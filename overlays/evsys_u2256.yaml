@@ -1,0 +1,23 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for EVSYS U2256 (12 channels; routing is out of scope in v0).
+ip: EVSYS
+id: U2256
+versions: ["1.0.2"]
+references:
+  - "DS60001632H 28.6 (EVSYS registers)"
+registers:
+  CTRLA:
+    pac_protected: true
+    self_clearing: [SWRST]
+    hooks: [post_write]
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: all
+    irq_source: {enable: INTENSET}
+  SWEVT:
+    pac_protected: true
+    hooks: [post_write]           # software event strobe (write-only per ATDF)
+  CHANNEL: {pac_protected: true}
+  USER: {pac_protected: true}

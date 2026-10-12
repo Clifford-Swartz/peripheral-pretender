@@ -1,0 +1,37 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Default comparison masks for py -m harness.compare (docs/silicon-harness.md,
+# "Comparison rules").  A mask hides bits that legitimately differ between the
+# twin and a given chip: per-chip factory data and free-running counters.
+# Board configuration (silicon revision, user row, lock bits) is not masked;
+# configure the twin to match the board instead.  Every entry states why; a
+# difference outside these masks is a model bug or a new fidelity-matrix entry.
+#
+# registers: name globs (* and ?; brackets are literal) over register names
+#            and aliases; mask = bits to ignore.
+# core:      core register names (r0..r12, sp, lr, pc, xpsr, msp, psp, ...).
+# uart:      Python regexes applied to every transcript line (re.sub).  The
+#            patterns follow the line format of firmware/hello; other images
+#            bring their own mask file (--masks).
+
+registers:
+  - {name: "NVM.SERIAL_WORD_*", mask: 0xFFFFFFFF, reason: "128-bit serial number, unique per chip (DS60001632H 10.3)"}
+  - {name: "NVM.CAL_WORD_*", mask: 0xFFFFFFFF, reason: "factory CAL row, contents undocumented"}
+  - {name: "NVM.TEMP_LOG_WORD_*", mask: 0xFFFFFFFF, reason: "factory TEMP_LOG row, contents undocumented"}
+  - {name: "NVM.OTP5_WORD_*", mask: 0xFFFFFFFF, reason: "software calibration row, per chip (DS60001632H Table 10-4)"}
+  - {name: "NVM.USER_PAGE_WORD_0", mask: 0x03FE0000, reason: "BODCORE calibration [25:17], per chip, DO NOT CHANGE (DS60001632H Table 10-3)"}
+  - {name: "OSCCTRL.CAL48M", mask: 0x003F033F, reason: "OSC48M factory calibration loaded at reset, per chip (DS60001632H 17.7.18)"}
+  - {name: "OSC32KCTRL.OSCULP32K", mask: 0x00001F00, reason: "OSCULP32K factory calibration [12:8] (reset 0x0000XX06, DS60001632H 16.7.10)"}
+  - {name: "DSU.STATUSB", mask: 0x00000002, reason: "DBGPRES: set on silicon once a probe was seen, until power-up (DS60001632H 13.12.3)"}
+  - {name: "SysTick.CVR", mask: 0xFFFFFFFF, reason: "free-running down-counter; QEMU time is not cycle accurate"}
+  - {name: "TC*.COUNT", mask: 0xFFFFFFFF, reason: "free-running counter"}
+  - {name: "TCC*.COUNT", mask: 0x00FFFFFF, reason: "free-running counter"}
+  - {name: "RTC.COUNT", mask: 0xFFFFFFFF, reason: "free-running counter"}
+  - {name: "RTC.CLOCK", mask: 0xFFFFFFFF, reason: "free-running calendar"}
+
+core: []
+
+uart:
+  - {pattern: '^(serial:).*', repl: '\1 <masked: unique per chip>'}
+  - {pattern: '^(calrow:).*', repl: '\1 <masked: factory calibration>'}
+  - {pattern: '(CAL48M=0x)[0-9A-Fa-f]{8}', repl: '\1<masked: factory calibration>'}

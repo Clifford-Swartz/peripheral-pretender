@@ -1,0 +1,27 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for GCLK U2122 (9 generators, 43 peripheral channels).
+ip: GCLK
+id: U2122
+versions: ["1.1.2"]
+references:
+  - "DS60001632H 14.7 (GCLK registers), 7.2 (clocks after reset)"
+  - "docs/research/boot-path.md findings 6, 8, 17"
+registers:
+  CTRLA:
+    pac_protected: true
+    sync: {SWRST: SWRST}
+    self_clearing: [SWRST]
+    hooks: [post_write]           # SWRST resets generators/channels (not WRTLOCKed)
+  SYNCBUSY: {dynamic: true}       # instant sync: reads 0
+  GENCTRL:
+    pac_protected: true
+    sync: "GENCTRL{n}"            # GENCTRLn raises SYNCBUSY.GENCTRLn
+    hooks: [post_write]           # generator frequency propagation
+  PCHCTRL:
+    pac_protected: true
+    hooks: [post_write]           # CHEN reads back as written; channel Clock
+    note: "Harmony spins until PCHCTRLm.CHEN reads 1 (DS 14.6.2.10)"
+reset_overrides:
+  # DS 14.7.3: generator 0 runs from OSC48M at reset (ATDF initval is 0)
+  "GENCTRL[0]": 0x00000106

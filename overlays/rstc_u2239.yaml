@@ -1,0 +1,16 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for RSTC U2239.
+ip: RSTC
+id: U2239
+versions: ["2.0.2"]
+references:
+  - "DS60001632H 20.7 (RSTC registers)"
+  - "docs/research/boot-path.md finding 13 (RCAUSE must survive the reset)"
+registers:
+  RCAUSE:
+    note: >-
+      Latched reset cause: POR 0x01, SYST 0x40, WDT 0x20, EXT 0x10. The RSTC
+      model pokes the cause after mchp_regfile_reset().
+reset_overrides:
+  RCAUSE: 0x01                    # POR; the ATDF has no initval

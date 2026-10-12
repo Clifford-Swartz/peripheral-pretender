@@ -1,0 +1,16 @@
+# Versions verified on the original workstation (2026-10-12).
+# Install: python -m pip install --user -r requirements.txt
+
+# generator, tools (pp runner, MCP server), tests
+PyYAML>=6.0.2
+pytest>=9.0
+mcp>=1.28
+
+# silicon harness (EDBG/CMSIS-DAP via pyOCD, VCOM via pyserial)
+pyserial>=3.5
+pyocd>=0.45.1
+
+# optional: firmware/hello/mock/run_mock.py (runs hello.elf without the twin)
+unicorn>=2.1.4
+# optional: validating the QEMU board documentation (.rst)
+docutils>=0.23

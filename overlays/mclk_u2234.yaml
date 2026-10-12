@@ -1,0 +1,25 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for MCLK U2234 (shared IRQ 0 SYSTEM).
+ip: MCLK
+id: U2234
+versions: ["2.0.0"]
+references:
+  - "DS60001632H 15.6 (MCLK registers)"
+  - "docs/research/boot-path.md, Harmony busy-wait table (CKRDY)"
+registers:
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: [CKRDY]
+    irq_source: {enable: INTENSET}
+  CPUDIV:
+    pac_protected: true
+    hooks: [post_write]           # cpuclk = GCLK0 / CPUDIV; sets INTFLAG.CKRDY again
+  AHBMASK: {pac_protected: true}
+  APBAMASK: {pac_protected: true}
+  APBBMASK: {pac_protected: true}
+  APBCMASK: {pac_protected: true}
+  APBDMASK: {pac_protected: true}
+reset_overrides:
+  INTFLAG: 0x01                   # CKRDY: clocks are ready out of reset

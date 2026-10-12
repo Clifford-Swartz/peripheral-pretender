@@ -1,0 +1,34 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for SUPC U2117 (BODVDD, VREG, VREF; shared IRQ 0).
+ip: SUPC
+id: U2117
+versions: ["2.1.1"]
+references:
+  - "DS60001632H 18.6 (SUPC registers), 10.2.1 Table 10-3 (user row)"
+registers:
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: [BODVDDRDY, BODVDDDET, BVDDSRDY]
+    irq_source: {enable: INTENSET}
+  STATUS:
+    dynamic: true                 # BODVDDRDY follows BODVDD.ENABLE; BVDDSRDY = 1
+  BODVDD:
+    pac_protected: true
+    enable_protected: {all_except: [ENABLE]}
+    hooks: [post_write]
+    note: >-
+      ENABLE is write-synchronized through STATUS.BVDDSRDY (a ready bit, not a
+      SYNCBUSY bit), so no sync mask is given.
+  VREG: {pac_protected: true}
+  VREF: {pac_protected: true}
+reset_overrides:
+  # Production user row enables BODVDD, so BODVDDRDY and BVDDSRDY read 1
+  # (DS: "determined from NVM User Row"). Dynamic; this is the fallback.
+  STATUS: 0x00000005
+reset_from:
+  BODVDD.ENABLE: {fuse: USER_FUSES.USER_WORD_0.BODVDD_DIS, invert: true}
+  BODVDD.ACTION: USER_FUSES.USER_WORD_0.BODVDD_ACTION
+  BODVDD.LEVEL: USER_FUSES.USER_WORD_0.BODVDDUSERLEVEL
+  BODVDD.HYST: USER_FUSES.USER_WORD_1.BODVDD_HYST

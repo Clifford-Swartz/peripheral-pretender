@@ -1,0 +1,26 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for DSU U2209. The first 0x100 bytes are mirrored at +0x100
+# (DSU_EXT, external/debugger view); CoreSight ROM table at +0x1000.
+ip: DSU
+id: U2209
+versions: ["3.0.0"]
+references:
+  - "DS60001632H 13.12 (DSU registers)"
+  - "Errata DS80001000H Table 2 (DID revision B0=1, C0=2)"
+registers:
+  CTRL:
+    pac_protected: true
+    hooks: [post_write]           # SWRST/CRC/CE strobes (write-only per ATDF)
+  STATUSA:
+    pac_protected: true
+    w1c: [DONE, CRSTEXT, BERR, FAIL, PERR]
+  STATUSB:
+    note: "PROT from the security bit, CEHL from the LOCKBIT row, DBGPRES 0"
+  ADDR: {pac_protected: true}
+  LENGTH: {pac_protected: true}
+  DATA: {pac_protected: true}
+  DID:
+    note: "REVISION[11:8] comes from the SoC silicon-rev property (B0=1, C0=2)"
+reset_overrides:
+  DID: 0x11060100                 # PIC32CM5164JH01100 rev B0

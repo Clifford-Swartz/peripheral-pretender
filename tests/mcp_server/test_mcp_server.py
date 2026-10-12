@@ -1,0 +1,85 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+"""Smoke test: start ``py -m tools.pp_mcp`` over stdio and call its tools."""
+
+import os
+import sys
+from pathlib import Path
+
+import anyio
+import pytest
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import get_default_environment, stdio_client
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SESSION_TIMEOUT_S = 120
+
+
+def server_params(qemu_path=None):
+    env = get_default_environment()
+    for name in ("PP_QEMU", "PP_MSYS2_BIN"):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    if qemu_path is not None:
+        env["PP_QEMU"] = str(qemu_path)
+    return StdioServerParameters(command=sys.executable,
+                                 args=["-m", "tools.pp_mcp"],
+                                 cwd=PROJECT_ROOT, env=env)
+
+
+def call_server(calls, qemu_path=None):
+    """Run [(tool, arguments)] in one server session; return the tool list
+    and the results."""
+    async def session():
+        with anyio.fail_after(SESSION_TIMEOUT_S):
+            async with stdio_client(server_params(qemu_path)) as streams:
+                async with ClientSession(*streams) as client:
+                    await client.initialize()
+                    tools = await client.list_tools()
+                    results = [await client.call_tool(name, args)
+                               for name, args in calls]
+                    return tools, results
+    return anyio.run(session)
+
+
+def test_tools_are_listed():
+    tools, _ = call_server([])
+    by_name = {t.name: t for t in tools.tools}
+    assert set(by_name) == {"twin_run", "twin_machines"}
+    schema = by_name["twin_run"].inputSchema
+    assert list(schema["properties"])[:4] == ["elf_path", "timeout_s",
+                                              "input_text", "icount_shift"]
+    assert schema["required"] == ["elf_path"]
+    assert by_name["twin_run"].outputSchema is not None
+
+
+@pytest.mark.qemu
+def test_twin_run_and_machines(qemu_path, mps2_images):
+    relative_echo = mps2_images["echo"].relative_to(PROJECT_ROOT)
+    _, (machines, exited, echoed, missing) = call_server([
+        ("twin_machines", {}),
+        ("twin_run", {"elf_path": str(mps2_images["exit"]),
+                      "machine": "mps2-an385"}),
+        ("twin_run", {"elf_path": str(relative_echo),
+                      "machine": "mps2-an385", "timeout_s": 20,
+                      "input_text": "from mcp\r\nexit 9\r\n"}),
+        ("twin_run", {"elf_path": "no/such.elf", "machine": "mps2-an385"}),
+    ], qemu_path)
+
+    info = machines.structuredContent
+    assert info["default_machine"] == "pic32cm-jh01-cpro"
+    assert "mps2-an385" in {m["name"] for m in info["machines"]}
+
+    result = exited.structuredContent
+    assert not exited.isError
+    assert (result["exit_code"], result["status"]) == (0, "exit")
+    assert result["uart"].endswith("PP:EXIT 0\n")
+    assert result["unimplemented_summary"]["total"] == 6
+    assert set(result) >= {"exit_code", "uart", "unimplemented_summary",
+                           "qemu_stderr_tail", "duration_s"}
+
+    result = echoed.structuredContent
+    assert result["exit_code"] == 9
+    assert "echo: from mcp\n" in result["uart"]
+
+    assert missing.isError
+    assert "ELF not found" in missing.content[0].text

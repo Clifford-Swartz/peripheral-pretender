@@ -1,0 +1,17 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for DIVAS U2258 (AHB 0x48000000, IOBUS alias 0x60000200).
+ip: DIVAS
+id: U2258
+versions: ["1.0.0"]
+references:
+  - "DS60001632H 21.6 (DIVAS registers)"
+  - "docs/research/boot-path.md finding 20"
+registers:
+  STATUS:
+    w1c: [DBZ]
+    ro: [BUSY]                    # instant results: BUSY stays 0
+  DIVISOR:
+    hooks: [post_write]           # starts a division; sets DBZ on divide by zero
+  SQRNUM:
+    hooks: [post_write]           # starts a square root

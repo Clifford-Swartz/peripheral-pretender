@@ -1,0 +1,13 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for PM U2240 (sleep configuration; shared IRQ 0).
+ip: PM
+id: U2240
+versions: ["2.1.1"]
+references:
+  - "DS60001632H 19.6 (PM registers)"
+registers:
+  SLEEPCFG:
+    pac_protected: true
+    note: "Harmony reads SLEEPCFG back before WFI; store and read back"
+  STDBYCFG: {pac_protected: true}

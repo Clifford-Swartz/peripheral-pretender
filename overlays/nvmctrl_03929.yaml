@@ -1,0 +1,40 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for NVMCTRL 03929 (JH-specific, ECC, data flash).
+ip: NVMCTRL
+id: "03929"
+versions: ["1a0"]
+references:
+  - "DS60001632H 26.6 (NVMCTRL registers)"
+  - "docs/research/microchip-data.md finding 7; boot-path.md busy-wait table"
+registers:
+  CTRLA:
+    pac_protected: true
+    strobe: [CMDEX]
+    hooks: [post_write]           # CMDEX=0xA5 runs CMD (instantly, flash writes LOG_UNIMP)
+  CTRLB: {pac_protected: true}    # RWS has no timing effect under TCG
+  PARAM:
+    pac_protected: true
+    read_only: true               # DS 26.6.3: all bits R; ATDF says RW
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: [ERROR, SERR, DERR, FLTCAP]
+    ro: [READY, FLASHERR]         # DS 26.6.6: READY access R, FLASHERR reset-only
+    irq_source: {enable: INTENSET}
+  STATUS:
+    w1c: [LOAD, PROGE, LOCKE, NVME]
+    ro: [PRM, SB]
+  ADDR: {pac_protected: true}
+  LOCK: {read_only: true}         # DS 26.6.9: R, loaded from the user row
+  ECCCTRL: {pac_protected: true}
+  FLTCTRL: {pac_protected: true}
+  FFLTPTR: {pac_protected: true}
+  FFLTADR: {pac_protected: true}
+  DBGCTRL: {pac_protected: true}
+reset_overrides:
+  PARAM: 0x08032000               # NVMP 8192, PSZ 3 (64 B), DFP 128 pages
+  CTRLB: 0x00000080               # MANW (DS 26.6.2)
+  INTFLAG: 0x00000001             # READY: idle, ready for a command
+reset_from:
+  LOCK.LOCK: USER_FUSES.USER_WORD_1.NVMCTRL_REGION_LOCKS

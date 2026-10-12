@@ -1,0 +1,25 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for OSC32KCTRL U2246 (XOSC32K, OSC32K, OSCULP32K).
+ip: OSC32KCTRL
+id: U2246
+versions: ["2.2.0"]
+references:
+  - "DS60001632H 16.7 (OSC32KCTRL registers)"
+registers:
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: [XOSC32KRDY, OSC32KRDY, CLKFAIL]
+    irq_source: {enable: INTENSET}
+  STATUS:
+    dynamic: true                 # XOSC32KRDY / OSC32KRDY follow the ENABLE bits
+  RTCCTRL: {pac_protected: true, hooks: [post_write]}   # RTC clock source
+  XOSC32K: {pac_protected: true, hooks: [post_write]}
+  CFDCTRL: {pac_protected: true}
+  EVCTRL: {pac_protected: true}
+  OSC32K: {pac_protected: true, hooks: [post_write]}
+  OSCULP32K: {pac_protected: true}
+reset_overrides:
+  # DS 16.7.10: reset 0x0000XX06, XX = factory calibration; no ATDF initval.
+  OSCULP32K: 0x00000006

@@ -1,0 +1,32 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for PORT U2210. Register names refer to the nested GROUP
+# (3 groups at a 0x80 stride: PA, PB, PC); rules apply to every group.
+ip: PORT
+id: U2210
+versions: ["3.1.0"]
+references:
+  - "DS60001632H 27.7 (PORT registers), 7.4 (PA30 SWCLK after reset)"
+  - "docs/research/microchip-data.md, Table: PORT group registers"
+registers:
+  DIR: {pac_protected: true, hooks: [post_write]}
+  DIRCLR: {pac_protected: true, alias: {storage: DIR, op: clear}}
+  DIRSET: {pac_protected: true, alias: {storage: DIR, op: set}}
+  DIRTGL: {pac_protected: true, alias: {storage: DIR, op: toggle}}
+  OUT: {pac_protected: true, hooks: [post_write]}      # gpio-out levels
+  OUTCLR: {pac_protected: true, alias: {storage: OUT, op: clear}}
+  OUTSET: {pac_protected: true, alias: {storage: OUT, op: set}}
+  OUTTGL: {pac_protected: true, alias: {storage: OUT, op: toggle}}
+  IN:
+    dynamic: true                 # from DIR/OUT/PINCFG and external levels
+  CTRL: {pac_protected: true}
+  WRCONFIG:
+    pac_protected: true
+    hooks: [post_write]           # bulk PINCFG/PMUX update (write-only per ATDF)
+  EVCTRL: {pac_protected: true}
+  PMUX: {pac_protected: true}
+  PINCFG: {pac_protected: true, hooks: [post_write]}   # INEN/PULLEN affect IN
+reset_overrides:
+  # DS 27.7.13 / 7.4: PMUXE = 6 puts PA30 in function G (SWCLK) out of reset.
+  # The ATDF lists no SWCLK signal; PINCFG30 (PMUXEN, pull-up) is unconfirmed.
+  "GROUP[0].PMUX[15]": 0x06

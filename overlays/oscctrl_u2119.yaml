@@ -1,0 +1,50 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for OSCCTRL U2119 (XOSC, OSC48M, FDPLL96M; shared IRQ 0).
+ip: OSCCTRL
+id: U2119
+versions: ["2.2.0"]
+references:
+  - "DS60001632H 17.7 (OSCCTRL registers), 7.2 (clocks after reset)"
+  - "docs/research/microchip-data.md, Table: Clock bring-up status bits"
+registers:
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: [XOSCRDY, XOSCFAIL, OSC48MRDY, DPLLLCKR, DPLLLCKF, DPLLLTO, DPLLLDRTO]
+    irq_source: {enable: INTENSET}
+  STATUS:
+    dynamic: true                 # OSC48MRDY = OSC48MCTRL.ENABLE, XOSCRDY, ...
+  XOSCCTRL: {pac_protected: true, hooks: [post_write]}
+  CFDPRESC: {pac_protected: true}
+  EVCTRL: {pac_protected: true}
+  OSC48MCTRL: {pac_protected: true, hooks: [post_write]}
+  OSC48MDIV:
+    pac_protected: true
+    sync: OSC48MSYNCBUSY.OSC48MDIV
+    hooks: [post_write]           # 48 MHz / (DIV + 1)
+  OSC48MSTUP: {pac_protected: true}
+  OSC48MSYNCBUSY: {dynamic: true}
+  DPLLCTRLA:
+    pac_protected: true
+    sync: {ENABLE: DPLLSYNCBUSY.ENABLE}
+    hooks: [post_write]
+  DPLLRATIO:
+    pac_protected: true
+    sync: DPLLSYNCBUSY.DPLLRATIO
+    hooks: [post_write]
+  DPLLCTRLB: {pac_protected: true, hooks: [post_write]}
+  DPLLPRESC:
+    pac_protected: true
+    sync: DPLLSYNCBUSY.DPLLPRESC
+    hooks: [post_write]
+  DPLLSYNCBUSY: {dynamic: true}
+  DPLLSTATUS:
+    dynamic: true                 # LOCK|CLKRDY once enabled with a running reference
+  CAL48M: {pac_protected: true}
+reset_overrides:
+  OSC48MCTRL: 0x82                # ENABLE | ONDEMAND (DS 17.7.8)
+  OSC48MDIV: 0x0B                 # divide by 12: 4 MHz at reset (DS 17.7.9)
+  # Observable value: OSC48M runs from reset, so OSC48MRDY reads 1 as soon as a
+  # debugger can look (DS 7.2). The register is dynamic; this is the fallback.
+  STATUS: 0x00000010

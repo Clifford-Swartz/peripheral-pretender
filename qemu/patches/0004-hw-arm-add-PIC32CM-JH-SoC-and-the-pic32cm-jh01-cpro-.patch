@@ -1,0 +1,3748 @@
+From 661fc55f2c3d1d8b940837922e656f7053cc25f9 Mon Sep 17 00:00:00 2001
+From: Clifford Swartz <cliffordswartz1@gmail.com>
+Date: Mon, 12 Oct 2026 11:25:11 -0700
+Subject: [PATCH 4/5] hw/arm: add PIC32CM JH SoC and the pic32cm-jh01-cpro
+ board
+
+Peripheral Pretender v0, part A:
+- mchp_regfile: byte-lane register-file dispatcher over the generated
+  MchpRegInfo tables (mixed 8/16/32-bit registers, aliases, W1C,
+  enable protection, debug-safe read side effects).
+- mchp-regblock: generic peripheral built from one generated instance;
+  every ATDF instance without a dedicated model uses it.
+- Clock system (OSCCTRL, OSC32KCTRL, GCLK, MCLK) with ready bits and a
+  Clock tree driving armv7m cpuclk (4 MHz at reset, 48 MHz after the
+  Harmony init sequence).
+- NVMCTRL, SUPC, RSTC (reset cause across resets), WDT (user-row reset
+  values, CLEAR key), PM, PAC, DSU (DID, DSU_EXT mirror), DIVAS.
+- SoC pic32cm5164jh01100-soc: cortex-m0 standing in for the M0+ (CPUID
+  overridden to 0x410CC601), 32 IRQs, OR gates for shared vectors, NVM
+  rows ROM, IOBUS aliases. Board pic32cm-jh01-cpro.
+- qtest pic32cm-jh-test (12 cases) and board documentation.
+
+Known gap: MPU_TYPE reads 0 because QEMU only creates pmsav7-dregion for
+Armv7 cores; a cortex-m0plus CPU type is needed for the M0+ MPU.
+
+Peripheral Pretender downstream patch; not for upstream submission.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst | 114 ++++
+ docs/system/target-arm.rst            |   1 +
+ hw/arm/Kconfig                        |  13 +
+ hw/arm/meson.build                    |   2 +
+ hw/arm/pic32cm_jh01_cpro.c            | 104 ++++
+ hw/arm/pic32cm_jh_soc.c               | 467 ++++++++++++++++
+ hw/misc/Kconfig                       |   3 +
+ hw/misc/mchp_clock.c                  | 732 ++++++++++++++++++++++++++
+ hw/misc/mchp_regblock.c               | 427 +++++++++++++++
+ hw/misc/mchp_regfile.c                | 279 ++++++++++
+ hw/misc/mchp_sysctrl.c                | 616 ++++++++++++++++++++++
+ hw/misc/meson.build                   |   8 +
+ hw/misc/trace-events                  |  11 +
+ include/hw/arm/pic32cm_jh_soc.h       |  66 +++
+ include/hw/misc/mchp_regblock.h       |  91 ++++
+ include/hw/misc/mchp_regfile.h        | 128 +++++
+ include/hw/misc/mchp_sysctrl.h        |  75 +++
+ tests/qtest/meson.build               |   1 +
+ tests/qtest/pic32cm-jh-test.c         | 399 ++++++++++++++
+ 19 files changed, 3537 insertions(+)
+ create mode 100644 docs/system/arm/pic32cm-jh01-cpro.rst
+ create mode 100644 hw/arm/pic32cm_jh01_cpro.c
+ create mode 100644 hw/arm/pic32cm_jh_soc.c
+ create mode 100644 hw/misc/mchp_clock.c
+ create mode 100644 hw/misc/mchp_regblock.c
+ create mode 100644 hw/misc/mchp_regfile.c
+ create mode 100644 hw/misc/mchp_sysctrl.c
+ create mode 100644 include/hw/arm/pic32cm_jh_soc.h
+ create mode 100644 include/hw/misc/mchp_regblock.h
+ create mode 100644 include/hw/misc/mchp_regfile.h
+ create mode 100644 include/hw/misc/mchp_sysctrl.h
+ create mode 100644 tests/qtest/pic32cm-jh-test.c
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+new file mode 100644
+index 0000000..df39a4b
+--- /dev/null
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -0,0 +1,114 @@
++Microchip PIC32CM JH01 Curiosity Pro (``pic32cm-jh01-cpro``)
++=============================================================
++
++.. note::
++   Peripheral Pretender: a personal project in a downstream fork
++   of QEMU. AI-assisted code; not for submission to upstream QEMU.
++
++The PIC32CM JH01 Curiosity Pro evaluation kit (EV81X90A) carries a
++PIC32CM5164JH01100 microcontroller: an Arm Cortex-M0+ with 512 KiB of
++flash, 8 KiB of data flash and 64 KiB of SRAM, a 32 MHz crystal on
++XIN/XOUT and a 32.768 kHz crystal on XIN32/XOUT32.
++
++The SoC model (``pic32cm5164jh01100-soc``) is built from a description
++generated from the device's ATDF file (``generator/atdf2qemu.py`` in the
++Peripheral Pretender project): the memory map, every peripheral instance
++with its register tables and reset values, the NVIC lines and the GCLK
++channel of each peripheral. Peripherals are QOM children of
++``/machine/soc`` named after their instance (``/machine/soc/gclk``,
++``/machine/soc/sercom4``, ...).
++
++Supported devices
++"""""""""""""""""
++
++- Cortex-M0 core (QEMU has no Cortex-M0+) reporting the Cortex-M0+ r0p1
++  CPUID 0x410CC601, NVIC with 32 interrupts and 2 priority bits, SysTick
++  clocked from the CPU clock
++- Flash, data flash (both read as erased, 0xFF, where no image is
++  loaded), SRAM, and the NVM rows at 0x00800000-0x0080FFFF (calibration,
++  user row with the production fuse values, OTP rows, serial number)
++- Clock system: OSCCTRL (XOSC, OSC48M, FDPLL96M), OSC32KCTRL (XOSC32K,
++  OSC32K, OSCULP32K), GCLK generators and peripheral channels, MCLK CPU
++  divider. Oscillators are ready as soon as they are enabled and every
++  synchronization is instant. Frequencies propagate through QEMU clocks
++  to the CPU clock (4 MHz after reset, 48 MHz after the usual
++  OSC48MDIV = 0) and to each peripheral's ``gclk`` clock input.
++- NVMCTRL: PARAM, READY, CTRLB, command keys (PROGE without the key)
++- SUPC: BODVDD loaded from the user row, its ready flags
++- RSTC: RCAUSE is POR at power-up, SYST after AIRCR.SYSRESETREQ, WDT after
++  a watchdog reset and EXT after any other reset (for example
++  ``system_reset`` in the monitor); SRAM keeps its contents across them
++- WDT: CTRLA, CONFIG and EWCTRL loaded from the user row; a wrong CLEAR key
++  resets the system
++- PM: SLEEPCFG and STDBYCFG
++- PAC: WRCTRL bookkeeping in STATUSx with the data sheet's error rules
++- DSU: device ID (revision set by the SoC property ``silicon-rev``), the
++  DSU_EXT view at 0x41002100 and the CoreSight ROM table
++- DIVAS: signed and unsigned division and square root, also through the
++  IOBUS view at 0x60000200
++- Every other peripheral instance is a generic register block: reset
++  values, store and read back, write-1-to-clear flags, set/clear
++  registers, SYNCBUSY reading 0, software reset through CTRLA.SWRST and
++  the register view selected by the mode field (SERCOM, TC, RTC). Writes
++  to it are reported with ``-d unimp`` as ``<instance>.<REGISTER>: write
++  0x... not modelled``. Interrupt lines follow ``INTFLAG & INTENSET``,
++  with OR gates for the shared vectors.
++
++Missing devices
++"""""""""""""""
++
++- SERCOM and PORT are generic register blocks, so there is no UART output
++  yet: firmware waiting for SERCOM INTFLAG.DRE does not progress. LED0
++  (PC05) and SW0 (PB19) are not connected.
++- The MPU: QEMU only gives Armv7-M cores MPU regions, so the
++  ``mpu-ns-regions`` setting of 8 has no effect and MPU_TYPE reads 0.
++  CONTROL.nPRIV is not implemented on the Cortex-M0 either.
++- Watchdog time-out, PAC write protection, flash programming through
++  NVMCTRL, DSU CRC32 and chip erase, sleep modes and every other
++  peripheral behaviour (DMAC, EIC, TC, TCC, RTC, ADC, DAC, AC, CAN, ...).
++
++Board and SoC properties
++""""""""""""""""""""""""
++
++The board connects ``-serial`` options to SERCOM4 (EDBG virtual COM
++port), SERCOM2 (EXT1), SERCOM3 (EXT2), SERCOM6 (EXT3) and SERCOM0 (LIN), in
++that order, once SERCOM has a UART model.
++
++The SoC takes two properties, which can be given with ``-global``:
++
++``silicon-rev``
++  ``B0`` (default) or ``C0``, shown in DSU.DID.REVISION.
++
++``serial-number``
++  32 hex digits: the words at 0x0080A00C, 0x0080A040, 0x0080A044 and
++  0x0080A048, in that order. The default is
++  ``50500000000000010000000200000003``.
++
++.. code-block:: bash
++
++  $ qemu-system-arm -M pic32cm-jh01-cpro -kernel app.elf \
++      -global pic32cm5164jh01100-soc.silicon-rev=C0
++
++Boot options
++""""""""""""
++
++Load an ELF with ``-kernel``, or an Intel HEX file with ``-device
++loader,file=app.hex``. Words that an image places in the user row
++(0x00804000) replace the production values and take effect at reset, as
++the WDT, SUPC and NVMCTRL.LOCK reset values are loaded from them.
++
++.. code-block:: bash
++
++  $ qemu-system-arm -M pic32cm-jh01-cpro -kernel app.elf \
++      -display none -serial stdio -d unimp,guest_errors
++
++``-d unimp,guest_errors`` lists the register writes the model does not
++implement and the accesses the device would reject. The trace events
++``mchp_clk_update``, ``mchp_regfile_read``, ``mchp_regfile_write``,
++``mchp_regblock_unimp_write`` and ``mchp_rstc_reset_request`` show the
++clock tree, every register access and reset requests. ``info qtree`` in
++the monitor shows the frequency of every clock, for example the
++``cpuclk`` input of ``armv7m``.
++
++Run release builds of the firmware: QEMU stops with ``cpu_abort`` when a
++fault handler executes ``BKPT`` (lockup is not modelled).
+diff --git a/docs/system/target-arm.rst b/docs/system/target-arm.rst
+index e344924..5619534 100644
+--- a/docs/system/target-arm.rst
++++ b/docs/system/target-arm.rst
+@@ -89,6 +89,7 @@ Board-specific documentation
+    arm/exynos
+    arm/musicpal
+    arm/kzm
++   arm/pic32cm-jh01-cpro
+    arm/nrf
+    arm/nuvoton
+    arm/imx25-pdk
+diff --git a/hw/arm/Kconfig b/hw/arm/Kconfig
+index 6f5b2ad..4b7773e 100644
+--- a/hw/arm/Kconfig
++++ b/hw/arm/Kconfig
+@@ -683,6 +683,19 @@ config MICROBIT
+     depends on TCG && ARM
+     select NRF51_SOC
+ 
++config PIC32CM_JH01_CPRO
++    bool
++    default y
++    depends on TCG && ARM
++    select PIC32CM_JH_SOC
++
++config PIC32CM_JH_SOC
++    bool
++    select ARM_V7M
++    select MCHP_REGFILE
++    select OR_IRQ
++    select UNIMP
++
+ config NRF51_SOC
+     bool
+     imply I2C_DEVICES
+diff --git a/hw/arm/meson.build b/hw/arm/meson.build
+index 4233a80..00c230a 100644
+--- a/hw/arm/meson.build
++++ b/hw/arm/meson.build
+@@ -93,6 +93,8 @@ arm_common_ss.add(when: 'CONFIG_TEGRA241_CMDQV', if_true: files('tegra241-cmdqv.
+ stub_ss.add(files('tegra241-cmdqv-stubs.c'))
+ arm_common_ss.add(when: 'CONFIG_FSL_IMX6UL', if_true: files('fsl-imx6ul.c', 'mcimx6ul-evk.c'))
+ arm_common_ss.add(when: 'CONFIG_NRF51_SOC', if_true: files('nrf51_soc.c'))
++arm_common_ss.add(when: 'CONFIG_PIC32CM_JH_SOC', if_true: files('pic32cm_jh_soc.c'))
++arm_common_ss.add(when: 'CONFIG_PIC32CM_JH01_CPRO', if_true: files('pic32cm_jh01_cpro.c'))
+ arm_common_ss.add(when: 'CONFIG_XEN', if_true: files(
+   'xen-stubs.c',
+   'xen-pvh.c',
+diff --git a/hw/arm/pic32cm_jh01_cpro.c b/hw/arm/pic32cm_jh01_cpro.c
+new file mode 100644
+index 0000000..010f0c2
+--- /dev/null
++++ b/hw/arm/pic32cm_jh01_cpro.c
+@@ -0,0 +1,104 @@
++/*
++ * Microchip PIC32CM JH01 Curiosity Pro board (EV81X90A)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * PIC32CM5164JH01100 with a 32 MHz crystal on XIN/XOUT and a 32.768 kHz
++ * crystal on XIN32/XOUT32 (board user guide DS70005482B).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "hw/arm/boot.h"
++#include "hw/arm/machines-qom.h"
++#include "hw/arm/pic32cm_jh_soc.h"
++#include "hw/core/boards.h"
++#include "hw/core/qdev-clock.h"
++#include "system/system.h"
++
++#define CPRO_XOSC_HZ        32000000
++#define CPRO_XOSC32K_HZ     32768
++
++/* serial_hd(i) is wired to SERCOM pic32cm_jh01_cpro_serial[i] */
++static const unsigned pic32cm_jh01_cpro_serial[] = {
++    4,                          /* EDBG virtual COM port (PB10/PB11) */
++    2,                          /* EXT1 */
++    3,                          /* EXT2 */
++    6,                          /* EXT3 */
++    0,                          /* LIN */
++};
++
++#define TYPE_PIC32CM_JH01_CPRO_MACHINE MACHINE_TYPE_NAME("pic32cm-jh01-cpro")
++OBJECT_DECLARE_SIMPLE_TYPE(Pic32cmJh01CproState, PIC32CM_JH01_CPRO_MACHINE)
++
++struct Pic32cmJh01CproState {
++    MachineState parent_obj;
++
++    Pic32cmJhSocState soc;
++    Clock *xosc;
++    Clock *xosc32k;
++};
++
++static void pic32cm_jh01_cpro_init(MachineState *machine)
++{
++    Pic32cmJh01CproState *s = PIC32CM_JH01_CPRO_MACHINE(machine);
++    DeviceState *soc;
++
++    s->xosc = clock_new(OBJECT(machine), "xosc");
++    clock_set_hz(s->xosc, CPRO_XOSC_HZ);
++    s->xosc32k = clock_new(OBJECT(machine), "xosc32k");
++    clock_set_hz(s->xosc32k, CPRO_XOSC32K_HZ);
++
++    object_initialize_child(OBJECT(machine), "soc", &s->soc,
++                            TYPE_PIC32CM5164JH01100_SOC);
++    soc = DEVICE(&s->soc);
++    qdev_connect_clock_in(soc, "xosc", s->xosc);
++    qdev_connect_clock_in(soc, "xosc32k", s->xosc32k);
++    for (unsigned i = 0; i < ARRAY_SIZE(pic32cm_jh01_cpro_serial); i++) {
++        pic32cm_jh_soc_connect_serial(&s->soc, pic32cm_jh01_cpro_serial[i],
++                                      serial_hd(i));
++    }
++    sysbus_realize(SYS_BUS_DEVICE(soc), &error_fatal);
++
++    armv7m_load_kernel(s->soc.armv7m.cpu, machine->kernel_filename,
++                       PIC32CM5164JH01100_FLASH_BASE,
++                       PIC32CM5164JH01100_FLASH_SIZE);
++}
++
++/* QEMU has no cortex-m0plus; give its cortex-m0 the M0+ CPUID */
++static GlobalProperty pic32cm_jh01_cpro_compat[] = {
++    { ARM_CPU_TYPE_NAME("cortex-m0"), "midr", stringify(PIC32CM_JH_CPUID) },
++};
++
++static void pic32cm_jh01_cpro_class_init(ObjectClass *oc, const void *data)
++{
++    MachineClass *mc = MACHINE_CLASS(oc);
++    static const char *const valid_cpu_types[] = {
++        ARM_CPU_TYPE_NAME("cortex-m0"),
++        NULL
++    };
++
++    mc->desc = "Microchip PIC32CM JH01 Curiosity Pro (EV81X90A, Cortex-M0+)";
++    mc->init = pic32cm_jh01_cpro_init;
++    mc->max_cpus = 1;
++    mc->valid_cpu_types = valid_cpu_types;
++    /* SRAM is part of the SoC */
++    mc->default_ram_size = 0;
++    compat_props_add(mc->compat_props, pic32cm_jh01_cpro_compat,
++                     G_N_ELEMENTS(pic32cm_jh01_cpro_compat));
++}
++
++static const TypeInfo pic32cm_jh01_cpro_types[] = {
++    {
++        .name = TYPE_PIC32CM_JH01_CPRO_MACHINE,
++        .parent = TYPE_MACHINE,
++        .instance_size = sizeof(Pic32cmJh01CproState),
++        .class_init = pic32cm_jh01_cpro_class_init,
++        .interfaces = arm_machine_interfaces,
++    },
++};
++
++DEFINE_TYPES(pic32cm_jh01_cpro_types)
+diff --git a/hw/arm/pic32cm_jh_soc.c b/hw/arm/pic32cm_jh_soc.c
+new file mode 100644
+index 0000000..2900c07
+--- /dev/null
++++ b/hw/arm/pic32cm_jh_soc.c
+@@ -0,0 +1,467 @@
++/*
++ * Microchip PIC32CM JH01 SoC (PIC32CM5164JH01100)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Everything comes from the generated device description: the memory map,
++ * one mchp-regblock (or dedicated subclass, see pic32cm_jh_models) per
++ * peripheral instance, the NVIC lines with OR gates for shared vectors and
++ * the GCLK channel of each instance.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/log.h"
++#include "qemu/units.h"
++#include "hw/arm/pic32cm_jh_soc.h"
++#include "hw/core/qdev-clock.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/core/qdev-properties-system.h"
++#include "hw/misc/mchp_sysctrl.h"
++#include "hw/misc/unimp.h"
++#include "system/address-spaces.h"
++#include "target/arm/cpu-qom.h"
++#include "pic32cm5164jh01100_nvmrows.h"
++
++/*
++ * The QOM type modelling each ATDF module. Every other instance is a
++ * generic mchp-regblock; a dedicated model only needs a line here.
++ */
++static const struct {
++    const char *module;
++    const char *type;
++} pic32cm_jh_models[] = {
++    { "DIVAS", TYPE_MCHP_DIVAS },
++    { "DSU", TYPE_MCHP_DSU },
++    { "GCLK", TYPE_MCHP_GCLK },
++    { "MCLK", TYPE_MCHP_MCLK },
++    { "NVMCTRL", TYPE_MCHP_NVMCTRL },
++    { "OSC32KCTRL", TYPE_MCHP_OSC32KCTRL },
++    { "OSCCTRL", TYPE_MCHP_OSCCTRL },
++    { "PAC", TYPE_MCHP_PAC },
++    { "PM", TYPE_MCHP_PM },
++    { "RSTC", TYPE_MCHP_RSTC },
++    { "SUPC", TYPE_MCHP_SUPC },
++    { "WDT", TYPE_MCHP_WDT },
++};
++
++/* Oscillator outputs feeding the GCLK generator sources of the same name */
++static const struct {
++    int inst;
++    const char *clock;
++} pic32cm_jh_gclk_sources[] = {
++    { PIC32CM5164JH01100_INST_OSCCTRL, "xosc" },
++    { PIC32CM5164JH01100_INST_OSCCTRL, "osc48m" },
++    { PIC32CM5164JH01100_INST_OSCCTRL, "fdpll96m" },
++    { PIC32CM5164JH01100_INST_OSC32KCTRL, "xosc32k" },
++    { PIC32CM5164JH01100_INST_OSC32KCTRL, "osc32k" },
++    { PIC32CM5164JH01100_INST_OSC32KCTRL, "osculp32k" },
++};
++
++static const char *pic32cm_jh_model_type(const MchpInstanceInfo *info)
++{
++    for (unsigned i = 0; i < ARRAY_SIZE(pic32cm_jh_models); i++) {
++        if (!strcmp(pic32cm_jh_models[i].module, info->module)) {
++            return pic32cm_jh_models[i].type;
++        }
++    }
++    return TYPE_MCHP_REGBLOCK;
++}
++
++static bool pic32cm_jh_has_regs(const MchpInstanceInfo *info)
++{
++    return !(info->flags & (MCHP_INST_CORE | MCHP_INST_FUSES |
++                            MCHP_INST_NO_REGS));
++}
++
++static const MchpIrqLine *pic32cm_jh_irq_line(int line)
++{
++    for (unsigned i = 0; i < PIC32CM5164JH01100_NUM_IRQ_LINES; i++) {
++        if (pic32cm5164jh01100_irq_lines[i].line == line) {
++            return &pic32cm5164jh01100_irq_lines[i];
++        }
++    }
++    g_assert_not_reached();
++}
++
++static DeviceState *pic32cm_jh_periph(Pic32cmJhSocState *s, int inst)
++{
++    assert(s->periph[inst]);
++    return s->periph[inst];
++}
++
++/* The GCLK peripheral channel that @param of @instance names. */
++static Clock *pic32cm_jh_gclk_channel(Pic32cmJhSocState *s,
++                                      const char *instance, const char *param)
++{
++    DeviceState *gclk = pic32cm_jh_periph(s, PIC32CM5164JH01100_INST_GCLK);
++
++    for (unsigned i = 0; i < PIC32CM5164JH01100_NUM_GCLK_CHANNEL_USERS; i++) {
++        const MchpPeriphRef *ref = &pic32cm5164jh01100_gclk_channels[i];
++
++        if (!strcmp(ref->instance, instance) && !strcmp(ref->param, param)) {
++            g_autofree char *name = g_strdup_printf("pch[%u]", ref->id);
++
++            return qdev_get_clock_out(gclk, name);
++        }
++    }
++    g_assert_not_reached();
++}
++
++void pic32cm_jh_soc_connect_serial(Pic32cmJhSocState *s, unsigned sercom,
++                                   Chardev *chr)
++{
++    assert(sercom < PIC32CM_JH_NUM_SERCOM);
++    s->sercom_chr[sercom] = chr;
++}
++
++static void pic32cm_jh_soc_init(Object *obj)
++{
++    Pic32cmJhSocState *s = PIC32CM5164JH01100_SOC(obj);
++
++    object_initialize_child(obj, "armv7m", &s->armv7m, TYPE_ARMV7M);
++
++    for (unsigned i = 0; i < PIC32CM5164JH01100_NUM_IRQ_LINES; i++) {
++        const MchpIrqLine *line = &pic32cm5164jh01100_irq_lines[i];
++        g_autofree char *lower = NULL;
++        g_autofree char *name = NULL;
++
++        if (line->nsources < 2) {
++            continue;
++        }
++        lower = g_ascii_strdown(line->name, -1);
++        name = g_strdup_printf("%s-irq-or", lower);
++        object_initialize_child(obj, name, &s->irq_or[line->line],
++                                TYPE_OR_IRQ);
++    }
++
++    for (unsigned i = 0; i < PIC32CM5164JH01100_NUM_INSTANCES; i++) {
++        const MchpInstanceInfo *info = &pic32cm5164jh01100_instances[i];
++        g_autofree char *name = g_ascii_strdown(info->name, -1);
++        Object *child;
++
++        if (!pic32cm_jh_has_regs(info)) {
++            continue;
++        }
++        child = object_new(pic32cm_jh_model_type(info));
++        object_property_add_child(obj, name, child);
++        object_unref(child);
++        mchp_regblock_set_info(MCHP_REGBLOCK(child), info);
++        s->periph[i] = DEVICE(child);
++    }
++
++    qdev_alias_clock(pic32cm_jh_periph(s, PIC32CM5164JH01100_INST_OSCCTRL),
++                     "xtal", DEVICE(s), "xosc");
++    qdev_alias_clock(pic32cm_jh_periph(s, PIC32CM5164JH01100_INST_OSC32KCTRL),
++                     "xtal32k", DEVICE(s), "xosc32k");
++}
++
++/* "serial-number": 32 hex digits, word 0 first; default from the image */
++static bool pic32cm_jh_serial(Pic32cmJhSocState *s, uint32_t serial[4],
++                              Error **errp)
++{
++    const char *str = s->serial_number;
++
++    if (!str) {
++        memcpy(serial, pic32cm5164jh01100_serial_default,
++               sizeof(pic32cm5164jh01100_serial_default));
++        return true;
++    }
++    if (strlen(str) != 32) {
++        error_setg(errp, "serial-number must be 32 hex digits");
++        return false;
++    }
++    memset(serial, 0, 4 * sizeof(uint32_t));
++    for (unsigned i = 0; i < 32; i++) {
++        int digit = g_ascii_xdigit_value(str[i]);
++
++        if (digit < 0) {
++            error_setg(errp, "serial-number must be 32 hex digits");
++            return false;
++        }
++        serial[i / 8] = serial[i / 8] << 4 | digit;
++    }
++    return true;
++}
++
++/* "silicon-rev" -> DSU DID.REVISION (errata DS80001000 Table 2) */
++static bool pic32cm_jh_revision(Pic32cmJhSocState *s, uint8_t *rev,
++                                Error **errp)
++{
++    if (!s->silicon_rev || !strcmp(s->silicon_rev, "B0")) {
++        *rev = 1;
++    } else if (!strcmp(s->silicon_rev, "C0")) {
++        *rev = 2;
++    } else {
++        error_setg(errp, "silicon-rev must be \"B0\" or \"C0\"");
++        return false;
++    }
++    return true;
++}
++
++/* Erased flash reads as 0xFF; images are loaded over it at reset. */
++static bool pic32cm_jh_init_flash(Pic32cmJhSocState *s, MemoryRegion *mr,
++                                  const char *name, hwaddr base,
++                                  uint64_t size, Error **errp)
++{
++    if (!memory_region_init_rom(mr, OBJECT(s), name, size, errp)) {
++        return false;
++    }
++    memset(memory_region_get_ram_ptr(mr), 0xFF, size);
++    memory_region_add_subregion(get_system_memory(), base, mr);
++    return true;
++}
++
++static bool pic32cm_jh_init_memory(Pic32cmJhSocState *s, Error **errp)
++{
++    MemoryRegion *sysmem = get_system_memory();
++    uint32_t serial[4];
++
++    if (!pic32cm_jh_serial(s, serial, errp) ||
++        !pic32cm_jh_init_flash(s, &s->flash, "flash",
++                               PIC32CM5164JH01100_FLASH_BASE,
++                               PIC32CM5164JH01100_FLASH_SIZE, errp) ||
++        !pic32cm_jh_init_flash(s, &s->dataflash, "dataflash",
++                               PIC32CM5164JH01100_DATAFLASH_BASE,
++                               PIC32CM5164JH01100_DATAFLASH_SIZE, errp)) {
++        return false;
++    }
++
++    /* Calibration, lock, user and OTP rows plus the serial number */
++    if (!memory_region_init_rom(&s->nvm_rows, OBJECT(s), "nvm-rows",
++                                PIC32CM5164JH01100_NVMROWS_SIZE, errp)) {
++        return false;
++    }
++    pic32cm5164jh01100_nvmrows_fill(memory_region_get_ram_ptr(&s->nvm_rows),
++                                    serial);
++    memory_region_add_subregion(sysmem, PIC32CM5164JH01100_NVMROWS_BASE,
++                                &s->nvm_rows);
++
++    if (!memory_region_init_ram(&s->sram, OBJECT(s), "sram",
++                                PIC32CM5164JH01100_DRAM_SIZE, errp)) {
++        return false;
++    }
++    memory_region_add_subregion(sysmem, PIC32CM5164JH01100_DRAM_BASE,
++                                &s->sram);
++
++    /* Reserved space on the peripheral bridges */
++    for (unsigned i = 0; i < PIC32CM5164JH01100_NUM_MEM_SEGMENTS; i++) {
++        const MchpMemSegment *seg = &pic32cm5164jh01100_mem_segments[i];
++        g_autofree char *name = g_ascii_strdown(seg->name, -1);
++
++        if (g_str_has_prefix(seg->name, "HPB")) {
++            create_unimplemented_device(name, seg->base, seg->size);
++        }
++    }
++    return true;
++}
++
++static void pic32cm_jh_connect_clocks(Pic32cmJhSocState *s)
++{
++    DeviceState *oscctrl = pic32cm_jh_periph(s,
++                                             PIC32CM5164JH01100_INST_OSCCTRL);
++    DeviceState *osc32k = pic32cm_jh_periph(s,
++                                            PIC32CM5164JH01100_INST_OSC32KCTRL);
++    DeviceState *gclk = pic32cm_jh_periph(s, PIC32CM5164JH01100_INST_GCLK);
++    DeviceState *mclk = pic32cm_jh_periph(s, PIC32CM5164JH01100_INST_MCLK);
++
++    for (unsigned i = 0; i < ARRAY_SIZE(pic32cm_jh_gclk_sources); i++) {
++        const char *clock = pic32cm_jh_gclk_sources[i].clock;
++        DeviceState *osc = pic32cm_jh_periph(s,
++                                             pic32cm_jh_gclk_sources[i].inst);
++
++        qdev_connect_clock_in(gclk, clock, qdev_get_clock_out(osc, clock));
++    }
++    qdev_connect_clock_in(oscctrl, "dpll-ref-xosc32k",
++                          qdev_get_clock_out(osc32k, "xosc32k"));
++    qdev_connect_clock_in(oscctrl, "dpll-ref-gclk",
++                          pic32cm_jh_gclk_channel(s, "OSCCTRL",
++                                                  "GCLK_ID_FDPLL"));
++    qdev_connect_clock_in(mclk, "gclk-main",
++                          qdev_get_clock_out(gclk, "gen[0]"));
++
++    for (unsigned i = 0; i < PIC32CM5164JH01100_NUM_INSTANCES; i++) {
++        const MchpInstanceInfo *info = &pic32cm5164jh01100_instances[i];
++        g_autofree char *pch = NULL;
++
++        if (!s->periph[i] || info->gclk_core < 0) {
++            continue;
++        }
++        pch = g_strdup_printf("pch[%d]", info->gclk_core);
++        qdev_connect_clock_in(s->periph[i], "gclk",
++                              qdev_get_clock_out(gclk, pch));
++    }
++}
++
++static bool pic32cm_jh_realize_cpu(Pic32cmJhSocState *s, Error **errp)
++{
++    DeviceState *armv7m = DEVICE(&s->armv7m);
++    DeviceState *mclk = pic32cm_jh_periph(s, PIC32CM5164JH01100_INST_MCLK);
++
++    qdev_prop_set_string(armv7m, "cpu-type", ARM_CPU_TYPE_NAME("cortex-m0"));
++    qdev_prop_set_uint32(armv7m, "num-irq", PIC32CM5164JH01100_NUM_IRQ);
++    qdev_prop_set_uint32(armv7m, "num-prio-bits",
++                         PIC32CM5164JH01100_NVIC_PRIO_BITS);
++    /*
++     * The Cortex-M0+ MPU has 8 regions. QEMU's cortex-m0 has no
++     * pmsav7-dregion property (it is Armv7-M only), so armv7m drops this
++     * and MPU_TYPE reads 0; see docs/system/arm/pic32cm-jh01-cpro.rst.
++     */
++    qdev_prop_set_uint32(armv7m, "mpu-ns-regions", 8);
++    /* No Security Extension: the reset VTOR is the non-secure one */
++    qdev_prop_set_uint32(armv7m, "init-nsvtor", 0);
++    qdev_connect_clock_in(armv7m, "cpuclk", qdev_get_clock_out(mclk, "cpu"));
++    object_property_set_link(OBJECT(armv7m), "memory",
++                             OBJECT(get_system_memory()), &error_abort);
++    return sysbus_realize(SYS_BUS_DEVICE(armv7m), errp);
++}
++
++static bool pic32cm_jh_realize_irq_or(Pic32cmJhSocState *s, Error **errp)
++{
++    for (unsigned i = 0; i < PIC32CM5164JH01100_NUM_IRQ_LINES; i++) {
++        const MchpIrqLine *line = &pic32cm5164jh01100_irq_lines[i];
++        DeviceState *gate;
++
++        if (line->nsources < 2) {
++            continue;
++        }
++        gate = DEVICE(&s->irq_or[line->line]);
++        if (!object_property_set_int(OBJECT(gate), "num-lines",
++                                     line->nsources, errp) ||
++            !qdev_realize(gate, NULL, errp)) {
++            return false;
++        }
++        qdev_connect_gpio_out(gate, 0,
++                              qdev_get_gpio_in(DEVICE(&s->armv7m),
++                                               line->line));
++    }
++    return true;
++}
++
++static qemu_irq pic32cm_jh_irq_input(Pic32cmJhSocState *s,
++                                     const MchpInstanceInfo *info)
++{
++    if (pic32cm_jh_irq_line(info->irq)->nsources > 1) {
++        return qdev_get_gpio_in(DEVICE(&s->irq_or[info->irq]),
++                                info->irq_input);
++    }
++    return qdev_get_gpio_in(DEVICE(&s->armv7m), info->irq);
++}
++
++/* Board-level wiring of SERCOM<n>: its chardev, if the model takes one */
++static void pic32cm_jh_connect_sercom(Pic32cmJhSocState *s, DeviceState *dev,
++                                      const MchpInstanceInfo *info)
++{
++    unsigned n = info->name[strlen("SERCOM")] - '0';
++    Chardev *chr = s->sercom_chr[n];
++
++    if (!chr) {
++        return;
++    }
++    if (object_property_find(OBJECT(dev), "chardev")) {
++        qdev_prop_set_chr(dev, "chardev", chr);
++    } else {
++        qemu_log_mask(LOG_UNIMP, "sercom%u: no UART model; serial port not"
++                      " connected\n", n);
++    }
++}
++
++static bool pic32cm_jh_realize_periph(Pic32cmJhSocState *s, uint8_t rev,
++                                      Error **errp)
++{
++    for (unsigned i = 0; i < PIC32CM5164JH01100_NUM_INSTANCES; i++) {
++        const MchpInstanceInfo *info = &pic32cm5164jh01100_instances[i];
++        DeviceState *dev = s->periph[i];
++        SysBusDevice *sbd;
++
++        if (info->flags & MCHP_INST_NO_REGS) {
++            g_autofree char *name = g_ascii_strdown(info->name, -1);
++
++            create_unimplemented_device(name, info->base, info->slot_size);
++            continue;
++        }
++        if (!dev) {
++            continue;
++        }
++        sbd = SYS_BUS_DEVICE(dev);
++        if (i == PIC32CM5164JH01100_INST_DSU) {
++            qdev_prop_set_uint8(dev, "revision", rev);
++        } else if (!strcmp(info->module, "SERCOM")) {
++            pic32cm_jh_connect_sercom(s, dev, info);
++        }
++        if (!sysbus_realize(sbd, errp)) {
++            return false;
++        }
++        sysbus_mmio_map(sbd, 0, info->base);
++        if (info->alias_size) {
++            /* IOBUS views, and DSU_EXT inside the DSU slot */
++            sysbus_mmio_map_overlap(sbd, 1, info->alias_base, 1);
++        }
++        if (info->irq >= 0) {
++            sysbus_connect_irq(sbd, 0, pic32cm_jh_irq_input(s, info));
++        }
++    }
++    return true;
++}
++
++/* Reset sources that RSTC records in RCAUSE */
++static void pic32cm_jh_connect_resets(Pic32cmJhSocState *s)
++{
++    DeviceState *rstc = pic32cm_jh_periph(s, PIC32CM5164JH01100_INST_RSTC);
++    DeviceState *wdt = pic32cm_jh_periph(s, PIC32CM5164JH01100_INST_WDT);
++
++    qdev_connect_gpio_out_named(DEVICE(&s->armv7m), "SYSRESETREQ", 0,
++        qdev_get_gpio_in_named(rstc, MCHP_RSTC_RESET_CAUSE,
++                               R_MCHP_RSTC_RCAUSE_SYST_SHIFT));
++    qdev_connect_gpio_out_named(wdt, MCHP_WDT_SYSTEM_RESET, 0,
++        qdev_get_gpio_in_named(rstc, MCHP_RSTC_RESET_CAUSE,
++                               R_MCHP_RSTC_RCAUSE_WDT_SHIFT));
++}
++
++static void pic32cm_jh_soc_realize(DeviceState *dev, Error **errp)
++{
++    Pic32cmJhSocState *s = PIC32CM5164JH01100_SOC(dev);
++    uint8_t rev;
++
++    if (!pic32cm_jh_revision(s, &rev, errp) ||
++        !pic32cm_jh_init_memory(s, errp)) {
++        return;
++    }
++    pic32cm_jh_connect_clocks(s);
++    if (!pic32cm_jh_realize_cpu(s, errp) ||
++        !pic32cm_jh_realize_irq_or(s, errp) ||
++        !pic32cm_jh_realize_periph(s, rev, errp)) {
++        return;
++    }
++    pic32cm_jh_connect_resets(s);
++}
++
++static const Property pic32cm_jh_soc_properties[] = {
++    DEFINE_PROP_STRING("silicon-rev", Pic32cmJhSocState, silicon_rev),
++    DEFINE_PROP_STRING("serial-number", Pic32cmJhSocState, serial_number),
++};
++
++static void pic32cm_jh_soc_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->realize = pic32cm_jh_soc_realize;
++    device_class_set_props(dc, pic32cm_jh_soc_properties);
++    /* Reason: mapped at fixed addresses on the system bus */
++    dc->user_creatable = false;
++}
++
++static const TypeInfo pic32cm_jh_soc_types[] = {
++    {
++        .name = TYPE_PIC32CM5164JH01100_SOC,
++        .parent = TYPE_SYS_BUS_DEVICE,
++        .instance_size = sizeof(Pic32cmJhSocState),
++        .instance_init = pic32cm_jh_soc_init,
++        .class_init = pic32cm_jh_soc_class_init,
++    },
++};
++
++DEFINE_TYPES(pic32cm_jh_soc_types)
+diff --git a/hw/misc/Kconfig b/hw/misc/Kconfig
+index 1543ee6..a0a0c23 100644
+--- a/hw/misc/Kconfig
++++ b/hw/misc/Kconfig
+@@ -200,6 +200,9 @@ config AVR_POWER
+ config MCHP_PFSOC_DMC
+     bool
+ 
++config MCHP_REGFILE
++    bool
++
+ config MCHP_PFSOC_IOSCB
+     bool
+ 
+diff --git a/hw/misc/mchp_clock.c b/hw/misc/mchp_clock.c
+new file mode 100644
+index 0000000..ea1a517
+--- /dev/null
++++ b/hw/misc/mchp_clock.c
+@@ -0,0 +1,732 @@
++/*
++ * Microchip SAM/PIC32CM clock system: OSCCTRL, OSC32KCTRL, GCLK and MCLK
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The four controllers form a QEMU Clock tree:
++ *
++ *   crystals -> OSCCTRL    (XOSC, OSC48M, FDPLL96M) --+
++ *               OSC32KCTRL (XOSC32K, OSC32K, ULP32K) -+-> GCLK generators
++ *   GCLK generators -> GCLK peripheral channels (PCHCTRLm) -> peripherals
++ *   GCLK generator 0 -> MCLK (/ CPUDIV) -> armv7m cpuclk
++ *
++ * An oscillator is ready as soon as it is enabled (and its crystal, if it
++ * needs one, is fitted), FDPLL96M locks as soon as it has a reference, and
++ * every synchronization completes instantly (SYNCBUSY reads 0).
++ * References: DS60001632H chapters 14 (GCLK), 15 (MCLK), 16 (OSC32KCTRL)
++ * and 17 (OSCCTRL).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/host-utils.h"
++#include "qemu/log.h"
++#include "hw/core/qdev-clock.h"
++#include "hw/mchp/gen/gclk_u2122.h"
++#include "hw/mchp/gen/mclk_u2234.h"
++#include "hw/mchp/gen/osc32kctrl_u2246.h"
++#include "hw/mchp/gen/oscctrl_u2119.h"
++#include "hw/misc/mchp_sysctrl.h"
++#include "migration/vmstate.h"
++
++#define MCHP_OSC48M_HZ      48000000
++#define MCHP_OSC32K_HZ      32768
++
++/*
++ * The clock graph can loop (FDPLL96M referenced from a GCLK channel whose
++ * generator runs from FDPLL96M), so updating an output can re-enter the
++ * device that made it. Re-entry only marks the device dirty and the outer
++ * update repeats until the outputs settle.
++ */
++#define MCHP_CLK_MAX_PASSES 8
++
++typedef struct MchpClkSettle {
++    bool busy;
++    bool dirty;
++} MchpClkSettle;
++
++static void mchp_clk_settle(MchpRegBlock *s, MchpClkSettle *st,
++                            void (*compute)(MchpRegBlock *s))
++{
++    if (st->busy) {
++        st->dirty = true;
++        return;
++    }
++    st->busy = true;
++    for (int pass = 0; pass < MCHP_CLK_MAX_PASSES; pass++) {
++        st->dirty = false;
++        compute(s);
++        if (!st->dirty) {
++            break;
++        }
++    }
++    if (st->dirty) {
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: clock configuration loops and does not settle\n",
++                      s->name);
++    }
++    st->busy = false;
++}
++
++static uint32_t mchp_clk_reg(MchpRegBlock *s, hwaddr offset, unsigned size)
++{
++    return mchp_regfile_peek(&s->rf, offset, size);
++}
++
++/* Set INTFLAG bits (ready flags) of @s. */
++static void mchp_clk_raise_flags(MchpRegBlock *s, uint32_t flags)
++{
++    if (flags && s->intflag) {
++        mchp_regfile_set(&s->rf, s->intflag, 0,
++                         mchp_regfile_get(&s->rf, s->intflag, 0) | flags);
++    }
++}
++
++/* A register with a WRTLOCK bit ignores writes once it is locked. */
++static bool mchp_clk_write_locked(MchpRegBlock *s, const MchpRegInfo *ri,
++                                  unsigned idx, uint32_t old, uint32_t lock)
++{
++    if (!(old & lock)) {
++        return false;
++    }
++    qemu_log_mask(LOG_GUEST_ERROR, "%s.%s: write while WRTLOCK is set"
++                  " (ignored)\n", s->name, ri->name);
++    mchp_regfile_set(&s->rf, ri, idx, old);
++    return true;
++}
++
++/* OSCCTRL */
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpOscctrlState, MCHP_OSCCTRL)
++
++struct MchpOscctrlState {
++    MchpRegBlock parent_obj;
++
++    Clock *xtal;
++    Clock *ref_xosc32k;
++    Clock *ref_gclk;
++    Clock *xosc;
++    Clock *osc48m;
++    Clock *fdpll96m;
++
++    uint32_t status;            /* STATUS when last updated, for flag edges */
++    MchpClkSettle settle;
++};
++
++#define MCHP_OSCCTRL_READY \
++    (R_MCHP_OSCCTRL_STATUS_XOSCRDY_MASK | \
++     R_MCHP_OSCCTRL_STATUS_OSC48MRDY_MASK | \
++     R_MCHP_OSCCTRL_STATUS_DPLLLCKR_MASK)
++
++static uint64_t mchp_oscctrl_xosc_hz(MchpOscctrlState *s)
++{
++    uint32_t ctrl = mchp_clk_reg(MCHP_REGBLOCK(s), A_MCHP_OSCCTRL_XOSCCTRL, 2);
++
++    return FIELD_EX32(ctrl, MCHP_OSCCTRL_XOSCCTRL, ENABLE) ?
++           clock_get_hz(s->xtal) : 0;
++}
++
++static uint64_t mchp_oscctrl_osc48m_hz(MchpOscctrlState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint32_t ctrl = mchp_clk_reg(rb, A_MCHP_OSCCTRL_OSC48MCTRL, 1);
++    uint32_t div = mchp_clk_reg(rb, A_MCHP_OSCCTRL_OSC48MDIV, 1);
++
++    if (!FIELD_EX32(ctrl, MCHP_OSCCTRL_OSC48MCTRL, ENABLE)) {
++        return 0;
++    }
++    return MCHP_OSC48M_HZ / (FIELD_EX32(div, MCHP_OSCCTRL_OSC48MDIV, DIV) + 1);
++}
++
++static uint64_t mchp_oscctrl_dpll_ref_hz(MchpOscctrlState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint32_t ctrlb = mchp_clk_reg(rb, A_MCHP_OSCCTRL_DPLLCTRLB, 4);
++    uint32_t div = FIELD_EX32(ctrlb, MCHP_OSCCTRL_DPLLCTRLB, DIV);
++
++    switch (FIELD_EX32(ctrlb, MCHP_OSCCTRL_DPLLCTRLB, REFCLK)) {
++    case MCHP_OSCCTRL_DPLLCTRLB_REFCLK_XOSC32K:
++        return clock_get_hz(s->ref_xosc32k);
++    case MCHP_OSCCTRL_DPLLCTRLB_REFCLK_XOSC:
++        return mchp_oscctrl_xosc_hz(s) / (2 * (div + 1));
++    case MCHP_OSCCTRL_DPLLCTRLB_REFCLK_GCLK:
++        return clock_get_hz(s->ref_gclk);
++    default:
++        return 0;
++    }
++}
++
++static bool mchp_oscctrl_dpll_locked(MchpOscctrlState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint32_t ctrla = mchp_clk_reg(rb, A_MCHP_OSCCTRL_DPLLCTRLA, 1);
++
++    return FIELD_EX32(ctrla, MCHP_OSCCTRL_DPLLCTRLA, ENABLE) &&
++           mchp_oscctrl_dpll_ref_hz(s);
++}
++
++/* fCK = fCKR * (LDR + 1 + LDRFRAC / 16) / 2^PRESC (DS 17.6.5) */
++static uint64_t mchp_oscctrl_fdpll_hz(MchpOscctrlState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint32_t ratio = mchp_clk_reg(rb, A_MCHP_OSCCTRL_DPLLRATIO, 4);
++    uint32_t presc = mchp_clk_reg(rb, A_MCHP_OSCCTRL_DPLLPRESC, 1);
++    uint64_t mul16;
++
++    if (!mchp_oscctrl_dpll_locked(s)) {
++        return 0;
++    }
++    mul16 = 16 * (FIELD_EX32(ratio, MCHP_OSCCTRL_DPLLRATIO, LDR) + 1) +
++            FIELD_EX32(ratio, MCHP_OSCCTRL_DPLLRATIO, LDRFRAC);
++    return (mchp_oscctrl_dpll_ref_hz(s) * mul16 / 16) >>
++           FIELD_EX32(presc, MCHP_OSCCTRL_DPLLPRESC, PRESC);
++}
++
++static uint32_t mchp_oscctrl_status(MchpOscctrlState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint32_t ctrl = mchp_clk_reg(rb, A_MCHP_OSCCTRL_OSC48MCTRL, 1);
++    uint32_t status = 0;
++
++    if (mchp_oscctrl_xosc_hz(s)) {
++        status |= R_MCHP_OSCCTRL_STATUS_XOSCRDY_MASK;
++    }
++    if (FIELD_EX32(ctrl, MCHP_OSCCTRL_OSC48MCTRL, ENABLE)) {
++        status |= R_MCHP_OSCCTRL_STATUS_OSC48MRDY_MASK;
++    }
++    if (mchp_oscctrl_dpll_locked(s)) {
++        status |= R_MCHP_OSCCTRL_STATUS_DPLLLCKR_MASK;
++    }
++    return status;
++}
++
++static void mchp_oscctrl_compute(MchpRegBlock *rb)
++{
++    MchpOscctrlState *s = MCHP_OSCCTRL(rb);
++    uint32_t status = mchp_oscctrl_status(s);
++    uint32_t flags = status & ~s->status & MCHP_OSCCTRL_READY;
++
++    if (s->status & ~status & R_MCHP_OSCCTRL_STATUS_DPLLLCKR_MASK) {
++        flags |= R_MCHP_OSCCTRL_INTFLAG_DPLLLCKF_MASK;
++    }
++    mchp_clk_raise_flags(rb, flags);
++    s->status = status;
++
++    mchp_regblock_set_clock(rb, s->xosc, mchp_oscctrl_xosc_hz(s));
++    mchp_regblock_set_clock(rb, s->osc48m, mchp_oscctrl_osc48m_hz(s));
++    mchp_regblock_set_clock(rb, s->fdpll96m, mchp_oscctrl_fdpll_hz(s));
++}
++
++static void mchp_oscctrl_update(MchpOscctrlState *s)
++{
++    mchp_clk_settle(MCHP_REGBLOCK(s), &s->settle, mchp_oscctrl_compute);
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++static void mchp_oscctrl_clk_update(void *opaque, ClockEvent event)
++{
++    mchp_oscctrl_update(MCHP_OSCCTRL(opaque));
++}
++
++static uint32_t mchp_oscctrl_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                                      unsigned idx, uint32_t stored,
++                                      bool side_effects)
++{
++    MchpOscctrlState *s = MCHP_OSCCTRL(rf->opaque);
++
++    switch (ri->offset) {
++    case A_MCHP_OSCCTRL_STATUS:
++        return mchp_oscctrl_status(s);
++    case A_MCHP_OSCCTRL_DPLLSTATUS:
++        return mchp_oscctrl_dpll_locked(s) ?
++               R_MCHP_OSCCTRL_DPLLSTATUS_LOCK_MASK |
++               R_MCHP_OSCCTRL_DPLLSTATUS_CLKRDY_MASK : 0;
++    default:
++        return stored;          /* *SYNCBUSY: synchronization is instant */
++    }
++}
++
++static void mchp_oscctrl_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                    unsigned idx, uint32_t old,
++                                    uint32_t written, uint32_t we)
++{
++    mchp_oscctrl_update(MCHP_OSCCTRL(rf->opaque));
++}
++
++static void mchp_oscctrl_reset_hold(MchpRegBlock *rb)
++{
++    MchpOscctrlState *s = MCHP_OSCCTRL(rb);
++
++    s->status = mchp_oscctrl_status(s);
++}
++
++static void mchp_oscctrl_reset_exit(MchpRegBlock *rb)
++{
++    mchp_oscctrl_update(MCHP_OSCCTRL(rb));
++}
++
++static void mchp_oscctrl_init(Object *obj)
++{
++    MchpOscctrlState *s = MCHP_OSCCTRL(obj);
++    DeviceState *dev = DEVICE(obj);
++
++    s->xtal = qdev_init_clock_in(dev, "xtal", mchp_oscctrl_clk_update, s,
++                                 ClockUpdate);
++    s->ref_xosc32k = qdev_init_clock_in(dev, "dpll-ref-xosc32k",
++                                        mchp_oscctrl_clk_update, s,
++                                        ClockUpdate);
++    s->ref_gclk = qdev_init_clock_in(dev, "dpll-ref-gclk",
++                                     mchp_oscctrl_clk_update, s, ClockUpdate);
++    s->xosc = qdev_init_clock_out(dev, "xosc");
++    s->osc48m = qdev_init_clock_out(dev, "osc48m");
++    s->fdpll96m = qdev_init_clock_out(dev, "fdpll96m");
++}
++
++static const VMStateDescription vmstate_mchp_oscctrl = {
++    .name = TYPE_MCHP_OSCCTRL,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpOscctrlState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_CLOCK(xtal, MchpOscctrlState),
++        VMSTATE_CLOCK(ref_xosc32k, MchpOscctrlState),
++        VMSTATE_CLOCK(ref_gclk, MchpOscctrlState),
++        VMSTATE_UINT32(status, MchpOscctrlState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void mchp_oscctrl_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_oscctrl;
++    c->pre_read = mchp_oscctrl_pre_read;
++    c->post_write = mchp_oscctrl_post_write;
++    c->reset_hold = mchp_oscctrl_reset_hold;
++    c->reset_exit = mchp_oscctrl_reset_exit;
++    c->log_writes = false;
++}
++
++/* OSC32KCTRL */
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpOsc32kctrlState, MCHP_OSC32KCTRL)
++
++struct MchpOsc32kctrlState {
++    MchpRegBlock parent_obj;
++
++    Clock *xtal32k;
++    Clock *xosc32k;
++    Clock *osc32k;
++    Clock *osculp32k;
++
++    uint32_t status;            /* STATUS when last updated, for flag edges */
++};
++
++#define MCHP_OSC32KCTRL_READY \
++    (R_MCHP_OSC32KCTRL_STATUS_XOSC32KRDY_MASK | \
++     R_MCHP_OSC32KCTRL_STATUS_OSC32KRDY_MASK)
++
++static uint32_t mchp_osc32kctrl_status(MchpOsc32kctrlState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint32_t xosc32k = mchp_clk_reg(rb, A_MCHP_OSC32KCTRL_XOSC32K, 2);
++    uint32_t osc32k = mchp_clk_reg(rb, A_MCHP_OSC32KCTRL_OSC32K, 4);
++    uint32_t status = 0;
++
++    if (FIELD_EX32(xosc32k, MCHP_OSC32KCTRL_XOSC32K, ENABLE) &&
++        clock_get_hz(s->xtal32k)) {
++        status |= R_MCHP_OSC32KCTRL_STATUS_XOSC32KRDY_MASK;
++    }
++    if (FIELD_EX32(osc32k, MCHP_OSC32KCTRL_OSC32K, ENABLE)) {
++        status |= R_MCHP_OSC32KCTRL_STATUS_OSC32KRDY_MASK;
++    }
++    return status;
++}
++
++/* The 32.768 kHz outputs also need EN32K (DS 16.6.2, 16.6.4). */
++static void mchp_osc32kctrl_update(MchpOsc32kctrlState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint32_t xosc32k = mchp_clk_reg(rb, A_MCHP_OSC32KCTRL_XOSC32K, 2);
++    uint32_t osc32k = mchp_clk_reg(rb, A_MCHP_OSC32KCTRL_OSC32K, 4);
++    uint32_t status = mchp_osc32kctrl_status(s);
++
++    mchp_clk_raise_flags(rb, status & ~s->status & MCHP_OSC32KCTRL_READY);
++    s->status = status;
++
++    mchp_regblock_set_clock(rb, s->xosc32k,
++        (status & R_MCHP_OSC32KCTRL_STATUS_XOSC32KRDY_MASK) &&
++        FIELD_EX32(xosc32k, MCHP_OSC32KCTRL_XOSC32K, EN32K) ?
++        clock_get_hz(s->xtal32k) : 0);
++    mchp_regblock_set_clock(rb, s->osc32k,
++        (status & R_MCHP_OSC32KCTRL_STATUS_OSC32KRDY_MASK) &&
++        FIELD_EX32(osc32k, MCHP_OSC32KCTRL_OSC32K, EN32K) ?
++        MCHP_OSC32K_HZ : 0);
++    mchp_regblock_set_clock(rb, s->osculp32k, MCHP_OSC32K_HZ);
++    mchp_regblock_update_irq(rb);
++}
++
++static void mchp_osc32kctrl_clk_update(void *opaque, ClockEvent event)
++{
++    mchp_osc32kctrl_update(MCHP_OSC32KCTRL(opaque));
++}
++
++static uint32_t mchp_osc32kctrl_pre_read(MchpRegFile *rf,
++                                         const MchpRegInfo *ri, unsigned idx,
++                                         uint32_t stored, bool side_effects)
++{
++    if (ri->offset == A_MCHP_OSC32KCTRL_STATUS) {
++        return mchp_osc32kctrl_status(MCHP_OSC32KCTRL(rf->opaque));
++    }
++    return stored;
++}
++
++static void mchp_osc32kctrl_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                       unsigned idx, uint32_t old,
++                                       uint32_t written, uint32_t we)
++{
++    MchpOsc32kctrlState *s = MCHP_OSC32KCTRL(rf->opaque);
++
++    switch (ri->offset) {
++    case A_MCHP_OSC32KCTRL_XOSC32K:
++        mchp_clk_write_locked(MCHP_REGBLOCK(s), ri, idx, old,
++                              R_MCHP_OSC32KCTRL_XOSC32K_WRTLOCK_MASK);
++        break;
++    case A_MCHP_OSC32KCTRL_OSC32K:
++        mchp_clk_write_locked(MCHP_REGBLOCK(s), ri, idx, old,
++                              R_MCHP_OSC32KCTRL_OSC32K_WRTLOCK_MASK);
++        break;
++    }
++    mchp_osc32kctrl_update(s);
++}
++
++static void mchp_osc32kctrl_reset_hold(MchpRegBlock *rb)
++{
++    MchpOsc32kctrlState *s = MCHP_OSC32KCTRL(rb);
++
++    s->status = mchp_osc32kctrl_status(s);
++}
++
++static void mchp_osc32kctrl_reset_exit(MchpRegBlock *rb)
++{
++    mchp_osc32kctrl_update(MCHP_OSC32KCTRL(rb));
++}
++
++static void mchp_osc32kctrl_init(Object *obj)
++{
++    MchpOsc32kctrlState *s = MCHP_OSC32KCTRL(obj);
++    DeviceState *dev = DEVICE(obj);
++
++    s->xtal32k = qdev_init_clock_in(dev, "xtal32k", mchp_osc32kctrl_clk_update,
++                                    s, ClockUpdate);
++    s->xosc32k = qdev_init_clock_out(dev, "xosc32k");
++    s->osc32k = qdev_init_clock_out(dev, "osc32k");
++    s->osculp32k = qdev_init_clock_out(dev, "osculp32k");
++}
++
++static const VMStateDescription vmstate_mchp_osc32kctrl = {
++    .name = TYPE_MCHP_OSC32KCTRL,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpOsc32kctrlState, 1,
++                       vmstate_mchp_regblock, MchpRegBlock),
++        VMSTATE_CLOCK(xtal32k, MchpOsc32kctrlState),
++        VMSTATE_UINT32(status, MchpOsc32kctrlState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void mchp_osc32kctrl_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_osc32kctrl;
++    c->pre_read = mchp_osc32kctrl_pre_read;
++    c->post_write = mchp_osc32kctrl_post_write;
++    c->reset_hold = mchp_osc32kctrl_reset_hold;
++    c->reset_exit = mchp_osc32kctrl_reset_exit;
++    c->log_writes = false;
++}
++
++/* GCLK */
++
++/* Clock inputs by GENCTRL.SRC value; GCLKGEN1 is generator 1 itself. */
++static const char *const mchp_gclk_src_names[] = {
++    [MCHP_GCLK_GENCTRL_SRC_XOSC] = "xosc",
++    [MCHP_GCLK_GENCTRL_SRC_GCLKIN] = "gclk-in",
++    [MCHP_GCLK_GENCTRL_SRC_OSCULP32K] = "osculp32k",
++    [MCHP_GCLK_GENCTRL_SRC_OSC32K] = "osc32k",
++    [MCHP_GCLK_GENCTRL_SRC_XOSC32K] = "xosc32k",
++    [MCHP_GCLK_GENCTRL_SRC_OSC48M] = "osc48m",
++    [MCHP_GCLK_GENCTRL_SRC_FDPLL96M] = "fdpll96m",
++};
++
++/* Only generator 1 has 16 DIV bits, the others have 8 (DS Table 14-3). */
++#define MCHP_GCLK_GEN1          1
++#define MCHP_GCLK_DIV8_MASK     0x00FF0000
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpGclkState, MCHP_GCLK)
++
++struct MchpGclkState {
++    MchpRegBlock parent_obj;
++
++    Clock *src[ARRAY_SIZE(mchp_gclk_src_names)];
++    Clock *gen[MCHP_GCLK_GENCTRL_COUNT];
++    Clock *pch[MCHP_GCLK_PCHCTRL_COUNT];
++
++    MchpClkSettle settle;
++};
++
++static uint64_t mchp_gclk_src_hz(MchpGclkState *s, unsigned src)
++{
++    if (src >= ARRAY_SIZE(s->src) || !s->src[src]) {
++        return 0;
++    }
++    return clock_get_hz(s->src[src]);
++}
++
++static uint64_t mchp_gclk_gen_hz(MchpGclkState *s, unsigned n,
++                                 uint64_t gen1_hz)
++{
++    uint32_t ctrl = mchp_clk_reg(MCHP_REGBLOCK(s),
++                                 A_MCHP_GCLK_GENCTRL + 4 * n, 4);
++    uint32_t src = FIELD_EX32(ctrl, MCHP_GCLK_GENCTRL, SRC);
++    uint32_t div = FIELD_EX32(ctrl, MCHP_GCLK_GENCTRL, DIV);
++    uint64_t hz;
++
++    if (!FIELD_EX32(ctrl, MCHP_GCLK_GENCTRL, GENEN)) {
++        return 0;
++    }
++    if (src == MCHP_GCLK_GENCTRL_SRC_GCLKGEN1) {
++        hz = n == MCHP_GCLK_GEN1 ? 0 : gen1_hz;
++    } else {
++        hz = mchp_gclk_src_hz(s, src);
++    }
++    if (FIELD_EX32(ctrl, MCHP_GCLK_GENCTRL, DIVSEL)) {
++        return div + 1 < 64 ? hz >> (div + 1) : 0;
++    }
++    return div > 1 ? hz / div : hz;
++}
++
++static void mchp_gclk_compute(MchpRegBlock *rb)
++{
++    MchpGclkState *s = MCHP_GCLK(rb);
++    uint64_t hz[MCHP_GCLK_GENCTRL_COUNT];
++
++    hz[MCHP_GCLK_GEN1] = mchp_gclk_gen_hz(s, MCHP_GCLK_GEN1, 0);
++    for (unsigned n = 0; n < MCHP_GCLK_GENCTRL_COUNT; n++) {
++        if (n != MCHP_GCLK_GEN1) {
++            hz[n] = mchp_gclk_gen_hz(s, n, hz[MCHP_GCLK_GEN1]);
++        }
++    }
++    for (unsigned n = 0; n < MCHP_GCLK_GENCTRL_COUNT; n++) {
++        mchp_regblock_set_clock(rb, s->gen[n], hz[n]);
++    }
++    for (unsigned m = 0; m < MCHP_GCLK_PCHCTRL_COUNT; m++) {
++        uint32_t ctrl = mchp_clk_reg(rb, A_MCHP_GCLK_PCHCTRL + 4 * m, 4);
++        uint32_t gen = FIELD_EX32(ctrl, MCHP_GCLK_PCHCTRL, GEN);
++        bool on = FIELD_EX32(ctrl, MCHP_GCLK_PCHCTRL, CHEN) &&
++                  gen < MCHP_GCLK_GENCTRL_COUNT;
++
++        mchp_regblock_set_clock(rb, s->pch[m], on ? hz[gen] : 0);
++    }
++}
++
++static void mchp_gclk_update(MchpGclkState *s)
++{
++    mchp_clk_settle(MCHP_REGBLOCK(s), &s->settle, mchp_gclk_compute);
++}
++
++static void mchp_gclk_clk_update(void *opaque, ClockEvent event)
++{
++    mchp_gclk_update(MCHP_GCLK(opaque));
++}
++
++static void mchp_gclk_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                 unsigned idx, uint32_t old,
++                                 uint32_t written, uint32_t we)
++{
++    MchpGclkState *s = MCHP_GCLK(rf->opaque);
++    uint32_t val = mchp_regfile_get(rf, ri, idx);
++
++    switch (ri->offset) {
++    case A_MCHP_GCLK_GENCTRL:
++        if (idx != MCHP_GCLK_GEN1) {
++            val &= ~R_MCHP_GCLK_GENCTRL_DIV_MASK | MCHP_GCLK_DIV8_MASK;
++            mchp_regfile_set(rf, ri, idx, val);
++        }
++        break;
++    case A_MCHP_GCLK_PCHCTRL:
++        mchp_clk_write_locked(MCHP_REGBLOCK(s), ri, idx, old,
++                              R_MCHP_GCLK_PCHCTRL_WRTLOCK_MASK);
++        break;
++    default:
++        return;                 /* CTRLA.SWRST is handled by mchp-regblock */
++    }
++    mchp_gclk_update(s);
++}
++
++static void mchp_gclk_reset_exit(MchpRegBlock *rb)
++{
++    mchp_gclk_update(MCHP_GCLK(rb));
++}
++
++static void mchp_gclk_init(Object *obj)
++{
++    MchpGclkState *s = MCHP_GCLK(obj);
++    DeviceState *dev = DEVICE(obj);
++
++    for (unsigned i = 0; i < ARRAY_SIZE(s->src); i++) {
++        if (mchp_gclk_src_names[i]) {
++            s->src[i] = qdev_init_clock_in(dev, mchp_gclk_src_names[i],
++                                           mchp_gclk_clk_update, s,
++                                           ClockUpdate);
++        }
++    }
++    for (unsigned n = 0; n < MCHP_GCLK_GENCTRL_COUNT; n++) {
++        g_autofree char *name = g_strdup_printf("gen[%u]", n);
++
++        s->gen[n] = qdev_init_clock_out(dev, name);
++    }
++    for (unsigned m = 0; m < MCHP_GCLK_PCHCTRL_COUNT; m++) {
++        g_autofree char *name = g_strdup_printf("pch[%u]", m);
++
++        s->pch[m] = qdev_init_clock_out(dev, name);
++    }
++}
++
++static const VMStateDescription vmstate_mchp_gclk = {
++    .name = TYPE_MCHP_GCLK,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpGclkState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void mchp_gclk_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_gclk;
++    c->post_write = mchp_gclk_post_write;
++    c->reset_exit = mchp_gclk_reset_exit;
++    c->log_writes = false;
++}
++
++/* MCLK */
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpMclkState, MCHP_MCLK)
++
++struct MchpMclkState {
++    MchpRegBlock parent_obj;
++
++    Clock *main;
++    Clock *cpu;
++};
++
++static void mchp_mclk_update(MchpMclkState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint32_t div = mchp_clk_reg(rb, A_MCHP_MCLK_CPUDIV, 1);
++
++    mchp_regblock_set_clock(rb, s->cpu, div ? clock_get_hz(s->main) / div : 0);
++}
++
++static void mchp_mclk_clk_update(void *opaque, ClockEvent event)
++{
++    mchp_mclk_update(MCHP_MCLK(opaque));
++}
++
++/* CPUDIV takes powers of two up to 128 (DS 15.6.4); CKRDY sets again. */
++static void mchp_mclk_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                 unsigned idx, uint32_t old,
++                                 uint32_t written, uint32_t we)
++{
++    MchpMclkState *s = MCHP_MCLK(rf->opaque);
++    uint32_t div = mchp_regfile_get(rf, ri, idx);
++
++    if (ri->offset != A_MCHP_MCLK_CPUDIV) {
++        return;
++    }
++    if (!is_power_of_2(div) || div > MCHP_MCLK_CPUDIV_CPUDIV_DIV128) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s.CPUDIV: reserved value 0x%" PRIx32
++                      " (ignored)\n", MCHP_REGBLOCK(s)->name, div);
++        mchp_regfile_set(rf, ri, idx, old);
++    }
++    mchp_clk_raise_flags(MCHP_REGBLOCK(s), R_MCHP_MCLK_INTFLAG_CKRDY_MASK);
++    mchp_mclk_update(s);
++}
++
++static void mchp_mclk_reset_exit(MchpRegBlock *rb)
++{
++    mchp_mclk_update(MCHP_MCLK(rb));
++}
++
++static void mchp_mclk_init(Object *obj)
++{
++    MchpMclkState *s = MCHP_MCLK(obj);
++
++    s->main = qdev_init_clock_in(DEVICE(obj), "gclk-main",
++                                 mchp_mclk_clk_update, s, ClockUpdate);
++    s->cpu = qdev_init_clock_out(DEVICE(obj), "cpu");
++}
++
++static const VMStateDescription vmstate_mchp_mclk = {
++    .name = TYPE_MCHP_MCLK,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpMclkState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_CLOCK(main, MchpMclkState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void mchp_mclk_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_mclk;
++    c->post_write = mchp_mclk_post_write;
++    c->reset_exit = mchp_mclk_reset_exit;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_clock_types[] = {
++    {
++        .name = TYPE_MCHP_OSCCTRL,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpOscctrlState),
++        .instance_init = mchp_oscctrl_init,
++        .class_init = mchp_oscctrl_class_init,
++    }, {
++        .name = TYPE_MCHP_OSC32KCTRL,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpOsc32kctrlState),
++        .instance_init = mchp_osc32kctrl_init,
++        .class_init = mchp_osc32kctrl_class_init,
++    }, {
++        .name = TYPE_MCHP_GCLK,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpGclkState),
++        .instance_init = mchp_gclk_init,
++        .class_init = mchp_gclk_class_init,
++    }, {
++        .name = TYPE_MCHP_MCLK,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpMclkState),
++        .instance_init = mchp_mclk_init,
++        .class_init = mchp_mclk_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_clock_types)
+diff --git a/hw/misc/mchp_regblock.c b/hw/misc/mchp_regblock.c
+new file mode 100644
+index 0000000..2d23c0b
+--- /dev/null
++++ b/hw/misc/mchp_regblock.c
+@@ -0,0 +1,427 @@
++/*
++ * Microchip generic register block: one peripheral instance as a register file
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/bswap.h"
++#include "qemu/log.h"
++#include "hw/core/irq.h"
++#include "hw/core/loader.h"
++#include "hw/core/qdev-clock.h"
++#include "hw/misc/mchp_regblock.h"
++#include "migration/vmstate.h"
++#include "system/address-spaces.h"
++#include "trace.h"
++
++/* SAM convention for the control register at offset 0 */
++#define MCHP_CTRL_SWRST     BIT(0)
++#define MCHP_CTRL_ENABLE    BIT(1)
++
++/* A 32-bit word of the NVM rows (fuses) for reset values */
++static uint32_t mchp_regblock_nvm_word(hwaddr addr)
++{
++    /*
++     * At the first reset the loader has not copied the image's ROM blobs
++     * (for example user-row fuse words) into memory yet, so look at the
++     * blobs first, as the Arm CPU reset does for the vector table.
++     */
++    uint8_t *p = rom_ptr_for_as(&address_space_memory, addr, 4);
++
++    if (p) {
++        return ldl_le_p(p);
++    }
++    return address_space_ldl_le(&address_space_memory, addr,
++                                MEMTXATTRS_UNSPECIFIED, NULL);
++}
++
++void mchp_regblock_set_clock(MchpRegBlock *s, Clock *out, uint64_t hz)
++{
++    if (clock_set_hz(out, hz)) {
++        trace_mchp_clk_update(s->name,
++                              object_get_canonical_path_component(OBJECT(out)),
++                              hz);
++        clock_propagate(out);
++    }
++}
++
++/* The register holding the value of @ri: its alias target or itself. */
++static const MchpRegInfo *mchp_regblock_storage(MchpRegBlock *s,
++                                                const MchpRegInfo *ri)
++{
++    return ri->alias_of >= 0 ? &s->rf.regs[ri->alias_of] : ri;
++}
++
++static const MchpRegInfo *mchp_regblock_find_ctrl(MchpRegBlock *s)
++{
++    unsigned idx;
++    const MchpRegInfo *ri = mchp_regfile_lookup(&s->rf, 0, &idx);
++
++    if (ri && (!strcmp(ri->name, "CTRLA") || !strcmp(ri->name, "CTRL"))) {
++        return ri;
++    }
++    return NULL;
++}
++
++static void mchp_regblock_bind_table(MchpRegBlock *s,
++                                     const MchpRegInfo *regs, unsigned nregs,
++                                     const MchpResetOverride *ovr,
++                                     unsigned novr)
++{
++    mchp_regfile_set_table(&s->rf, regs, nregs);
++    mchp_regfile_set_overrides(&s->rf, ovr, novr);
++    s->ctrl = mchp_regblock_find_ctrl(s);
++    s->intflag = mchp_regfile_find(&s->rf, "INTFLAG");
++    s->intenset = mchp_regfile_find(&s->rf, "INTENSET");
++}
++
++static uint32_t mchp_regblock_view_selector(MchpRegBlock *s)
++{
++    const MchpInstanceInfo *info = s->info;
++    unsigned idx;
++    const MchpRegInfo *ri = mchp_regfile_lookup(&s->rf, info->view_sel_offset,
++                                                &idx);
++
++    if (!ri) {
++        return 0;
++    }
++    return extract32(mchp_regfile_get(&s->rf, ri, idx),
++                     info->view_sel_shift, info->view_sel_length);
++}
++
++/* Follow the mode selector (e.g. SERCOM CTRLA.MODE) to a register view. */
++static void mchp_regblock_select_view(MchpRegBlock *s)
++{
++    const MchpInstanceInfo *info = s->info;
++    uint32_t sel;
++
++    if (!info->nviews) {
++        return;
++    }
++    sel = mchp_regblock_view_selector(s);
++    if (sel == s->view_sel) {
++        return;
++    }
++    s->view_sel = sel;
++    for (unsigned i = 0; i < info->nviews; i++) {
++        const MchpRegView *v = &info->views[i];
++
++        if (v->value == sel) {
++            mchp_regblock_bind_table(s, v->regs, v->nregs, v->ovr, v->novr);
++            return;
++        }
++    }
++    qemu_log_mask(LOG_GUEST_ERROR,
++                  "%s: reserved mode %" PRIu32 " selected; register view"
++                  " unchanged\n", s->name, sel);
++}
++
++static void mchp_regblock_apply_fuses(MchpRegBlock *s)
++{
++    const MchpInstanceInfo *info = s->info;
++
++    for (unsigned i = 0; i < info->nreset_from; i++) {
++        const MchpFuseReset *f = &info->reset_from[i];
++        uint32_t field = f->fuse_mask >> ctz32(f->fuse_mask);
++        uint32_t v = (mchp_regblock_nvm_word(f->fuse_addr) & f->fuse_mask)
++                     >> ctz32(f->fuse_mask);
++        uint32_t reg = mchp_regfile_peek(&s->rf, f->reg_offset, f->reg_size);
++
++        if (f->invert) {
++            v = ~v & field;
++        }
++        reg = (reg & ~f->reg_mask) | ((v << ctz32(f->reg_mask)) & f->reg_mask);
++        mchp_regfile_poke(&s->rf, f->reg_offset, f->reg_size, reg);
++    }
++}
++
++/* Register reset values, then fields loaded from NVM fuses */
++static void mchp_regblock_reset_registers(MchpRegBlock *s)
++{
++    const MchpInstanceInfo *info = s->info;
++
++    mchp_regblock_bind_table(s, info->regs, info->nregs, info->ovr,
++                             info->novr);
++    mchp_regfile_reset(&s->rf);
++    mchp_regblock_apply_fuses(s);
++    if (info->nviews) {
++        s->view_sel = mchp_regblock_view_selector(s);
++    }
++}
++
++void mchp_regblock_update_irq(MchpRegBlock *s)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_GET_CLASS(s);
++    bool level = false;
++
++    if (c->irq_pending) {
++        level = c->irq_pending(s);
++    } else if (s->intflag && s->intenset) {
++        level = mchp_regfile_get(&s->rf, s->intflag, 0) &
++                mchp_regfile_get(&s->rf, mchp_regblock_storage(s, s->intenset),
++                                 0);
++    }
++    qemu_set_irq(s->irq, level);
++}
++
++static void mchp_regblock_soft_reset(MchpRegBlock *s)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_GET_CLASS(s);
++
++    mchp_regblock_reset_registers(s);
++    if (c->reset_hold) {
++        c->reset_hold(s);
++    }
++    if (c->reset_exit) {
++        c->reset_exit(s);
++    }
++    mchp_regblock_update_irq(s);
++}
++
++/* Interrupt enables and W1C/read-only registers are fully modelled. */
++static bool mchp_regblock_is_bookkeeping(MchpRegBlock *s,
++                                         const MchpRegInfo *ri)
++{
++    return !ri->wmask || mchp_regblock_storage(s, ri) == s->intenset;
++}
++
++static void mchp_regblock_log_write(MchpRegBlock *s, const MchpRegInfo *ri,
++                                    unsigned idx, uint32_t value)
++{
++    trace_mchp_regblock_unimp_write(s->name, ri->name, idx, value);
++    if (ri->count > 1) {
++        qemu_log_mask(LOG_UNIMP, "%s.%s[%u]: write 0x%" PRIx32
++                      " not modelled\n", s->name, ri->name, idx, value);
++    } else {
++        qemu_log_mask(LOG_UNIMP, "%s.%s: write 0x%" PRIx32 " not modelled\n",
++                      s->name, ri->name, value);
++    }
++}
++
++/* Report the registers of a generic block written by one access. */
++static void mchp_regblock_log_writes(MchpRegBlock *s, hwaddr addr,
++                                     uint64_t val, unsigned size)
++{
++    hwaddr pos = addr, end = addr + size;
++
++    while (pos < end) {
++        unsigned idx;
++        const MchpRegInfo *ri = mchp_regfile_lookup(&s->rf, pos, &idx);
++        uint32_t base, value = 0;
++        hwaddr stop;
++
++        if (!ri) {
++            pos++;
++            continue;
++        }
++        base = mchp_regfile_elem_offset(ri, idx);
++        stop = MIN(end, base + ri->size);
++        for (; pos < stop; pos++) {
++            value |= extract64(val, (pos - addr) * 8, 8) << ((pos - base) * 8);
++        }
++        if (!mchp_regblock_is_bookkeeping(s, ri)) {
++            mchp_regblock_log_write(s, ri, idx, value);
++        }
++    }
++}
++
++static MemTxResult mchp_regblock_read(void *opaque, hwaddr addr,
++                                      uint64_t *data, unsigned size,
++                                      MemTxAttrs attrs)
++{
++    MchpRegBlock *s = opaque;
++
++    *data = mchp_regfile_read(&s->rf, addr, size, attrs);
++    if (!attrs.debug && MCHP_REGBLOCK_GET_CLASS(s)->pre_read) {
++        mchp_regblock_update_irq(s);
++    }
++    return MEMTX_OK;
++}
++
++static MemTxResult mchp_regblock_write(void *opaque, hwaddr addr,
++                                       uint64_t val, unsigned size,
++                                       MemTxAttrs attrs)
++{
++    MchpRegBlock *s = opaque;
++
++    mchp_regfile_write(&s->rf, addr, val, size, attrs);
++
++    if (addr == 0 && (val & MCHP_CTRL_SWRST) && s->ctrl &&
++        (s->ctrl->rdz & MCHP_CTRL_SWRST)) {
++        mchp_regblock_soft_reset(s);
++        return MEMTX_OK;
++    }
++    if (MCHP_REGBLOCK_GET_CLASS(s)->log_writes) {
++        mchp_regblock_log_writes(s, addr, val, size);
++    }
++    mchp_regblock_select_view(s);
++    mchp_regblock_update_irq(s);
++    return MEMTX_OK;
++}
++
++static const MemoryRegionOps mchp_regblock_ops = {
++    .read_with_attrs = mchp_regblock_read,
++    .write_with_attrs = mchp_regblock_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = {
++        .min_access_size = 1,
++        .max_access_size = 4,
++        .unaligned = false,
++    },
++    .impl = {
++        .min_access_size = 1,
++        .max_access_size = 4,
++        .unaligned = false,
++    },
++};
++
++static bool mchp_regblock_ctrl_enabled(MchpRegFile *rf)
++{
++    MchpRegBlock *s = rf->opaque;
++
++    return s->ctrl && (mchp_regfile_get(rf, s->ctrl, 0) & MCHP_CTRL_ENABLE);
++}
++
++void mchp_regblock_set_info(MchpRegBlock *s, const MchpInstanceInfo *info)
++{
++    assert(!DEVICE(s)->realized);
++    s->info = info;
++}
++
++static void mchp_regblock_reset_hold(Object *obj, ResetType type)
++{
++    MchpRegBlock *s = MCHP_REGBLOCK(obj);
++    MchpRegBlockClass *c = MCHP_REGBLOCK_GET_CLASS(s);
++
++    mchp_regblock_reset_registers(s);
++    if (c->reset_hold) {
++        c->reset_hold(s);
++    }
++}
++
++static void mchp_regblock_reset_exit(Object *obj, ResetType type)
++{
++    MchpRegBlock *s = MCHP_REGBLOCK(obj);
++    MchpRegBlockClass *c = MCHP_REGBLOCK_GET_CLASS(s);
++
++    if (c->reset_exit) {
++        c->reset_exit(s);
++    }
++    mchp_regblock_update_irq(s);
++}
++
++static void mchp_regblock_realize(DeviceState *dev, Error **errp)
++{
++    MchpRegBlock *s = MCHP_REGBLOCK(dev);
++    MchpRegBlockClass *c = MCHP_REGBLOCK_GET_CLASS(s);
++    const MchpInstanceInfo *info = s->info;
++
++    if (!info) {
++        error_setg(errp, "%s: no instance selected",
++                   object_get_typename(OBJECT(dev)));
++        return;
++    }
++    if (!info->regs || !info->slot_size) {
++        error_setg(errp, "%s: instance %s has no register map",
++                   object_get_typename(OBJECT(dev)), info->name);
++        return;
++    }
++
++    s->name = g_ascii_strdown(info->name, -1);
++    mchp_regfile_init(&s->rf, s->name, info->regs_size, info->regs,
++                      info->nregs);
++    s->rf.opaque = s;
++    s->rf.pre_read = c->pre_read;
++    s->rf.post_write = c->post_write;
++    s->rf.is_enabled = c->is_enabled ? c->is_enabled
++                                     : mchp_regblock_ctrl_enabled;
++    mchp_regblock_bind_table(s, info->regs, info->nregs, info->ovr,
++                             info->novr);
++
++    memory_region_init_io(&s->iomem, OBJECT(s), &mchp_regblock_ops, s,
++                          s->name, info->slot_size);
++    sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->iomem);
++    if (info->alias_size) {
++        g_autofree char *alias = g_ascii_strdown(info->alias_name, -1);
++
++        memory_region_init_alias(&s->alias, OBJECT(s), alias, &s->iomem, 0,
++                                 info->alias_size);
++        sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->alias);
++    }
++    if (c->realize) {
++        c->realize(s, errp);
++    }
++}
++
++static void mchp_regblock_init(Object *obj)
++{
++    MchpRegBlock *s = MCHP_REGBLOCK(obj);
++
++    sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq);
++    s->gclk = qdev_init_clock_in(DEVICE(obj), "gclk", NULL, NULL, 0);
++}
++
++static void mchp_regblock_finalize(Object *obj)
++{
++    MchpRegBlock *s = MCHP_REGBLOCK(obj);
++
++    g_free(s->rf.storage);
++    g_free(s->name);
++}
++
++static int mchp_regblock_post_load(void *opaque, int version_id)
++{
++    MchpRegBlock *s = opaque;
++
++    if (s->info->nviews) {
++        s->view_sel = UINT32_MAX;
++        mchp_regblock_select_view(s);
++    }
++    return 0;
++}
++
++const VMStateDescription vmstate_mchp_regblock = {
++    .name = TYPE_MCHP_REGBLOCK,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .post_load = mchp_regblock_post_load,
++    .fields = (const VMStateField[]) {
++        VMSTATE_MCHP_REGFILE(rf, MchpRegBlock),
++        VMSTATE_CLOCK(gclk, MchpRegBlock),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void mchp_regblock_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    ResettableClass *rc = RESETTABLE_CLASS(klass);
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    dc->realize = mchp_regblock_realize;
++    dc->vmsd = &vmstate_mchp_regblock;
++    /* Reason: configured from a generated SoC instance table */
++    dc->user_creatable = false;
++    rc->phases.hold = mchp_regblock_reset_hold;
++    rc->phases.exit = mchp_regblock_reset_exit;
++    c->log_writes = true;
++}
++
++static const TypeInfo mchp_regblock_types[] = {
++    {
++        .name = TYPE_MCHP_REGBLOCK,
++        .parent = TYPE_SYS_BUS_DEVICE,
++        .instance_size = sizeof(MchpRegBlock),
++        .instance_init = mchp_regblock_init,
++        .instance_finalize = mchp_regblock_finalize,
++        .class_size = sizeof(MchpRegBlockClass),
++        .class_init = mchp_regblock_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_regblock_types)
+diff --git a/hw/misc/mchp_regfile.c b/hw/misc/mchp_regfile.c
+new file mode 100644
+index 0000000..523c275
+--- /dev/null
++++ b/hw/misc/mchp_regfile.c
+@@ -0,0 +1,279 @@
++/*
++ * Microchip register file: byte-lane dispatcher over generated register tables
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/bitops.h"
++#include "qemu/bswap.h"
++#include "qemu/log.h"
++#include "hw/misc/mchp_regfile.h"
++#include "trace.h"
++
++#define MCHP_F_ALIAS_ANY \
++    (MCHP_F_ALIAS_SET | MCHP_F_ALIAS_CLEAR | MCHP_F_ALIAS_TOGGLE)
++
++/* Catch generator mistakes at realize time rather than on a guest access. */
++static void mchp_regfile_check_table(MchpRegFile *rf)
++{
++    for (unsigned i = 0; i < rf->nregs; i++) {
++        const MchpRegInfo *ri = &rf->regs[i];
++
++        assert(ri->size == 1 || ri->size == 2 || ri->size == 4);
++        assert(ri->count >= 1 && ri->stride >= ri->size);
++        assert(mchp_regfile_elem_offset(ri, ri->count - 1) + ri->size <=
++               rf->size);
++        if (ri->alias_of >= 0) {
++            assert(ri->alias_of < rf->nregs);
++            assert(rf->regs[ri->alias_of].count == ri->count);
++        }
++    }
++}
++
++void mchp_regfile_init(MchpRegFile *rf, const char *name, uint32_t size,
++                       const MchpRegInfo *regs, unsigned nregs)
++{
++    rf->name = name;
++    rf->storage = g_malloc0(size);
++    rf->size = size;
++    rf->ovr = NULL;
++    rf->novr = 0;
++    rf->opaque = NULL;
++    rf->pre_read = NULL;
++    rf->post_write = NULL;
++    rf->is_enabled = NULL;
++    mchp_regfile_set_table(rf, regs, nregs);
++}
++
++void mchp_regfile_set_table(MchpRegFile *rf, const MchpRegInfo *regs,
++                            unsigned nregs)
++{
++    rf->regs = regs;
++    rf->nregs = nregs;
++    mchp_regfile_check_table(rf);
++}
++
++void mchp_regfile_set_overrides(MchpRegFile *rf, const MchpResetOverride *ovr,
++                                unsigned n)
++{
++    rf->ovr = ovr;
++    rf->novr = n;
++}
++
++uint32_t mchp_regfile_peek(MchpRegFile *rf, uint32_t offset, unsigned size)
++{
++    assert(offset + size <= rf->size);
++    return ldn_le_p(rf->storage + offset, size);
++}
++
++void mchp_regfile_poke(MchpRegFile *rf, uint32_t offset, unsigned size,
++                       uint32_t val)
++{
++    assert(offset + size <= rf->size);
++    stn_le_p(rf->storage + offset, size, val);
++}
++
++void mchp_regfile_reset(MchpRegFile *rf)
++{
++    memset(rf->storage, 0, rf->size);
++    for (unsigned i = 0; i < rf->nregs; i++) {
++        const MchpRegInfo *ri = &rf->regs[i];
++
++        /* Set/clear/toggle views have no storage of their own. */
++        if (ri->alias_of >= 0 && ri->alias_of != i) {
++            continue;
++        }
++        for (unsigned idx = 0; idx < ri->count; idx++) {
++            mchp_regfile_set(rf, ri, idx, ri->reset);
++        }
++    }
++    for (unsigned i = 0; i < rf->novr; i++) {
++        mchp_regfile_poke(rf, rf->ovr[i].offset, rf->ovr[i].size,
++                          rf->ovr[i].value);
++    }
++}
++
++const MchpRegInfo *mchp_regfile_find(MchpRegFile *rf, const char *name)
++{
++    for (unsigned i = 0; i < rf->nregs; i++) {
++        if (!strcmp(rf->regs[i].name, name)) {
++            return &rf->regs[i];
++        }
++    }
++    return NULL;
++}
++
++const MchpRegInfo *mchp_regfile_lookup(MchpRegFile *rf, uint32_t offset,
++                                       unsigned *idx)
++{
++    for (unsigned i = 0; i < rf->nregs; i++) {
++        const MchpRegInfo *ri = &rf->regs[i];
++        uint32_t rel = offset - ri->offset;
++
++        if (offset >= ri->offset && rel / ri->stride < ri->count &&
++            rel % ri->stride < ri->size) {
++            *idx = rel / ri->stride;
++            return ri;
++        }
++    }
++    return NULL;
++}
++
++static uint32_t mchp_regfile_read_elem(MchpRegFile *rf, const MchpRegInfo *ri,
++                                       unsigned idx, bool side_effects)
++{
++    const MchpRegInfo *src = ri->alias_of >= 0 ? &rf->regs[ri->alias_of] : ri;
++    uint32_t val;
++
++    if (ri->flags & MCHP_F_WRITE_ONLY) {
++        return 0;
++    }
++    val = mchp_regfile_get(rf, src, idx);
++    if ((ri->flags & (MCHP_F_DYNAMIC | MCHP_F_HOOK_PRE_READ)) && rf->pre_read) {
++        val = rf->pre_read(rf, ri, idx, val, side_effects);
++    }
++    return val & ~ri->rdz & ri->impl;
++}
++
++uint64_t mchp_regfile_read(MchpRegFile *rf, hwaddr addr, unsigned size,
++                           MemTxAttrs attrs)
++{
++    hwaddr pos = addr, end = addr + size;
++    uint64_t data = 0;
++    bool hit = false;
++
++    while (pos < end) {
++        unsigned idx;
++        const MchpRegInfo *ri = mchp_regfile_lookup(rf, pos, &idx);
++        uint32_t base, val;
++        hwaddr stop;
++
++        if (!ri) {
++            pos++;
++            continue;
++        }
++        base = mchp_regfile_elem_offset(ri, idx);
++        stop = MIN(end, base + ri->size);
++        val = mchp_regfile_read_elem(rf, ri, idx, !attrs.debug);
++        for (; pos < stop; pos++) {
++            data |= (uint64_t)extract32(val, (pos - base) * 8, 8)
++                    << ((pos - addr) * 8);
++        }
++        hit = true;
++    }
++
++    if (!hit && !attrs.debug) {
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: read of reserved offset 0x%" HWADDR_PRIx
++                      " (size %u)\n", rf->name, addr, size);
++    }
++    trace_mchp_regfile_read(rf->name, addr, size, data);
++    return data;
++}
++
++static void mchp_regfile_write_alias(MchpRegFile *rf, const MchpRegInfo *ri,
++                                     unsigned idx, uint32_t val, uint32_t we)
++{
++    const MchpRegInfo *target = &rf->regs[ri->alias_of];
++    uint32_t old = mchp_regfile_get(rf, target, idx);
++    uint32_t bits = val & we & ri->wmask;
++    uint32_t new;
++
++    if (ri->flags & MCHP_F_ALIAS_SET) {
++        new = old | bits;
++    } else if (ri->flags & MCHP_F_ALIAS_CLEAR) {
++        new = old & ~bits;
++    } else {
++        new = old ^ bits;
++    }
++    mchp_regfile_set(rf, target, idx, new);
++
++    if (((ri->flags | target->flags) & MCHP_F_HOOK_POST_WRITE) &&
++        rf->post_write) {
++        rf->post_write(rf, ri, idx, old, val, we);
++    }
++}
++
++/* Write the lanes @we of element @idx of @ri; @val is lane-aligned. */
++static void mchp_regfile_write_elem(MchpRegFile *rf, const MchpRegInfo *ri,
++                                    unsigned idx, uint32_t val, uint32_t we)
++{
++    uint32_t old, new, writable;
++
++    if (ri->flags & MCHP_F_READ_ONLY) {
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s.%s: write 0x%" PRIx32 " to read-only register"
++                      " (ignored)\n", rf->name, ri->name, val & we);
++        return;
++    }
++    if (ri->flags & MCHP_F_ALIAS_ANY) {
++        mchp_regfile_write_alias(rf, ri, idx, val, we);
++        return;
++    }
++
++    old = mchp_regfile_get(rf, ri, idx);
++    writable = ri->wmask & we;
++    if ((val ^ old) & ri->enprot & we && rf->is_enabled &&
++        rf->is_enabled(rf)) {
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s.%s: write to enable-protected bits 0x%" PRIx32
++                      " while enabled (ignored)\n", rf->name, ri->name,
++                      (val ^ old) & ri->enprot & we);
++        writable &= ~ri->enprot;
++    }
++    new = (old & ~writable) | (val & writable);
++    new &= ~(val & we & ri->w1c);
++    mchp_regfile_set(rf, ri, idx, new);
++
++    if ((ri->flags & MCHP_F_HOOK_POST_WRITE) && rf->post_write) {
++        rf->post_write(rf, ri, idx, old, val, we);
++    }
++    if (ri->rdz) {
++        mchp_regfile_set(rf, ri, idx,
++                         mchp_regfile_get(rf, ri, idx) & ~ri->rdz);
++    }
++}
++
++void mchp_regfile_write(MchpRegFile *rf, hwaddr addr, uint64_t val,
++                        unsigned size, MemTxAttrs attrs)
++{
++    hwaddr pos = addr, end = addr + size;
++    uint64_t reserved = 0;
++    bool hit = false;
++
++    trace_mchp_regfile_write(rf->name, addr, size, val);
++    while (pos < end) {
++        unsigned idx;
++        const MchpRegInfo *ri = mchp_regfile_lookup(rf, pos, &idx);
++        uint32_t base, lanes = 0, lval = 0;
++        hwaddr stop;
++
++        if (!ri) {
++            reserved |= val & (0xffull << ((pos - addr) * 8));
++            pos++;
++            continue;
++        }
++        base = mchp_regfile_elem_offset(ri, idx);
++        stop = MIN(end, base + ri->size);
++        for (; pos < stop; pos++) {
++            unsigned lane = (pos - base) * 8;
++
++            lanes |= 0xffu << lane;
++            lval |= extract64(val, (pos - addr) * 8, 8) << lane;
++        }
++        mchp_regfile_write_elem(rf, ri, idx, lval, lanes);
++        hit = true;
++    }
++
++    /* Zeros written to reserved bytes next to a register are harmless. */
++    if (!hit || reserved) {
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: write 0x%" PRIx64 " to reserved offset 0x%"
++                      HWADDR_PRIx " (size %u, ignored)\n",
++                      rf->name, val, addr, size);
++    }
++}
+diff --git a/hw/misc/mchp_sysctrl.c b/hw/misc/mchp_sysctrl.c
+new file mode 100644
+index 0000000..28c22ee
+--- /dev/null
++++ b/hw/misc/mchp_sysctrl.c
+@@ -0,0 +1,616 @@
++/*
++ * Microchip SAM/PIC32CM system controllers: NVMCTRL, SUPC, RSTC, WDT, PM,
++ * PAC, DSU and DIVAS
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Each model only adds what the generated register tables cannot express;
++ * references are to DS60001632H (PIC32CM JH00/JH01 data sheet).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/log.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/mchp/gen/divas_u2258.h"
++#include "hw/mchp/gen/dsu_u2209.h"
++#include "hw/mchp/gen/nvmctrl_03929.h"
++#include "hw/mchp/gen/pac_u2120.h"
++#include "hw/mchp/gen/rstc_u2239.h"
++#include "hw/mchp/gen/supc_u2117.h"
++#include "hw/mchp/gen/wdt_u2251.h"
++#include "hw/misc/mchp_sysctrl.h"
++#include "migration/vmstate.h"
++#include "system/runstate.h"
++#include "trace.h"
++
++static uint32_t mchp_reg(MchpRegBlock *s, hwaddr offset, unsigned size)
++{
++    return mchp_regfile_peek(&s->rf, offset, size);
++}
++
++static void mchp_reg_set_bits(MchpRegBlock *s, hwaddr offset, unsigned size,
++                              uint32_t bits)
++{
++    mchp_regfile_poke(&s->rf, offset, size, mchp_reg(s, offset, size) | bits);
++}
++
++/* NVMCTRL */
++
++/*
++ * A command runs when CTRLA is written with the CMDEX key (DS 26.6.1);
++ * without it the write is dropped and STATUS.PROGE is set. The commands
++ * that need no flash array complete at once and READY stays 1.
++ */
++static void mchp_nvmctrl_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                    unsigned idx, uint32_t old,
++                                    uint32_t written, uint32_t we)
++{
++    MchpRegBlock *s = rf->opaque;
++    uint32_t cmd = FIELD_EX32(written, MCHP_NVMCTRL_CTRLA, CMD);
++
++    if (ri->offset != A_MCHP_NVMCTRL_CTRLA) {
++        return;
++    }
++    if (FIELD_EX32(written, MCHP_NVMCTRL_CTRLA, CMDEX) !=
++        MCHP_NVMCTRL_CTRLA_CMDEX_KEY) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s.CTRLA: command 0x%" PRIx32
++                      " without the CMDEX key (PROGE)\n", s->name, cmd);
++        mchp_regfile_set(rf, ri, idx, old);
++        mchp_reg_set_bits(s, A_MCHP_NVMCTRL_STATUS, 2,
++                          R_MCHP_NVMCTRL_STATUS_PROGE_MASK);
++        mchp_reg_set_bits(s, A_MCHP_NVMCTRL_INTFLAG, 4,
++                          R_MCHP_NVMCTRL_INTFLAG_ERROR_MASK);
++        return;
++    }
++
++    switch (cmd) {
++    case MCHP_NVMCTRL_CTRLA_CMD_SPRM:
++        mchp_reg_set_bits(s, A_MCHP_NVMCTRL_STATUS, 2,
++                          R_MCHP_NVMCTRL_STATUS_PRM_MASK);
++        break;
++    case MCHP_NVMCTRL_CTRLA_CMD_CPRM:
++        mchp_regfile_poke(rf, A_MCHP_NVMCTRL_STATUS, 2,
++                          mchp_reg(s, A_MCHP_NVMCTRL_STATUS, 2) &
++                          ~R_MCHP_NVMCTRL_STATUS_PRM_MASK);
++        break;
++    case MCHP_NVMCTRL_CTRLA_CMD_PBC:
++    case MCHP_NVMCTRL_CTRLA_CMD_INVALL:
++        break;                  /* no page buffer or cache to clear */
++    default:
++        qemu_log_mask(LOG_UNIMP, "%s.CTRLA: command 0x%" PRIx32
++                      " not modelled (flash programming)\n", s->name, cmd);
++        break;
++    }
++}
++
++static void mchp_nvmctrl_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    c->post_write = mchp_nvmctrl_post_write;
++    c->log_writes = false;
++}
++
++/* SUPC */
++
++/* Synchronization is instant, so BVDDSRDY always reads 1 (DS 18.6.4). */
++static uint32_t mchp_supc_status(MchpRegBlock *s)
++{
++    uint32_t bodvdd = mchp_reg(s, A_MCHP_SUPC_BODVDD, 4);
++    uint32_t status = R_MCHP_SUPC_STATUS_BVDDSRDY_MASK;
++
++    if (FIELD_EX32(bodvdd, MCHP_SUPC_BODVDD, ENABLE)) {
++        status |= R_MCHP_SUPC_STATUS_BODVDDRDY_MASK;
++    }
++    return status;
++}
++
++static bool mchp_supc_is_enabled(MchpRegFile *rf)
++{
++    return FIELD_EX32(mchp_regfile_peek(rf, A_MCHP_SUPC_BODVDD, 4),
++                      MCHP_SUPC_BODVDD, ENABLE);
++}
++
++static uint32_t mchp_supc_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                                   unsigned idx, uint32_t stored,
++                                   bool side_effects)
++{
++    if (ri->offset == A_MCHP_SUPC_STATUS) {
++        return mchp_supc_status(rf->opaque);
++    }
++    return stored;
++}
++
++static void mchp_supc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                 unsigned idx, uint32_t old,
++                                 uint32_t written, uint32_t we)
++{
++    MchpRegBlock *s = rf->opaque;
++    uint32_t flags = R_MCHP_SUPC_INTFLAG_BVDDSRDY_MASK;
++
++    if (ri->offset != A_MCHP_SUPC_BODVDD) {
++        return;
++    }
++    if (!FIELD_EX32(old, MCHP_SUPC_BODVDD, ENABLE) &&
++        mchp_supc_is_enabled(rf)) {
++        flags |= R_MCHP_SUPC_INTFLAG_BODVDDRDY_MASK;
++    }
++    mchp_reg_set_bits(s, A_MCHP_SUPC_INTFLAG, 4, flags);
++}
++
++/* The BOD was ready (and synchronized) when the device left reset. */
++static void mchp_supc_reset_hold(MchpRegBlock *s)
++{
++    mchp_regfile_poke(&s->rf, A_MCHP_SUPC_INTFLAG, 4, mchp_supc_status(s));
++}
++
++static void mchp_supc_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    c->pre_read = mchp_supc_pre_read;
++    c->post_write = mchp_supc_post_write;
++    c->is_enabled = mchp_supc_is_enabled;
++    c->reset_hold = mchp_supc_reset_hold;
++    c->log_writes = false;
++}
++
++/* RSTC */
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpRstcState, MCHP_RSTC)
++
++struct MchpRstcState {
++    MchpRegBlock parent_obj;
++
++    uint8_t cause;              /* RCAUSE after the next reset */
++};
++
++/* RCAUSE must describe the reset it survives (DS 20.7.1). */
++static void mchp_rstc_reset_request(void *opaque, int line, int level)
++{
++    MchpRstcState *s = MCHP_RSTC(opaque);
++
++    if (!level) {
++        return;
++    }
++    s->cause = BIT(line);
++    trace_mchp_rstc_reset_request(MCHP_REGBLOCK(s)->name, s->cause);
++    qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
++}
++
++static void mchp_rstc_reset_hold(MchpRegBlock *rb)
++{
++    MchpRstcState *s = MCHP_RSTC(rb);
++
++    mchp_regfile_poke(&rb->rf, A_MCHP_RSTC_RCAUSE, 1, s->cause);
++    /* A later reset that no source announced came from the reset pin. */
++    s->cause = R_MCHP_RSTC_RCAUSE_EXT_MASK;
++}
++
++static void mchp_rstc_init(Object *obj)
++{
++    MchpRstcState *s = MCHP_RSTC(obj);
++
++    qdev_init_gpio_in_named(DEVICE(obj), mchp_rstc_reset_request,
++                            MCHP_RSTC_RESET_CAUSE, 8);
++    s->cause = R_MCHP_RSTC_RCAUSE_POR_MASK;
++}
++
++static const VMStateDescription vmstate_mchp_rstc = {
++    .name = TYPE_MCHP_RSTC,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpRstcState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_UINT8(cause, MchpRstcState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void mchp_rstc_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_rstc;
++    c->reset_hold = mchp_rstc_reset_hold;
++    c->log_writes = false;
++}
++
++/* WDT */
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpWdtState, MCHP_WDT)
++
++struct MchpWdtState {
++    MchpRegBlock parent_obj;
++
++    qemu_irq system_reset;
++};
++
++#define MCHP_WDT_ON \
++    (R_MCHP_WDT_CTRLA_ENABLE_MASK | R_MCHP_WDT_CTRLA_ALWAYSON_MASK)
++
++static bool mchp_wdt_is_enabled(MchpRegFile *rf)
++{
++    return mchp_regfile_peek(rf, A_MCHP_WDT_CTRLA, 1) & MCHP_WDT_ON;
++}
++
++static void mchp_wdt_report_enabled(MchpRegBlock *s)
++{
++    qemu_log_mask(LOG_UNIMP, "%s.CTRLA: watchdog enabled; time-out not"
++                  " modelled\n", s->name);
++}
++
++static void mchp_wdt_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                unsigned idx, uint32_t old,
++                                uint32_t written, uint32_t we)
++{
++    MchpWdtState *s = MCHP_WDT(rf->opaque);
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint32_t val = mchp_regfile_get(rf, ri, idx);
++
++    switch (ri->offset) {
++    case A_MCHP_WDT_CTRLA:
++        /* ALWAYSON holds until power-on reset and locks CTRLA (DS 22.6.1) */
++        if (old & R_MCHP_WDT_CTRLA_ALWAYSON_MASK) {
++            if (val != old) {
++                qemu_log_mask(LOG_GUEST_ERROR, "%s.CTRLA: read-only while"
++                              " ALWAYSON is set (ignored)\n", rb->name);
++                mchp_regfile_set(rf, ri, idx, old);
++            }
++        } else if ((val & MCHP_WDT_ON) && !(old & MCHP_WDT_ON)) {
++            mchp_wdt_report_enabled(rb);
++        }
++        break;
++    case A_MCHP_WDT_CLEAR:
++        /* Any value but the key resets the system at once (DS 22.6.8) */
++        if (mchp_wdt_is_enabled(rf) &&
++            FIELD_EX32(written, MCHP_WDT_CLEAR, CLEAR) !=
++            MCHP_WDT_CLEAR_CLEAR_KEY) {
++            qemu_log_mask(LOG_GUEST_ERROR, "%s.CLEAR: wrong key 0x%" PRIx32
++                          "; system reset\n", rb->name,
++                          FIELD_EX32(written, MCHP_WDT_CLEAR, CLEAR));
++            qemu_irq_pulse(s->system_reset);
++        }
++        break;
++    }
++}
++
++static void mchp_wdt_reset_exit(MchpRegBlock *rb)
++{
++    if (mchp_wdt_is_enabled(&rb->rf)) {
++        mchp_wdt_report_enabled(rb);
++    }
++}
++
++static void mchp_wdt_init(Object *obj)
++{
++    MchpWdtState *s = MCHP_WDT(obj);
++
++    qdev_init_gpio_out_named(DEVICE(obj), &s->system_reset,
++                             MCHP_WDT_SYSTEM_RESET, 1);
++}
++
++static void mchp_wdt_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    c->post_write = mchp_wdt_post_write;
++    c->is_enabled = mchp_wdt_is_enabled;
++    c->reset_exit = mchp_wdt_reset_exit;
++    c->log_writes = false;
++}
++
++/* PM: SLEEPCFG and STDBYCFG only store; sleep is the CPU's WFI. */
++
++static void mchp_pm_class_init(ObjectClass *klass, const void *data)
++{
++    MCHP_REGBLOCK_CLASS(klass)->log_writes = false;
++}
++
++/* PAC */
++
++#define MCHP_PAC_NUM_BRIDGES        4
++#define MCHP_PAC_PERIDS_PER_BRIDGE  32
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpPacState, MCHP_PAC)
++
++struct MchpPacState {
++    MchpRegBlock parent_obj;
++
++    uint32_t locked[MCHP_PAC_NUM_BRIDGES];  /* SETLCK, until reset */
++};
++
++/* Errors of WRCTRL operations set INTFLAGA.PAC (DS 12.5.2.6). */
++static void mchp_pac_error(MchpRegBlock *s, const char *what, uint32_t perid)
++{
++    qemu_log_mask(LOG_GUEST_ERROR, "%s.WRCTRL: %s (PERID %" PRIu32 ")\n",
++                  s->name, what, perid);
++    mchp_reg_set_bits(s, A_MCHP_PAC_INTFLAGA, 4, BIT(0));
++}
++
++static void mchp_pac_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                unsigned idx, uint32_t old,
++                                uint32_t written, uint32_t we)
++{
++    MchpPacState *s = MCHP_PAC(rf->opaque);
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint32_t key = FIELD_EX32(written, MCHP_PAC_WRCTRL, KEY);
++    uint32_t perid = FIELD_EX32(written, MCHP_PAC_WRCTRL, PERID);
++    unsigned bridge = perid / MCHP_PAC_PERIDS_PER_BRIDGE;
++    uint32_t bit = BIT(perid % MCHP_PAC_PERIDS_PER_BRIDGE);
++    hwaddr offset = A_MCHP_PAC_STATUSA + 4 * bridge;
++    const MchpRegInfo *status_ri;
++    unsigned status_idx;
++    uint32_t status;
++
++    if (we != UINT32_MAX) {
++        mchp_pac_error(rb, "only word writes change protection", perid);
++        return;
++    }
++    if (key == MCHP_PAC_WRCTRL_KEY_OFF) {
++        return;
++    }
++    status_ri = bridge < MCHP_PAC_NUM_BRIDGES ?
++                mchp_regfile_lookup(rf, offset, &status_idx) : NULL;
++    if (!status_ri || !(status_ri->impl & bit)) {
++        mchp_pac_error(rb, "no such peripheral", perid);
++        return;
++    }
++
++    status = mchp_reg(rb, offset, 4);
++    switch (key) {
++    case MCHP_PAC_WRCTRL_KEY_CLR:
++        if (s->locked[bridge] & bit) {
++            mchp_pac_error(rb, "protection is locked", perid);
++        } else if (!(status & bit)) {
++            mchp_pac_error(rb, "double clear", perid);
++        }
++        status &= ~bit | s->locked[bridge];
++        break;
++    case MCHP_PAC_WRCTRL_KEY_SET:
++    case MCHP_PAC_WRCTRL_KEY_SETLCK:
++        if (status & bit) {
++            mchp_pac_error(rb, "already protected", perid);
++            break;
++        }
++        status |= bit;
++        if (key == MCHP_PAC_WRCTRL_KEY_SETLCK) {
++            s->locked[bridge] |= bit;
++        }
++        break;
++    default:
++        mchp_pac_error(rb, "invalid key", perid);
++        break;
++    }
++    mchp_regfile_poke(rf, offset, 4, status);
++}
++
++static bool mchp_pac_irq_pending(MchpRegBlock *s)
++{
++    uint32_t flags = 0;
++
++    for (hwaddr off = A_MCHP_PAC_INTFLAGAHB; off <= A_MCHP_PAC_INTFLAGD;
++         off += 4) {
++        flags |= mchp_reg(s, off, 4);
++    }
++    return flags &&
++           (mchp_reg(s, A_MCHP_PAC_INTENSET, 1) & R_MCHP_PAC_INTENSET_ERR_MASK);
++}
++
++static void mchp_pac_reset_hold(MchpRegBlock *rb)
++{
++    MchpPacState *s = MCHP_PAC(rb);
++
++    memset(s->locked, 0, sizeof(s->locked));
++}
++
++static const VMStateDescription vmstate_mchp_pac = {
++    .name = TYPE_MCHP_PAC,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpPacState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_UINT32_ARRAY(locked, MchpPacState, MCHP_PAC_NUM_BRIDGES),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void mchp_pac_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_pac;
++    c->post_write = mchp_pac_post_write;
++    c->irq_pending = mchp_pac_irq_pending;
++    c->reset_hold = mchp_pac_reset_hold;
++    c->log_writes = false;
++}
++
++/* DSU */
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpDsuState, MCHP_DSU)
++
++struct MchpDsuState {
++    MchpRegBlock parent_obj;
++
++    uint8_t revision;
++};
++
++static void mchp_dsu_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                unsigned idx, uint32_t old,
++                                uint32_t written, uint32_t we)
++{
++    MchpRegBlock *s = rf->opaque;
++
++    if (ri->offset != A_MCHP_DSU_CTRL) {
++        return;                 /* CTRL.SWRST is handled by mchp-regblock */
++    }
++    if (FIELD_EX32(written, MCHP_DSU_CTRL, CRC)) {
++        qemu_log_mask(LOG_UNIMP, "%s.CTRL: CRC32 not modelled\n", s->name);
++    }
++    if (FIELD_EX32(written, MCHP_DSU_CTRL, CE)) {
++        qemu_log_mask(LOG_UNIMP, "%s.CTRL: chip erase not modelled\n",
++                      s->name);
++    }
++}
++
++static void mchp_dsu_reset_hold(MchpRegBlock *rb)
++{
++    MchpDsuState *s = MCHP_DSU(rb);
++    uint32_t did = mchp_reg(rb, A_MCHP_DSU_DID, 4);
++
++    mchp_regfile_poke(&rb->rf, A_MCHP_DSU_DID, 4,
++                      FIELD_DP32(did, MCHP_DSU_DID, REVISION, s->revision));
++}
++
++static bool mchp_dsu_realize(MchpRegBlock *rb, Error **errp)
++{
++    MchpDsuState *s = MCHP_DSU(rb);
++
++    if (s->revision > R_MCHP_DSU_DID_REVISION_MASK >>
++                      R_MCHP_DSU_DID_REVISION_SHIFT) {
++        error_setg(errp, "%s: revision %u does not fit DID.REVISION",
++                   rb->name, s->revision);
++        return false;
++    }
++    return true;
++}
++
++static const Property mchp_dsu_properties[] = {
++    DEFINE_PROP_UINT8("revision", MchpDsuState, revision, 1),
++};
++
++static void mchp_dsu_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    device_class_set_props(dc, mchp_dsu_properties);
++    c->realize = mchp_dsu_realize;
++    c->post_write = mchp_dsu_post_write;
++    c->reset_hold = mchp_dsu_reset_hold;
++    c->log_writes = false;
++}
++
++/* DIVAS: operations complete instantly, so STATUS.BUSY stays 0. */
++
++static void mchp_divas_result(MchpRegFile *rf, uint32_t result, uint32_t rem)
++{
++    mchp_regfile_poke(rf, A_MCHP_DIVAS_RESULT, 4, result);
++    mchp_regfile_poke(rf, A_MCHP_DIVAS_REM, 4, rem);
++}
++
++/* DS 21.5.4.3-21.5.4.5 */
++static void mchp_divas_divide(MchpRegFile *rf)
++{
++    uint32_t ctrla = mchp_regfile_peek(rf, A_MCHP_DIVAS_CTRLA, 1);
++    uint32_t dividend = mchp_regfile_peek(rf, A_MCHP_DIVAS_DIVIDEND, 4);
++    uint32_t divisor = mchp_regfile_peek(rf, A_MCHP_DIVAS_DIVISOR, 4);
++    int32_t sdividend = dividend, sdivisor = divisor;
++
++    if (!divisor) {
++        mchp_reg_set_bits(rf->opaque, A_MCHP_DIVAS_STATUS, 1,
++                          R_MCHP_DIVAS_STATUS_DBZ_MASK);
++        mchp_divas_result(rf, 0, dividend);
++    } else if (!FIELD_EX32(ctrla, MCHP_DIVAS_CTRLA, SIGNED)) {
++        mchp_divas_result(rf, dividend / divisor, dividend % divisor);
++    } else if (sdividend == INT32_MIN && sdivisor == -1) {
++        /* The overflow returns the most negative number, no flag */
++        mchp_divas_result(rf, INT32_MIN, 0);
++    } else {
++        mchp_divas_result(rf, sdividend / sdivisor, sdividend % sdivisor);
++    }
++}
++
++/* Integer square root, one result bit per step */
++static uint32_t mchp_divas_isqrt(uint32_t x)
++{
++    uint32_t root = 0;
++
++    for (uint32_t bit = 1u << 30; bit; bit >>= 2) {
++        if (x >= root + bit) {
++            x -= root + bit;
++            root = (root >> 1) + bit;
++        } else {
++            root >>= 1;
++        }
++    }
++    return root;
++}
++
++static void mchp_divas_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                  unsigned idx, uint32_t old,
++                                  uint32_t written, uint32_t we)
++{
++    uint32_t num, root;
++
++    switch (ri->offset) {
++    case A_MCHP_DIVAS_DIVISOR:
++        mchp_divas_divide(rf);
++        break;
++    case A_MCHP_DIVAS_SQRNUM:
++        num = mchp_regfile_peek(rf, A_MCHP_DIVAS_SQRNUM, 4);
++        root = mchp_divas_isqrt(num);
++        mchp_divas_result(rf, root, num - root * root);
++        break;
++    }
++}
++
++static void mchp_divas_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    c->post_write = mchp_divas_post_write;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_sysctrl_types[] = {
++    {
++        .name = TYPE_MCHP_NVMCTRL,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .class_init = mchp_nvmctrl_class_init,
++    }, {
++        .name = TYPE_MCHP_SUPC,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .class_init = mchp_supc_class_init,
++    }, {
++        .name = TYPE_MCHP_RSTC,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpRstcState),
++        .instance_init = mchp_rstc_init,
++        .class_init = mchp_rstc_class_init,
++    }, {
++        .name = TYPE_MCHP_WDT,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpWdtState),
++        .instance_init = mchp_wdt_init,
++        .class_init = mchp_wdt_class_init,
++    }, {
++        .name = TYPE_MCHP_PM,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .class_init = mchp_pm_class_init,
++    }, {
++        .name = TYPE_MCHP_PAC,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpPacState),
++        .class_init = mchp_pac_class_init,
++    }, {
++        .name = TYPE_MCHP_DSU,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpDsuState),
++        .class_init = mchp_dsu_class_init,
++    }, {
++        .name = TYPE_MCHP_DIVAS,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .class_init = mchp_divas_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_sysctrl_types)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 23265f6..fa5cc6b 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -17,6 +17,14 @@ system_ss.add(when: 'CONFIG_A9SCU', if_true: files('a9scu.c'))
+ system_ss.add(when: 'CONFIG_ARM11SCU', if_true: files('arm11scu.c'))
+ 
+ system_ss.add(when: 'CONFIG_ARM_V7M', if_true: files('armv7m_ras.c'))
++system_ss.add(when: 'CONFIG_MCHP_REGFILE', if_true: files(
++  'mchp_regfile.c',
++  'mchp_regblock.c',
++))
++system_ss.add(when: 'CONFIG_PIC32CM_JH_SOC', if_true: files(
++  'mchp_clock.c',
++  'mchp_sysctrl.c',
++))
+ 
+ # Mac devices
+ system_ss.add(when: 'CONFIG_MOS6522', if_true: files('mos6522.c'))
+diff --git a/hw/misc/trace-events b/hw/misc/trace-events
+index c9a868b..88d4d68 100644
+--- a/hw/misc/trace-events
++++ b/hw/misc/trace-events
+@@ -442,3 +442,14 @@ iommu_testdev_dma_read(uint64_t gva, uint32_t len) "gva=0x%" PRIx64 " len=%u"
+ iommu_testdev_dma_verify(uint32_t expected, uint32_t actual) "expected=0x%x actual=0x%x"
+ iommu_testdev_dma_result(uint32_t result) "DMA completed result=0x%x"
+ iommu_testdev_dma_armed(bool armed) "armed=%d"
++
++# mchp_regfile.c
++mchp_regfile_read(const char *inst, uint64_t offset, unsigned size, uint64_t value) "%s: offset 0x%" PRIx64 " size %u value 0x%" PRIx64
++mchp_regfile_write(const char *inst, uint64_t offset, unsigned size, uint64_t value) "%s: offset 0x%" PRIx64 " size %u value 0x%" PRIx64
++
++# mchp_regblock.c
++mchp_regblock_unimp_write(const char *inst, const char *reg, unsigned idx, uint32_t value) "%s.%s[%u] value 0x%" PRIx32
++mchp_clk_update(const char *inst, const char *clock, uint64_t hz) "%s.%s: %" PRIu64 " Hz"
++
++# mchp_sysctrl.c
++mchp_rstc_reset_request(const char *inst, uint8_t rcause) "%s: reset requested, RCAUSE 0x%02x"
+diff --git a/include/hw/arm/pic32cm_jh_soc.h b/include/hw/arm/pic32cm_jh_soc.h
+new file mode 100644
+index 0000000..8aead76
+--- /dev/null
++++ b/include/hw/arm/pic32cm_jh_soc.h
+@@ -0,0 +1,66 @@
++/*
++ * Microchip PIC32CM JH01 SoC (PIC32CM5164JH01100)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Built from the generated device description (pic32cm5164jh01100_gen.h):
++ * a Cortex-M0 armv7m, the memories, and one child per ATDF peripheral
++ * instance named after it in lowercase ("sercom4", "gclk", ...).
++ *
++ * Clock inputs "xosc" and "xosc32k": the board's crystals on XIN/XOUT and
++ * XIN32/XOUT32 (leave unconnected when not fitted).
++ * Properties: "silicon-rev" ("B0" default, or "C0"), "serial-number"
++ * (32 hex digits: the words at 0x0080A00C, 0x0080A040, 0x0080A044 and
++ * 0x0080A048, in that order).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_ARM_PIC32CM_JH_SOC_H
++#define HW_ARM_PIC32CM_JH_SOC_H
++
++#include "hw/arm/armv7m.h"
++#include "hw/arm/pic32cm5164jh01100_gen.h"
++#include "hw/core/or-irq.h"
++#include "hw/core/sysbus.h"
++#include "qom/object.h"
++
++#define TYPE_PIC32CM5164JH01100_SOC "pic32cm5164jh01100-soc"
++OBJECT_DECLARE_SIMPLE_TYPE(Pic32cmJhSocState, PIC32CM5164JH01100_SOC)
++
++#define PIC32CM_JH_NUM_SERCOM   8
++
++/*
++ * SCB->CPUID of the Cortex-M0+ r0p1 core (ATDF __CM0P_REV 0x0001); the
++ * board applies it to QEMU's cortex-m0 as a "midr" global property.
++ */
++#define PIC32CM_JH_CPUID        0x410CC601
++
++struct Pic32cmJhSocState {
++    SysBusDevice parent_obj;
++
++    ARMv7MState armv7m;
++    /* OR gates of the shared NVIC lines, indexed by line */
++    OrIRQState irq_or[PIC32CM5164JH01100_NUM_IRQ_LINES];
++    /* Peripheral models by instance index; NULL when not a regblock */
++    DeviceState *periph[PIC32CM5164JH01100_NUM_INSTANCES];
++    Chardev *sercom_chr[PIC32CM_JH_NUM_SERCOM];
++
++    MemoryRegion flash;
++    MemoryRegion dataflash;
++    MemoryRegion nvm_rows;
++    MemoryRegion sram;
++
++    char *silicon_rev;
++    char *serial_number;
++};
++
++/*
++ * Attach @chr to SERCOM@sercom; call before realize. The chardev reaches
++ * the SERCOM model through its "chardev" property, if the model has one.
++ */
++void pic32cm_jh_soc_connect_serial(Pic32cmJhSocState *s, unsigned sercom,
++                                   Chardev *chr);
++
++#endif /* HW_ARM_PIC32CM_JH_SOC_H */
+diff --git a/include/hw/misc/mchp_regblock.h b/include/hw/misc/mchp_regblock.h
+new file mode 100644
+index 0000000..b8410aa
+--- /dev/null
++++ b/include/hw/misc/mchp_regblock.h
+@@ -0,0 +1,91 @@
++/*
++ * Microchip generic register block: one peripheral instance as a register file
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * A SysBusDevice built from one MchpInstanceInfo of a generated SoC table:
++ * the register file with that instance's tables, reset values (including
++ * fields loaded from NVM fuses at reset), register views switched by the
++ * mode selector (SERCOM CTRLA.MODE, TC/RTC CTRLA.MODE) and one IRQ output.
++ *
++ * Without a dedicated model it gives firmware what the tables describe:
++ * reset values, store and read back, W1C flags, set/clear aliases,
++ * SYNCBUSY reading 0 (DYNAMIC registers return their stored value) and a
++ * software reset when bit 0 (SWRST) of CTRLA/CTRL at offset 0 is written,
++ * and it reports every other write with LOG_UNIMP ("<inst>.<REG>: ... not
++ * modelled"). The IRQ level is (INTFLAG & INTENSET) != 0.
++ *
++ * Dedicated models subclass TYPE_MCHP_REGBLOCK and fill MchpRegBlockClass.
++ *
++ * sysbus MMIO 0: the instance slot; MMIO 1: the second view of the
++ * registers (IOBUS or DSU_EXT) when the instance has one.
++ * sysbus IRQ 0: the interrupt request. Clock input "gclk": the GCLK
++ * peripheral channel of the instance (may stay unconnected).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_MCHP_REGBLOCK_H
++#define HW_MISC_MCHP_REGBLOCK_H
++
++#include "hw/core/sysbus.h"
++#include "hw/mchp/mchp_device.h"
++#include "hw/misc/mchp_regfile.h"
++#include "qom/object.h"
++
++#define TYPE_MCHP_REGBLOCK "mchp-regblock"
++OBJECT_DECLARE_TYPE(MchpRegBlock, MchpRegBlockClass, MCHP_REGBLOCK)
++
++struct MchpRegBlock {
++    SysBusDevice parent_obj;
++
++    MemoryRegion iomem;
++    MemoryRegion alias;
++    qemu_irq irq;
++    Clock *gclk;
++
++    MchpRegFile rf;
++    const MchpInstanceInfo *info;
++    char *name;                         /* lowercase instance name */
++
++    /* Registers of the active view the generic behaviour relies on */
++    const MchpRegInfo *ctrl;            /* CTRLA/CTRL at offset 0, or NULL */
++    const MchpRegInfo *intflag;
++    const MchpRegInfo *intenset;
++    uint32_t view_sel;                  /* mode selector of the active view */
++};
++
++struct MchpRegBlockClass {
++    SysBusDeviceClass parent_class;
++
++    /* Model-specific realize, after the register file exists */
++    bool (*realize)(MchpRegBlock *s, Error **errp);
++    /* Register hooks of a dedicated model (MchpRegFile semantics) */
++    MchpRegPreReadFn pre_read;
++    MchpRegPostWriteFn post_write;
++    /* Enable protection; NULL: CTRLA/CTRL.ENABLE (bit 1) */
++    MchpRegEnabledFn is_enabled;
++    /* IRQ level; NULL: (INTFLAG & INTENSET) != 0 */
++    bool (*irq_pending)(MchpRegBlock *s);
++    /* Called after the registers are reset (system reset and SWRST) */
++    void (*reset_hold)(MchpRegBlock *s);
++    /* Called after reset_hold, may update outputs such as clocks */
++    void (*reset_exit)(MchpRegBlock *s);
++    /* Report each write with LOG_UNIMP: true for the generic block */
++    bool log_writes;
++};
++
++/* For dedicated models with state of their own (VMSTATE_STRUCT) */
++extern const VMStateDescription vmstate_mchp_regblock;
++
++/* Select the instance to model; call before realize. */
++void mchp_regblock_set_info(MchpRegBlock *s, const MchpInstanceInfo *info);
++
++/* Recompute the IRQ output after a state change made outside an access. */
++void mchp_regblock_update_irq(MchpRegBlock *s);
++
++/* Set output clock @out of @s to @hz; a change is traced and propagated. */
++void mchp_regblock_set_clock(MchpRegBlock *s, Clock *out, uint64_t hz);
++
++#endif /* HW_MISC_MCHP_REGBLOCK_H */
+diff --git a/include/hw/misc/mchp_regfile.h b/include/hw/misc/mchp_regfile.h
+new file mode 100644
+index 0000000..e18218e
+--- /dev/null
++++ b/include/hw/misc/mchp_regfile.h
+@@ -0,0 +1,128 @@
++/*
++ * Microchip register file: byte-lane dispatcher over generated register tables
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * SAM/PIC32CM peripherals mix 8, 16 and 32-bit registers at byte offsets
++ * and firmware accesses them with any width, so an access is split into
++ * the register elements it overlaps. Each element follows the semantics
++ * of its MchpRegInfo row (generated from the ATDF plus behaviour overlays
++ * by generator/atdf2qemu.py); models add behaviour through the pre_read and
++ * post_write hooks.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_MCHP_REGFILE_H
++#define HW_MISC_MCHP_REGFILE_H
++
++#include "exec/hwaddr.h"
++#include "exec/memattrs.h"
++#include "migration/vmstate.h"
++
++typedef struct MchpRegInfo {
++    const char *name;   /* ATDF register name, e.g. "CTRLA", "PCHCTRL" */
++    uint16_t offset;    /* byte offset of element 0 inside the register group */
++    uint8_t size;       /* 1, 2 or 4 bytes */
++    uint8_t count;      /* array elements (1 for scalars) */
++    uint16_t stride;    /* bytes between array elements (== size unless ATDF says otherwise) */
++    int16_t alias_of;   /* index in the same table of the storage register this one aliases,
++                           or -1; may equal its own index (e.g. INTENSET is the storage) */
++    uint32_t reset;     /* reset value of every element (exceptions: MchpResetOverride) */
++    uint32_t impl;      /* implemented bits; reads return value & impl (0xFFFFFFFF if ATDF has no bitfields) */
++    uint32_t wmask;     /* software-writable bits (RW bits minus ro/w1c) */
++    uint32_t w1c;       /* write-1-to-clear bits */
++    uint32_t rdz;       /* bits that always read 0 (strobes, self-clearing, write-only) */
++    uint32_t enprot;    /* enable-protected bits: writable only while the IP is disabled */
++    uint32_t syncbusy;  /* SYNCBUSY bits raised by writing this register (0 = none) */
++    uint32_t flags;     /* MCHP_F_* */
++} MchpRegInfo;
++
++#define MCHP_F_PAC             (1u << 0)  /* PAC write-protectable */
++#define MCHP_F_ALIAS_SET       (1u << 1)  /* write 1 sets bits of alias_of; read returns alias_of */
++#define MCHP_F_ALIAS_CLEAR     (1u << 2)  /* write 1 clears bits of alias_of; read returns alias_of */
++#define MCHP_F_ALIAS_TOGGLE    (1u << 3)  /* write 1 toggles bits of alias_of; read returns alias_of */
++#define MCHP_F_DYNAMIC         (1u << 4)  /* value produced by the model's pre_read hook */
++#define MCHP_F_HOOK_PRE_READ   (1u << 5)  /* call pre_read (side effects only when !attrs.debug) */
++#define MCHP_F_HOOK_POST_WRITE (1u << 6)  /* call post_write after storage is updated */
++#define MCHP_F_BUSY_BUSERR     (1u << 7)  /* write while own SYNCBUSY bit set = bus error (pedantic mode) */
++#define MCHP_F_WRITE_ONLY      (1u << 8)  /* reads return 0 */
++#define MCHP_F_READ_ONLY       (1u << 9)  /* writes ignored (+LOG_GUEST_ERROR) */
++
++typedef struct MchpResetOverride {
++    uint16_t offset;    /* byte offset of the element */
++    uint8_t size;
++    uint32_t value;
++} MchpResetOverride;
++
++typedef struct MchpRegFile MchpRegFile;
++typedef uint32_t (*MchpRegPreReadFn)(MchpRegFile *rf, const MchpRegInfo *ri,
++                                     unsigned idx, uint32_t stored,
++                                     bool side_effects);
++typedef void (*MchpRegPostWriteFn)(MchpRegFile *rf, const MchpRegInfo *ri,
++                                   unsigned idx, uint32_t old_value,
++                                   uint32_t written, uint32_t we);
++typedef bool (*MchpRegEnabledFn)(MchpRegFile *rf);
++
++struct MchpRegFile {
++    const char *name;                 /* instance name for logs, e.g. "sercom4" */
++    uint8_t *storage;                 /* little-endian backing store */
++    uint32_t size;                    /* bytes of storage (register-group size) */
++    const MchpRegInfo *regs;          /* active table (SERCOM switches it on CTRLA.MODE) */
++    unsigned nregs;
++    const MchpResetOverride *ovr;
++    unsigned novr;
++    void *opaque;                     /* owning device */
++    MchpRegPreReadFn pre_read;        /* may be NULL */
++    MchpRegPostWriteFn post_write;    /* may be NULL */
++    MchpRegEnabledFn is_enabled;      /* NULL = never enabled (no enable protection) */
++};
++
++void mchp_regfile_init(MchpRegFile *rf, const char *name, uint32_t size,
++                       const MchpRegInfo *regs, unsigned nregs);
++void mchp_regfile_set_table(MchpRegFile *rf, const MchpRegInfo *regs, unsigned nregs);
++void mchp_regfile_set_overrides(MchpRegFile *rf, const MchpResetOverride *ovr, unsigned n);
++void mchp_regfile_reset(MchpRegFile *rf);       /* reset values, then overrides */
++uint64_t mchp_regfile_read(MchpRegFile *rf, hwaddr addr, unsigned size, MemTxAttrs attrs);
++void mchp_regfile_write(MchpRegFile *rf, hwaddr addr, uint64_t val, unsigned size, MemTxAttrs attrs);
++uint32_t mchp_regfile_peek(MchpRegFile *rf, uint32_t offset, unsigned size);   /* raw storage */
++void mchp_regfile_poke(MchpRegFile *rf, uint32_t offset, unsigned size, uint32_t val);
++const MchpRegInfo *mchp_regfile_find(MchpRegFile *rf, const char *name);       /* active table */
++/* VMState helper: VMSTATE_VBUFFER_UINT32 or equivalent over storage/size */
++
++/* Additions to the contract above. */
++
++/*
++ * The register element of the active table that covers byte @offset, or
++ * NULL for a reserved byte. *@idx receives the array element index.
++ */
++const MchpRegInfo *mchp_regfile_lookup(MchpRegFile *rf, uint32_t offset,
++                                       unsigned *idx);
++
++/* Byte offset of element @idx of @ri. */
++static inline uint32_t mchp_regfile_elem_offset(const MchpRegInfo *ri,
++                                                unsigned idx)
++{
++    return ri->offset + idx * ri->stride;
++}
++
++/* Raw stored value of element @idx of @ri. */
++static inline uint32_t mchp_regfile_get(MchpRegFile *rf,
++                                        const MchpRegInfo *ri, unsigned idx)
++{
++    return mchp_regfile_peek(rf, mchp_regfile_elem_offset(ri, idx), ri->size);
++}
++
++/* Overwrite the raw stored value of element @idx of @ri. */
++static inline void mchp_regfile_set(MchpRegFile *rf, const MchpRegInfo *ri,
++                                    unsigned idx, uint32_t val)
++{
++    mchp_regfile_poke(rf, mchp_regfile_elem_offset(ri, idx), ri->size, val);
++}
++
++/* Migrates the storage of the MchpRegFile member @_field of @_state. */
++#define VMSTATE_MCHP_REGFILE(_field, _state) \
++    VMSTATE_VBUFFER_UINT32(_field.storage, _state, 0, NULL, _field.size)
++
++#endif /* HW_MISC_MCHP_REGFILE_H */
+diff --git a/include/hw/misc/mchp_sysctrl.h b/include/hw/misc/mchp_sysctrl.h
+new file mode 100644
+index 0000000..233be95
+--- /dev/null
++++ b/include/hw/misc/mchp_sysctrl.h
+@@ -0,0 +1,75 @@
++/*
++ * Microchip SAM/PIC32CM system controllers built on mchp-regblock
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Each type is a TYPE_MCHP_REGBLOCK subclass configured with
++ * mchp_regblock_set_info(). Their state is private; SoCs wire them through
++ * the clock, GPIO and property names below.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_MCHP_SYSCTRL_H
++#define HW_MISC_MCHP_SYSCTRL_H
++
++#include "hw/misc/mchp_regblock.h"
++
++/*
++ * OSCCTRL U2119. Clock inputs: "xtal" (XIN/XOUT crystal or external clock,
++ * unconnected or 0 Hz: none fitted), "dpll-ref-xosc32k" and "dpll-ref-gclk"
++ * (FDPLL96M references). Clock outputs: "xosc", "osc48m", "fdpll96m".
++ */
++#define TYPE_MCHP_OSCCTRL "mchp-oscctrl"
++
++/*
++ * OSC32KCTRL U2246. Clock input "xtal32k" (XIN32/XOUT32). Clock outputs
++ * (32.768 kHz domain): "xosc32k", "osc32k", "osculp32k".
++ */
++#define TYPE_MCHP_OSC32KCTRL "mchp-osc32kctrl"
++
++/*
++ * GCLK U2122. Clock inputs named after the GENCTRL.SRC sources: "xosc",
++ * "gclk-in", "osculp32k", "osc32k", "xosc32k", "osc48m", "fdpll96m".
++ * Clock outputs: generators "gen[n]" and peripheral channels "pch[m]".
++ */
++#define TYPE_MCHP_GCLK "mchp-gclk"
++
++/* MCLK U2234. Clock input "gclk-main" (generator 0); output "cpu". */
++#define TYPE_MCHP_MCLK "mchp-mclk"
++
++/* NVMCTRL 03929: PARAM, READY, CTRLA command keys; no flash programming. */
++#define TYPE_MCHP_NVMCTRL "mchp-nvmctrl"
++
++/* SUPC U2117: BODVDD (reset from the user row) and its ready flags. */
++#define TYPE_MCHP_SUPC "mchp-supc"
++
++/*
++ * RSTC U2239. Named GPIO input array "reset-cause": raising line n records
++ * RCAUSE bit n and requests a system reset; RCAUSE reads that cause after
++ * the reset (POR at the first reset, EXT for resets nobody announced).
++ */
++#define TYPE_MCHP_RSTC "mchp-rstc"
++#define MCHP_RSTC_RESET_CAUSE "reset-cause"
++
++/*
++ * WDT U2251. Named GPIO output "system-reset", pulsed when software writes
++ * a wrong CLEAR key to an enabled watchdog. No timeout in v0.
++ */
++#define TYPE_MCHP_WDT "mchp-wdt"
++#define MCHP_WDT_SYSTEM_RESET "system-reset"
++
++/* PM U2240: SLEEPCFG/STDBYCFG store and read back; WFI is the CPU's. */
++#define TYPE_MCHP_PM "mchp-pm"
++
++/* PAC U2120: WRCTRL/STATUSx bookkeeping and errors, no enforcement. */
++#define TYPE_MCHP_PAC "mchp-pac"
++
++/* DSU U2209. Property "revision": DID.REVISION (1 = B0, 2 = C0). */
++#define TYPE_MCHP_DSU "mchp-dsu"
++
++/* DIVAS U2258: divide and square root, completed instantly. */
++#define TYPE_MCHP_DIVAS "mchp-divas"
++
++#endif /* HW_MISC_MCHP_SYSCTRL_H */
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index 78b3010..51c5a46 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -251,6 +251,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_TPM_TIS_I2C') ? ['tpm-tis-i2c-test', 'tpm-tis-i2c-swtpm-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-jh-test.c b/tests/qtest/pic32cm-jh-test.c
+new file mode 100644
+index 0000000..f9cddac
+--- /dev/null
++++ b/tests/qtest/pic32cm-jh-test.c
+@@ -0,0 +1,399 @@
++/*
++ * QTest for the PIC32CM JH01 Curiosity Pro machine (pic32cm-jh01-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Addresses and values come from DS60001632H (PIC32CM JH00/JH01 data
++ * sheet), not from the generated tables, so the test checks them.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qobject/qdict.h"
++
++#define MACHINE         "-M pic32cm-jh01-cpro "
++
++#define PAC             0x40000000
++#define MCLK            0x40000800
++#define RSTC            0x40000C00
++#define OSCCTRL         0x40001000
++#define OSC32KCTRL      0x40001400
++#define SUPC            0x40001800
++#define GCLK            0x40001C00
++#define WDT             0x40002000
++#define DSU             0x41002000
++#define DSU_EXT         0x41002100
++#define NVMCTRL         0x41004000
++#define SERCOM4         0x42001400
++#define TC0             0x42003000
++#define DIVAS           0x48000000
++#define DIVAS_IOBUS     0x60000200
++#define USER_ROW        0x00804000
++#define SERIAL_WORD0    0x0080A00C
++#define SERIAL_WORD1    0x0080A040
++#define SRAM            0x20000000
++
++#define NVIC_ISER       0xE000E100
++#define NVIC_ISPR       0xE000E200
++#define NVIC_ICPR       0xE000E280
++#define SCB_CPUID       0xE000ED00
++#define SCB_AIRCR       0xE000ED0C
++
++#define RCAUSE_POR      0x01
++#define RCAUSE_EXT      0x10
++#define RCAUSE_WDT      0x20
++#define RCAUSE_SYST     0x40
++
++/* Frequency of a QOM Clock object, from its period in 2^-32 ns. */
++static uint64_t clock_hz(QTestState *qts, const char *path)
++{
++    QDict *rsp = qtest_qmp(qts, "{ 'execute': 'qom-get', 'arguments':"
++                           " { 'path': %s,"
++                           " 'property': 'qtest-clock-period' } }", path);
++    uint64_t period;
++
++    g_assert(qdict_haskey(rsp, "return"));
++    period = qdict_get_int(rsp, "return");
++    qobject_unref(rsp);
++    return period ? (1000000000ULL << 32) / period : 0;
++}
++
++static void test_reset_values(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    /* GCLK generator 0 runs from OSC48M (DS 14.7.3, ATDF says 0) */
++    g_assert_cmphex(qtest_readl(qts, GCLK + 0x20), ==, 0x00000106);
++    g_assert_cmphex(qtest_readl(qts, GCLK + 0x24), ==, 0);
++    g_assert_cmphex(qtest_readl(qts, GCLK + 0x04), ==, 0);    /* SYNCBUSY */
++    /* NVMCTRL: PARAM, CTRLB.MANW, INTFLAG.READY */
++    g_assert_cmphex(qtest_readl(qts, NVMCTRL + 0x08), ==, 0x08032000);
++    g_assert_cmphex(qtest_readl(qts, NVMCTRL + 0x04), ==, 0x00000080);
++    g_assert_cmphex(qtest_readl(qts, NVMCTRL + 0x14), ==, 0x00000001);
++    /* DSU.DID of rev B0, also through DSU_EXT */
++    g_assert_cmphex(qtest_readl(qts, DSU + 0x18), ==, 0x11060100);
++    g_assert_cmphex(qtest_readl(qts, DSU_EXT + 0x18), ==, 0x11060100);
++    /* PAC: DSU and SMBIST (and bit 24) write-protected */
++    g_assert_cmphex(qtest_readl(qts, PAC + 0x34), ==, 0);
++    g_assert_cmphex(qtest_readl(qts, PAC + 0x38), ==, 0x00000002);
++    g_assert_cmphex(qtest_readl(qts, PAC + 0x3C), ==, 0x09000000);
++    /* Production user row (DS Table 10-3) */
++    g_assert_cmphex(qtest_readl(qts, USER_ROW), ==, 0xB15088FB);
++    g_assert_cmphex(qtest_readl(qts, USER_ROW + 4), ==, 0xFFFFF8BB);
++    /* SYNCBUSY registers read 0 */
++    g_assert_cmphex(qtest_readl(qts, WDT + 0x08), ==, 0);
++    g_assert_cmphex(qtest_readl(qts, SERCOM4 + 0x1C), ==, 0);
++    g_assert_cmphex(qtest_readl(qts, OSCCTRL + 0x18), ==, 0);
++    g_assert_cmphex(qtest_readb(qts, OSCCTRL + 0x2C), ==, 0);
++    /* OSC48M on, divided by 12; MCLK.INTFLAG.CKRDY */
++    g_assert_cmphex(qtest_readb(qts, OSCCTRL + 0x14), ==, 0x82);
++    g_assert_cmphex(qtest_readb(qts, OSCCTRL + 0x15), ==, 0x0B);
++    g_assert_cmphex(qtest_readb(qts, MCLK + 0x03), ==, 0x01);
++    /* Cortex-M0+ r0p1 CPUID */
++    g_assert_cmphex(qtest_readl(qts, SCB_CPUID), ==, 0x410CC601);
++    qtest_quit(qts);
++}
++
++static void test_ready_bits(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    /* OSC48MRDY follows OSC48MCTRL.ENABLE */
++    g_assert_cmphex(qtest_readl(qts, OSCCTRL + 0x0C), ==, 0x10);
++    /* XOSC with the board's crystal */
++    qtest_writew(qts, OSCCTRL + 0x10, 0x0006);       /* ENABLE | XTALEN */
++    g_assert_cmphex(qtest_readl(qts, OSCCTRL + 0x0C), ==, 0x11);
++    g_assert_cmphex(qtest_readl(qts, OSCCTRL + 0x08) & 0x1, ==, 0x1);
++    /* XOSC32K and OSC32K */
++    g_assert_cmphex(qtest_readl(qts, OSC32KCTRL + 0x0C), ==, 0);
++    qtest_writew(qts, OSC32KCTRL + 0x14, 0x000E);    /* ENABLE, XTALEN, EN32K */
++    qtest_writel(qts, OSC32KCTRL + 0x18, 0x0006);    /* ENABLE, EN32K */
++    g_assert_cmphex(qtest_readl(qts, OSC32KCTRL + 0x0C), ==, 0x3);
++    g_assert_cmphex(qtest_readl(qts, OSC32KCTRL + 0x08), ==, 0x3);
++    /* SUPC: BODVDD enabled by the user row; BVDDSRDY always */
++    g_assert_cmphex(qtest_readl(qts, SUPC + 0x0C), ==, 0x5);
++    qtest_quit(qts);
++}
++
++static void test_rcause(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    g_assert_cmphex(qtest_readb(qts, RSTC), ==, RCAUSE_POR);
++
++    /* SYSRESETREQ: RCAUSE.SYST, SRAM survives the reset */
++    qtest_writel(qts, SRAM + 0x100, 0xC0FFEE00);
++    qtest_writel(qts, SCB_AIRCR, 0x05FA0004);
++    qtest_qmp_eventwait(qts, "RESET");
++    g_assert_cmphex(qtest_readb(qts, RSTC), ==, RCAUSE_SYST);
++    g_assert_cmphex(qtest_readl(qts, SRAM + 0x100), ==, 0xC0FFEE00);
++
++    /* A wrong WDT.CLEAR key with the watchdog on: RCAUSE.WDT */
++    qtest_writeb(qts, WDT + 0x00, 0x02);             /* CTRLA.ENABLE */
++    qtest_writeb(qts, WDT + 0x0C, 0x5A);
++    qtest_qmp_eventwait(qts, "RESET");
++    g_assert_cmphex(qtest_readb(qts, RSTC), ==, RCAUSE_WDT);
++    g_assert_cmphex(qtest_readb(qts, WDT + 0x00), ==, 0);
++
++    /* A reset nobody announced is an external one */
++    qtest_system_reset(qts);
++    g_assert_cmphex(qtest_readb(qts, RSTC), ==, RCAUSE_EXT);
++    qtest_quit(qts);
++}
++
++static void test_user_row_resets(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    /* WDT from the production row: off, PER/WINDOW/EWOFFSET 0xB */
++    g_assert_cmphex(qtest_readb(qts, WDT + 0x00), ==, 0x00);
++    g_assert_cmphex(qtest_readb(qts, WDT + 0x01), ==, 0xBB);
++    g_assert_cmphex(qtest_readb(qts, WDT + 0x02), ==, 0x0B);
++    /* SUPC.BODVDD: LEVEL 8, ACTION reset, enabled */
++    g_assert_cmphex(qtest_readl(qts, SUPC + 0x10), ==, 0x0008000A);
++    /* NVMCTRL.LOCK from the region lock bits */
++    g_assert_cmphex(qtest_readw(qts, NVMCTRL + 0x20), ==, 0xFFFF);
++    qtest_quit(qts);
++}
++
++/* Fuse words in the loaded image take effect at the first reset. */
++static void test_user_row_from_image(void)
++{
++    static const uint8_t row[8] = {
++        0xFB, 0xC8, 0x50, 0xB5,     /* 0xB550C8FB: WDT on, BODVDD off */
++        0xBB, 0xF8, 0xFF, 0xFF,
++    };
++    g_autofree char *path = NULL;
++    g_autoptr(GString) hex = g_string_new(":0200000400807A\n:08400000");
++    unsigned sum = 0x08 + 0x40;
++    QTestState *qts;
++    int fd;
++
++    if (!qtest_has_device("loader")) {
++        g_test_skip("generic loader not built");
++        return;
++    }
++    for (unsigned i = 0; i < sizeof(row); i++) {
++        g_string_append_printf(hex, "%02X", row[i]);
++        sum += row[i];
++    }
++    g_string_append_printf(hex, "%02X\n:00000001FF\n", (0x100 - sum) & 0xFF);
++    fd = g_file_open_tmp("pic32cm-user-row-XXXXXX.hex", &path, NULL);
++    g_assert(fd >= 0);
++    close(fd);
++    g_assert(g_file_set_contents(path, hex->str, hex->len, NULL));
++
++    qts = qtest_initf(MACHINE "-device loader,file=%s", path);
++    for (int reset = 0; reset < 2; reset++) {
++        g_assert_cmphex(qtest_readl(qts, USER_ROW), ==, 0xB550C8FB);
++        g_assert_cmphex(qtest_readb(qts, WDT + 0x00), ==, 0x02);
++        g_assert_cmphex(qtest_readl(qts, SUPC + 0x10) & 0x2, ==, 0);
++        g_assert_cmphex(qtest_readl(qts, SUPC + 0x0C), ==, 0x4);
++        qtest_system_reset(qts);
++    }
++    qtest_quit(qts);
++    unlink(path);
++}
++
++static void test_regfile_semantics(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    /* One access spanning three byte registers and a reserved byte */
++    g_assert_cmphex(qtest_readl(qts, OSCCTRL + 0x14), ==, 0x00070B82);
++    /* Read-only registers ignore writes */
++    qtest_writel(qts, NVMCTRL + 0x08, 0);
++    g_assert_cmphex(qtest_readl(qts, NVMCTRL + 0x08), ==, 0x08032000);
++    /* W1C clears CKRDY; a CPUDIV write sets it again */
++    qtest_writeb(qts, MCLK + 0x03, 0x01);
++    g_assert_cmphex(qtest_readb(qts, MCLK + 0x03), ==, 0x00);
++    qtest_writeb(qts, MCLK + 0x04, 0x01);
++    g_assert_cmphex(qtest_readb(qts, MCLK + 0x03), ==, 0x01);
++    /* INTENSET/INTENCLR share one storage */
++    qtest_writeb(qts, MCLK + 0x02, 0x01);
++    g_assert_cmphex(qtest_readb(qts, MCLK + 0x01), ==, 0x01);
++    qtest_writeb(qts, MCLK + 0x01, 0x01);
++    g_assert_cmphex(qtest_readb(qts, MCLK + 0x02), ==, 0x00);
++    /* Enable protection: BODVDD.LEVEL only changes while disabled */
++    qtest_writel(qts, SUPC + 0x10, 0x0010000A);
++    g_assert_cmphex(qtest_readl(qts, SUPC + 0x10), ==, 0x0008000A);
++    qtest_writel(qts, SUPC + 0x10, 0x00080008);
++    qtest_writel(qts, SUPC + 0x10, 0x00100008);
++    g_assert_cmphex(qtest_readl(qts, SUPC + 0x10), ==, 0x00100008);
++    g_assert_cmphex(qtest_readl(qts, SUPC + 0x0C), ==, 0x4);
++    /* NVMCTRL: no CMDEX key is a PROGE error; READY stays set */
++    qtest_writew(qts, NVMCTRL + 0x00, 0x0044);
++    g_assert_cmphex(qtest_readw(qts, NVMCTRL + 0x18) & 0x4, ==, 0x4);
++    g_assert_cmphex(qtest_readl(qts, NVMCTRL + 0x14), ==, 0x3);
++    qtest_writel(qts, NVMCTRL + 0x14, 0xFFFFFFFF);
++    g_assert_cmphex(qtest_readl(qts, NVMCTRL + 0x14), ==, 0x1);
++    qtest_writew(qts, NVMCTRL + 0x00, 0xA544);       /* page buffer clear */
++    g_assert_cmphex(qtest_readl(qts, NVMCTRL + 0x14), ==, 0x1);
++    qtest_quit(qts);
++}
++
++static void test_views_and_swrst(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    /* COUNT16 has no PER register at 0x1B; COUNT8 has */
++    qtest_writeb(qts, TC0 + 0x1B, 0x5A);
++    g_assert_cmphex(qtest_readb(qts, TC0 + 0x1B), ==, 0);
++    qtest_writel(qts, TC0 + 0x00, 1 << 2);           /* CTRLA.MODE COUNT8 */
++    qtest_writeb(qts, TC0 + 0x1B, 0x5A);
++    g_assert_cmphex(qtest_readb(qts, TC0 + 0x1B), ==, 0x5A);
++    /* SWRST resets the registers and the view */
++    qtest_writel(qts, TC0 + 0x00, 0x1);
++    g_assert_cmphex(qtest_readl(qts, TC0 + 0x00), ==, 0);
++    g_assert_cmphex(qtest_readb(qts, TC0 + 0x1B), ==, 0);
++
++    /* GCLK.SWRST restores GENCTRL0 */
++    qtest_writel(qts, GCLK + 0x20, 0x00010103);
++    qtest_writeb(qts, GCLK + 0x00, 0x01);
++    g_assert_cmphex(qtest_readl(qts, GCLK + 0x20), ==, 0x00000106);
++    g_assert_cmphex(qtest_readb(qts, GCLK + 0x00), ==, 0);
++    qtest_quit(qts);
++}
++
++static void test_clock_tree(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    g_assert_cmpuint(clock_hz(qts, "/machine/soc/armv7m/cpuclk"), ==, 4000000);
++
++    /* Harmony: OSC48MDIV = 0 */
++    qtest_writeb(qts, OSCCTRL + 0x15, 0x00);
++    g_assert_cmpuint(clock_hz(qts, "/machine/soc/armv7m/cpuclk"), ==,
++                     48000000);
++    qtest_writeb(qts, MCLK + 0x04, 0x02);            /* CPUDIV 2 */
++    g_assert_cmpuint(clock_hz(qts, "/machine/soc/mclk/cpu"), ==, 24000000);
++    qtest_writeb(qts, MCLK + 0x04, 0x03);            /* reserved: ignored */
++    g_assert_cmphex(qtest_readb(qts, MCLK + 0x04), ==, 0x02);
++
++    /* FDPLL96M: 32 MHz XOSC / 32 * 96 / 2 = 48 MHz */
++    qtest_writew(qts, OSCCTRL + 0x10, 0x0006);
++    qtest_writel(qts, OSCCTRL + 0x24, 0x000F0010);   /* REFCLK XOSC, DIV 15 */
++    qtest_writel(qts, OSCCTRL + 0x20, 95);           /* LDR */
++    qtest_writeb(qts, OSCCTRL + 0x28, 0x01);         /* PRESC /2 */
++    g_assert_cmphex(qtest_readb(qts, OSCCTRL + 0x30), ==, 0);
++    qtest_writeb(qts, OSCCTRL + 0x1C, 0x02);         /* ENABLE */
++    g_assert_cmphex(qtest_readb(qts, OSCCTRL + 0x30), ==, 0x3);
++    g_assert_cmpuint(clock_hz(qts, "/machine/soc/oscctrl/fdpll96m"), ==,
++                     48000000);
++
++    /* GCLK1 from FDPLL96M, GCLK2 = GCLK1 / 4 to SERCOM4's channel 22 */
++    qtest_writel(qts, GCLK + 0x24, 0x00000107);
++    qtest_writel(qts, GCLK + 0x28, 0x00040102);
++    qtest_writel(qts, GCLK + 0x80 + 22 * 4, 0x42);
++    g_assert_cmpuint(clock_hz(qts, "/machine/soc/gclk/gen[1]"), ==, 48000000);
++    g_assert_cmpuint(clock_hz(qts, "/machine/soc/sercom4/gclk"), ==,
++                     12000000);
++    g_assert_cmphex(qtest_readl(qts, GCLK + 0x80 + 22 * 4), ==, 0x42);
++    /* Channel write lock */
++    qtest_writel(qts, GCLK + 0x80 + 22 * 4, 0xC2);
++    qtest_writel(qts, GCLK + 0x80 + 22 * 4, 0x00);
++    g_assert_cmphex(qtest_readl(qts, GCLK + 0x80 + 22 * 4), ==, 0xC2);
++    qtest_quit(qts);
++}
++
++/* MCLK shares NVIC line 0 (SYSTEM) through an OR gate */
++static void test_shared_irq(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, NVIC_ISER, 1 << 0);
++    g_assert_cmphex(qtest_readl(qts, NVIC_ISPR) & 1, ==, 0);
++    qtest_writeb(qts, MCLK + 0x02, 0x01);            /* INTENSET.CKRDY */
++    g_assert_cmphex(qtest_readl(qts, NVIC_ISPR) & 1, ==, 1);
++    qtest_writeb(qts, MCLK + 0x03, 0x01);            /* W1C */
++    qtest_writel(qts, NVIC_ICPR, 1 << 0);
++    g_assert_cmphex(qtest_readl(qts, NVIC_ISPR) & 1, ==, 0);
++    qtest_writeb(qts, MCLK + 0x04, 0x01);            /* CKRDY again */
++    g_assert_cmphex(qtest_readl(qts, NVIC_ISPR) & 1, ==, 1);
++    qtest_quit(qts);
++}
++
++static void test_pac(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, PAC + 0x00, 0x00020009);       /* SET RTC (PERID 9) */
++    g_assert_cmphex(qtest_readl(qts, PAC + 0x34), ==, 1 << 9);
++    g_assert_cmphex(qtest_readl(qts, PAC + 0x14), ==, 0);
++    qtest_writel(qts, PAC + 0x00, 0x00020009);       /* double set */
++    g_assert_cmphex(qtest_readl(qts, PAC + 0x14), ==, 1);
++    qtest_writel(qts, PAC + 0x14, 1);
++    qtest_writel(qts, PAC + 0x00, 0x00010009);       /* CLR */
++    g_assert_cmphex(qtest_readl(qts, PAC + 0x34), ==, 0);
++    qtest_writel(qts, PAC + 0x00, 0x00030009);       /* SETLCK */
++    qtest_writel(qts, PAC + 0x00, 0x00010009);       /* CLR of a lock */
++    g_assert_cmphex(qtest_readl(qts, PAC + 0x34), ==, 1 << 9);
++    g_assert_cmphex(qtest_readl(qts, PAC + 0x14), ==, 1);
++    qtest_quit(qts);
++}
++
++static void test_divas(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writeb(qts, DIVAS + 0x00, 0x01);           /* SIGNED */
++    qtest_writel(qts, DIVAS + 0x08, (uint32_t)-100);
++    qtest_writel(qts, DIVAS + 0x0C, 7);
++    g_assert_cmpint((int32_t)qtest_readl(qts, DIVAS + 0x10), ==, -14);
++    g_assert_cmpint((int32_t)qtest_readl(qts, DIVAS + 0x14), ==, -2);
++    /* Divide by zero: RESULT 0, REM = DIVIDEND, DBZ (W1C) */
++    qtest_writel(qts, DIVAS + 0x0C, 0);
++    g_assert_cmphex(qtest_readl(qts, DIVAS + 0x10), ==, 0);
++    g_assert_cmphex(qtest_readl(qts, DIVAS + 0x14), ==, (uint32_t)-100);
++    g_assert_cmphex(qtest_readb(qts, DIVAS + 0x04), ==, 0x02);
++    qtest_writeb(qts, DIVAS + 0x04, 0x02);
++    g_assert_cmphex(qtest_readb(qts, DIVAS + 0x04), ==, 0);
++    /* Square root through the IOBUS view */
++    qtest_writel(qts, DIVAS_IOBUS + 0x18, 1000001);
++    g_assert_cmpuint(qtest_readl(qts, DIVAS_IOBUS + 0x10), ==, 1000);
++    g_assert_cmpuint(qtest_readl(qts, DIVAS_IOBUS + 0x14), ==, 1);
++    qtest_quit(qts);
++}
++
++static void test_soc_properties(void)
++{
++    QTestState *qts = qtest_init(MACHINE
++        "-global pic32cm5164jh01100-soc.silicon-rev=C0 "
++        "-global pic32cm5164jh01100-soc.serial-number="
++        "00112233445566778899AABBCCDDEEFF");
++
++    g_assert_cmphex(qtest_readl(qts, DSU + 0x18), ==, 0x11060200);
++    g_assert_cmphex(qtest_readl(qts, SERIAL_WORD0), ==, 0x00112233);
++    g_assert_cmphex(qtest_readl(qts, SERIAL_WORD1), ==, 0x44556677);
++    g_assert_cmphex(qtest_readl(qts, SERIAL_WORD1 + 4), ==, 0x8899AABB);
++    g_assert_cmphex(qtest_readl(qts, SERIAL_WORD1 + 8), ==, 0xCCDDEEFF);
++    qtest_quit(qts);
++
++    qts = qtest_init(MACHINE);
++    g_assert_cmphex(qtest_readl(qts, SERIAL_WORD0), ==, 0x50500000);
++    g_assert_cmphex(qtest_readl(qts, SERIAL_WORD1 + 8), ==, 0x00000003);
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++
++    qtest_add_func("pic32cm-jh/reset-values", test_reset_values);
++    qtest_add_func("pic32cm-jh/ready-bits", test_ready_bits);
++    qtest_add_func("pic32cm-jh/rcause", test_rcause);
++    qtest_add_func("pic32cm-jh/user-row-resets", test_user_row_resets);
++    qtest_add_func("pic32cm-jh/user-row-from-image", test_user_row_from_image);
++    qtest_add_func("pic32cm-jh/regfile-semantics", test_regfile_semantics);
++    qtest_add_func("pic32cm-jh/views-and-swrst", test_views_and_swrst);
++    qtest_add_func("pic32cm-jh/clock-tree", test_clock_tree);
++    qtest_add_func("pic32cm-jh/shared-irq", test_shared_irq);
++    qtest_add_func("pic32cm-jh/pac", test_pac);
++    qtest_add_func("pic32cm-jh/divas", test_divas);
++    qtest_add_func("pic32cm-jh/soc-properties", test_soc_properties);
++
++    return g_test_run();
++}
+-- 
+2.51.2.windows.1
+

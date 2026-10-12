@@ -1,0 +1,27 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for PAC U2120. v0 keeps WRCTRL/STATUSx bookkeeping only;
+# protected writes are not refused (no enforcement).
+ip: PAC
+id: U2120
+versions: ["1.1.0"]
+references:
+  - "DS60001632H 12.6 (PAC registers), 12.5.2.4 (access errors)"
+  - "docs/research/boot-path.md finding 11"
+registers:
+  WRCTRL:
+    hooks: [post_write]           # KEY OFF/CLR/SET/SETLCK + PERID -> STATUSx
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAGAHB: {w1c: all}
+  INTFLAGA: {w1c: all}
+  INTFLAGB: {w1c: all}
+  INTFLAGC: {w1c: all}
+  INTFLAGD: {w1c: all}
+  STATUSA: {note: "updated by the WRCTRL hook"}
+  STATUSB: {note: "updated by the WRCTRL hook"}
+  STATUSC: {note: "bit 24 is set at reset but has no ATDF bitfield"}
+  STATUSD: {note: "updated by the WRCTRL hook"}
+reset_overrides:
+  STATUSB: 0x00000002             # DSU write-protected
+  STATUSC: 0x09000000             # SMBIST (bit 27) and unnamed bit 24

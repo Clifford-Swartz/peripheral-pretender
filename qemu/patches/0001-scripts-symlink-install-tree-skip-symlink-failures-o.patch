@@ -1,0 +1,39 @@
+From 0501856f6a16701caf4da64845f7c8bea56e9519 Mon Sep 17 00:00:00 2001
+From: Clifford Swartz <cliffordswartz1@gmail.com>
+Date: Mon, 12 Oct 2026 11:22:16 -0700
+Subject: [PATCH 1/5] scripts/symlink-install-tree: skip symlink failures on
+ Windows
+
+Unprivileged Windows hosts (no Developer Mode, no admin) cannot create
+the qemu-bundle symlinks, which makes configure fail. The Cortex-M
+machines load firmware with -kernel and need no bundled data files, so
+warn and skip instead of aborting. Other hosts behave as before.
+
+Peripheral Pretender downstream patch; not for upstream submission.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ scripts/symlink-install-tree.py | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/scripts/symlink-install-tree.py b/scripts/symlink-install-tree.py
+index b725638..9475326 100644
+--- a/scripts/symlink-install-tree.py
++++ b/scripts/symlink-install-tree.py
+@@ -30,7 +30,11 @@ def destdir_join(d1: str, d2: str) -> str:
+     except BaseException as e:
+         if not isinstance(e, OSError) or e.errno != errno.EEXIST:
+             if os.name == 'nt':
+-                print('Please enable Developer Mode to support soft link '
+-                      'without Administrator permission')
++                # Peripheral Pretender: unprivileged Windows hosts cannot create
++                # symlinks. The MCU machines load firmware with -kernel and need
++                # no bundled data files, so skip instead of failing the build.
++                print(f'warning: cannot symlink {dest} ({e}); skipping',
++                      file=sys.stderr)
++                continue
+             print(f'error making symbolic link {dest}', file=sys.stderr)
+             raise e
+-- 
+2.51.2.windows.1
+

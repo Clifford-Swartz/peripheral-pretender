@@ -1,0 +1,1061 @@
+From 861dc5b1ca32174cf0ab54850406a329a1afd775 Mon Sep 17 00:00:00 2001
+From: Clifford Swartz <cliffordswartz1@gmail.com>
+Date: Mon, 12 Oct 2026 11:25:12 -0700
+Subject: [PATCH 5/5] WIP: hw/char, hw/gpio: SERCOM and PORT models
+ (unfinished)
+
+Peripheral Pretender v0, part B, interrupted before verification. The
+mchp-sercom (USART mode) and mchp-port devices are written but not yet
+selected by PIC32CM_JH_SOC, not added to the SoC model table, and not
+built or tested. Remaining work is listed in the Peripheral Pretender
+repo (docs/handoff.md and the qemu-core-b progress log).
+
+Peripheral Pretender downstream patch; not for upstream submission.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/char/Kconfig               |   6 +
+ hw/char/mchp_sercom.c         | 529 ++++++++++++++++++++++++++++++++++
+ hw/char/meson.build           |   1 +
+ hw/gpio/Kconfig               |   4 +
+ hw/gpio/mchp_port.c           | 343 ++++++++++++++++++++++
+ hw/gpio/meson.build           |   1 +
+ include/hw/char/mchp_sercom.h |  30 ++
+ include/hw/gpio/mchp_port.h   |  46 +++
+ 8 files changed, 960 insertions(+)
+ create mode 100644 hw/char/mchp_sercom.c
+ create mode 100644 hw/gpio/mchp_port.c
+ create mode 100644 include/hw/char/mchp_sercom.h
+ create mode 100644 include/hw/gpio/mchp_port.h
+
+diff --git a/hw/char/Kconfig b/hw/char/Kconfig
+index 020c0a8..123616a 100644
+--- a/hw/char/Kconfig
++++ b/hw/char/Kconfig
+@@ -82,6 +82,12 @@ config MCHP_PFSOC_MMUART
+     bool
+     select SERIAL
+ 
++config MCHP_SERCOM
++    bool
++    select I2C
++    select MCHP_REGFILE
++    select SSI
++
+ config SIFIVE_UART
+     bool
+ 
+diff --git a/hw/char/mchp_sercom.c b/hw/char/mchp_sercom.c
+new file mode 100644
+index 0000000..4a2a1cc
+--- /dev/null
++++ b/hw/char/mchp_sercom.c
+@@ -0,0 +1,529 @@
++/*
++ * Microchip SAM/PIC32CM SERCOM (U2201) serial communication interface
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The USART follows DS60001632H chapter 30: a one-character DATA buffer in
++ * front of the transmit shift register, a two-character receive buffer,
++ * and the INTFLAG rules: DRE is cleared only by writing DATA, TXC by W1C or
++ * by writing DATA, RXC only by reading DATA or disabling the receiver.
++ * Register semantics (W1C, set/clear aliases, enable protection, views,
++ * SWRST) come from the generated tables through mchp-regblock.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "chardev/char-fe.h"
++#include "hw/char/mchp_sercom.h"
++#include "hw/core/clock.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/core/qdev-properties-system.h"
++#include "hw/i2c/i2c.h"
++#include "hw/mchp/gen/sercom_u2201.h"
++#include "hw/ssi/ssi.h"
++#include "migration/vmstate.h"
++#include "trace.h"
++
++/*
++ * The USART_EXT and USART_INT views have the same layout, and CTRLA/CTRLB,
++ * INTFLAG and DATA sit at the same offsets in every mode.
++ */
++#define A_CTRLA     A_MCHP_SERCOM_USART_INT_CTRLA
++#define A_CTRLB     A_MCHP_SERCOM_USART_INT_CTRLB
++#define A_BAUD      A_MCHP_SERCOM_USART_INT_BAUD
++#define A_INTFLAG   A_MCHP_SERCOM_USART_INT_INTFLAG
++#define A_STATUS    A_MCHP_SERCOM_USART_INT_STATUS
++#define A_DATA      A_MCHP_SERCOM_USART_INT_DATA
++
++#define MCHP_SERCOM_RX_DEPTH    2
++
++/* Receive errors that disabling the receiver clears (DS 30.7.2) */
++#define MCHP_SERCOM_RX_ERRORS \
++    (R_MCHP_SERCOM_USART_INT_STATUS_PERR_MASK | \
++     R_MCHP_SERCOM_USART_INT_STATUS_FERR_MASK | \
++     R_MCHP_SERCOM_USART_INT_STATUS_BUFOVF_MASK)
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpSercomState, MCHP_SERCOM)
++
++struct MchpSercomState {
++    MchpRegBlock parent_obj;
++
++    CharFrontend chr;
++    I2CBus *i2c;
++    SSIBus *spi;
++    bool pace_tx;
++
++    /* Transmitter: the DATA buffer, then the shift register */
++    uint16_t tx_buf;
++    bool tx_buf_full;
++    uint16_t tx_shift;
++    bool tx_busy;               /* tx_shift is being sent */
++    guint watch_tag;            /* waiting for the chardev to take tx_shift */
++    QEMUTimer *frame_timer;     /* end of the frame on the wire (pace-tx) */
++
++    /* Receiver */
++    uint16_t rx_buf[MCHP_SERCOM_RX_DEPTH];
++    uint8_t rx_count;
++};
++
++static uint32_t mchp_sercom_reg(MchpSercomState *s, hwaddr offset,
++                                unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, offset, size);
++}
++
++static void mchp_sercom_set_reg(MchpSercomState *s, hwaddr offset,
++                                unsigned size, uint32_t val)
++{
++    mchp_regfile_poke(&MCHP_REGBLOCK(s)->rf, offset, size, val);
++}
++
++static bool mchp_sercom_is_usart(uint32_t ctrla)
++{
++    unsigned mode = FIELD_EX32(ctrla, MCHP_SERCOM_USART_INT_CTRLA, MODE);
++
++    return mode == MCHP_SERCOM_MODE_USART_EXT ||
++           mode == MCHP_SERCOM_MODE_USART_INT;
++}
++
++static bool mchp_sercom_usart_on(uint32_t ctrla)
++{
++    return mchp_sercom_is_usart(ctrla) &&
++           FIELD_EX32(ctrla, MCHP_SERCOM_USART_INT_CTRLA, ENABLE);
++}
++
++static bool mchp_sercom_rx_on(uint32_t ctrla, uint32_t ctrlb)
++{
++    return mchp_sercom_usart_on(ctrla) &&
++           FIELD_EX32(ctrlb, MCHP_SERCOM_USART_INT_CTRLB, RXEN);
++}
++
++static bool mchp_sercom_tx_on(uint32_t ctrla, uint32_t ctrlb)
++{
++    return mchp_sercom_usart_on(ctrla) &&
++           FIELD_EX32(ctrlb, MCHP_SERCOM_USART_INT_CTRLB, TXEN);
++}
++
++static bool mchp_sercom_rx_enabled(MchpSercomState *s)
++{
++    return mchp_sercom_rx_on(mchp_sercom_reg(s, A_CTRLA, 4),
++                             mchp_sercom_reg(s, A_CTRLB, 4));
++}
++
++static bool mchp_sercom_tx_enabled(MchpSercomState *s)
++{
++    return mchp_sercom_tx_on(mchp_sercom_reg(s, A_CTRLA, 4),
++                             mchp_sercom_reg(s, A_CTRLB, 4));
++}
++
++/* CTRLB.CHSIZE: 0 is 8 bits, 1 is 9 bits, 5 to 7 are 5 to 7 bits */
++static unsigned mchp_sercom_char_bits(MchpSercomState *s)
++{
++    unsigned chsize = FIELD_EX32(mchp_sercom_reg(s, A_CTRLB, 4),
++                                 MCHP_SERCOM_USART_INT_CTRLB, CHSIZE);
++
++    return chsize >= 5 ? chsize : 8 + (chsize == 1);
++}
++
++static bool mchp_sercom_has_parity(uint32_t ctrla)
++{
++    switch (FIELD_EX32(ctrla, MCHP_SERCOM_USART_INT_CTRLA, FORM)) {
++    case MCHP_SERCOM_USART_INT_CTRLA_FORM_USART_FRAME_WITH_PARITY:
++    case MCHP_SERCOM_USART_INT_CTRLA_FORM_USART_FRAME_AUTO_BAUD_WITH_PARITY:
++        return true;
++    default:
++        return false;
++    }
++}
++
++/* INTFLAG.DRE and RXC mirror the buffers; the IRQ follows INTFLAG. */
++static void mchp_sercom_update(MchpSercomState *s)
++{
++    uint32_t flags = mchp_sercom_reg(s, A_INTFLAG, 1);
++
++    if (mchp_sercom_is_usart(mchp_sercom_reg(s, A_CTRLA, 4))) {
++        flags = FIELD_DP32(flags, MCHP_SERCOM_USART_INT_INTFLAG, DRE,
++                           mchp_sercom_tx_enabled(s) && !s->tx_buf_full);
++        flags = FIELD_DP32(flags, MCHP_SERCOM_USART_INT_INTFLAG, RXC,
++                           s->rx_count != 0);
++        mchp_sercom_set_reg(s, A_INTFLAG, 1, flags);
++    }
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++/* Oversampling per CTRLA.SAMPR (DS 30.6.2.3); larger values are reserved */
++static const uint8_t mchp_sercom_samples[] = { 16, 16, 8, 8, 3 };
++
++/*
++ * Time one frame takes on the wire at the baud rate of BAUD and the core
++ * clock (DS 30.6.2.3), or 0 when there is no such rate: no clock,
++ * synchronous mode or a reserved setting.
++ */
++static uint64_t mchp_sercom_frame_ns(MchpSercomState *s)
++{
++    uint32_t ctrla = mchp_sercom_reg(s, A_CTRLA, 4);
++    uint32_t ctrlb = mchp_sercom_reg(s, A_CTRLB, 4);
++    uint32_t baud = mchp_sercom_reg(s, A_BAUD, 2);
++    unsigned sampr = FIELD_EX32(ctrla, MCHP_SERCOM_USART_INT_CTRLA, SAMPR);
++    uint64_t ref = clock_get_hz(MCHP_REGBLOCK(s)->gclk);
++    uint64_t bits, num, den;
++
++    if (!ref || FIELD_EX32(ctrla, MCHP_SERCOM_USART_INT_CTRLA, CMODE) ||
++        sampr >= ARRAY_SIZE(mchp_sercom_samples)) {
++        return 0;
++    }
++    if (sampr & 1) {
++        /* Fractional: f = ref / (S * (BAUD + FP / 8)) */
++        num = mchp_sercom_samples[sampr] *
++              (8 * FIELD_EX32(baud, MCHP_SERCOM_USART_INT_BAUD_FRAC, BAUD) +
++               FIELD_EX32(baud, MCHP_SERCOM_USART_INT_BAUD_FRAC, FP));
++        den = 8 * ref;
++    } else {
++        /* Arithmetic: f = ref / S * (1 - BAUD / 65536) */
++        num = mchp_sercom_samples[sampr] * 65536;
++        den = ref * (65536 - baud);
++    }
++    /* Start bit, data, parity and one or two stop bits */
++    bits = 2 + mchp_sercom_char_bits(s) + mchp_sercom_has_parity(ctrla) +
++           FIELD_EX32(ctrlb, MCHP_SERCOM_USART_INT_CTRLB, SBMODE);
++    return bits * NANOSECONDS_PER_SECOND * num / den;
++}
++
++static void mchp_sercom_tx_load(MchpSercomState *s);
++
++/* The shift register is empty: take the next character or set TXC. */
++static void mchp_sercom_tx_done(MchpSercomState *s)
++{
++    s->tx_busy = false;
++    if (s->tx_buf_full) {
++        mchp_sercom_tx_load(s);
++    } else {
++        mchp_sercom_set_reg(s, A_INTFLAG, 1,
++                            mchp_sercom_reg(s, A_INTFLAG, 1) |
++                            R_MCHP_SERCOM_USART_INT_INTFLAG_TXC_MASK);
++    }
++    mchp_sercom_update(s);
++}
++
++static void mchp_sercom_frame_end(void *opaque)
++{
++    mchp_sercom_tx_done(opaque);
++}
++
++/*
++ * Give the character in the shift register to the chardev, or wait until
++ * the chardev can take it.
++ */
++static gboolean mchp_sercom_tx_send(void *do_not_use, GIOCondition cond,
++                                    void *opaque)
++{
++    MchpSercomState *s = opaque;
++    uint8_t ch = s->tx_shift;
++    uint64_t frame_ns;
++
++    s->watch_tag = 0;
++    if (qemu_chr_fe_write(&s->chr, &ch, 1) <= 0) {
++        s->watch_tag = qemu_chr_fe_add_watch(&s->chr, G_IO_OUT | G_IO_HUP,
++                                             mchp_sercom_tx_send, s);
++        if (s->watch_tag) {
++            trace_mchp_sercom_tx_blocked(MCHP_REGBLOCK(s)->name);
++            return G_SOURCE_REMOVE;
++        }
++        /* No backend that could ever take it: the character is lost. */
++    }
++    trace_mchp_sercom_tx(MCHP_REGBLOCK(s)->name, ch);
++
++    frame_ns = s->pace_tx ? mchp_sercom_frame_ns(s) : 0;
++    if (frame_ns) {
++        timer_mod(s->frame_timer,
++                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + frame_ns);
++    } else {
++        mchp_sercom_tx_done(s);
++    }
++    return G_SOURCE_REMOVE;
++}
++
++/* Move the DATA buffer into the shift register and start sending it. */
++static void mchp_sercom_tx_load(MchpSercomState *s)
++{
++    s->tx_shift = s->tx_buf;
++    s->tx_buf_full = false;
++    s->tx_busy = true;
++    mchp_sercom_tx_send(NULL, 0, s);
++}
++
++static void mchp_sercom_data_write(MchpSercomState *s, uint32_t data)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++
++    if (!mchp_sercom_tx_enabled(s) || s->tx_buf_full) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s.DATA: write 0x%" PRIx32
++                      " while INTFLAG.DRE is 0 (ignored)\n", rb->name, data);
++        return;
++    }
++    s->tx_buf = data & MAKE_64BIT_MASK(0, mchp_sercom_char_bits(s));
++    s->tx_buf_full = true;
++    mchp_sercom_set_reg(s, A_INTFLAG, 1,
++                        mchp_sercom_reg(s, A_INTFLAG, 1) &
++                        ~R_MCHP_SERCOM_USART_INT_INTFLAG_TXC_MASK);
++    if (!s->tx_busy) {
++        mchp_sercom_tx_load(s);
++    }
++}
++
++static int mchp_sercom_can_receive(void *opaque)
++{
++    MchpSercomState *s = opaque;
++
++    /* Input waits in the chardev until the receiver is on. */
++    return mchp_sercom_rx_enabled(s) ? MCHP_SERCOM_RX_DEPTH - s->rx_count : 0;
++}
++
++static void mchp_sercom_receive(void *opaque, const uint8_t *buf, int size)
++{
++    MchpSercomState *s = opaque;
++    uint32_t mask = MAKE_64BIT_MASK(0, mchp_sercom_char_bits(s));
++
++    for (int i = 0; i < size && s->rx_count < MCHP_SERCOM_RX_DEPTH; i++) {
++        trace_mchp_sercom_rx(MCHP_REGBLOCK(s)->name, buf[i]);
++        s->rx_buf[s->rx_count++] = buf[i] & mask;
++    }
++    /* Start-of-frame detection flags every start bit (DS 30.6.3.7) */
++    if (FIELD_EX32(mchp_sercom_reg(s, A_CTRLB, 4),
++                   MCHP_SERCOM_USART_INT_CTRLB, SFDE)) {
++        mchp_sercom_set_reg(s, A_INTFLAG, 1,
++                            mchp_sercom_reg(s, A_INTFLAG, 1) |
++                            R_MCHP_SERCOM_USART_INT_INTFLAG_RXS_MASK);
++    }
++    mchp_sercom_update(s);
++}
++
++/* Reading DATA pops the receive buffer, unless a debugger reads it. */
++static uint32_t mchp_sercom_data_read(MchpSercomState *s, bool side_effects)
++{
++    uint32_t data;
++
++    if (!s->rx_count) {
++        return 0;
++    }
++    data = s->rx_buf[0];
++    if (side_effects) {
++        s->rx_buf[0] = s->rx_buf[1];
++        s->rx_count--;
++        mchp_sercom_update(s);
++        qemu_chr_fe_accept_input(&s->chr);
++    }
++    return data;
++}
++
++static uint32_t mchp_sercom_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                                     unsigned idx, uint32_t stored,
++                                     bool side_effects)
++{
++    MchpSercomState *s = MCHP_SERCOM(rf->opaque);
++
++    if (ri->offset == A_DATA &&
++        mchp_sercom_is_usart(mchp_sercom_reg(s, A_CTRLA, 4))) {
++        return mchp_sercom_data_read(s, side_effects);
++    }
++    return stored;      /* SYNCBUSY: synchronization is instant */
++}
++
++/* Disabling the receiver flushes it (DS 30.7.2, CTRLB.RXEN). */
++static void mchp_sercom_rx_switched(MchpSercomState *s, bool was_on)
++{
++    bool on = mchp_sercom_rx_enabled(s);
++
++    if (was_on && !on) {
++        s->rx_count = 0;
++        mchp_sercom_set_reg(s, A_STATUS, 2,
++                            mchp_sercom_reg(s, A_STATUS, 2) &
++                            ~MCHP_SERCOM_RX_ERRORS);
++    } else if (!was_on && on) {
++        qemu_chr_fe_accept_input(&s->chr);
++    }
++}
++
++static const char *mchp_sercom_mode_name(MchpRegBlock *rb, unsigned mode)
++{
++    for (unsigned i = 0; i < rb->info->nviews; i++) {
++        if (rb->info->views[i].value == mode) {
++            return rb->info->views[i].name;
++        }
++    }
++    return "reserved";
++}
++
++/* Report the settings of a SERCOM being enabled that are not modelled. */
++static void mchp_sercom_report_unimp(MchpSercomState *s, uint32_t ctrla,
++                                     uint32_t ctrlb)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    unsigned mode = FIELD_EX32(ctrla, MCHP_SERCOM_USART_INT_CTRLA, MODE);
++    unsigned form = FIELD_EX32(ctrla, MCHP_SERCOM_USART_INT_CTRLA, FORM);
++
++    if (!mchp_sercom_is_usart(ctrla)) {
++        qemu_log_mask(LOG_UNIMP, "%s.CTRLA: %s mode not modelled; the"
++                      " registers only store\n", rb->name,
++                      mchp_sercom_mode_name(rb, mode));
++        return;
++    }
++    if (mode == MCHP_SERCOM_MODE_USART_EXT) {
++        qemu_log_mask(LOG_UNIMP, "%s.CTRLA: external clock (XCK) not"
++                      " modelled\n", rb->name);
++    }
++    if (FIELD_EX32(ctrla, MCHP_SERCOM_USART_INT_CTRLA, CMODE)) {
++        qemu_log_mask(LOG_UNIMP, "%s.CTRLA: synchronous mode not modelled\n",
++                      rb->name);
++    }
++    if (form > MCHP_SERCOM_USART_INT_CTRLA_FORM_USART_FRAME_WITH_PARITY) {
++        qemu_log_mask(LOG_UNIMP, "%s.CTRLA: frame format %u (LIN, auto-baud)"
++                      " not modelled\n", rb->name, form);
++    }
++    if (FIELD_EX32(ctrlb, MCHP_SERCOM_USART_INT_CTRLB, ENC)) {
++        qemu_log_mask(LOG_UNIMP, "%s.CTRLB: IrDA encoding not modelled\n",
++                      rb->name);
++    }
++    if (mchp_sercom_char_bits(s) == 9) {
++        qemu_log_mask(LOG_UNIMP, "%s.CTRLB: 9-bit characters not modelled;"
++                      " bit 8 is not transmitted\n", rb->name);
++    }
++}
++
++static void mchp_sercom_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                   unsigned idx, uint32_t old,
++                                   uint32_t written, uint32_t we)
++{
++    MchpSercomState *s = MCHP_SERCOM(rf->opaque);
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint32_t ctrla = mchp_sercom_reg(s, A_CTRLA, 4);
++    uint32_t ctrlb = mchp_sercom_reg(s, A_CTRLB, 4);
++    unsigned mode = FIELD_EX32(ctrla, MCHP_SERCOM_USART_INT_CTRLA, MODE);
++
++    switch (ri->offset) {
++    case A_CTRLA:
++        if (written & we & R_MCHP_SERCOM_USART_INT_CTRLA_SWRST_MASK) {
++            return;             /* mchp-regblock resets the SERCOM next */
++        }
++        if (ctrla & ~old & R_MCHP_SERCOM_USART_INT_CTRLA_ENABLE_MASK) {
++            mchp_sercom_report_unimp(s, ctrla, ctrlb);
++        }
++        mchp_sercom_rx_switched(s, mchp_sercom_rx_on(old, ctrlb));
++        break;
++    case A_CTRLB:
++        mchp_sercom_rx_switched(s, mchp_sercom_rx_on(ctrla, old));
++        break;
++    case A_DATA:
++        if (mchp_sercom_is_usart(ctrla)) {
++            mchp_sercom_data_write(s, mchp_regfile_get(rf, ri, idx));
++        } else {
++            qemu_log_mask(LOG_UNIMP, "%s.DATA: %s transfer not modelled\n",
++                          rb->name, mchp_sercom_mode_name(rb, mode));
++        }
++        break;
++    case A_MCHP_SERCOM_I2CM_ADDR:
++        qemu_log_mask(LOG_UNIMP, "%s.ADDR: I2C transfer not modelled\n",
++                      rb->name);
++        break;
++    }
++    mchp_sercom_update(s);
++}
++
++/* After the registers are reset (system reset or CTRLA.SWRST) */
++static void mchp_sercom_reset_hold(MchpRegBlock *rb)
++{
++    MchpSercomState *s = MCHP_SERCOM(rb);
++
++    g_clear_handle_id(&s->watch_tag, g_source_remove);
++    timer_del(s->frame_timer);
++    s->tx_buf_full = false;
++    s->tx_busy = false;
++    s->rx_count = 0;
++}
++
++static bool mchp_sercom_realize(MchpRegBlock *rb, Error **errp)
++{
++    MchpSercomState *s = MCHP_SERCOM(rb);
++    g_autofree char *i2c = g_strdup_printf("%s.i2c", rb->name);
++    g_autofree char *spi = g_strdup_printf("%s.spi", rb->name);
++
++    s->i2c = i2c_init_bus(DEVICE(s), i2c);
++    s->spi = ssi_create_bus(DEVICE(s), spi);
++    s->frame_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mchp_sercom_frame_end,
++                                  s);
++    qemu_chr_fe_set_handlers(&s->chr, mchp_sercom_can_receive,
++                             mchp_sercom_receive, NULL, NULL, s, NULL, true);
++    return true;
++}
++
++static void mchp_sercom_finalize(Object *obj)
++{
++    MchpSercomState *s = MCHP_SERCOM(obj);
++
++    timer_free(s->frame_timer);
++}
++
++/* A character waiting for the chardev was not migrated with its watch. */
++static int mchp_sercom_post_load(void *opaque, int version_id)
++{
++    MchpSercomState *s = opaque;
++
++    if (s->tx_busy && !timer_pending(s->frame_timer)) {
++        mchp_sercom_tx_send(NULL, 0, s);
++    }
++    return 0;
++}
++
++static const VMStateDescription vmstate_mchp_sercom = {
++    .name = TYPE_MCHP_SERCOM,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .post_load = mchp_sercom_post_load,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpSercomState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_UINT16(tx_buf, MchpSercomState),
++        VMSTATE_BOOL(tx_buf_full, MchpSercomState),
++        VMSTATE_UINT16(tx_shift, MchpSercomState),
++        VMSTATE_BOOL(tx_busy, MchpSercomState),
++        VMSTATE_TIMER_PTR(frame_timer, MchpSercomState),
++        VMSTATE_UINT16_ARRAY(rx_buf, MchpSercomState, MCHP_SERCOM_RX_DEPTH),
++        VMSTATE_UINT8(rx_count, MchpSercomState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static const Property mchp_sercom_properties[] = {
++    DEFINE_PROP_CHR("chardev", MchpSercomState, chr),
++    DEFINE_PROP_BOOL("pace-tx", MchpSercomState, pace_tx, false),
++};
++
++static void mchp_sercom_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    dc->vmsd = &vmstate_mchp_sercom;
++    device_class_set_props(dc, mchp_sercom_properties);
++    c->realize = mchp_sercom_realize;
++    c->pre_read = mchp_sercom_pre_read;
++    c->post_write = mchp_sercom_post_write;
++    c->reset_hold = mchp_sercom_reset_hold;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_sercom_types[] = {
++    {
++        .name = TYPE_MCHP_SERCOM,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpSercomState),
++        .instance_finalize = mchp_sercom_finalize,
++        .class_init = mchp_sercom_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_sercom_types)
+diff --git a/hw/char/meson.build b/hw/char/meson.build
+index fc3d7ee..09ff1b5 100644
+--- a/hw/char/meson.build
++++ b/hw/char/meson.build
+@@ -36,6 +36,7 @@ system_ss.add(when: 'CONFIG_SH_SCI', if_true: files('sh_serial.c'))
+ system_ss.add(when: 'CONFIG_STM32F2XX_USART', if_true: files('stm32f2xx_usart.c'))
+ system_ss.add(when: 'CONFIG_STM32L4X5_USART', if_true: files('stm32l4x5_usart.c'))
+ system_ss.add(when: 'CONFIG_MCHP_PFSOC_MMUART', if_true: files('mchp_pfsoc_mmuart.c'))
++system_ss.add(when: 'CONFIG_MCHP_SERCOM', if_true: files('mchp_sercom.c'))
+ system_ss.add(when: 'CONFIG_HTIF', if_true: files('riscv_htif.c'))
+ system_ss.add(when: 'CONFIG_GOLDFISH_TTY', if_true: files('goldfish_tty.c'))
+ 
+diff --git a/hw/gpio/Kconfig b/hw/gpio/Kconfig
+index a209294..e9ec9a3 100644
+--- a/hw/gpio/Kconfig
++++ b/hw/gpio/Kconfig
+@@ -16,6 +16,10 @@ config SIFIVE_GPIO
+ config STM32L4X5_GPIO
+     bool
+ 
++config MCHP_PORT
++    bool
++    select MCHP_REGFILE
++
+ config PCA9552
+     bool
+     depends on I2C
+diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
+new file mode 100644
+index 0000000..c0b358c
+--- /dev/null
++++ b/hw/gpio/mchp_port.c
+@@ -0,0 +1,343 @@
++/*
++ * Microchip SAM/PIC32CM PORT (U2210) I/O pin controller
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Pin configuration follows DS60001632H chapter 27 ("I/O Pin
++ * Configuration"). The register file stores DIR, OUT, PINCFG and PMUX, and
++ * the generated tables give the SET/CLR/TGL aliases; this model derives
++ * the pads from them. Not modelled: event inputs (EVCTRL) and the input
++ * sampling mode (CTRL.SAMPLING), since IN always shows the current pads.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/visitor.h"
++#include "hw/core/irq.h"
++#include "hw/gpio/mchp_port.h"
++#include "hw/mchp/gen/port_u2210.h"
++#include "migration/vmstate.h"
++#include "trace.h"
++
++#define MCHP_PORT_GROUP_PINS    32
++#define MCHP_PORT_NUM_PINS      (MCHP_PORT_GROUP_COUNT * MCHP_PORT_GROUP_PINS)
++
++/* WRCONFIG holds the PINCFG fields 16 bits up (DS 27.7.11). */
++#define MCHP_PORT_WRCONFIG_PINCFG_SHIFT R_MCHP_PORT_GROUP_WRCONFIG_PMUXEN_SHIFT
++#define MCHP_PORT_PINCFG_FIELDS \
++    (R_MCHP_PORT_GROUP_PINCFG_PMUXEN_MASK | \
++     R_MCHP_PORT_GROUP_PINCFG_INEN_MASK | \
++     R_MCHP_PORT_GROUP_PINCFG_PULLEN_MASK | \
++     R_MCHP_PORT_GROUP_PINCFG_DRVSTR_MASK)
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpPortState, MCHP_PORT)
++
++struct MchpPortState {
++    MchpRegBlock parent_obj;
++
++    qemu_irq out[MCHP_PORT_NUM_PINS];
++    /* External drivers, per group: the pads they drive and the levels */
++    uint32_t ext_mask[MCHP_PORT_GROUP_COUNT];
++    uint32_t ext_level[MCHP_PORT_GROUP_COUNT];
++    /* The PORT's own drive, as last signalled on "port-out" */
++    uint32_t drive_mask[MCHP_PORT_GROUP_COUNT];
++    uint32_t drive_level[MCHP_PORT_GROUP_COUNT];
++};
++
++static MchpRegFile *mchp_port_rf(MchpPortState *s)
++{
++    return &MCHP_REGBLOCK(s)->rf;
++}
++
++/* Byte offset of register @reg of group @g */
++static hwaddr mchp_port_offset(unsigned g, hwaddr reg)
++{
++    return MCHP_PORT_GROUP_OFFSET + g * MCHP_PORT_GROUP_STRIDE + reg;
++}
++
++/* The group of register @ri, and the offset of @ri inside its group */
++static unsigned mchp_port_group(const MchpRegInfo *ri)
++{
++    return (ri->offset - MCHP_PORT_GROUP_OFFSET) / MCHP_PORT_GROUP_STRIDE;
++}
++
++static hwaddr mchp_port_group_reg(const MchpRegInfo *ri)
++{
++    return (ri->offset - MCHP_PORT_GROUP_OFFSET) % MCHP_PORT_GROUP_STRIDE;
++}
++
++static uint32_t mchp_port_reg(MchpPortState *s, unsigned g, hwaddr reg)
++{
++    return mchp_regfile_peek(mchp_port_rf(s), mchp_port_offset(g, reg), 4);
++}
++
++/* Pins of group @g whose PINCFG has any of @bits set */
++static uint32_t mchp_port_pincfg(MchpPortState *s, unsigned g, uint8_t bits)
++{
++    uint32_t pins = 0;
++
++    for (unsigned pin = 0; pin < MCHP_PORT_GROUP_PINS; pin++) {
++        hwaddr offset = mchp_port_offset(g, A_MCHP_PORT_GROUP_PINCFG + pin);
++
++        if (mchp_regfile_peek(mchp_port_rf(s), offset, 1) & bits) {
++            pins |= BIT(pin);
++        }
++    }
++    return pins;
++}
++
++/* Pads the PORT drives: GPIO outputs not handed over to a peripheral */
++static uint32_t mchp_port_drive_mask(MchpPortState *s, unsigned g)
++{
++    return mchp_port_reg(s, g, A_MCHP_PORT_GROUP_DIR) &
++           ~mchp_port_pincfg(s, g, R_MCHP_PORT_GROUP_PINCFG_PMUXEN_MASK);
++}
++
++/*
++ * Level of every pad of group @g (DS 27.6.3.2): the PORT's output, else an
++ * external driver, else the pull resistor of an input (towards OUT), else
++ * 0 for a floating pad.
++ */
++static uint32_t mchp_port_pads(MchpPortState *s, unsigned g)
++{
++    uint32_t out = mchp_port_reg(s, g, A_MCHP_PORT_GROUP_OUT);
++    uint32_t drive = mchp_port_drive_mask(s, g);
++    uint32_t ext = s->ext_mask[g] & ~drive;
++    uint32_t pull = mchp_port_pincfg(s, g,
++                                     R_MCHP_PORT_GROUP_PINCFG_PULLEN_MASK) &
++                    ~mchp_port_reg(s, g, A_MCHP_PORT_GROUP_DIR) & ~ext;
++
++    return (out & drive) | (s->ext_level[g] & ext) | (out & pull);
++}
++
++/* IN shows the pads whose input buffer is enabled; the others read 0. */
++static uint32_t mchp_port_in(MchpPortState *s, unsigned g)
++{
++    return mchp_port_pads(s, g) &
++           mchp_port_pincfg(s, g, R_MCHP_PORT_GROUP_PINCFG_INEN_MASK);
++}
++
++/* Signal the pads of group @g whose drive changed on "port-out". */
++static void mchp_port_update(MchpPortState *s, unsigned g)
++{
++    uint32_t mask = mchp_port_drive_mask(s, g);
++    uint32_t level = mchp_port_reg(s, g, A_MCHP_PORT_GROUP_OUT) & mask;
++    uint32_t changed = (mask ^ s->drive_mask[g]) |
++                       (level ^ s->drive_level[g]);
++
++    s->drive_mask[g] = mask;
++    s->drive_level[g] = level;
++    for (unsigned pin = 0; pin < MCHP_PORT_GROUP_PINS; pin++) {
++        int value = extract32(mask, pin, 1) ? extract32(level, pin, 1) : -1;
++
++        if (extract32(changed, pin, 1)) {
++            trace_mchp_port_out('A' + g, pin, value);
++            qemu_set_irq(s->out[g * MCHP_PORT_GROUP_PINS + pin], value);
++        }
++    }
++}
++
++/* WRCONFIG: PINCFG and PMUX of up to 16 pins in one write (DS 27.7.11) */
++static void mchp_port_wrconfig(MchpPortState *s, unsigned g, uint32_t val)
++{
++    MchpRegFile *rf = mchp_port_rf(s);
++    unsigned first = FIELD_EX32(val, MCHP_PORT_GROUP_WRCONFIG, HWSEL) ? 16 : 0;
++    uint32_t pins = FIELD_EX32(val, MCHP_PORT_GROUP_WRCONFIG, PINMASK);
++    uint32_t pincfg = (val >> MCHP_PORT_WRCONFIG_PINCFG_SHIFT) &
++                      MCHP_PORT_PINCFG_FIELDS;
++    uint32_t pmux = FIELD_EX32(val, MCHP_PORT_GROUP_WRCONFIG, PMUX);
++
++    for (unsigned i = 0; i < 16; i++) {
++        unsigned pin = first + i;
++        hwaddr pincfg_offset = mchp_port_offset(g, A_MCHP_PORT_GROUP_PINCFG +
++                                                   pin);
++        hwaddr pmux_offset = mchp_port_offset(g, A_MCHP_PORT_GROUP_PMUX +
++                                                 pin / 2);
++
++        if (!extract32(pins, i, 1)) {
++            continue;
++        }
++        if (FIELD_EX32(val, MCHP_PORT_GROUP_WRCONFIG, WRPINCFG)) {
++            mchp_regfile_poke(rf, pincfg_offset, 1, pincfg);
++        }
++        if (FIELD_EX32(val, MCHP_PORT_GROUP_WRCONFIG, WRPMUX)) {
++            /* PMUXE holds the even pin, PMUXO the odd one */
++            mchp_regfile_poke(rf, pmux_offset, 1,
++                              deposit32(mchp_regfile_peek(rf, pmux_offset, 1),
++                                        (pin & 1) * 4, 4, pmux));
++        }
++    }
++}
++
++static uint32_t mchp_port_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                                   unsigned idx, uint32_t stored,
++                                   bool side_effects)
++{
++    if (mchp_port_group_reg(ri) == A_MCHP_PORT_GROUP_IN) {
++        return mchp_port_in(MCHP_PORT(rf->opaque), mchp_port_group(ri));
++    }
++    return stored;
++}
++
++/* DIR and OUT (also through their aliases), PINCFG and WRCONFIG */
++static void mchp_port_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                 unsigned idx, uint32_t old,
++                                 uint32_t written, uint32_t we)
++{
++    MchpPortState *s = MCHP_PORT(rf->opaque);
++    unsigned g = mchp_port_group(ri);
++
++    if (mchp_port_group_reg(ri) == A_MCHP_PORT_GROUP_WRCONFIG) {
++        mchp_port_wrconfig(s, g, written & we);
++    }
++    mchp_port_update(s, g);
++}
++
++/* "port-in": level 0 or 1 drives the pad, a negative level releases it */
++static void mchp_port_set_input(void *opaque, int n, int level)
++{
++    MchpPortState *s = opaque;
++    unsigned g = n / MCHP_PORT_GROUP_PINS, pin = n % MCHP_PORT_GROUP_PINS;
++
++    trace_mchp_port_in('A' + g, pin, level);
++    s->ext_mask[g] = deposit32(s->ext_mask[g], pin, 1, level >= 0);
++    s->ext_level[g] = deposit32(s->ext_level[g], pin, 1, level > 0);
++}
++
++static void mchp_port_get_in(Object *obj, Visitor *v, const char *name,
++                             void *opaque, Error **errp)
++{
++    MchpPortState *s = MCHP_PORT(obj);
++    unsigned g = GPOINTER_TO_UINT(opaque);
++    uint32_t value = s->ext_level[g] & s->ext_mask[g];
++
++    visit_type_uint32(v, name, &value, errp);
++}
++
++static void mchp_port_set_in(Object *obj, Visitor *v, const char *name,
++                             void *opaque, Error **errp)
++{
++    MchpPortState *s = MCHP_PORT(obj);
++    unsigned g = GPOINTER_TO_UINT(opaque);
++    uint32_t value;
++
++    if (visit_type_uint32(v, name, &value, errp)) {
++        s->ext_level[g] = value;
++        s->ext_mask[g] = UINT32_MAX;
++    }
++}
++
++static void mchp_port_get_in_mask(Object *obj, Visitor *v, const char *name,
++                                  void *opaque, Error **errp)
++{
++    MchpPortState *s = MCHP_PORT(obj);
++    uint32_t value = s->ext_mask[GPOINTER_TO_UINT(opaque)];
++
++    visit_type_uint32(v, name, &value, errp);
++}
++
++static void mchp_port_set_in_mask(Object *obj, Visitor *v, const char *name,
++                                  void *opaque, Error **errp)
++{
++    MchpPortState *s = MCHP_PORT(obj);
++    uint32_t value;
++
++    if (visit_type_uint32(v, name, &value, errp)) {
++        s->ext_mask[GPOINTER_TO_UINT(opaque)] = value;
++    }
++}
++
++static void mchp_port_get_out(Object *obj, Visitor *v, const char *name,
++                              void *opaque, Error **errp)
++{
++    MchpPortState *s = MCHP_PORT(obj);
++    uint32_t value = s->drive_level[GPOINTER_TO_UINT(opaque)];
++
++    visit_type_uint32(v, name, &value, errp);
++}
++
++static void mchp_port_get_out_mask(Object *obj, Visitor *v, const char *name,
++                                   void *opaque, Error **errp)
++{
++    MchpPortState *s = MCHP_PORT(obj);
++    uint32_t value = s->drive_mask[GPOINTER_TO_UINT(opaque)];
++
++    visit_type_uint32(v, name, &value, errp);
++}
++
++/* After a reset every pin is an input again: release the pads. */
++static void mchp_port_reset_exit(MchpRegBlock *rb)
++{
++    for (unsigned g = 0; g < MCHP_PORT_GROUP_COUNT; g++) {
++        mchp_port_update(MCHP_PORT(rb), g);
++    }
++}
++
++static void mchp_port_init(Object *obj)
++{
++    MchpPortState *s = MCHP_PORT(obj);
++
++    qdev_init_gpio_out_named(DEVICE(obj), s->out, MCHP_PORT_OUT,
++                             MCHP_PORT_NUM_PINS);
++    qdev_init_gpio_in_named(DEVICE(obj), mchp_port_set_input, MCHP_PORT_IN,
++                            MCHP_PORT_NUM_PINS);
++
++    for (unsigned g = 0; g < MCHP_PORT_GROUP_COUNT; g++) {
++        void *group = GUINT_TO_POINTER(g);
++        char p = 'a' + g;
++        g_autofree char *in = g_strdup_printf("p%c-in", p);
++        g_autofree char *in_mask = g_strdup_printf("p%c-in-mask", p);
++        g_autofree char *out = g_strdup_printf("p%c-out", p);
++        g_autofree char *out_mask = g_strdup_printf("p%c-out-mask", p);
++
++        object_property_add(obj, in, "uint32", mchp_port_get_in,
++                            mchp_port_set_in, NULL, group);
++        object_property_add(obj, in_mask, "uint32", mchp_port_get_in_mask,
++                            mchp_port_set_in_mask, NULL, group);
++        object_property_add(obj, out, "uint32", mchp_port_get_out, NULL,
++                            NULL, group);
++        object_property_add(obj, out_mask, "uint32", mchp_port_get_out_mask,
++                            NULL, NULL, group);
++    }
++}
++
++static const VMStateDescription vmstate_mchp_port = {
++    .name = TYPE_MCHP_PORT,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpPortState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_UINT32_ARRAY(ext_mask, MchpPortState, MCHP_PORT_GROUP_COUNT),
++        VMSTATE_UINT32_ARRAY(ext_level, MchpPortState, MCHP_PORT_GROUP_COUNT),
++        VMSTATE_UINT32_ARRAY(drive_mask, MchpPortState, MCHP_PORT_GROUP_COUNT),
++        VMSTATE_UINT32_ARRAY(drive_level, MchpPortState,
++                             MCHP_PORT_GROUP_COUNT),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void mchp_port_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_port;
++    c->pre_read = mchp_port_pre_read;
++    c->post_write = mchp_port_post_write;
++    c->reset_exit = mchp_port_reset_exit;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_port_types[] = {
++    {
++        .name = TYPE_MCHP_PORT,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpPortState),
++        .instance_init = mchp_port_init,
++        .class_init = mchp_port_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_port_types)
+diff --git a/hw/gpio/meson.build b/hw/gpio/meson.build
+index 6a67ee9..17ea9b2 100644
+--- a/hw/gpio/meson.build
++++ b/hw/gpio/meson.build
+@@ -7,6 +7,7 @@ system_ss.add(when: 'CONFIG_PL061', if_true: files('pl061.c'))
+ system_ss.add(when: 'CONFIG_ZAURUS_SCOOP', if_true: files('zaurus.c'))
+ 
+ system_ss.add(when: 'CONFIG_IMX', if_true: files('imx_gpio.c'))
++system_ss.add(when: 'CONFIG_MCHP_PORT', if_true: files('mchp_port.c'))
+ system_ss.add(when: 'CONFIG_NPCM7XX', if_true: files('npcm7xx_gpio.c'))
+ system_ss.add(when: 'CONFIG_NRF51_SOC', if_true: files('nrf51_gpio.c'))
+ system_ss.add(when: 'CONFIG_OMAP', if_true: files('omap_gpio.c'))
+diff --git a/include/hw/char/mchp_sercom.h b/include/hw/char/mchp_sercom.h
+new file mode 100644
+index 0000000..637aa2a
+--- /dev/null
++++ b/include/hw/char/mchp_sercom.h
+@@ -0,0 +1,30 @@
++/*
++ * Microchip SAM/PIC32CM SERCOM (U2201) serial communication interface
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * A TYPE_MCHP_REGBLOCK subclass configured with mchp_regblock_set_info()
++ * from a generated SoC instance table; CTRLA.MODE selects the register
++ * view. In the USART modes characters go to and come from the chardev;
++ * the SPI and I2C modes only store their registers (LOG_UNIMP).
++ *
++ * Properties:
++ *   "chardev"  the USART's serial backend
++ *   "pace-tx"  bool, default off: keep the transmit shift register busy
++ *              for one frame at the baud rate set by BAUD and the "gclk"
++ *              clock, instead of sending each character at once
++ * Buses "<instance>.i2c" (I2C) and "<instance>.spi" (SSI), for example
++ * "sercom4.i2c", let board devices attach; v0 does not drive them.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_CHAR_MCHP_SERCOM_H
++#define HW_CHAR_MCHP_SERCOM_H
++
++#include "hw/misc/mchp_regblock.h"
++
++#define TYPE_MCHP_SERCOM "mchp-sercom"
++
++#endif /* HW_CHAR_MCHP_SERCOM_H */
+diff --git a/include/hw/gpio/mchp_port.h b/include/hw/gpio/mchp_port.h
+new file mode 100644
+index 0000000..c348e5d
+--- /dev/null
++++ b/include/hw/gpio/mchp_port.h
+@@ -0,0 +1,46 @@
++/*
++ * Microchip SAM/PIC32CM PORT (U2210) I/O pin controller
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * A TYPE_MCHP_REGBLOCK subclass configured with mchp_regblock_set_info()
++ * from a generated SoC instance table: the pin groups at a 0x80 stride and
++ * their IOBUS view (sysbus MMIO 1). Pins are numbered group * 32 + pin,
++ * with PA = group 0, PB = 1 and PC = 2 (see MCHP_PORT_PIN()).
++ *
++ * Each pad is driven by the PORT, by something outside, or by nobody. The
++ * GPIO lines use the level -1 for "not driven", as nrf51_gpio does:
++ *   "port-out"[n]  the PORT's drive on pad n: the OUT bit while the pin
++ *                  is a GPIO output (DIR = 1, PINCFG.PMUXEN = 0), else -1
++ *   "port-in"[n]   an external driver on pad n: 0 or 1, or -1 to release
++ *                  the pad
++ * IN reads the pad of each pin whose input buffer is on (PINCFG.INEN): the
++ * PORT's own drive, else the external driver, else the pull resistor
++ * (PINCFG.PULLEN, towards OUT), else 0 for a floating pad.
++ *
++ * QOM properties per group, here for PA ("pb-..." and "pc-..." likewise):
++ *   "pa-in"        uint32: levels of the external drivers; writing it
++ *                  drives all 32 pads
++ *   "pa-in-mask"   uint32: pads that have an external driver (default 0)
++ *   "pa-out"       uint32, read-only: levels the PORT drives (0 where it
++ *                  does not drive)
++ *   "pa-out-mask"  uint32, read-only: pads the PORT drives
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_GPIO_MCHP_PORT_H
++#define HW_GPIO_MCHP_PORT_H
++
++#include "hw/misc/mchp_regblock.h"
++
++#define TYPE_MCHP_PORT "mchp-port"
++
++#define MCHP_PORT_OUT "port-out"
++#define MCHP_PORT_IN "port-in"
++
++/* GPIO line of pin P<group><pin>, for example MCHP_PORT_PIN('C', 5) */
++#define MCHP_PORT_PIN(group, pin) (((group) - 'A') * 32 + (pin))
++
++#endif /* HW_GPIO_MCHP_PORT_H */
+-- 
+2.51.2.windows.1
+

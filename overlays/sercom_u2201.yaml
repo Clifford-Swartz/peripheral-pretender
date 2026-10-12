@@ -1,0 +1,127 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for SERCOM U2201. Facts come from the datasheet register
+# descriptions, not from the ATDF (which marks INTFLAG fully W1C, STATUS plain
+# RW, and has no enable-protection or SYNCBUSY mapping).
+ip: SERCOM
+id: U2201
+versions: ["3.1.1"]
+references:
+  - "DS60001632H 30.7 (USART registers), 31.7 (SPI), 32.7/32.8 (I2C client/host)"
+  - "docs/research/microchip-data.md, Table: SERCOM USART_INT registers"
+  - "docs/research/boot-path.md finding 18"
+modes:
+  USART_INT:
+    registers: &usart
+      CTRLA:
+        pac_protected: true
+        enable_protected: {all_except: [SWRST, ENABLE]}
+        sync: {SWRST: SWRST, ENABLE: ENABLE}
+        self_clearing: [SWRST]
+        hooks: [post_write]                 # enable, soft reset, MODE view
+      CTRLB:
+        pac_protected: true
+        enable_protected: {all_except: [RXEN, TXEN]}
+        sync: {RXEN: CTRLB, TXEN: CTRLB, LINCMD: CTRLB}   # only while enabled
+        strobe: [LINCMD]                    # "always read back as zero"
+        write_while_syncbusy: bus_error     # DS 30.7.10: APB error
+        hooks: [post_write]
+      CTRLC: {pac_protected: true, enable_protected: all}
+      BAUD: {pac_protected: true, enable_protected: all}
+      RXPL: {pac_protected: true, enable_protected: all}
+      INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+      INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+      INTFLAG:
+        w1c: [TXC, RXS, CTSIC, RXBRK, ERROR]
+        ro: [DRE, RXC]          # DRE cleared by a DATA write, RXC by a DATA read
+        irq_source: {enable: INTENSET}
+      STATUS:
+        w1c: [PERR, FERR, BUFOVF, ISF, COLL, TXE]
+        ro: [CTS]               # CTS pin level
+      SYNCBUSY: {dynamic: true}
+      DATA:
+        hooks: [pre_read, post_write]       # pop RX / push TX; DRE, TXC, RXC
+      DBGCTRL: {pac_protected: true}
+  USART_EXT:
+    registers: *usart
+  SPIM:
+    registers: &spi
+      CTRLA:
+        pac_protected: true
+        enable_protected: {all_except: [SWRST, ENABLE]}
+        sync: {SWRST: SWRST, ENABLE: ENABLE}
+        self_clearing: [SWRST]
+        hooks: [post_write]
+      CTRLB:
+        pac_protected: true
+        enable_protected: {all_except: [RXEN]}
+        sync: {RXEN: CTRLB}
+        write_while_syncbusy: bus_error
+        hooks: [post_write]
+      BAUD: {pac_protected: true, enable_protected: all}
+      INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+      INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+      INTFLAG:
+        w1c: [TXC, SSL, ERROR]
+        ro: [DRE, RXC]
+        irq_source: {enable: INTENSET}
+      STATUS: {w1c: [BUFOVF]}
+      SYNCBUSY: {dynamic: true}
+      ADDR: {pac_protected: true, enable_protected: all}
+      DATA: {hooks: [pre_read, post_write]}
+      DBGCTRL: {pac_protected: true}
+  SPIS:
+    registers: *spi
+  I2CM:
+    registers:
+      CTRLA:
+        pac_protected: true
+        enable_protected: {all_except: [SWRST, ENABLE]}
+        sync: {SWRST: SWRST, ENABLE: ENABLE}
+        self_clearing: [SWRST]
+        hooks: [post_write]
+      CTRLB:
+        pac_protected: true
+        enable_protected: [SMEN, QCEN]
+        sync: {CMD: SYSOP}
+        strobe: [CMD]
+        hooks: [post_write]
+      BAUD: {pac_protected: true, enable_protected: all}
+      INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+      INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+      INTFLAG:
+        w1c: [MB, SB, ERROR]
+        irq_source: {enable: INTENSET}
+      STATUS:
+        w1c: [BUSERR, ARBLOST, LOWTOUT, MEXTTOUT, SEXTTOUT, LENERR]
+        ro: [RXNACK, CLKHOLD]
+        sync: {BUSSTATE: SYSOP}
+        hooks: [post_write]                 # writing BUSSTATE forces IDLE
+      SYNCBUSY: {dynamic: true}
+      ADDR: {sync: SYSOP, hooks: [post_write]}            # starts a transfer
+      DATA: {sync: SYSOP, hooks: [pre_read, post_write]}
+      DBGCTRL: {pac_protected: true}
+  I2CS:
+    registers:
+      CTRLA:
+        pac_protected: true
+        enable_protected: {all_except: [SWRST, ENABLE]}
+        sync: {SWRST: SWRST, ENABLE: ENABLE}
+        self_clearing: [SWRST]
+        hooks: [post_write]
+      CTRLB:
+        pac_protected: true
+        enable_protected: [SMEN, GCMD, AACKEN, AMODE]
+        strobe: [CMD]
+        hooks: [post_write]
+      INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+      INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+      INTFLAG:
+        w1c: [PREC, AMATCH, DRDY, ERROR]
+        irq_source: {enable: INTENSET}
+      STATUS:
+        w1c: [BUSERR, COLL, LOWTOUT, SEXTTOUT, HS]
+        ro: [RXNACK, DIR, SR, CLKHOLD]
+      SYNCBUSY: {dynamic: true}
+      ADDR: {pac_protected: true, enable_protected: all}
+      DATA: {hooks: [pre_read, post_write]}

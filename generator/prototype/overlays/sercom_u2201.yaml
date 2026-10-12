@@ -1,0 +1,39 @@
+# Behavior overlay for SERCOM IP U2201 -- written ONCE per IP id/version,
+# reused by every device whose ATDF declares <module name="SERCOM" id="U2201" version=...>.
+# Facts below come from the datasheet register descriptions, NOT from the ATDF:
+#   PIC32CM JH00/JH01 DS60001632H, 30.7.x (SERCOM USART register descriptions)
+ip: SERCOM
+id: U2201
+versions: ["3.1.1"]          # generator refuses to apply to an unlisted version
+modes:
+  USART_INT:
+    registers:
+      CTRLA:
+        pac_protected: true
+        enable_protected: {all_except: [SWRST, ENABLE]}   # "Enable-Protected Bits"
+        sync: {SWRST: SWRST, ENABLE: ENABLE}              # field -> SYNCBUSY bit
+        self_clearing: [SWRST]
+        hooks: [post_write]                               # enable / soft reset
+      CTRLB:
+        pac_protected: true
+        enable_protected: {all_except: [RXEN, TXEN]}
+        sync: {RXEN: CTRLB, TXEN: CTRLB, LINCMD: CTRLB}   # only while CTRLA.ENABLE=1
+        strobe: [LINCMD]                                  # "strobe bits ... always read back as zero"
+        write_while_syncbusy: bus_error                   # "an APB error will be generated"
+        hooks: [post_write]
+      CTRLC:  {pac_protected: true, enable_protected: all}
+      BAUD:   {pac_protected: true, enable_protected: all}
+      RXPL:   {pac_protected: true, enable_protected: all}
+      INTENCLR: {pac_protected: true, alias: {storage: INTEN, op: clear}}
+      INTENSET: {pac_protected: true, alias: {storage: INTEN, op: set}}
+      INTFLAG:
+        w1c: [TXC, RXS, CTSIC, RXBRK, ERROR]
+        ro:  [DRE, RXC]          # DRE cleared by DATA write, RXC by DATA read
+        irq_source: {enable: INTEN}
+      STATUS:
+        w1c: [PERR, FERR, BUFOVF, ISF, COLL, TXE]
+        ro:  [CTS]               # reflects CTS pin level
+      SYNCBUSY: {dynamic: true}
+      DATA:
+        hooks: [pre_read, post_write]   # pop RX FIFO / push TX, update DRE/TXC/RXC
+      DBGCTRL: {pac_protected: true}

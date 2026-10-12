@@ -1,0 +1,33 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for WDT U2251 (IRQ 1). Timeouts are out of scope in v0.
+ip: WDT
+id: U2251
+versions: ["1.0.1"]
+references:
+  - "DS60001632H 22.6 (WDT registers), 10.2.1 Table 10-3 (user row)"
+  - "docs/research/boot-path.md finding 3 (Harmony startup reads CTRLA)"
+registers:
+  CTRLA:
+    pac_protected: true
+    enable_protected: [WEN]       # WEN writable only while disabled
+    sync: {ENABLE: ENABLE, WEN: WEN, ALWAYSON: ALWAYSON}
+    hooks: [post_write]           # ALWAYSON is set-only; LOG_UNIMP when enabled
+  CONFIG: {pac_protected: true}
+  EWCTRL: {pac_protected: true}
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: [EW]
+    irq_source: {enable: INTENSET}
+  SYNCBUSY: {dynamic: true}
+  CLEAR:
+    sync: CLEAR
+    hooks: [post_write]           # 0xA5 restarts the period; other values reset
+reset_from:
+  CTRLA.ENABLE: USER_FUSES.USER_WORD_0.WDT_ENABLE
+  CTRLA.ALWAYSON: USER_FUSES.USER_WORD_0.WDT_ALWAYSON
+  CTRLA.WEN: USER_FUSES.USER_WORD_1.WDT_WEN
+  CONFIG.PER: USER_FUSES.USER_WORD_0.WDT_PER
+  CONFIG.WINDOW: USER_FUSES.USER_WORD_1.WDT_WINDOW
+  EWCTRL.EWOFFSET: USER_FUSES.USER_WORD_1.WDT_EWOFFSET

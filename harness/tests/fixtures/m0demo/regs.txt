@@ -1,0 +1,11 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+# Register list for the m0demo fixture on QEMU's microbit machine (nRF51 FICR is
+# constant in QEMU: CODEPAGESIZE 0x400, CODESIZE 0x100).
+DEMO.counter       0x20000000 4 RW 0x00000000
+DEMO.marks[0]      0x20000004 4 RW 0x00000000
+DEMO.marks[1]      0x20000008 4 RW 0x00000000
+DEMO.marks[2]      0x2000000C 4 RW 0x00000000
+DEMO.marks[3]      0x20000010 4 RW 0x00000000
+FICR.CODEPAGESIZE  0x10000010 4 R  0x00000400
+FICR.CODESIZE      0x10000014 4 R  0x00000100
+DEMO.fifo          0x20000018 4 RW -          sensitive
