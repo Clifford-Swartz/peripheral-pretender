@@ -10,6 +10,11 @@
 # registers: name globs (* and ?; brackets are literal) over register names
 #            and aliases; mask = bits to ignore.
 # core:      core register names (r0..r12, sp, lr, pc, xpsr, msp, psp, ...).
+#            "pc" also masks the stop PC of breakpoint events.
+# reset:     like registers, but only for `compare reset` (a capture against
+#            the documented reset table): values the table cannot know.
+#            Registers loaded from the NVM user row (reset_from) are masked
+#            there automatically.
 # uart:      Python regexes applied to every transcript line (re.sub).  The
 #            patterns follow the line format of firmware/hello; other images
 #            bring their own mask file (--masks).
@@ -30,6 +35,10 @@ registers:
   - {name: "RTC.CLOCK", mask: 0xFFFFFFFF, reason: "free-running calendar"}
 
 core: []
+
+reset:
+  - {name: "SUPC.INTFLAG", mask: 0x00000005, reason: "BODVDDRDY and BVDDSRDY are set by hardware right after reset; the documented 0x0 is the value before the BOD and supply report ready"}
+  - {name: "SysTick.CALIB", mask: 0xFFFFFFFF, reason: "implementation defined (ARMv6-M ARM B3.3.5); the ATDF's 0x0 is not a datasheet value and QEMU reports NOREF. Compared twin vs silicon with compare regs"}
 
 uart:
   - {pattern: '^(serial:).*', repl: '\1 <masked: unique per chip>'}

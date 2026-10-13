@@ -9,21 +9,22 @@ and do trigger side effects (docs/research/validation-build.md, finding 7).
 from __future__ import annotations
 
 import contextlib
-import os
 import socket
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Iterator, Sequence
 
-_EXE = "qemu-system-arm.exe" if sys.platform == "win32" else "qemu-system-arm"
-# The pp-qemu checkout lives next to this repo (its path must not contain spaces).
-QEMU = Path(__file__).resolve().parents[1].parent / "pp-qemu" / "build" / _EXE
-MACHINE = "pic32cm-jh01-cpro"
-# Windows only: QEMU's runtime DLLs (glib, pixman) from MSYS2 UCRT64.
-MSYS2_BIN = Path(os.environ.get("PP_MSYS2_BIN", "C:/msys64/ucrt64/bin"))
+# QEMU is located and launched exactly as by the runner (tools/pp/qemu.py):
+# --qemu / $PP_QEMU may name the binary or a pp-qemu checkout or build
+# directory, and $PP_MSYS2_BIN supplies the DLLs on Windows.
+from tools.pp.qemu import DEFAULT_MACHINE as MACHINE
+from tools.pp.qemu import DEFAULT_QEMU as QEMU
+from tools.pp.qemu import QemuNotFound, find_qemu, qemu_env
+
+__all__ = ["MACHINE", "QEMU", "TwinError", "free_port", "halted",
+           "qemu_binary", "qemu_env"]
 
 
 class TwinError(Exception):
@@ -31,17 +32,10 @@ class TwinError(Exception):
 
 
 def qemu_binary(explicit: str | Path | None = None) -> Path:
-    path = Path(explicit or os.environ.get("PP_QEMU") or QEMU)
-    if not path.is_file():
-        raise TwinError(f"QEMU not found at {path}; pass --qemu or set PP_QEMU")
-    return path
-
-
-def qemu_env() -> dict[str, str]:
-    env = dict(os.environ)
-    if sys.platform == "win32" and MSYS2_BIN.is_dir():
-        env["PATH"] = f"{MSYS2_BIN}{os.pathsep}{env.get('PATH', '')}"
-    return env
+    try:
+        return find_qemu(explicit)
+    except QemuNotFound as exc:
+        raise TwinError(str(exc)) from exc
 
 
 def free_port() -> int:

@@ -143,6 +143,61 @@ def test_summarize_log_reads_crlf_files(tmp_path):
     assert summarize_log(log).as_dict()["total"] == 6
 
 
+def test_invalid_mem_bus_fault_is_a_guest_error():
+    # -d invalid_mem (QEMU 9.1+), verbatim from tests/assets/mps2/fault.c.
+    line = ("Invalid write at addr 0x30000000, size 4, region '(null)', "
+            "reason: rejected")
+    (group,) = summarize_lines([line]).as_dict()["groups"]
+    assert (group["kind"], group["instance"], group["register"],
+            group["writes"]) == (GUEST_ERROR, "(unassigned)", "@0x30000000", 1)
+
+
+# Verbatim from tests/assets/mps2/lockup.c on mps2-an385: cpu_abort() writes
+# the message and the CPU dump to the -D log too.
+LOCKUP_LOG = [
+    "VGA: unimplemented device write (size 4, offset 0x000000, value 0x41)",
+    "qemu: fatal: Lockup: can't escalate 3 to HardFault (current priority -1)",
+    "",
+    "R00=000000dc R01=00000000 R02=40004000 R03=00000000",
+    "R12=00000000 R13=2000fff0 R14=00000091 R15=00000092",
+    "XPSR=41000000 -Z-- T priv-thread",
+    "FPSCR: 00000000",
+]
+
+
+def test_fatal_message_ends_the_backlog():
+    summary = summarize_lines(LOCKUP_LOG)
+    assert summary.fatal == ("Lockup: can't escalate 3 to HardFault "
+                             "(current priority -1)")
+    backlog = summary.as_dict()
+    assert backlog["total"] == 1
+    assert set(backlog["instances"]) == {"VGA"}     # no "FPSCR", no "qemu"
+
+
+def test_nul_bytes_are_dropped(tmp_path):
+    log = tmp_path / "qemu.log"
+    log.write_bytes(MPS2_LOG.encode() + b"\0" * 200_000)
+    assert summarize_log(log).as_dict()["total"] == 6
+    assert summarize_lines(["\0\0\0\n"]).as_dict()["total"] == 0
+
+
+def test_capped_writes_flag_the_group_without_counting():
+    writes = [f"tc0.CTRLBSET: write 0x{i:x} not modelled" for i in range(8)]
+    capped = "tc0.CTRLBSET: further writes not logged"
+    entry = parse_line(capped)
+    assert (entry.kind, entry.instance, entry.register, entry.capped) == \
+        (UNIMP, "tc0", "CTRLBSET", True)
+    summary = summarize_lines(writes + [capped, "tc0.CTRLA: write 0x2 not "
+                                                "modelled"]).as_dict()
+    assert summary["total"] == 9
+    by_register = {g["register"]: g for g in summary["groups"]}
+    assert by_register["CTRLBSET"]["writes"] == 8
+    assert by_register["CTRLBSET"]["truncated"] is True
+    assert by_register["CTRLA"]["truncated"] is False
+    alone = summarize_lines([capped]).as_dict()
+    assert alone["total"] == 0 and alone["groups"][0]["truncated"]
+
+
 def test_summarize_missing_log_is_empty(tmp_path):
     summary = summarize_log(tmp_path / "absent.log").as_dict()
     assert summary["total"] == 0 and summary["groups"] == []

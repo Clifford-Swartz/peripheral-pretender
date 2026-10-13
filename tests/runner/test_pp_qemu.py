@@ -71,3 +71,10 @@ def test_qemu_env_prepends_msys2_bin(tmp_path):
     env = qemu_env({"PATH": "C:\\Windows",
                     "PP_MSYS2_BIN": str(tmp_path / "missing")})
     assert env["PATH"] == "C:\\Windows"
+
+
+def test_trace_events_parses_trace_help(monkeypatch):
+    monkeypatch.setattr(qemu, "_query", lambda path, *args: (
+        "run_poll_handlers_begin\ncmsdk_apb_uart_tx\n\nnot an event line\n"))
+    assert qemu.trace_events("q") == ["run_poll_handlers_begin",
+                                      "cmsdk_apb_uart_tx"]

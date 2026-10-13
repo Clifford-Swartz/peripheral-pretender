@@ -63,7 +63,8 @@ def test_build_command():
                         ["-serial", "chardev:x"], Path("q.log"))
     assert cmd == ["qemu", "-M", "mps2-an385", "-display", "none",
                    "-monitor", "none", "-serial", "chardev:x",
-                   "-d", "unimp,guest_errors,in_asm", "-D", "q.log",
+                   "-d", "unimp,guest_errors,invalid_mem,in_asm",
+                   "-D", "q.log",
                    "-kernel", "fw.elf", "-icount", "shift=3,sleep=off",
                    "-gdb", "tcp:127.0.0.1:1234", "-S",
                    "-trace", "mchp_*", "-s"]
@@ -111,6 +112,20 @@ def make_result(**overrides):
       "qemu_returncode": 1},
      "[pp] exit 125 (QEMU exited with status 1 before PP:EXIT) after "
      "0.50 s on mps2-an385"),
+    ({"exit_code": 125, "status": "qemu-exited", "firmware_exit": None,
+      "qemu_returncode": 0xC0000005},
+     "[pp] exit 125 (QEMU exited with status 0xC0000005 "
+     "(STATUS_ACCESS_VIOLATION) before PP:EXIT) after 0.50 s on mps2-an385"),
+    ({"exit_code": 125, "status": "cpu-lockup", "firmware_exit": None,
+      "qemu_returncode": 0xC0000409,
+      "detail": "CPU lockup (x); CPU in thread mode at PC=0x00000092"},
+     "[pp] exit 125 (CPU lockup, QEMU aborted before PP:EXIT) after "
+     "0.50 s on mps2-an385\n"
+     "[pp] CPU lockup (x); CPU in thread mode at PC=0x00000092"),
+    ({"exit_code": 124, "status": "timeout", "firmware_exit": None,
+      "detail": "timeout: CPU in HardFault (IPSR=3) at PC=0x000002D0"},
+     "[pp] exit 124 (timeout, no PP:EXIT) after 0.50 s on mps2-an385\n"
+     "[pp] timeout: CPU in HardFault (IPSR=3) at PC=0x000002D0"),
 ])
 def test_verdict(overrides, text):
     assert cli.verdict(make_result(**overrides)) == text
@@ -135,6 +150,30 @@ def test_format_summary_table():
     ]
     assert cli.format_summary(EMPTY_SUMMARY) == [
         "[pp] model backlog: no unimplemented or guest-error accesses"]
+    capped = {"reads": 0, "writes": 8, "truncated": True}
+    assert cli._rw(capped) == "8w+"
+
+
+def test_report_warnings_and_kept_log(tmp_path):
+    err = io.StringIO()
+    missing = tmp_path / "gone" / "q.log"
+    cli.report(make_result(warnings=["trace pattern 'x' matches no trace"],
+                           log_path=str(missing)), err)
+    text = err.getvalue()
+    assert text.startswith("[pp] warning: trace pattern 'x'")
+    assert "QEMU log kept" not in text          # QEMU never wrote it
+    kept = _write(tmp_path / "q.log", b"")
+    err = io.StringIO()
+    cli.report(make_result(log_path=str(kept)), err)
+    assert f"QEMU log kept at {kept}" in err.getvalue()
+
+
+def test_gdb_hint_quotes_the_elf_path(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "run", lambda options: make_result())
+    cli.main(["run", "my dir/fw.elf", "--gdb", "3333"])
+    err = capsys.readouterr().err
+    assert ('"my dir/fw.elf"' in err) or ("'my dir/fw.elf'" in err)
+    assert "127.0.0.1:3333" in err
 
 
 def test_cmd_run_json_and_exit_code(monkeypatch, capsys):
@@ -166,7 +205,128 @@ def test_cmd_run_human_report(monkeypatch, capsys):
 def test_main_error_statuses(tmp_path, monkeypatch, capsys):
     assert cli.main(["run", str(tmp_path / "missing.elf")]) == cli.EXIT_USAGE
     elf = tmp_path / "fw.elf"
-    elf.write_bytes(b"\x7fELF")
+    elf.write_bytes(arm_elf_header())
     monkeypatch.setenv("PP_QEMU", str(tmp_path / "no-qemu.exe"))
     assert cli.main(["run", str(elf)]) == cli.EXIT_QEMU_MISSING
     assert "PP_QEMU" in capsys.readouterr().err
+
+
+def arm_elf_header(machine=40):
+    """The first 20 bytes of a little-endian ELF32 executable."""
+    return (b"\x7fELF\x01\x01\x01" + bytes(9) + (2).to_bytes(2, "little")
+            + machine.to_bytes(2, "little"))
+
+
+@pytest.mark.parametrize("content, message", [
+    (b"MZ\x90\x00 not an elf at all", "not an ELF file"),
+    (b"\x7fELF\x01", "truncated ELF header"),
+    (arm_elf_header(machine=62), r"not an Arm ELF \(e_machine 62"),
+])
+def test_non_arm_elf_images_are_usage_errors(tmp_path, content, message):
+    image = tmp_path / "fw.bin"
+    image.write_bytes(content)
+    with pytest.raises(runner.RunnerError, match=message):
+        runner.check_elf(image)
+    runner.check_elf(_write(tmp_path / "ok.elf", arm_elf_header()))
+
+
+def _write(path, data):
+    path.write_bytes(data)
+    return path
+
+
+def test_directory_and_non_elf_from_the_cli(tmp_path, capsys):
+    assert cli.main(["run", str(tmp_path)]) == cli.EXIT_USAGE
+    assert "is a directory, expected an ELF file" in capsys.readouterr().err
+    text = _write(tmp_path / "notes.txt", b"hello")
+    assert cli.main(["run", str(text)]) == cli.EXIT_USAGE
+    assert "not an ELF file" in capsys.readouterr().err
+
+
+# --- extra QEMU args -------------------------------------------------------------
+
+def test_extra_args_log_file_and_machine():
+    extra = runner.split_extra_args(
+        ["-d", "in_asm", "-D", "my.log", "-machine", "sw0-pressed=on", "-s"])
+    assert extra.rest == ["-machine", "sw0-pressed=on", "-s"]
+    assert (extra.log_items, extra.log_file, extra.machine) == \
+        (["in_asm"], "my.log", None)
+    assert runner.split_extra_args(
+        ["-M", "pic32cm-jh01-cpro,sw0-pressed=on"]).machine == \
+        "pic32cm-jh01-cpro"
+    assert runner.split_extra_args(
+        ["-M", "a", "-machine", "type=mps2-an385,x=1"]).machine == \
+        "mps2-an385"
+
+
+def test_extra_D_replaces_the_runner_log_in_the_command():
+    options = RunOptions("fw.elf", extra_args=["-D", "user.log", "-s"])
+    cmd = build_command(Path("qemu"), Path("fw.elf"), options, [],
+                        Path("user.log"))
+    assert cmd.count("-D") == 1 and cmd[-1] == "-s"
+
+
+def test_kept_log_creates_its_directory_and_rejects_two_files(tmp_path):
+    log = tmp_path / "new" / "dir" / "q.log"
+    assert runner._kept_log(str(log), None) == log.resolve()
+    assert log.parent.is_dir()
+    assert runner._kept_log(None, str(log)) == log.resolve()
+    assert runner._kept_log(None, None) is None
+    with pytest.raises(runner.RunnerError, match="different files"):
+        runner._kept_log(str(log), str(tmp_path / "other.log"))
+
+
+# --- diagnosis helpers ----------------------------------------------------------
+
+def test_describe_returncode(monkeypatch):
+    assert runner.describe_returncode(1) == "1"
+    assert runner.describe_returncode(0xC0000409) == \
+        "0xC0000409 (STATUS_STACK_BUFFER_OVERRUN, e.g. abort())"
+    assert runner.describe_returncode(0xC0001234) == "0xC0001234"
+    monkeypatch.setattr(runner.sys, "platform", "linux")
+    assert runner.describe_returncode(-6) == "signal 6"
+    monkeypatch.setattr(runner.sys, "platform", "win32")
+    assert runner.describe_returncode(-1073740791) == \
+        "0xC0000409 (STATUS_STACK_BUFFER_OVERRUN, e.g. abort())"
+
+
+LOCKUP_DUMP = """
+R00=000000dc R01=00000000 R02=40004000 R03=00000000
+R12=00000000 R13=2000fff0 R14=00000091 R15=00000092
+XPSR=41000000 -Z-- T priv-thread
+FPSCR: 00000000"""
+
+
+def test_cpu_location():
+    assert runner.cpu_location(LOCKUP_DUMP) == \
+        "CPU in thread mode at PC=0x00000092"
+    hardfault = LOCKUP_DUMP.replace("XPSR=41000000", "XPSR=61000003")
+    assert runner.cpu_location(hardfault) == \
+        "CPU in HardFault (IPSR=3) at PC=0x00000092"
+    irq = LOCKUP_DUMP.replace("XPSR=41000000", "XPSR=01000013")
+    assert "IRQ 3 (IPSR=19)" in runner.cpu_location(irq)
+    assert runner.cpu_location("no registers") is None
+
+
+def test_unknown_trace_patterns_warn(monkeypatch):
+    monkeypatch.setattr(runner, "_cached_trace_events",
+                        lambda qemu: ["cmsdk_apb_uart_tx", "mchp_sercom_rx"])
+    assert runner.unknown_trace_patterns(Path("q"), []) == []
+    warnings = runner.unknown_trace_patterns(
+        Path("q"), ["cmsdk_apb_uart_*", "mchp_sercomm_*"])
+    assert len(warnings) == 1 and "'mchp_sercomm_*'" in warnings[0]
+
+
+def test_trace_event_list_is_cached(monkeypatch, tmp_path):
+    qemu = _write(tmp_path / "qemu.exe", b"binary")
+    monkeypatch.setattr(runner.tempfile, "gettempdir", lambda: str(tmp_path))
+    calls = []
+
+    def fake_events(path):
+        calls.append(path)
+        return ["a_event", "b_event"]
+
+    monkeypatch.setattr(runner, "trace_events", fake_events)
+    assert runner._cached_trace_events(qemu) == ["a_event", "b_event"]
+    assert runner._cached_trace_events(qemu) == ["a_event", "b_event"]
+    assert len(calls) == 1

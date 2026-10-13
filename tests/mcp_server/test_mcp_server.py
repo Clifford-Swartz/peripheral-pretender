@@ -55,21 +55,51 @@ def test_tools_are_listed():
     schema = field(by_name["twin_run"], "inputSchema")
     assert list(schema["properties"])[:4] == ["elf_path", "timeout_s",
                                               "input_text", "icount_shift"]
+    assert {"machine_options", "input_after", "trace"} <= \
+        set(schema["properties"])
     assert schema["required"] == ["elf_path"]
-    assert field(by_name["twin_run"], "outputSchema") is not None
+    output = field(by_name["twin_run"], "outputSchema")
+    assert {"uart_truncated", "uart_length", "detail"} <= \
+        set(output["properties"])
+
+
+def test_uart_is_bounded_head_and_tail():
+    from tools.pp_mcp.server import bound_uart
+    assert bound_uart("short", limit=10) == ("short", False)
+    text = "".join(f"line {i}\n" for i in range(20000))
+    cut, truncated = bound_uart(text, limit=1000)
+    assert truncated and len(cut) < 1100
+    assert cut.startswith("line 0\n") and cut.endswith("line 19999\n")
+    assert f"[... {len(text) - 1000} characters omitted ...]" in cut
+
+
+def test_machine_options_take_properties_only():
+    from tools.pp_mcp.server import ToolError, machine_extra_args
+    assert machine_extra_args(None) == []
+    assert machine_extra_args("sw0-pressed=on") == \
+        ["-machine", "sw0-pressed=on"]
+    for bad in ("mps2-an385", "type=mps2-an385", "mps2-an385,x=1"):
+        with pytest.raises(ToolError, match="only key=value"):
+            machine_extra_args(bad)
 
 
 @pytest.mark.qemu
 def test_twin_run_and_machines(qemu_path, mps2_images):
     relative_echo = mps2_images["echo"].relative_to(PROJECT_ROOT)
-    _, (machines, exited, echoed, missing) = call_server([
+    _, (machines, exited, echoed, missing, traced, burst) = call_server([
         ("twin_machines", {}),
         ("twin_run", {"elf_path": str(mps2_images["exit"]),
                       "machine": "mps2-an385"}),
         ("twin_run", {"elf_path": str(relative_echo),
                       "machine": "mps2-an385", "timeout_s": 20,
-                      "input_text": "from mcp\r\nexit 9\r\n"}),
+                      "input_text": "from mcp\r\nexit 9\r\n",
+                      "input_after": "ready"}),
         ("twin_run", {"elf_path": "no/such.elf", "machine": "mps2-an385"}),
+        ("twin_run", {"elf_path": str(mps2_images["exit"]),
+                      "machine": "mps2-an385",
+                      "trace": ["cmsdk_apb_uart_tx", "no_such_event_x"]}),
+        ("twin_run", {"elf_path": str(mps2_images["burst"]),
+                      "machine": "mps2-an385", "timeout_s": 30}),
     ], qemu_path)
 
     info = field(machines, "structuredContent")
@@ -90,3 +120,15 @@ def test_twin_run_and_machines(qemu_path, mps2_images):
 
     assert field(missing, "isError")
     assert "ELF not found" in missing.content[0].text
+
+    result = field(traced, "structuredContent")
+    assert result["trace"]["events"] == {"cmsdk_apb_uart_tx": 55}
+    assert len(result["warnings"]) == 1 and \
+        "no_such_event_x" in result["warnings"][0]
+    assert (result["uart_truncated"], result["uart_length"]) == \
+        (False, len(result["uart"]))
+
+    result = field(burst, "structuredContent")      # ~150 KB transcript
+    assert result["exit_code"] == 0 and result["uart_truncated"]
+    assert result["uart_length"] > 140_000 and len(result["uart"]) < 70_000
+    assert result["uart"].endswith("PP:EXIT 0\n")

@@ -1,11 +1,17 @@
 # Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
-"""Summarise QEMU's ``-d unimp,guest_errors`` log into a model backlog.
+"""Summarise QEMU's ``-d unimp,guest_errors,invalid_mem`` log into a model
+backlog.
 
 Every line is classified as an unimplemented access (LOG_UNIMP), a guest
-error (LOG_GUEST_ERROR), a trace event (when its name matches an enabled
-``-trace`` pattern) or other text, and counted per (kind, instance,
-register). The log does not record which mask produced a message, so the
-unimp/guest-error split for free-form messages is made from their wording.
+error (LOG_GUEST_ERROR or LOG_INVALID_MEM), a trace event (when its name
+matches an enabled ``-trace`` pattern) or other text, and counted per
+(kind, instance, register). The log does not record which mask produced a
+message, so the unimp/guest-error split for free-form messages is made from
+their wording.
+
+A "qemu: fatal: ..." line (cpu_abort, e.g. a CPU lockup) ends the backlog:
+the CPU register dump after it is not model output. NUL bytes are dropped
+(a log cut short by killing QEMU on Windows can end in a run of them).
 """
 
 from __future__ import annotations
@@ -37,6 +43,14 @@ _INVALID_MEM = re.compile(
     r"^Invalid (?P<access>read|write|access)(?: to non-RAM device)? at addr "
     r"(?P<addr>0x[0-9a-fA-F]+), size \d+, region '(?P<region>[^']*)'")
 
+# mchp generic register block, after 8 logged writes to one register:
+#   "tc0.CTRLBSET: further writes not logged"
+_WRITES_CAPPED = re.compile(
+    r"^(?P<instance>[a-z][a-z0-9_]*)\.(?P<register>[A-Z][A-Z0-9_]*"
+    r"(?:\[\d+\])?): further writes not logged\s*$")
+
+FATAL_PREFIX = "qemu: fatal: "
+
 # QEMU's convention for device messages: "<instance>: <message>".
 _PREFIXED = re.compile(r"^(?P<prefix>[^:\s][^:]{0,79}): (?P<message>.*)$")
 
@@ -64,6 +78,7 @@ class LogEntry:
     register: str
     access: str | None
     line: str
+    capped: bool = False    # "further writes not logged": counts stop here
 
 
 def _hex(text: str) -> str:
@@ -108,6 +123,10 @@ def parse_line(line: str) -> LogEntry | None:
     line = line.rstrip("\r\n")
     if not line.strip():
         return None
+    m = _WRITES_CAPPED.match(line)
+    if m:
+        return LogEntry(UNIMP, m.group("instance"), m.group("register"),
+                        "write", line, capped=True)
     m = _UNIMP_DEVICE.match(line)
     if m:
         return LogEntry(UNIMP, m.group("instance"), _hex(m.group("offset")),
@@ -151,6 +170,7 @@ class _Group:
     reads: int = 0
     writes: int = 0
     samples: list[str] = field(default_factory=list)
+    truncated: bool = False
 
 
 class LogSummary:
@@ -170,9 +190,15 @@ class LogSummary:
         # of times, so parsed lines and per-event pattern matches are cached.
         self._parsed: dict[str, LogEntry | None] = {}
         self._traced: dict[str, bool] = {}
+        self.fatal: str | None = None   # message of "qemu: fatal: ..."
 
     def add_line(self, line: str) -> None:
-        line = line.rstrip("\r\n")
+        if self.fatal is not None:
+            return                      # CPU register dump, then abort()
+        line = line.replace("\0", "").rstrip("\r\n")
+        if line.startswith(FATAL_PREFIX):
+            self.fatal = line[len(FATAL_PREFIX):].strip()
+            return
         event = self._trace_event(line)
         if event:
             self._trace_events[event] += 1
@@ -201,6 +227,9 @@ class LogSummary:
         return event if enabled else None
 
     def add(self, entry: LogEntry) -> None:
+        if entry.capped:
+            self._mark_truncated(entry)
+            return
         key = (entry.kind, entry.instance, entry.register)
         group = self._groups.get(key)
         if group is None:
@@ -213,6 +242,17 @@ class LogSummary:
         if (len(group.samples) < self.max_samples
                 and entry.line not in group.samples):
             group.samples.append(entry.line)
+
+    def _mark_truncated(self, entry: LogEntry) -> None:
+        """QEMU stopped logging writes to this register: flag its groups
+        (their write counts are a lower bound) without counting a line."""
+        groups = [g for (_, inst, reg), g in self._groups.items()
+                  if (inst, reg) == (entry.instance, entry.register)]
+        if not groups:
+            key = (entry.kind, entry.instance, entry.register)
+            groups = [self._groups.setdefault(key, _Group(*key))]
+        for group in groups:
+            group.truncated = True
 
     def as_dict(self) -> dict:
         groups = sorted(self._groups.values(),
@@ -235,6 +275,7 @@ class LogSummary:
                 "reads": g.reads,
                 "writes": g.writes,
                 "samples": list(g.samples),
+                "truncated": g.truncated,
             } for g in groups],
         }
 

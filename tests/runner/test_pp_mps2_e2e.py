@@ -109,6 +109,53 @@ def test_trace_and_kept_log(mps2_images, tmp_path):
     assert "VGA: unimplemented device write" in log.read_text()
 
 
+def test_bus_fault_to_unmapped_address_is_in_the_backlog(mps2_images):
+    result = run_mps2(mps2_images["fault"])
+    assert (result.exit_code, result.status) == (1, "exit")
+    assert result.uart == ("pp runner test: fault\nhardfault\nPP:EXIT 1\n")
+    rows = [(g["kind"], g["instance"], g["register"], g["writes"])
+            for g in result.unimplemented_summary["groups"]]
+    assert rows == [("guest_error", "(unassigned)", "@0x30000000", 1)]
+
+
+def test_cpu_lockup_has_its_own_status(mps2_images):
+    result = run_mps2(mps2_images["lockup"])
+    assert (result.exit_code, result.status) == \
+        (EXIT_NO_EXIT_LINE, "cpu-lockup")
+    assert result.detail.startswith("CPU lockup (can't escalate 3 to "
+                                    "HardFault")
+    assert "CPU in thread mode at PC=0x" in result.detail
+    assert result.unimplemented_summary["total"] == 0  # no CPU dump in it
+    assert "qemu: fatal: Lockup" in result.qemu_stderr_tail
+
+
+def test_timeout_reports_where_the_cpu_is(mps2_images):
+    result = run_mps2(mps2_images["echo"], timeout_s=1.0)
+    assert result.status == "timeout"
+    assert re.fullmatch(r"timeout: CPU in thread mode at PC=0x[0-9A-F]{8}",
+                        result.detail)
+
+
+def test_extra_D_keeps_the_backlog_and_M_sets_the_machine(mps2_images,
+                                                          tmp_path):
+    log = tmp_path / "sub" / "user.log"
+    result = run(RunOptions(mps2_images["exit"],
+                            extra_args=["-D", str(log), "-M", MPS2_MACHINE]))
+    assert result.exit_code == 0
+    assert result.machine == MPS2_MACHINE
+    assert result.unimplemented_summary["total"] == 6
+    assert result.log_path == str(log.resolve())
+    assert "VGA: unimplemented device write" in log.read_text()
+
+
+def test_misspelt_trace_pattern_warns(mps2_images):
+    result = run_mps2(mps2_images["exit"],
+                      trace=["cmsdk_apb_uart_tx", "cmsdk_apb_uart_txx"])
+    assert result.trace["events"] == {"cmsdk_apb_uart_tx": 55}
+    assert len(result.warnings) == 1
+    assert "'cmsdk_apb_uart_txx'" in result.warnings[0]
+
+
 def test_icount(mps2_images):
     result = run_mps2(mps2_images["exit"], icount_shift=4)
     assert result.exit_code == 0

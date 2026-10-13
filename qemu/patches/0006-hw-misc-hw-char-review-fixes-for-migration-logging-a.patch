@@ -1,0 +1,364 @@
+From d7f6459948640f36d1c7822c79d1ff88e2321849 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Tue, 13 Oct 2026 14:08:22 -0700
+Subject: [PATCH] hw/misc, hw/char: review fixes for migration, logging and WDT
+
+- Clock models migrate every clock: the GCLK source inputs and the
+  outputs of OSCCTRL, OSC32KCTRL, GCLK and MCLK. Before, the outputs came
+  back at their reset rates after loadvm, and the next GCLK write
+  propagated a wrong CPU clock (48 MHz -> 2 MHz instead of 24 MHz).
+- SERCOM: pre_load drops a pending chardev watch; post_load rejects an
+  impossible rx_count and defers the TX retry and accept_input to a
+  virtual-clock timer, so nothing happens before every device is loaded
+  and the VM runs; finalize removes the watch.
+- Generic register blocks log at most 8 unmodelled writes per register,
+  then "further writes not logged".
+- NVIC: ICSR.RETTOBASE reads as zero on ARMv6-M (reserved there).
+- WDT CONFIG and EWCTRL are enable-protected (also while ALWAYSON);
+  regenerated wdt_u2251.h. New qtest pic32cm-jh/wdt-protection.
+
+Peripheral Pretender downstream patch; not for upstream submission.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/char/mchp_sercom.c           | 40 ++++++++++++++++++++++++++++++---
+ hw/intc/armv7m_nvic.c           |  7 ++++--
+ hw/misc/mchp_clock.c            | 33 ++++++++++++++++++++-------
+ hw/misc/mchp_regblock.c         | 23 +++++++++++++++++++
+ include/hw/mchp/gen/wdt_u2251.h |  6 ++---
+ include/hw/misc/mchp_regblock.h |  1 +
+ tests/qtest/pic32cm-jh-test.c   | 25 +++++++++++++++++++++
+ 7 files changed, 119 insertions(+), 16 deletions(-)
+
+diff --git a/hw/char/mchp_sercom.c b/hw/char/mchp_sercom.c
+index 4a2a1cc..32bc20c 100644
+--- a/hw/char/mchp_sercom.c
++++ b/hw/char/mchp_sercom.c
+@@ -64,6 +64,7 @@ struct MchpSercomState {
+     bool tx_busy;               /* tx_shift is being sent */
+     guint watch_tag;            /* waiting for the chardev to take tx_shift */
+     QEMUTimer *frame_timer;     /* end of the frame on the wire (pace-tx) */
++    QEMUTimer *resume_timer;    /* restart the chardev I/O after loadvm */
+ 
+     /* Receiver */
+     uint16_t rx_buf[MCHP_SERCOM_RX_DEPTH];
+@@ -214,6 +215,20 @@ static void mchp_sercom_frame_end(void *opaque)
+     mchp_sercom_tx_done(opaque);
+ }
+ 
++static gboolean mchp_sercom_tx_send(void *do_not_use, GIOCondition cond,
++                                    void *opaque);
++
++/* After loadvm: resend a character the chardev had not taken, take input */
++static void mchp_sercom_resume(void *opaque)
++{
++    MchpSercomState *s = opaque;
++
++    if (s->tx_busy && !s->watch_tag && !timer_pending(s->frame_timer)) {
++        mchp_sercom_tx_send(NULL, 0, s);
++    }
++    qemu_chr_fe_accept_input(&s->chr);
++}
++
+ /*
+  * Give the character in the shift register to the chardev, or wait until
+  * the chardev can take it.
+@@ -440,6 +455,7 @@ static void mchp_sercom_reset_hold(MchpRegBlock *rb)
+ 
+     g_clear_handle_id(&s->watch_tag, g_source_remove);
+     timer_del(s->frame_timer);
++    timer_del(s->resume_timer);
+     s->tx_buf_full = false;
+     s->tx_busy = false;
+     s->rx_count = 0;
+@@ -455,6 +471,7 @@ static bool mchp_sercom_realize(MchpRegBlock *rb, Error **errp)
+     s->spi = ssi_create_bus(DEVICE(s), spi);
+     s->frame_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mchp_sercom_frame_end,
+                                   s);
++    s->resume_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mchp_sercom_resume, s);
+     qemu_chr_fe_set_handlers(&s->chr, mchp_sercom_can_receive,
+                              mchp_sercom_receive, NULL, NULL, s, NULL, true);
+     return true;
+@@ -464,17 +481,33 @@ static void mchp_sercom_finalize(Object *obj)
+ {
+     MchpSercomState *s = MCHP_SERCOM(obj);
+ 
++    g_clear_handle_id(&s->watch_tag, g_source_remove);
+     timer_free(s->frame_timer);
++    timer_free(s->resume_timer);
+ }
+ 
+-/* A character waiting for the chardev was not migrated with its watch. */
++/* A watch of this process refers to state that loadvm replaces. */
++static int mchp_sercom_pre_load(void *opaque)
++{
++    MchpSercomState *s = opaque;
++
++    g_clear_handle_id(&s->watch_tag, g_source_remove);
++    return 0;
++}
++
++/*
++ * Chardev I/O waits until the VM runs (the virtual clock is stopped while
++ * loading), so nothing is sent and no IRQ changes before every device is
++ * loaded.
++ */
+ static int mchp_sercom_post_load(void *opaque, int version_id)
+ {
+     MchpSercomState *s = opaque;
+ 
+-    if (s->tx_busy && !timer_pending(s->frame_timer)) {
+-        mchp_sercom_tx_send(NULL, 0, s);
++    if (s->rx_count > MCHP_SERCOM_RX_DEPTH) {
++        return -EINVAL;
+     }
++    timer_mod(s->resume_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+     return 0;
+ }
+ 
+@@ -482,6 +515,7 @@ static const VMStateDescription vmstate_mchp_sercom = {
+     .name = TYPE_MCHP_SERCOM,
+     .version_id = 1,
+     .minimum_version_id = 1,
++    .pre_load = mchp_sercom_pre_load,
+     .post_load = mchp_sercom_post_load,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpSercomState, 1, vmstate_mchp_regblock,
+diff --git a/hw/intc/armv7m_nvic.c b/hw/intc/armv7m_nvic.c
+index a7651f8..82183a5 100644
+--- a/hw/intc/armv7m_nvic.c
++++ b/hw/intc/armv7m_nvic.c
+@@ -1075,8 +1075,11 @@ static uint32_t nvic_readl(NVICState *s, uint32_t offset, MemTxAttrs attrs)
+         if (nvic_isrpending(s)) {
+             val |= (1 << 22);
+         }
+-        /* RETTOBASE - set if only one handler is active */
+-        if (nvic_rettobase(s)) {
++        /*
++         * RETTOBASE - set if only one handler is active; reserved (RAZ)
++         * in ARMv6-M
++         */
++        if (arm_feature(&s->cpu->env, ARM_FEATURE_V7) && nvic_rettobase(s)) {
+             val |= (1 << 11);
+         }
+         if (attrs.secure) {
+diff --git a/hw/misc/mchp_clock.c b/hw/misc/mchp_clock.c
+index ea1a517..2211304 100644
+--- a/hw/misc/mchp_clock.c
++++ b/hw/misc/mchp_clock.c
+@@ -286,14 +286,17 @@ static void mchp_oscctrl_init(Object *obj)
+ 
+ static const VMStateDescription vmstate_mchp_oscctrl = {
+     .name = TYPE_MCHP_OSCCTRL,
+-    .version_id = 1,
+-    .minimum_version_id = 1,
++    .version_id = 2,
++    .minimum_version_id = 2,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpOscctrlState, 1, vmstate_mchp_regblock,
+                        MchpRegBlock),
+         VMSTATE_CLOCK(xtal, MchpOscctrlState),
+         VMSTATE_CLOCK(ref_xosc32k, MchpOscctrlState),
+         VMSTATE_CLOCK(ref_gclk, MchpOscctrlState),
++        VMSTATE_CLOCK(xosc, MchpOscctrlState),
++        VMSTATE_CLOCK(osc48m, MchpOscctrlState),
++        VMSTATE_CLOCK(fdpll96m, MchpOscctrlState),
+         VMSTATE_UINT32(status, MchpOscctrlState),
+         VMSTATE_END_OF_LIST()
+     },
+@@ -430,12 +433,15 @@ static void mchp_osc32kctrl_init(Object *obj)
+ 
+ static const VMStateDescription vmstate_mchp_osc32kctrl = {
+     .name = TYPE_MCHP_OSC32KCTRL,
+-    .version_id = 1,
+-    .minimum_version_id = 1,
++    .version_id = 2,
++    .minimum_version_id = 2,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpOsc32kctrlState, 1,
+                        vmstate_mchp_regblock, MchpRegBlock),
+         VMSTATE_CLOCK(xtal32k, MchpOsc32kctrlState),
++        VMSTATE_CLOCK(xosc32k, MchpOsc32kctrlState),
++        VMSTATE_CLOCK(osc32k, MchpOsc32kctrlState),
++        VMSTATE_CLOCK(osculp32k, MchpOsc32kctrlState),
+         VMSTATE_UINT32(status, MchpOsc32kctrlState),
+         VMSTATE_END_OF_LIST()
+     },
+@@ -602,11 +608,21 @@ static void mchp_gclk_init(Object *obj)
+ 
+ static const VMStateDescription vmstate_mchp_gclk = {
+     .name = TYPE_MCHP_GCLK,
+-    .version_id = 1,
+-    .minimum_version_id = 1,
++    .version_id = 2,
++    .minimum_version_id = 2,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpGclkState, 1, vmstate_mchp_regblock,
+                        MchpRegBlock),
++        /* src[] has no clock for SRC = GCLKGEN1 */
++        VMSTATE_CLOCK(src[MCHP_GCLK_GENCTRL_SRC_XOSC], MchpGclkState),
++        VMSTATE_CLOCK(src[MCHP_GCLK_GENCTRL_SRC_GCLKIN], MchpGclkState),
++        VMSTATE_CLOCK(src[MCHP_GCLK_GENCTRL_SRC_OSCULP32K], MchpGclkState),
++        VMSTATE_CLOCK(src[MCHP_GCLK_GENCTRL_SRC_OSC32K], MchpGclkState),
++        VMSTATE_CLOCK(src[MCHP_GCLK_GENCTRL_SRC_XOSC32K], MchpGclkState),
++        VMSTATE_CLOCK(src[MCHP_GCLK_GENCTRL_SRC_OSC48M], MchpGclkState),
++        VMSTATE_CLOCK(src[MCHP_GCLK_GENCTRL_SRC_FDPLL96M], MchpGclkState),
++        VMSTATE_ARRAY_CLOCK(gen, MchpGclkState, MCHP_GCLK_GENCTRL_COUNT),
++        VMSTATE_ARRAY_CLOCK(pch, MchpGclkState, MCHP_GCLK_PCHCTRL_COUNT),
+         VMSTATE_END_OF_LIST()
+     },
+ };
+@@ -681,12 +697,13 @@ static void mchp_mclk_init(Object *obj)
+ 
+ static const VMStateDescription vmstate_mchp_mclk = {
+     .name = TYPE_MCHP_MCLK,
+-    .version_id = 1,
+-    .minimum_version_id = 1,
++    .version_id = 2,
++    .minimum_version_id = 2,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpMclkState, 1, vmstate_mchp_regblock,
+                        MchpRegBlock),
+         VMSTATE_CLOCK(main, MchpMclkState),
++        VMSTATE_CLOCK(cpu, MchpMclkState),
+         VMSTATE_END_OF_LIST()
+     },
+ };
+diff --git a/hw/misc/mchp_regblock.c b/hw/misc/mchp_regblock.c
+index 2d23c0b..af50f5d 100644
+--- a/hw/misc/mchp_regblock.c
++++ b/hw/misc/mchp_regblock.c
+@@ -190,10 +190,32 @@ static bool mchp_regblock_is_bookkeeping(MchpRegBlock *s,
+     return !ri->wmask || mchp_regblock_storage(s, ri) == s->intenset;
+ }
+ 
++/*
++ * Writes logged per register before going quiet: enough to show what the
++ * firmware programs, without flooding the log from a busy loop.
++ */
++#define MCHP_REGBLOCK_UNIMP_LOG_MAX 8
++
+ static void mchp_regblock_log_write(MchpRegBlock *s, const MchpRegInfo *ri,
+                                     unsigned idx, uint32_t value)
+ {
++    gpointer key = GUINT_TO_POINTER(mchp_regfile_elem_offset(ri, idx));
++    unsigned n;
++
+     trace_mchp_regblock_unimp_write(s->name, ri->name, idx, value);
++    if (!s->unimp_writes) {
++        s->unimp_writes = g_hash_table_new(NULL, NULL);
++    }
++    n = GPOINTER_TO_UINT(g_hash_table_lookup(s->unimp_writes, key));
++    if (n > MCHP_REGBLOCK_UNIMP_LOG_MAX) {
++        return;
++    }
++    g_hash_table_insert(s->unimp_writes, key, GUINT_TO_POINTER(n + 1));
++    if (n == MCHP_REGBLOCK_UNIMP_LOG_MAX) {
++        qemu_log_mask(LOG_UNIMP, "%s.%s: further writes not logged\n",
++                      s->name, ri->name);
++        return;
++    }
+     if (ri->count > 1) {
+         qemu_log_mask(LOG_UNIMP, "%s.%s[%u]: write 0x%" PRIx32
+                       " not modelled\n", s->name, ri->name, idx, value);
+@@ -372,6 +394,7 @@ static void mchp_regblock_finalize(Object *obj)
+ 
+     g_free(s->rf.storage);
+     g_free(s->name);
++    g_clear_pointer(&s->unimp_writes, g_hash_table_destroy);
+ }
+ 
+ static int mchp_regblock_post_load(void *opaque, int version_id)
+diff --git a/include/hw/mchp/gen/wdt_u2251.h b/include/hw/mchp/gen/wdt_u2251.h
+index 8799fc3..2b64e84 100644
+--- a/include/hw/mchp/gen/wdt_u2251.h
++++ b/include/hw/mchp/gen/wdt_u2251.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/wdt_u2251.yaml (sha1 ea15d36d69ca)
++ * Overlay: overlays/wdt_u2251.yaml (sha1 c3cfd40a345e)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -89,12 +89,12 @@ static const MchpRegInfo mchp_wdt_regs[] = {
+     {
+         .name = "CONFIG", .offset = 0x01, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0xBB, .impl = 0xFF, .wmask = 0xFF,
+-        .flags = MCHP_F_PAC,
++        .enprot = 0xFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "EWCTRL", .offset = 0x02, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x0B, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = MCHP_F_PAC,
++        .enprot = 0x0F, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
+diff --git a/include/hw/misc/mchp_regblock.h b/include/hw/misc/mchp_regblock.h
+index b8410aa..72b3359 100644
+--- a/include/hw/misc/mchp_regblock.h
++++ b/include/hw/misc/mchp_regblock.h
+@@ -54,6 +54,7 @@ struct MchpRegBlock {
+     const MchpRegInfo *intflag;
+     const MchpRegInfo *intenset;
+     uint32_t view_sel;                  /* mode selector of the active view */
++    GHashTable *unimp_writes;           /* writes logged per register offset */
+ };
+ 
+ struct MchpRegBlockClass {
+diff --git a/tests/qtest/pic32cm-jh-test.c b/tests/qtest/pic32cm-jh-test.c
+index f9cddac..d715914 100644
+--- a/tests/qtest/pic32cm-jh-test.c
++++ b/tests/qtest/pic32cm-jh-test.c
+@@ -94,6 +94,8 @@ static void test_reset_values(void)
+     g_assert_cmphex(qtest_readb(qts, MCLK + 0x03), ==, 0x01);
+     /* Cortex-M0+ r0p1 CPUID */
+     g_assert_cmphex(qtest_readl(qts, SCB_CPUID), ==, 0x410CC601);
++    /* ICSR: nothing pending or active; RETTOBASE is reserved on ARMv6-M */
++    g_assert_cmphex(qtest_readl(qts, 0xE000ED04), ==, 0);
+     qtest_quit(qts);
+ }
+ 
+@@ -160,6 +162,28 @@ static void test_user_row_resets(void)
+ }
+ 
+ /* Fuse words in the loaded image take effect at the first reset. */
++/* WDT CONFIG and EWCTRL are enable-protected, also by ALWAYSON (DS 22.6) */
++static void test_wdt_protection(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writeb(qts, WDT + 0x01, 0x55);
++    g_assert_cmphex(qtest_readb(qts, WDT + 0x01), ==, 0x55);
++
++    qtest_writeb(qts, WDT + 0x00, 0x02);                    /* ENABLE */
++    qtest_writeb(qts, WDT + 0x01, 0x66);
++    qtest_writeb(qts, WDT + 0x02, 0x03);
++    g_assert_cmphex(qtest_readb(qts, WDT + 0x01), ==, 0x55);
++    g_assert_cmphex(qtest_readb(qts, WDT + 0x02), ==, 0x0B);
++
++    qtest_writeb(qts, WDT + 0x00, 0x80);                    /* ALWAYSON */
++    qtest_writeb(qts, WDT + 0x00, 0x00);
++    g_assert_cmphex(qtest_readb(qts, WDT + 0x00) & 0x80, ==, 0x80);
++    qtest_writeb(qts, WDT + 0x01, 0x66);
++    g_assert_cmphex(qtest_readb(qts, WDT + 0x01), ==, 0x55);
++    qtest_quit(qts);
++}
++
+ static void test_user_row_from_image(void)
+ {
+     static const uint8_t row[8] = {
+@@ -387,6 +411,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-jh/rcause", test_rcause);
+     qtest_add_func("pic32cm-jh/user-row-resets", test_user_row_resets);
+     qtest_add_func("pic32cm-jh/user-row-from-image", test_user_row_from_image);
++    qtest_add_func("pic32cm-jh/wdt-protection", test_wdt_protection);
+     qtest_add_func("pic32cm-jh/regfile-semantics", test_regfile_semantics);
+     qtest_add_func("pic32cm-jh/views-and-swrst", test_views_and_swrst);
+     qtest_add_func("pic32cm-jh/clock-tree", test_clock_tree);
+-- 
+2.53.0.windows.2
+

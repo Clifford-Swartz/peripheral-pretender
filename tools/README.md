@@ -25,18 +25,18 @@ py -m tools.pp_mcp                                                  # MCP server
 
 | option | meaning |
 |---|---|
-| `ELF` | firmware image, loaded with `-kernel` |
+| `ELF` | firmware image, loaded with `-kernel`; must be an Arm ELF (checked: `\x7fELF` magic, `e_machine` 40), else exit 2 |
 | `-M`, `--machine NAME` | QEMU machine, default `pic32cm-jh01-cpro` |
 | `--qemu PATH` | QEMU binary (or a pp-qemu checkout or build directory); default `$PP_QEMU`, then `../pp-qemu/build/qemu-system-arm.exe`, then `PATH` |
 | `--timeout S` | host seconds before giving up; default 10, none with `--gdb` |
-| `--icount SHIFT` | deterministic virtual time: `-icount shift=SHIFT,sleep=off` (0-10, 2^SHIFT ns per instruction) |
+| `--icount SHIFT` | deterministic virtual time: `-icount shift=SHIFT,sleep=off` (0-10, 2^SHIFT ns per instruction); see *Virtual time* |
 | `--gdb [PORT]` | start paused (`-S`) with the gdbstub on `127.0.0.1:PORT` (default 1234). The run keeps going after `PP:EXIT` until the debugger kills or detaches from QEMU |
-| `--trace PATTERN` | enable QEMU trace events (repeatable); matching lines are counted and listed apart from the backlog |
+| `--trace PATTERN` | enable QEMU trace events (repeatable); matching lines are counted and listed apart from the backlog. A pattern that matches no event of the QEMU build (`-trace help`, cached per binary) gives a warning |
 | `--input TEXT` | bytes for the UART; `\n \r \t \0 \\ \xNN` are expanded. Include the line ending the firmware expects |
 | `--input-after TEXT` | send `--input` once TEXT has appeared on the UART (default: see *Input timing*) |
-| `--log FILE` | keep QEMU's `-d` log (otherwise a temporary file) |
+| `--log FILE` | keep QEMU's `-d` log (otherwise a temporary file); missing directories are created |
 | `--json` | print one JSON object (below) and nothing else on stdout |
-| `--extra-args ...` | everything after it goes to QEMU unchanged; must be last. A `-d ITEMS` in it is merged with the runner's own `-d unimp,guest_errors` |
+| `--extra-args ...` | everything after it goes to QEMU; must be last. A `-d ITEMS` in it is merged with the runner's own `-d unimp,guest_errors,invalid_mem`; a `-D FILE` becomes the log file (as `--log`, so the backlog is still parsed). `-M`/`-machine` pass through and QEMU merges them with `--machine`: `-machine sw0-pressed=on` adds a property, while a machine type there (`-M mps2-an385`, `-machine type=X,...`) replaces `--machine` and is what the result reports |
 
 Without `--json`, stdout carries only the UART transcript (CRLF shown as LF), streamed live;
 the verdict, the backlog table and, when QEMU failed, its output go to stderr:
@@ -60,10 +60,19 @@ PP:EXIT 0
 |---|---|
 | `n` | the firmware printed `PP:EXIT n` (design §5.6). Values outside 0-255 become 255 so that `PP:EXIT 256` cannot read as success; JSON `firmware_exit` keeps the raw value |
 | 124 | timeout before `PP:EXIT` (as GNU `timeout`); the partial transcript is kept |
-| 125 | QEMU ended before `PP:EXIT` (bad machine, crash, gdb kill); see `qemu_stderr_tail` |
-| 2 | usage error (missing ELF, bad option value) |
+| 125 | QEMU ended before `PP:EXIT` (bad machine, crash, gdb kill, CPU lockup); see `detail` and `qemu_stderr_tail` |
+| 2 | usage error (missing ELF, not an Arm ELF, bad option value) |
 | 127 | QEMU binary not found |
 | 130 | interrupted (Ctrl+C) |
+
+`status` tells the 125 cases apart: `cpu-lockup` when QEMU aborted with `qemu: fatal: Lockup: ...`
+(a fault QEMU cannot escalate, e.g. a fault in HardFault or with FAULTMASK set; QEMU does not model
+lockup and exits with 0xC0000409 on Windows), else `qemu-exited`. `detail` then reads, for example,
+`CPU lockup (can't escalate 3 to HardFault (current priority -1)); CPU in thread mode at PC=0x00000092`
+or `QEMU exit status 0xC0000135 (STATUS_DLL_NOT_FOUND)` (Windows NTSTATUS values are shown in hex).
+On timeout the runner asks QEMU where the CPU is before stopping it, over a QMP socket it opens for
+that (`-qmp tcp:127.0.0.1:<port>`, HMP `info registers`, 1 s limit; reads CPU state only), and
+`detail` reads e.g. `timeout: CPU in HardFault (IPSR=3) at PC=0x000002D0`.
 
 An exit line is `PP:EXIT <decimal>` at the end of a line (text before it is allowed). It counts once
 CR or LF ends it. An unterminated one is accepted after 0.2 s of UART silence. After the exit line
@@ -78,7 +87,7 @@ fields from `exit_code` to `elf`):
 | field | content |
 |---|---|
 | `exit_code` | process exit status as in the table above |
-| `status` | `exit`, `timeout` or `qemu-exited` |
+| `status` | `exit`, `timeout`, `qemu-exited` or `cpu-lockup` |
 | `firmware_exit` | raw `PP:EXIT` value, or null |
 | `uart` | transcript; UTF-8, undecodable bytes as `\xNN`, CRLF → LF |
 | `unimplemented_summary` | model backlog, below |
@@ -88,20 +97,23 @@ fields from `exit_code` to `elf`):
 | `trace` | with `--trace`: `{count, events: {name: n}, lines (first 10000), truncated}`; else null |
 | `qemu_returncode` | QEMU's own exit status, or null when the runner stopped it |
 | `command` | the QEMU command line (the UART port is ephemeral) |
-| `log_path` | the kept log with `--log`, else null |
+| `log_path` | the kept log with `--log` (or `-D` in `--extra-args`), else null |
+| `detail` | one line on why the run ended (lockup, QEMU exit status, CPU location on timeout), or null |
+| `warnings` | e.g. a `--trace` pattern that matches no event |
 
 ## Model backlog (`unimplemented_summary`)
 
-QEMU always runs with `-d unimp,guest_errors -D <log>`. Each log line becomes a
-`(kind, instance, register)` group with `count`, `reads`, `writes` and up to three distinct
-`samples`.
+QEMU always runs with `-d unimp,guest_errors,invalid_mem -D <log>` (`invalid_mem`, QEMU 9.1+, carries
+the bus faults to unmapped addresses). Each log line becomes a `(kind, instance, register)` group with
+`count`, `reads`, `writes`, up to three distinct `samples` and `truncated`.
 Groups are sorted by count. `counts` totals per kind and `instances` per instance.
 
 ```json
 {"total": 6, "counts": {"unimp": 5, "guest_error": 1, "other": 0},
  "instances": {"cmsdk-ahb-gpio": 4, "VGA": 1, "CMSDK APB UART": 1},
  "groups": [{"kind": "unimp", "instance": "cmsdk-ahb-gpio", "register": "0x0", "count": 3,
-             "reads": 3, "writes": 0, "samples": ["cmsdk-ahb-gpio: unimplemented device read  (size 4, offset 0x000)"]},
+             "reads": 3, "writes": 0, "samples": ["cmsdk-ahb-gpio: unimplemented device read  (size 4, offset 0x000)"],
+             "truncated": false},
             "..."]}
 ```
 
@@ -113,7 +125,14 @@ Recognised formats (`tools/pp/unimp.py`):
 | `system/memory.c`, `physmem.c` | `Invalid read at addr 0x41000000, size 4, region '(null)', reason: rejected` | region or `(unassigned)` / `@0x41000000` |
 | QEMU device convention `<instance>[ read\|write]: <message>` | `CMSDK APB UART write: bad offset 0x20` | `CMSDK APB UART` / `0x20` |
 | `instance.REGISTER` anywhere in the line | `mchp_regblock: tc0.CTRLA write 0x2 not implemented` | `tc0` / `CTRLA` |
-| anything else | CPU dumps etc. | `(unparsed)` / `-`, kind `other` |
+| mchp generic register block, after 8 writes | `tc0.CTRLBSET: further writes not logged` | marks `tc0` / `CTRLBSET` `truncated`; not counted |
+| `cpu_abort` | `qemu: fatal: Lockup: ...` | ends the backlog: the register dump after it is ignored |
+| anything else | | `(unparsed)` / `-`, kind `other` |
+
+**Write counts are capped.** The mchp generic register block logs at most 8 unmodelled writes per
+register, then one `further writes not logged` line, so `writes` (and `count`) for such a register is
+a lower bound; the group has `truncated: true` and the CLI table shows `8w+`. NUL bytes in the log
+are dropped (a log cut short by killing QEMU on Windows can end in a long run of them).
 
 In a free-form message, the register is the first `offset 0x…`, else `addr 0x…`, else the first
 upper-case identifier (`PCHCTRL[22]`, `CTRLA`), else `-`. The log does not record which `-d` mask
@@ -156,6 +175,11 @@ socket only when the UART can accept. Of the two TCP variants, the client one ha
 and no connect retry loop. Output costs about 12 µs per byte (CMSDK writes one byte per send), about
 1.8 s for 149 KB, which is irrelevant for normal transcripts.
 
+**Input is never lost, unlike on silicon.** TCP backpressure holds every byte until the UART
+model takes it: input sent before the firmware enables its receiver (RXEN), or faster than it reads
+DATA, waits instead of being dropped or raising an overrun. A firmware that only works because the
+twin buffers its input can fail on the board; test overrun handling on silicon.
+
 **Input timing.** Bytes that reach QEMU before the guest enables its receiver stay queued until the
 UART model calls `qemu_chr_fe_accept_input()`. On Windows the socket's FD_READ notification fires
 once and is not re-armed until QEMU reads, so a model that does not call it on receiver enable (the
@@ -165,15 +189,32 @@ firmware has printed its first byte (10/10 runs), once `--input-after TEXT` has 
 becomes enabled (CTRLB.RXEN / CTRLA.ENABLE) and after each DATA read, so that input sent at any time
 is delivered.
 
+## Virtual time (`--icount`)
+
+Without `--icount` the guest runs as fast as the host lets it: busy loops run about 50 times faster
+than on a 48 MHz Cortex-M0+, and timing depends on host load. `--icount SHIFT` makes each instruction
+take 2^SHIFT ns of virtual time, so timers and delays become deterministic, but only for runs that
+do not read the UART: input still arrives in host time, so the instruction at which it lands varies.
+For the 48 MHz PIC32CM (20.8 ns per cycle) use shift 5 (32 ns per instruction, about 1.5 cycles,
+a typical Cortex-M0+ average) to approximate silicon timing, or 4 (16 ns) for slightly faster runs;
+the ratio is approximate because QEMU does not count cycles. Measured with `hello.elf` on this host: shift 0 took 57.7 s, 2 took 14.4 s,
+4 took 3.7 s and 7 took 0.55 s, so small shifts make delay-heavy firmware slow in host time.
+
 ## MCP server
 
 `py -m tools.pp_mcp` speaks MCP over stdio (FastMCP from the `mcp` SDK) and never writes to stdout
 itself. Tools:
 
-- `twin_run(elf_path, timeout_s=10, input_text=None, icount_shift=None, machine="pic32cm-jh01-cpro")`
-  returns the JSON fields above. `machine` is an addition to design §6.3 (needed to run the mps2
-  smoke images). Relative `elf_path` is tried against the server's working directory, then the
-  project root. `timeout_s` is limited to 600. Errors (missing ELF, no QEMU) come back as tool errors.
+- `twin_run(elf_path, timeout_s=10, input_text=None, icount_shift=None, machine="pic32cm-jh01-cpro",
+  machine_options=None, input_after=None, trace=None)` returns the JSON fields above from
+  `exit_code` to `elf`, plus `detail`, `trace` and `warnings`. `machine` is an addition to design §6.3
+  (needed to run the mps2 smoke images); `machine_options` adds properties (`"sw0-pressed=on"`,
+  passed as `-machine`; a machine type there is refused); `input_after` and `trace` (list of
+  patterns) are the CLI's `--input-after` and `--trace`. `uart` is cut to its first and last 32 K
+  characters around a `[... N characters omitted ...]` line when longer than 64 K; `uart_truncated`
+  and `uart_length` (the full length) say so. `trace.lines` keeps the first 200 lines. Relative
+  `elf_path` is tried against the server's working directory, then the project root. `timeout_s` is
+  limited to 600. Errors (missing or non-ELF file, no QEMU) come back as tool errors.
 - `twin_machines()` returns `{qemu, qemu_version, default_machine, default_machine_available, machines}`.
 
 Register it with a client from the project root, e.g. Claude Code
@@ -198,14 +239,15 @@ py -m pytest tests/runner tests/mcp_server tests/e2e -rs
 
 - `tests/runner/`: unit tests (exit protocol, log parsing, CLI, QEMU discovery) and
   `test_pp_mps2_e2e.py`, which runs the real QEMU on `mps2-an385`. It covers exit codes, input,
-  timeout, a byte-exact 2000-line burst, an unknown machine, trace, `--icount`, the CLI as a
-  subprocess, and a `--gdb` session driven over the GDB remote protocol.
+  timeout (with the CPU location), a byte-exact 2000-line burst, an unknown machine, trace,
+  `--icount`, a bus fault to an unmapped address, a CPU lockup, `-D`/`-M` in the extra args, the CLI
+  as a subprocess, and a `--gdb` session driven over the GDB remote protocol.
 - `tests/mcp_server/`: starts `py -m tools.pp_mcp` with the SDK's stdio client, lists the tools and
   calls `twin_machines` and `twin_run` on the mps2 images.
 - `tests/e2e/test_hello_twin.py`: `firmware/hello/build/hello.elf` on `pic32cm-jh01-cpro`, through
   the API and the CLI. It skips, with the reason, until both the machine and the ELF exist.
-- Test images: `tests/assets/mps2/` (`exit.c`, built as `exit` and `exit3`, plus `echo.c`,
-  `burst.c`, `startup.c`, `cmsdk_uart.h`, `mps2.ld`). `py tests/assets/mps2/build.py [--force]`
+- Test images: `tests/assets/mps2/` (`exit.c`, built as `exit` and `exit3`, `fault.c`, built as
+  `fault` and `lockup`, plus `echo.c`, `burst.c`, `startup.c`, `cmsdk_uart.h`, `mps2.ld`). `py tests/assets/mps2/build.py [--force]`
   builds them into `tests/assets/mps2/build/` (git-ignored); the fixtures do this on demand and
   skip without a toolchain. They print `PP:EXIT` instead of using semihosting.
 - Tests that launch QEMU carry the `qemu` marker (`-m "not qemu"` runs only the fast ones).
@@ -218,6 +260,6 @@ py -m pytest tests/runner tests/mcp_server tests/e2e -rs
   `--uart N` option can add more links.
 - Input is all sent at once; expect-style dialogues (wait for prompt A, send B, ...) would need
   a list of (wait-for, send) pairs.
-- No QMP channel yet. A future runner can hold one for `qom-set` (e.g. board property
-  `sw0-pressed`) and a clean `quit`. Today QEMU is killed, which is safe because QEMU flushes the
-  log after every message (`util/log.c` `qemu_log_unlock`).
+- The QMP channel is only used for the CPU location on timeout. It could also carry `qom-set`
+  (e.g. board property `sw0-pressed` during a run) and a clean `quit`. Today QEMU is killed, which
+  is safe because QEMU flushes the log after every message (`util/log.c` `qemu_log_unlock`).

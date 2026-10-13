@@ -13,8 +13,8 @@ registers:
     enable_protected: [WEN]       # WEN writable only while disabled
     sync: {ENABLE: ENABLE, WEN: WEN, ALWAYSON: ALWAYSON}
     hooks: [post_write]           # ALWAYSON is set-only; LOG_UNIMP when enabled
-  CONFIG: {pac_protected: true}
-  EWCTRL: {pac_protected: true}
+  CONFIG: {pac_protected: true, enable_protected: all}   # also while ALWAYSON
+  EWCTRL: {pac_protected: true, enable_protected: all}
   INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
   INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
   INTFLAG:

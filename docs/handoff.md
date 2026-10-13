@@ -76,8 +76,12 @@ Environment variables: `PP_PACKS` (pack root), `PP_QEMU` (QEMU binary for tools/
 
 ## Next steps, in order
 
-1. **Independent review**, three lenses: datasheet/Harmony semantics, QEMU robustness (reset,
-   VMState, debug reads, logging), and end to end. Then fix what the reviewers find.
+1. ~~Independent review~~ **done 2026-10-13** (three lenses). Fixed: clock state lost on
+   migration, SERCOM loadvm, unbounded unimplemented-write logging, WDT CONFIG/EWCTRL protection,
+   ICSR.RETTOBASE on ARMv6-M (patch 0006); runner: `invalid_mem` faults in the backlog, lockup
+   status, timeout reports PC/IPSR, non-ELF rejection, `-D`/`-M` in `--extra-args`, MCP
+   `machine_options`/`trace`/`input_after` and bounded `uart`, harness PP_QEMU and compare fixes.
+   Open items are listed under "Known issues".
 2. **Fact-check the walkthrough** with `docs/handoff/workflows/walkthrough-factcheck.js` (five claim
    clusters, primary sources only), and correct it before sharing.
 3. **First silicon session** (needs the owner's go-ahead at each step; follow the checklist in
@@ -91,6 +95,19 @@ Environment variables: `PP_PACKS` (pack root), `PP_QEMU` (QEMU binary for tools/
 
 ## Known issues
 
+Open findings from the 2026-10-13 review (datasheet items are from the shared SAM C21/JH IP and
+still need checking against DS60001632H):
+- SERCOM RX never overflows: the chardev holds input back (TCP backpressure), so STATUS.BUFOVF,
+  INTFLAG.ERROR and lost bytes before RXEN never happen. Firmware RX error paths cannot be tested.
+  Plan: an opt-in `rx-overrun` mode paced by the baud rate (2-deep FIFO + shift register).
+- SERCOM TX is instant unless `pace-tx=on`: TXC is already set when a DATA write returns.
+- SERCOM DRE is gated on CTRLB.TXEN; RXS is set once per chardev batch; DATA reads 0 when empty.
+- WDT CTRLA.ALWAYSON is cleared by warm resets (SYST, WDT); silicon clears it only at power-on.
+- GCLK PCHCTRL.WRTLOCK does not also lock the generator the channel uses.
+- Oscillators with ONDEMAND=1 report ready without a clock request, so firmware that would hang on
+  silicon boots on the twin.
+- NVMCTRL accepts undefined command codes without setting STATUS.PROGE.
+- `--icount` is deterministic only for output-only runs: UART input arrives in host time.
 - MPU_TYPE reads 0 on QEMU's `cortex-m0`, because QEMU only creates MPU regions for Armv7 cores.
   Firmware that enables the MPU (Zephyr with `CONFIG_ARM_MPU`) fails until a `cortex-m0plus` type exists.
 - The generated calibration row (`0xFFFFFF00_1103F924`) differs from the firmware README's example

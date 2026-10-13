@@ -32,6 +32,8 @@ IMAGES = {
     "exit3": ("exit.c", ["-DEXIT_CODE=3"]),
     "echo": ("echo.c", []),
     "burst": ("burst.c", []),
+    "fault": ("fault.c", []),
+    "lockup": ("fault.c", ["-DLOCKUP"]),
 }
 
 COMMON_SOURCES = ["startup.c", "cmsdk_uart.h", "mps2.ld", "build.py"]

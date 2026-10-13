@@ -113,6 +113,12 @@ def list_machines(qemu: Path) -> list[Machine]:
     return parse_machine_list(_query(qemu, "-M", "help"))
 
 
+def trace_events(qemu: Path) -> list[str]:
+    """Names of the trace events the binary knows (``-trace help``)."""
+    return [line.strip() for line in _query(qemu, "-trace", "help")
+            .splitlines() if re.fullmatch(r"\s*[A-Za-z_]\w*\s*", line)]
+
+
 def qemu_version(qemu: Path) -> str:
     """First line of ``qemu-system-arm --version``."""
     out = _query(qemu, "--version")

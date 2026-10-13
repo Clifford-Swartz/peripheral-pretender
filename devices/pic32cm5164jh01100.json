@@ -52425,7 +52425,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/wdt_u2251.yaml",
-    "sha1": "ea15d36d69ca6fb736d75a33c23eda06fb66dd8c",
+    "sha1": "c3cfd40a345e8b58a198a4ddbc36cf21220074fd",
     "status": "applied",
     "versions": [
      "1.0.1"
@@ -52544,7 +52544,7 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 255,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
@@ -52697,6 +52697,11 @@
        ],
        "provenance": [
         [
+         "enprot",
+         "overlay",
+         "all = 0xFF"
+        ],
+        [
          "reset",
          "overlay",
          "reset_from PER <- USER_FUSES.USER_WORD_0.WDT_PER"
@@ -52722,7 +52727,7 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 15,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
@@ -52800,6 +52805,11 @@
         }
        ],
        "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0xF"
+        ],
         [
          "reset",
          "overlay",

@@ -5,7 +5,8 @@
 the model backlog to stderr; with ``--json`` stdout carries one JSON object
 (the same fields as the MCP tool ``twin_run``) and nothing else. The exit
 status is the firmware's ``PP:EXIT`` code, 124 on timeout, 125 when QEMU
-ended without an exit line, 2 for usage errors and 127 when QEMU is missing.
+ended without an exit line (including a CPU lockup), 2 for usage errors and
+127 when QEMU is missing.
 """
 
 from __future__ import annotations
@@ -15,12 +16,16 @@ import codecs
 import json
 import os
 import re
+import shlex
+import subprocess
 import sys
+from pathlib import Path
 from typing import Sequence, TextIO
 
 from .qemu import DEFAULT_MACHINE, QemuNotFound, machines_info
-from .runner import (STATUS_EXIT, STATUS_TIMEOUT, RunnerError, RunOptions,
-                     RunResult, run)
+from .runner import (STATUS_CPU_LOCKUP, STATUS_EXIT, STATUS_TIMEOUT,
+                     RunnerError, RunOptions, RunResult, describe_returncode,
+                     run)
 
 EXIT_USAGE = 2
 EXIT_QEMU_MISSING = 127
@@ -86,7 +91,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "transcript and summary")
     p.add_argument("--extra-args", nargs=argparse.REMAINDER, default=[],
                    metavar="ARG",
-                   help="all remaining arguments go to QEMU unchanged")
+                   help="all remaining arguments go to QEMU (-d is merged "
+                        "with the runner's, -D replaces --log)")
 
     m = sub.add_parser("machines",
                        help="list the machines of the QEMU binary")
@@ -145,12 +151,18 @@ def verdict(result: RunResult) -> str:
         what = f"PP:EXIT {result.firmware_exit}"
     elif result.status == STATUS_TIMEOUT:
         what = "timeout, no PP:EXIT"
+    elif result.status == STATUS_CPU_LOCKUP:
+        what = "CPU lockup, QEMU aborted before PP:EXIT"
     else:
         code = result.qemu_returncode
-        what = "QEMU exited" + ("" if code is None else f" with status {code}")
+        what = "QEMU exited" + ("" if code is None else
+                                f" with status {describe_returncode(code)}")
         what += " before PP:EXIT"
-    return (f"[pp] exit {result.exit_code} ({what}) after "
+    line = (f"[pp] exit {result.exit_code} ({what}) after "
             f"{result.duration_s:.2f} s on {result.machine}")
+    if result.detail and result.status != STATUS_EXIT:
+        line += f"\n[pp] {result.detail}"
+    return line
 
 
 def format_summary(summary: dict) -> list[str]:
@@ -176,10 +188,14 @@ def _rw(group: dict) -> str:
         parts.append(f"{group['reads']}r")
     if group["writes"]:
         parts.append(f"{group['writes']}w")
-    return " ".join(parts) or "-"
+    text = " ".join(parts) or "-"
+    # QEMU stopped logging writes to the register: the count is a minimum
+    return text + "+" if group.get("truncated") else text
 
 
 def report(result: RunResult, err: TextIO) -> None:
+    for warning in result.warnings:
+        print(f"[pp] warning: {warning}", file=err)
     print(verdict(result), file=err)
     for line in format_summary(result.unimplemented_summary):
         print(line, file=err)
@@ -190,7 +206,7 @@ def report(result: RunResult, err: TextIO) -> None:
         print("[pp] QEMU output:", file=err)
         for line in result.qemu_stderr_tail.splitlines():
             print("    " + line, file=err)
-    if result.log_path:
+    if result.log_path and Path(result.log_path).is_file():
         print(f"[pp] QEMU log kept at {result.log_path}", file=err)
 
 
@@ -206,6 +222,14 @@ def _report_trace(trace: dict, err: TextIO) -> None:
         print(f"    ... {hidden} more (use --log FILE for all)", file=err)
 
 
+def shell_quote(arg: str) -> str:
+    """Quote arg for the shell a user pastes the hint into (cmd/PowerShell
+    on Windows, a POSIX shell elsewhere)."""
+    if sys.platform == "win32":
+        return subprocess.list2cmdline([arg])
+    return shlex.quote(arg)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     options = options_from_args(args)
     echo = None
@@ -213,7 +237,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         echo = options.on_uart = LiveEcho(sys.stdout)
         if args.gdb is not None:
             print(f"[pp] QEMU is paused; attach with: gdb-multiarch "
-                  f"{args.elf} -ex 'target remote 127.0.0.1:{args.gdb}'",
+                  f"{shell_quote(args.elf)} -ex "
+                  f"{shell_quote(f'target remote 127.0.0.1:{args.gdb}')}",
                   file=sys.stderr)
     result = run(options)
     if args.json:

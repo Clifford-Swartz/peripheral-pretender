@@ -141,6 +141,44 @@ def test_reset_command_checks_documented_values(tmp_path, capsys):
     assert "1 registers read only in A" in out          # X.NORESET has no reset value
 
 
+def test_dump_pc_is_a_note_breakpoint_pc_a_problem(masks):
+    a = capture("twin", [GENCTRL0], [("dump", {GENCTRL0.name: "0x00000106"})])
+    b = capture("twin", [GENCTRL0], [("dump", {GENCTRL0.name: "0x00000106"})])
+    a["events"][0]["pc"], b["events"][0]["pc"] = "0xFFFFFFFE", "0x000006A8"
+    a["tool"] = "dump_regs"           # twin dumped without --kernel
+    problems, notes, diffs, _ = compare.compare_captures(a, b, masks)
+    assert (problems, diffs) == ([], [])
+    assert "pc A=0xFFFFFFFE" in notes[0] and "--kernel" in notes[0]
+    a["tool"] = b["tool"] = "gdb_snapshot"
+    problems, *_ = compare.compare_captures(a, b, masks)
+    assert problems == ["event #0 (dump): pc A=0xFFFFFFFE B=0x000006A8"]
+    pc_masked = compare.Masks(masks.registers, [(compare.name_pattern("pc"),
+                                                 0xFFFFFFFF, "test")])
+    assert compare.compare_captures(a, b, pc_masked)[0] == []
+
+
+def test_reset_uses_architectural_values_and_masks_fuse_loaded(tmp_path, capsys):
+    aircr = Reg("SystemControl.AIRCR", 0xE000ED0C, 4, reset=0, module="SYSTEMCONTROL")
+    ccr = Reg("SystemControl.CCR", 0xE000ED14, 4, reset=0x204, module="SYSTEMCONTROL")
+    lock = Reg("NVMCTRL.LOCK", 0x41004020, 2, reset=0, module="NVMCTRL", ip_id="03929",
+               reset_from=("USER_FUSES.USER_WORD_1.NVMCTRL_REGION_LOCKS",))
+    intflag = Reg("SUPC.INTFLAG", 0x40001808, 4, reset=0, module="SUPC", ip_id="U2117")
+    calib = Reg("SysTick.CALIB", 0xE000E01C, 4, reset=0, module="SYSTICK")
+    twin = capture("twin", [aircr, ccr, lock, intflag, calib],
+                   [("dump", {aircr.name: "0xFA050000", ccr.name: "0x00000208",
+                              lock.name: "0xFFFF", intflag.name: "0x00000005",
+                              calib.name: "0x80000000"})])
+    path = save(tmp_path, "twin.json", twin)
+    assert compare.main(["reset", path]) == 0
+    out = capsys.readouterr().out
+    assert "NVMCTRL.LOCK=0xFFFF" in out and "USER_PAGE_WORD" in out
+    assert out.rstrip().endswith("0 differences")
+    # The reset-only masks do not apply to twin-vs-silicon comparisons.
+    masks = compare.load_masks([])
+    assert masks.ignored(["SUPC.INTFLAG"]) == (0, "")
+    assert masks.for_reset().ignored(["SUPC.INTFLAG"])[0] == 0x5
+
+
 # --- reset_overrides suggestions ------------------------------------------------------
 
 def test_overrides_grouped_per_overlay_and_kind(masks):

@@ -41,11 +41,25 @@ _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 Place = tuple[int, int]                 # (address, size)
 
 
+# Arm architectural reset values that the ATDF, and so the generated device
+# description, gets wrong for the Cortex-M0+ System Control Block.  ARMv6-M ARM
+# (DDI 0419) B3.2.6: AIRCR.VECTKEYSTAT reads as 0xFA05 and ENDIANNESS is 0
+# (little endian); B3.2.8: CCR.STKALIGN (bit 9) and UNALIGN_TRP (bit 3) are RAO
+# and every other bit is reserved (the ATDF's bit 2 does not exist).  The
+# Cortex-M0+ Generic User Guide (DUI 0662) lists the same 0xFA050000 and 0x208.
+# `compare reset` uses these; the generator should take them as an overlay.
+ARCH_RESET = {
+    "SystemControl.AIRCR": 0xFA050000,
+    "SystemControl.CCR": 0x00000208,
+}
+
+
 @dataclass
 class Masks:
     registers: list[tuple[re.Pattern[str], int, str]] = field(default_factory=list)
     core: list[tuple[re.Pattern[str], int, str]] = field(default_factory=list)
     uart: list[tuple[re.Pattern[str], str]] = field(default_factory=list)
+    reset: list[tuple[re.Pattern[str], int, str]] = field(default_factory=list)
 
     def ignored(self, names: list[str], table: str = "registers") -> tuple[int, str]:
         """OR of the masks whose glob matches any of names, and their reasons."""
@@ -58,7 +72,11 @@ class Masks:
 
     def plus(self, name: str, mask: int, reason: str) -> "Masks":
         return Masks(self.registers + [(name_pattern(name), mask, reason)],
-                     self.core, self.uart)
+                     self.core, self.uart, self.reset)
+
+    def for_reset(self) -> "Masks":
+        """The register masks plus the `reset:` ones (documented vs. read)."""
+        return Masks(self.registers + self.reset, self.core, self.uart, [])
 
 
 def load_masks(paths: list[str], defaults: bool = True) -> Masks:
@@ -71,6 +89,9 @@ def load_masks(paths: list[str], defaults: bool = True) -> Masks:
         for entry in doc.get("core") or []:
             masks.core.append((name_pattern(entry["name"]),
                                parse_int(entry["mask"]), entry.get("reason", "")))
+        for entry in doc.get("reset") or []:
+            masks.reset.append((name_pattern(entry["name"]),
+                                parse_int(entry["mask"]), entry.get("reason", "")))
         for entry in doc.get("uart") or []:
             masks.uart.append((re.compile(entry["pattern"]), entry.get("repl", "<masked>")))
     return masks
@@ -223,9 +244,18 @@ def compare_captures(ca: dict, cb: dict, masks: Masks, core: bool = False
     if only_a or only_b:
         notes.append(f"not compared: {only_a} registers read only in A, "
                      f"{only_b} only in B")
+    # A register dump's PC is wherever the core sat (the reset vector of the
+    # loaded image, 0xFFFFFFFE without one): not a register-model difference.
+    dumps = "dump_regs" in (ca.get("tool"), cb.get("tool"))
+    pc_ignored, _ = masks.ignored(["pc"], "core")
     for seq, (ea, eb) in enumerate(zip(ca["events"], cb["events"])):
         if ea.get("pc") and eb.get("pc") and ea["pc"] != eb["pc"]:
-            problems.append(f"event #{seq} ({ea.get('label')}): pc A={ea['pc']} B={eb['pc']}")
+            line = f"event #{seq} ({ea.get('label')}): pc A={ea['pc']} B={eb['pc']}"
+            if dumps:
+                notes.append(line + " (register dumps: not compared; dump both "
+                                    "sides with the same image, --kernel on the twin)")
+            elif (int(ea["pc"], 16) ^ int(eb["pc"], 16)) & ~pc_ignored:
+                problems.append(line)
         diffs += diff_event(seq, ea, eb, ta, tb, masks, stats)
         if core:
             diffs += diff_core(seq, ea, eb, masks)
@@ -236,8 +266,9 @@ def documented(capture: dict[str, Any]) -> dict[str, Any]:
     """A one-event capture holding the reset values capture's list documents."""
     table = [e for e in capture["registers"] if "reset" in e]
     label = capture["events"][0].get("label", "") if capture["events"] else ""
-    event = snapshot.make_event(0, label, "documented",
-                                {e["name"]: e["reset"] for e in table}, {})
+    values = {e["name"]: (fmt_hex(ARCH_RESET[e["name"]], e["size"])
+                          if e["name"] in ARCH_RESET else e["reset"]) for e in table}
+    event = snapshot.make_event(0, label, "documented", values, {})
     return {"format": snapshot.FORMAT, "side": "documented", "reset": "documented",
             "target": capture.get("register_source", ""), "registers": table,
             "skipped": [], "events": [event], "end": "dump"}
@@ -360,9 +391,27 @@ def compare_regs(args: argparse.Namespace, masks: Masks) -> int:
 
 
 def compare_reset(args: argparse.Namespace, masks: Masks) -> int:
+    """Masks for this check: the `reset:` entries of the mask files, and every
+    register loaded from the NVM user row at reset (`reset_from`): its
+    documented value assumes an erased row, so the user row words are the
+    thing to compare (NVM.USER_PAGE_WORD_0/1)."""
     capture = snapshot.load(args.a)
     first = {**capture, "events": capture["events"][:1]}
-    return report(first, documented(first), args, masks, first, "a")
+    masks = masks.for_reset()
+    golden = documented(first)
+    read = first["events"][0].get("values", {}) if first["events"] else {}
+    from_fuses = []
+    for entry in golden["registers"]:
+        if entry.get("reset_from"):
+            masks = masks.plus(entry["name"], (1 << 8 * entry["size"]) - 1,
+                               "loaded from the NVM user row at reset")
+            if entry["name"] in read and \
+                    int(read[entry["name"]], 16) != int(entry["reset"], 16):
+                from_fuses.append(f"{entry['name']}={read[entry['name']]}")
+    if from_fuses:
+        print(f"masked, loaded from the NVM user row at reset (compare "
+              f"NVM.USER_PAGE_WORD_0/1 instead): {', '.join(from_fuses)}")
+    return report(first, golden, args, masks, first, "a")
 
 
 def main(argv: list[str] | None = None) -> int:

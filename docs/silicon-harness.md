@@ -238,7 +238,7 @@ py -m harness.hw_run firmware/hello/build/hello.elf --check            # read-on
 py -m harness.dump_regs --pyocd --out identify.json                    # read-only
 py -m harness.dump_regs --pyocd --reset-halt --allow-halt --out golden-gated.json
 py -m harness.dump_regs --pyocd --reset-halt --allow-halt --unmask-clocks --out golden.json
-py -m harness.dump_regs --twin --out twin.json                         # QEMU, -S at reset
+py -m harness.dump_regs --twin --kernel firmware/hello/build/hello.elf --out twin.json   # QEMU, -S at reset
 py -m harness.compare reset golden.json --by-instance --emit-overrides from-silicon.yaml
 py -m harness.compare regs twin.json golden.json --by-instance --emit-overrides twin-vs-silicon.yaml
 ```
@@ -316,8 +316,10 @@ same register may carry different names in two captures.
    dropped, leading NUL and undecodable bytes from the TX pin switch-over dropped); `--from REGEX`
    skips anything before the first matching line on both sides. The exit codes must match; 124 is
    a failure on either side.
-4. **Captures**: the event labels must match in order; the PC at each event must match; registers
-   read on both sides are compared after masking; a read fault on one side only is a difference;
+4. **Captures**: the event labels must match in order; the PC at each breakpoint event must match
+   (`core: [{name: pc, ...}]` masks it); for `dump_regs` captures a PC difference is only a note,
+   since it reflects the loaded image (0xFFFFFFFE when the twin was dumped without `--kernel`), not
+   the register model; registers read on both sides are compared after masking; a read fault on one side only is a difference;
    registers read on one side only are reported as "not compared", not as differences.
 5. **Reset kinds**: RSTC.RCAUSE is compared only when both captures came from the same kind of
    reset.
@@ -340,6 +342,14 @@ Default masks (`harness/masks/default.yaml`; add more with `--masks FILE`, disab
 | DSU.STATUSB | 0x02 | DBGPRES: set once a probe was seen |
 | SysTick.CVR, TCn.COUNT, TCCn.COUNT, RTC.COUNT/CLOCK | counter bits | free-running |
 | transcript lines `serial:`, `calrow:`, field `CAL48M=` | rest of line or field | hello prints per-chip data |
+
+`compare reset` only (the `reset:` section): SUPC.INTFLAG 0x05 (BODVDDRDY and BVDDSRDY set by
+hardware just after reset) and SysTick.CALIB (implementation defined; the ATDF's 0 is not a
+datasheet value). It also masks every register loaded from the NVM user row at reset
+(`reset_from`: SUPC.BODVDD, NVMCTRL.LOCK, WDT CTRLA/CONFIG/EWCTRL) and lists those that differ; check
+`NVM.USER_PAGE_WORD_0/1` instead. The documented SystemControl.AIRCR and CCR are replaced by the
+architectural values 0xFA050000 and 0x00000208 (ARMv6-M ARM B3.2.6, B3.2.8; the ATDF says 0 and
+0x204) until the generator carries them as an overlay (`ARCH_RESET` in `harness/compare.py`).
 
 ## 10. Feeding results back into the twin
 

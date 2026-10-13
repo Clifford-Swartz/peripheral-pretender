@@ -12,6 +12,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0003 | generated device description and NVM-rows image (`include/hw/arm/pic32cm5164jh01100_gen.h`, `hw/arm/pic32cm5164jh01100_nvmrows.h`) |
 | 0004 | part A: register-file helper, generic regblock, clock and system models, SoC, `pic32cm-jh01-cpro` board, qtest, board docs |
 | 0005 | part B: SERCOM USART and PORT models, LED0 and SW0 on the board, SERCOM and PORT qtests |
+| 0006 | review fixes: clock migration, SERCOM loadvm, ICSR.RETTOBASE on ARMv6-M, unimplemented-write log cap, WDT CONFIG/EWCTRL protection |
 
 ## Setting it up
 
