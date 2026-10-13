@@ -10,9 +10,16 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 import anyio
-from mcp.server.fastmcp import FastMCP
 
-from ..pp import DEFAULT_MACHINE, RunOptions, machines_info, run
+try:                    # mcp 2.x renamed FastMCP to MCPServer
+    from mcp.server.mcpserver import MCPServer as FastMCP
+    from mcp.server.mcpserver.exceptions import ToolError
+except ImportError:     # mcp 1.x
+    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp.exceptions import ToolError
+
+from ..pp import (DEFAULT_MACHINE, QemuNotFound, RunnerError, RunOptions,
+                  machines_info, run)
 from ..pp.qemu import PROJECT_ROOT
 
 MAX_TIMEOUT_S = 600.0
@@ -75,11 +82,15 @@ async def twin_run(elf_path: str, timeout_s: float = 10.0,
     unimplemented_summary (model backlog), qemu_stderr_tail, duration_s.
     """
     if not 0 < timeout_s <= MAX_TIMEOUT_S:
-        raise ValueError(f"timeout_s must be in (0, {MAX_TIMEOUT_S:g}]")
+        raise ToolError(f"timeout_s must be in (0, {MAX_TIMEOUT_S:g}]")
     options = RunOptions(elf=resolve_elf(elf_path), machine=machine,
                          timeout_s=timeout_s, icount_shift=icount_shift,
                          input_text=input_text)
-    result = await anyio.to_thread.run_sync(run, options)
+    # mcp 2.x hides the message of any exception but ToolError
+    try:
+        result = await anyio.to_thread.run_sync(run, options)
+    except (RunnerError, QemuNotFound, ValueError) as exc:
+        raise ToolError(str(exc)) from exc
     return TwinRunResult(
         exit_code=result.exit_code,
         status=result.status,

@@ -1,33 +1,253 @@
-From 861dc5b1ca32174cf0ab54850406a329a1afd775 Mon Sep 17 00:00:00 2001
+From 5f27fdabefa1b40af81d04a705fdec815ccb0281 Mon Sep 17 00:00:00 2001
 From: Clifford Swartz <cliffordswartz1@gmail.com>
 Date: Mon, 12 Oct 2026 11:25:12 -0700
-Subject: [PATCH 5/5] WIP: hw/char, hw/gpio: SERCOM and PORT models
- (unfinished)
+Subject: [PATCH 5/5] hw/char, hw/gpio, hw/arm: SERCOM USART and PORT models,
+ LED0 and SW0
 
-Peripheral Pretender v0, part B, interrupted before verification. The
-mchp-sercom (USART mode) and mchp-port devices are written but not yet
-selected by PIC32CM_JH_SOC, not added to the SoC model table, and not
-built or tested. Remaining work is listed in the Peripheral Pretender
-repo (docs/handoff.md and the qemu-core-b progress log).
+Peripheral Pretender v0, part B. mchp-sercom models the SERCOM USART
+(one-character transmit buffer plus shift register, two-character
+receive buffer, DRE/TXC/RXC per DS60001632H chapter 30) on a chardev,
+with an optional "pace-tx" frame timer; SPI and I2C modes only store
+their registers. mchp-port derives the pads from DIR/OUT/PINCFG/PMUX,
+handles WRCONFIG and the IOBUS view, and exposes "port-out"/"port-in"
+GPIO lines (-1 = not driven) plus per-group QOM properties.
+
+The SoC uses both models in place of their generic register blocks.
+The pic32cm-jh01-cpro board wires LED0 (PC05, active low) to a QEMU LED
+and adds the machine property "sw0-pressed" for SW0 (PB19). New qtests
+pic32cm-jh-sercom-test and pic32cm-jh-port-test; board docs updated.
 
 Peripheral Pretender downstream patch; not for upstream submission.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- hw/char/Kconfig               |   6 +
- hw/char/mchp_sercom.c         | 529 ++++++++++++++++++++++++++++++++++
- hw/char/meson.build           |   1 +
- hw/gpio/Kconfig               |   4 +
- hw/gpio/mchp_port.c           | 343 ++++++++++++++++++++++
- hw/gpio/meson.build           |   1 +
- include/hw/char/mchp_sercom.h |  30 ++
- include/hw/gpio/mchp_port.h   |  46 +++
- 8 files changed, 960 insertions(+)
+ docs/system/arm/pic32cm-jh01-cpro.rst |  35 +-
+ hw/arm/Kconfig                        |   3 +
+ hw/arm/pic32cm_jh01_cpro.c            |  46 ++-
+ hw/arm/pic32cm_jh_soc.c               |   4 +
+ hw/char/Kconfig                       |   6 +
+ hw/char/mchp_sercom.c                 | 529 ++++++++++++++++++++++++++
+ hw/char/meson.build                   |   1 +
+ hw/char/trace-events                  |   5 +
+ hw/gpio/Kconfig                       |   4 +
+ hw/gpio/mchp_port.c                   | 343 +++++++++++++++++
+ hw/gpio/meson.build                   |   1 +
+ hw/gpio/trace-events                  |   4 +
+ include/hw/char/mchp_sercom.h         |  30 ++
+ include/hw/gpio/mchp_port.h           |  46 +++
+ tests/qtest/meson.build               |   2 +-
+ tests/qtest/pic32cm-jh-port-test.c    | 241 ++++++++++++
+ tests/qtest/pic32cm-jh-sercom-test.c  | 239 ++++++++++++
+ 17 files changed, 1532 insertions(+), 7 deletions(-)
  create mode 100644 hw/char/mchp_sercom.c
  create mode 100644 hw/gpio/mchp_port.c
  create mode 100644 include/hw/char/mchp_sercom.h
  create mode 100644 include/hw/gpio/mchp_port.h
+ create mode 100644 tests/qtest/pic32cm-jh-port-test.c
+ create mode 100644 tests/qtest/pic32cm-jh-sercom-test.c
 
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index df39a4b..00c6f2b 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -46,6 +46,25 @@ Supported devices
+   DSU_EXT view at 0x41002100 and the CoreSight ROM table
+ - DIVAS: signed and unsigned division and square root, also through the
+   IOBUS view at 0x60000200
++- SERCOM in the USART modes (internal clock, asynchronous, 5 to 8 data
++  bits, with or without parity): a one-character transmit buffer in front
++  of the shift register and a two-character receive buffer, with DRE, TXC
++  and RXC as the data sheet describes them, connected to a ``-serial``
++  backend. Characters leave at once unless the SERCOM property
++  ``pace-tx`` is on, which holds each one for a frame time at the rate
++  set by BAUD and the SERCOM's GCLK channel. Debugger reads of DATA do not
++  pop the receive buffer. The SPI and I2C modes only store their
++  registers.
++- PORT: DIR, OUT and their SET/CLR/TGL registers, PINCFG, PMUX, WRCONFIG
++  and the IOBUS view at 0x60000000. IN shows each pad with its input
++  buffer on: the PORT's own output, else an external driver, else the
++  pull resistor. GPIO outputs ``port-out[n]`` and inputs ``port-in[n]``,
++  n = group * 32 + pin, use -1 for an undriven pad. The QOM properties
++  ``pa-in``, ``pa-in-mask``, ``pa-out`` and ``pa-out-mask`` (and ``pb-``,
++  ``pc-``) of ``/machine/soc/port`` show and drive the pads.
++- LED0 (PC05, active low) is a QEMU LED device; its state changes show
++  in the ``led_set_intensity`` trace event. SW0 (PB19, to ground) is the
++  machine property ``sw0-pressed``.
+ - Every other peripheral instance is a generic register block: reset
+   values, store and read back, write-1-to-clear flags, set/clear
+   registers, SYNCBUSY reading 0, software reset through CTRLA.SWRST and
+@@ -57,9 +76,9 @@ Supported devices
+ Missing devices
+ """""""""""""""
+ 
+-- SERCOM and PORT are generic register blocks, so there is no UART output
+-  yet: firmware waiting for SERCOM INTFLAG.DRE does not progress. LED0
+-  (PC05) and SW0 (PB19) are not connected.
++- SERCOM: SPI and I2C transfers, the external clock (XCK), synchronous
++  mode, LIN and auto-baud frames, IrDA, 9-bit characters and receive
++  errors. PORT: event inputs (EVCTRL) and the sampling mode (CTRL).
+ - The MPU: QEMU only gives Armv7-M cores MPU regions, so the
+   ``mpu-ns-regions`` setting of 8 has no effect and MPU_TYPE reads 0.
+   CONTROL.nPRIV is not implemented on the Cortex-M0 either.
+@@ -72,7 +91,12 @@ Board and SoC properties
+ 
+ The board connects ``-serial`` options to SERCOM4 (EDBG virtual COM
+ port), SERCOM2 (EXT1), SERCOM3 (EXT2), SERCOM6 (EXT3) and SERCOM0 (LIN), in
+-that order, once SERCOM has a UART model.
++that order.
++
++``sw0-pressed``
++  Machine property, default ``off``. ``on`` holds user switch SW0 down,
++  which pulls PB19 to ground; it can also be changed at run time with
++  ``qom-set /machine sw0-pressed true``.
+ 
+ The SoC takes two properties, which can be given with ``-global``:
+ 
+@@ -104,7 +128,8 @@ the WDT, SUPC and NVMCTRL.LOCK reset values are loaded from them.
+ 
+ ``-d unimp,guest_errors`` lists the register writes the model does not
+ implement and the accesses the device would reject. The trace events
+-``mchp_clk_update``, ``mchp_regfile_read``, ``mchp_regfile_write``,
++``mchp_sercom_tx``, ``mchp_sercom_rx``, ``mchp_port_out``,
++``led_set_intensity``, ``mchp_clk_update``, ``mchp_regfile_read``, ``mchp_regfile_write``,
+ ``mchp_regblock_unimp_write`` and ``mchp_rstc_reset_request`` show the
+ clock tree, every register access and reset requests. ``info qtree`` in
+ the monitor shows the frequency of every clock, for example the
+diff --git a/hw/arm/Kconfig b/hw/arm/Kconfig
+index 4b7773e..0d8a0ad 100644
+--- a/hw/arm/Kconfig
++++ b/hw/arm/Kconfig
+@@ -687,12 +687,15 @@ config PIC32CM_JH01_CPRO
+     bool
+     default y
+     depends on TCG && ARM
++    select LED
+     select PIC32CM_JH_SOC
+ 
+ config PIC32CM_JH_SOC
+     bool
+     select ARM_V7M
++    select MCHP_PORT
+     select MCHP_REGFILE
++    select MCHP_SERCOM
+     select OR_IRQ
+     select UNIMP
+ 
+diff --git a/hw/arm/pic32cm_jh01_cpro.c b/hw/arm/pic32cm_jh01_cpro.c
+index 010f0c2..ab441d7 100644
+--- a/hw/arm/pic32cm_jh01_cpro.c
++++ b/hw/arm/pic32cm_jh01_cpro.c
+@@ -16,12 +16,19 @@
+ #include "hw/arm/machines-qom.h"
+ #include "hw/arm/pic32cm_jh_soc.h"
+ #include "hw/core/boards.h"
++#include "hw/core/irq.h"
+ #include "hw/core/qdev-clock.h"
++#include "hw/gpio/mchp_port.h"
++#include "hw/misc/led.h"
+ #include "system/system.h"
+ 
+ #define CPRO_XOSC_HZ        32000000
+ #define CPRO_XOSC32K_HZ     32768
+ 
++/* User LED0 (yellow, active low) and switch SW0 (to ground) */
++#define CPRO_LED0_PIN       MCHP_PORT_PIN('C', 5)
++#define CPRO_SW0_PIN        MCHP_PORT_PIN('B', 19)
++
+ /* serial_hd(i) is wired to SERCOM pic32cm_jh01_cpro_serial[i] */
+ static const unsigned pic32cm_jh01_cpro_serial[] = {
+     4,                          /* EDBG virtual COM port (PB10/PB11) */
+@@ -40,12 +47,36 @@ struct Pic32cmJh01CproState {
+     Pic32cmJhSocState soc;
+     Clock *xosc;
+     Clock *xosc32k;
++    LEDState *led0;
++    qemu_irq sw0;
++    bool sw0_pressed;
+ };
+ 
++/* A pressed SW0 pulls PB19 low; a released one leaves the pad undriven. */
++static void pic32cm_jh01_cpro_update_sw0(Pic32cmJh01CproState *s)
++{
++    if (s->sw0) {
++        qemu_set_irq(s->sw0, s->sw0_pressed ? 0 : -1);
++    }
++}
++
++static bool pic32cm_jh01_cpro_get_sw0(Object *obj, Error **errp)
++{
++    return PIC32CM_JH01_CPRO_MACHINE(obj)->sw0_pressed;
++}
++
++static void pic32cm_jh01_cpro_set_sw0(Object *obj, bool value, Error **errp)
++{
++    Pic32cmJh01CproState *s = PIC32CM_JH01_CPRO_MACHINE(obj);
++
++    s->sw0_pressed = value;
++    pic32cm_jh01_cpro_update_sw0(s);
++}
++
+ static void pic32cm_jh01_cpro_init(MachineState *machine)
+ {
+     Pic32cmJh01CproState *s = PIC32CM_JH01_CPRO_MACHINE(machine);
+-    DeviceState *soc;
++    DeviceState *soc, *port;
+ 
+     s->xosc = clock_new(OBJECT(machine), "xosc");
+     clock_set_hz(s->xosc, CPRO_XOSC_HZ);
+@@ -63,6 +94,14 @@ static void pic32cm_jh01_cpro_init(MachineState *machine)
+     }
+     sysbus_realize(SYS_BUS_DEVICE(soc), &error_fatal);
+ 
++    port = s->soc.periph[PIC32CM5164JH01100_INST_PORT];
++    s->led0 = led_create_simple(OBJECT(machine), GPIO_POLARITY_ACTIVE_LOW,
++                                LED_COLOR_YELLOW, "LED0");
++    qdev_connect_gpio_out_named(port, MCHP_PORT_OUT, CPRO_LED0_PIN,
++                                qdev_get_gpio_in(DEVICE(s->led0), 0));
++    s->sw0 = qdev_get_gpio_in_named(port, MCHP_PORT_IN, CPRO_SW0_PIN);
++    pic32cm_jh01_cpro_update_sw0(s);
++
+     armv7m_load_kernel(s->soc.armv7m.cpu, machine->kernel_filename,
+                        PIC32CM5164JH01100_FLASH_BASE,
+                        PIC32CM5164JH01100_FLASH_SIZE);
+@@ -89,6 +128,11 @@ static void pic32cm_jh01_cpro_class_init(ObjectClass *oc, const void *data)
+     mc->default_ram_size = 0;
+     compat_props_add(mc->compat_props, pic32cm_jh01_cpro_compat,
+                      G_N_ELEMENTS(pic32cm_jh01_cpro_compat));
++    object_class_property_add_bool(oc, "sw0-pressed",
++                                   pic32cm_jh01_cpro_get_sw0,
++                                   pic32cm_jh01_cpro_set_sw0);
++    object_class_property_set_description(oc, "sw0-pressed",
++                                          "Hold user switch SW0 (PB19) down");
+ }
+ 
+ static const TypeInfo pic32cm_jh01_cpro_types[] = {
+diff --git a/hw/arm/pic32cm_jh_soc.c b/hw/arm/pic32cm_jh_soc.c
+index 2900c07..9e221a1 100644
+--- a/hw/arm/pic32cm_jh_soc.c
++++ b/hw/arm/pic32cm_jh_soc.c
+@@ -17,9 +17,11 @@
+ #include "qemu/log.h"
+ #include "qemu/units.h"
+ #include "hw/arm/pic32cm_jh_soc.h"
++#include "hw/char/mchp_sercom.h"
+ #include "hw/core/qdev-clock.h"
+ #include "hw/core/qdev-properties.h"
+ #include "hw/core/qdev-properties-system.h"
++#include "hw/gpio/mchp_port.h"
+ #include "hw/misc/mchp_sysctrl.h"
+ #include "hw/misc/unimp.h"
+ #include "system/address-spaces.h"
+@@ -43,7 +45,9 @@ static const struct {
+     { "OSCCTRL", TYPE_MCHP_OSCCTRL },
+     { "PAC", TYPE_MCHP_PAC },
+     { "PM", TYPE_MCHP_PM },
++    { "PORT", TYPE_MCHP_PORT },
+     { "RSTC", TYPE_MCHP_RSTC },
++    { "SERCOM", TYPE_MCHP_SERCOM },
+     { "SUPC", TYPE_MCHP_SUPC },
+     { "WDT", TYPE_MCHP_WDT },
+ };
 diff --git a/hw/char/Kconfig b/hw/char/Kconfig
 index 020c0a8..123616a 100644
 --- a/hw/char/Kconfig
@@ -592,6 +812,19 @@ index fc3d7ee..09ff1b5 100644
  system_ss.add(when: 'CONFIG_HTIF', if_true: files('riscv_htif.c'))
  system_ss.add(when: 'CONFIG_GOLDFISH_TTY', if_true: files('goldfish_tty.c'))
  
+diff --git a/hw/char/trace-events b/hw/char/trace-events
+index a3fcc77..9cf0257 100644
+--- a/hw/char/trace-events
++++ b/hw/char/trace-events
+@@ -141,3 +141,8 @@ stm32f2xx_usart_receive(char *id, uint8_t chr) " %s receiving '%c'"
+ # riscv_htif.c
+ htif_uart_write_to_host(uint8_t device, uint8_t cmd, uint64_t payload) "device: %u cmd: %02u payload: %016" PRIx64
+ htif_uart_unknown_device_command(uint8_t device, uint8_t cmd, uint64_t payload) "device: %u cmd: %02u payload: %016" PRIx64
++
++# mchp_sercom.c
++mchp_sercom_tx(const char *name, uint8_t ch) "%s: tx 0x%02x"
++mchp_sercom_tx_blocked(const char *name) "%s: chardev busy, tx waits"
++mchp_sercom_rx(const char *name, uint8_t ch) "%s: rx 0x%02x"
 diff --git a/hw/gpio/Kconfig b/hw/gpio/Kconfig
 index a209294..e9ec9a3 100644
 --- a/hw/gpio/Kconfig
@@ -968,6 +1201,18 @@ index 6a67ee9..17ea9b2 100644
  system_ss.add(when: 'CONFIG_NPCM7XX', if_true: files('npcm7xx_gpio.c'))
  system_ss.add(when: 'CONFIG_NRF51_SOC', if_true: files('nrf51_gpio.c'))
  system_ss.add(when: 'CONFIG_OMAP', if_true: files('omap_gpio.c'))
+diff --git a/hw/gpio/trace-events b/hw/gpio/trace-events
+index cea896b..c27fea5 100644
+--- a/hw/gpio/trace-events
++++ b/hw/gpio/trace-events
+@@ -46,3 +46,7 @@ stm32l4x5_gpio_read(char *gpio, uint64_t addr) "GPIO%s addr: 0x%" PRIx64 " "
+ stm32l4x5_gpio_write(char *gpio, uint64_t addr, uint64_t data) "GPIO%s addr: 0x%" PRIx64 " val: 0x%" PRIx64 ""
+ stm32l4x5_gpio_update_idr(char *gpio, uint32_t old_idr, uint32_t new_idr) "GPIO%s from: 0x%x to: 0x%x"
+ stm32l4x5_gpio_pins(char *gpio, uint16_t disconnected, uint16_t high) "GPIO%s disconnected pins: 0x%x levels: 0x%x"
++
++# mchp_port.c
++mchp_port_out(char group, unsigned pin, int level) "P%c%02u: out %d"
++mchp_port_in(char group, unsigned pin, int level) "P%c%02u: in %d"
 diff --git a/include/hw/char/mchp_sercom.h b/include/hw/char/mchp_sercom.h
 new file mode 100644
 index 0000000..637aa2a
@@ -1056,6 +1301,511 @@ index 0000000..c348e5d
 +#define MCHP_PORT_PIN(group, pin) (((group) - 'A') * 32 + (pin))
 +
 +#endif /* HW_GPIO_MCHP_PORT_H */
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index 51c5a46..2d54c90 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -251,7 +251,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_TPM_TIS_I2C') ? ['tpm-tis-i2c-test', 'tpm-tis-i2c-swtpm-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-jh-port-test.c b/tests/qtest/pic32cm-jh-port-test.c
+new file mode 100644
+index 0000000..69a34c9
+--- /dev/null
++++ b/tests/qtest/pic32cm-jh-port-test.c
+@@ -0,0 +1,241 @@
++/*
++ * QTest for the PORT of the PIC32CM JH01 (pic32cm-jh01-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Addresses and values come from DS60001632H chapter 27, not from the
++ * generated tables, so the test checks them.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++#include "qobject/qdict.h"
++
++#define MACHINE         "-M pic32cm-jh01-cpro "
++
++#define PORT            0x41000000
++#define PORT_IOBUS      0x60000000
++#define GROUP(g)        (PORT + (g) * 0x80)
++#define PA              GROUP(0)
++#define PB              GROUP(1)
++#define PC              GROUP(2)
++
++#define P_DIR           0x00
++#define P_DIRCLR        0x04
++#define P_DIRSET        0x08
++#define P_DIRTGL        0x0C
++#define P_OUT           0x10
++#define P_OUTCLR        0x14
++#define P_OUTSET        0x18
++#define P_OUTTGL        0x1C
++#define P_IN            0x20
++#define P_WRCONFIG      0x28
++#define P_PMUX          0x30
++#define P_PINCFG        0x40
++
++#define PINCFG_PMUXEN   0x01
++#define PINCFG_INEN     0x02
++#define PINCFG_PULLEN   0x04
++
++#define SW0_PIN         19      /* PB19 */
++#define LED0_PIN        5       /* PC05 */
++
++static uint32_t port_prop(QTestState *qts, const char *name)
++{
++    QDict *rsp = qtest_qmp(qts, "{ 'execute': 'qom-get', 'arguments':"
++                           " { 'path': '/machine/soc/port',"
++                           " 'property': %s } }", name);
++    uint32_t value;
++
++    g_assert(qdict_haskey(rsp, "return"));
++    value = qdict_get_int(rsp, "return");
++    qobject_unref(rsp);
++    return value;
++}
++
++static void port_set(QTestState *qts, const char *name, uint32_t value)
++{
++    QDict *rsp = qtest_qmp(qts, "{ 'execute': 'qom-set', 'arguments':"
++                           " { 'path': '/machine/soc/port',"
++                           " 'property': %s, 'value': %u } }", name, value);
++
++    g_assert(qdict_haskey(rsp, "return"));
++    qobject_unref(rsp);
++}
++
++static void test_reset_values(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    for (unsigned g = 0; g < 3; g++) {
++        g_assert_cmphex(qtest_readl(qts, GROUP(g) + P_DIR), ==, 0);
++        g_assert_cmphex(qtest_readl(qts, GROUP(g) + P_OUT), ==, 0);
++        g_assert_cmphex(qtest_readl(qts, GROUP(g) + P_IN), ==, 0);
++        g_assert_cmphex(qtest_readl(qts, GROUP(g) + P_PINCFG), ==, 0);
++    }
++    /* PA30 (SWCLK) starts on function G (DS 27.7.13) */
++    g_assert_cmphex(qtest_readb(qts, PA + P_PMUX + 15), ==, 0x06);
++    qtest_quit(qts);
++}
++
++static void test_set_clr_tgl(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, PC + P_DIRSET, 0x00000021);
++    g_assert_cmphex(qtest_readl(qts, PC + P_DIR), ==, 0x00000021);
++    g_assert_cmphex(qtest_readl(qts, PC + P_DIRSET), ==, 0x00000021);
++    qtest_writel(qts, PC + P_DIRCLR, 0x00000001);
++    g_assert_cmphex(qtest_readl(qts, PC + P_DIR), ==, 0x00000020);
++    qtest_writel(qts, PC + P_DIRTGL, 0x00000030);
++    g_assert_cmphex(qtest_readl(qts, PC + P_DIR), ==, 0x00000010);
++
++    qtest_writel(qts, PC + P_OUTSET, 0x80000003);
++    g_assert_cmphex(qtest_readl(qts, PC + P_OUT), ==, 0x80000003);
++    qtest_writel(qts, PC + P_OUTCLR, 0x00000001);
++    g_assert_cmphex(qtest_readl(qts, PC + P_OUT), ==, 0x80000002);
++    qtest_writel(qts, PC + P_OUTTGL, 0x80000004);
++    g_assert_cmphex(qtest_readl(qts, PC + P_OUT), ==, 0x00000006);
++
++    /* The other groups are untouched */
++    g_assert_cmphex(qtest_readl(qts, PB + P_DIR), ==, 0);
++    g_assert_cmphex(qtest_readl(qts, PB + P_OUT), ==, 0);
++    qtest_quit(qts);
++}
++
++static void test_pincfg_pmux(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    /* PB10/PB11 to SERCOM4 (function D), as Harmony does */
++    qtest_writeb(qts, PB + P_PINCFG + 10, PINCFG_PMUXEN);
++    qtest_writeb(qts, PB + P_PINCFG + 11, PINCFG_PMUXEN | PINCFG_INEN);
++    qtest_writeb(qts, PB + P_PMUX + 5, 0x33);
++    g_assert_cmphex(qtest_readb(qts, PB + P_PINCFG + 10), ==, PINCFG_PMUXEN);
++    g_assert_cmphex(qtest_readb(qts, PB + P_PINCFG + 11), ==,
++                    PINCFG_PMUXEN | PINCFG_INEN);
++    g_assert_cmphex(qtest_readl(qts, PB + P_PINCFG + 8), ==, 0x03010000);
++    g_assert_cmphex(qtest_readb(qts, PB + P_PMUX + 5), ==, 0x33);
++
++    /*
++     * P_WRCONFIG: PINMASK PB16/PB17 (HWSEL), WRPMUX + WRPINCFG, P_PMUX 2,
++     * PMUXEN + INEN
++     */
++    qtest_writel(qts, PB + P_WRCONFIG,
++                 BIT(31) | BIT(30) | BIT(28) | (2 << 24) | (0x03 << 16) |
++                 0x0003);
++    g_assert_cmphex(qtest_readb(qts, PB + P_PINCFG + 16), ==,
++                    PINCFG_PMUXEN | PINCFG_INEN);
++    g_assert_cmphex(qtest_readb(qts, PB + P_PINCFG + 17), ==,
++                    PINCFG_PMUXEN | PINCFG_INEN);
++    g_assert_cmphex(qtest_readb(qts, PB + P_PINCFG + 18), ==, 0);
++    g_assert_cmphex(qtest_readb(qts, PB + P_PMUX + 8), ==, 0x22);
++    /* P_WRCONFIG reads as 0 */
++    g_assert_cmphex(qtest_readl(qts, PB + P_WRCONFIG), ==, 0);
++    qtest_quit(qts);
++}
++
++static void test_iobus_alias(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, PORT_IOBUS + 0x80 + P_DIRSET, BIT(7));
++    g_assert_cmphex(qtest_readl(qts, PB + P_DIR), ==, BIT(7));
++    qtest_writel(qts, PB + P_OUTSET, BIT(7));
++    g_assert_cmphex(qtest_readl(qts, PORT_IOBUS + 0x80 + P_OUT), ==, BIT(7));
++    qtest_quit(qts);
++}
++
++static void test_in(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    /* An output reads back through P_IN only with the input buffer on */
++    qtest_writel(qts, PA + P_DIRSET, BIT(3));
++    qtest_writel(qts, PA + P_OUTSET, BIT(3));
++    g_assert_cmphex(qtest_readl(qts, PA + P_IN), ==, 0);
++    qtest_writeb(qts, PA + P_PINCFG + 3, PINCFG_INEN);
++    g_assert_cmphex(qtest_readl(qts, PA + P_IN), ==, BIT(3));
++
++    /* A floating input with a pull-up (P_OUT = 1) reads 1, pull-down 0 */
++    qtest_writeb(qts, PA + P_PINCFG + 4, PINCFG_INEN | PINCFG_PULLEN);
++    qtest_writel(qts, PA + P_OUTSET, BIT(4));
++    g_assert_cmphex(qtest_readl(qts, PA + P_IN) & BIT(4), ==, BIT(4));
++    qtest_writel(qts, PA + P_OUTCLR, BIT(4));
++    g_assert_cmphex(qtest_readl(qts, PA + P_IN) & BIT(4), ==, 0);
++
++    /* External drivers through QOM win over the pull */
++    qtest_writel(qts, PA + P_OUTSET, BIT(4));
++    port_set(qts, "pa-in", 0);
++    g_assert_cmphex(qtest_readl(qts, PA + P_IN) & BIT(4), ==, 0);
++    g_assert_cmphex(port_prop(qts, "pa-in-mask"), ==, 0xFFFFFFFF);
++    port_set(qts, "pa-in-mask", 0);
++    g_assert_cmphex(qtest_readl(qts, PA + P_IN) & BIT(4), ==, BIT(4));
++
++    /* The PORT's own output beats the external driver */
++    port_set(qts, "pa-in", 0);
++    g_assert_cmphex(qtest_readl(qts, PA + P_IN) & BIT(3), ==, BIT(3));
++    qtest_quit(qts);
++}
++
++static void test_sw0(void)
++{
++    QTestState *qts = qtest_init(MACHINE "-machine sw0-pressed=on");
++
++    /* SW0 pulls PB19 to ground; Harmony enables INEN and the pull-up */
++    qtest_writeb(qts, PB + P_PINCFG + SW0_PIN, PINCFG_INEN | PINCFG_PULLEN);
++    qtest_writel(qts, PB + P_OUTSET, BIT(SW0_PIN));
++    g_assert_cmphex(qtest_readl(qts, PB + P_IN) & BIT(SW0_PIN), ==, 0);
++
++    qtest_qom_set_bool(qts, "/machine", "sw0-pressed", false);
++    g_assert_cmphex(qtest_readl(qts, PB + P_IN) & BIT(SW0_PIN), ==,
++                    BIT(SW0_PIN));
++    qtest_qom_set_bool(qts, "/machine", "sw0-pressed", true);
++    g_assert_cmphex(qtest_readl(qts, PB + P_IN) & BIT(SW0_PIN), ==, 0);
++    qtest_quit(qts);
++}
++
++static void test_gpio_out(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++    unsigned led = 2 * 32 + LED0_PIN;
++
++    qtest_irq_intercept_out_named(qts, "/machine/soc/port", "port-out");
++
++    /* PC05 as an output, high: LED0 off */
++    qtest_writel(qts, PC + P_OUTSET, BIT(LED0_PIN));
++    g_assert_cmphex(port_prop(qts, "pc-out-mask"), ==, 0);
++    qtest_writel(qts, PC + P_DIRSET, BIT(LED0_PIN));
++    g_assert_cmphex(port_prop(qts, "pc-out-mask"), ==, BIT(LED0_PIN));
++    g_assert_cmphex(port_prop(qts, "pc-out"), ==, BIT(LED0_PIN));
++    g_assert_true(qtest_get_irq(qts, led));
++
++    /* Low: LED0 on */
++    qtest_writel(qts, PC + P_OUTTGL, BIT(LED0_PIN));
++    g_assert_cmphex(port_prop(qts, "pc-out"), ==, 0);
++    g_assert_false(qtest_get_irq(qts, led));
++
++    /* Handing the pin to a peripheral releases the pad */
++    qtest_writeb(qts, PC + P_PINCFG + LED0_PIN, PINCFG_PMUXEN);
++    g_assert_cmphex(port_prop(qts, "pc-out-mask"), ==, 0);
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++
++    qtest_add_func("pic32cm-jh/port/reset-values", test_reset_values);
++    qtest_add_func("pic32cm-jh/port/set-clr-tgl", test_set_clr_tgl);
++    qtest_add_func("pic32cm-jh/port/pincfg-pmux", test_pincfg_pmux);
++    qtest_add_func("pic32cm-jh/port/iobus-alias", test_iobus_alias);
++    qtest_add_func("pic32cm-jh/port/in", test_in);
++    qtest_add_func("pic32cm-jh/port/sw0", test_sw0);
++    qtest_add_func("pic32cm-jh/port/gpio-out", test_gpio_out);
++
++    return g_test_run();
++}
+diff --git a/tests/qtest/pic32cm-jh-sercom-test.c b/tests/qtest/pic32cm-jh-sercom-test.c
+new file mode 100644
+index 0000000..42e69bb
+--- /dev/null
++++ b/tests/qtest/pic32cm-jh-sercom-test.c
+@@ -0,0 +1,239 @@
++/*
++ * QTest for the SERCOM USART of the PIC32CM JH01 (pic32cm-jh01-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Addresses and values come from DS60001632H chapter 30, not from the
++ * generated tables, so the test checks them. SERCOM4 is the EDBG virtual
++ * COM port, the first -serial of the board.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++#include "qemu/sockets.h"
++
++#define MACHINE         "-M pic32cm-jh01-cpro "
++
++#define SERCOM4         0x42001400
++#define SERCOM4_IRQ     13
++
++#define U_CTRLA         0x00
++#define U_CTRLB         0x04
++#define U_BAUD          0x0C
++#define U_INTENCLR      0x14
++#define U_INTENSET      0x16
++#define U_INTFLAG       0x18
++#define U_STATUS        0x1A
++#define U_SYNCBUSY      0x1C
++#define U_DATA          0x28
++
++#define INT_DRE         0x01
++#define INT_TXC         0x02
++#define INT_RXC         0x04
++
++/* USART_INT, LSB first, RXPO 3, TXPO 1, as Harmony sets it for the VCOM */
++#define U_CTRLA_VCOM    0x40310004
++#define U_CTRLA_ENABLE  0x00000002
++#define U_CTRLB_TXEN    0x00010000
++#define U_CTRLB_RXEN    0x00020000
++#define U_BAUD_115200   63019
++
++#define NVIC_ISPR       0xE000E200
++#define NVIC_ICPR       0xE000E280
++
++static uint32_t sercom_readb(QTestState *qts, uint32_t reg)
++{
++    return qtest_readb(qts, SERCOM4 + reg);
++}
++
++static bool irq_pending(QTestState *qts)
++{
++    return qtest_readl(qts, NVIC_ISPR) & BIT(SERCOM4_IRQ);
++}
++
++static void irq_clear(QTestState *qts)
++{
++    qtest_writel(qts, NVIC_ICPR, BIT(SERCOM4_IRQ));
++}
++
++/* Program the VCOM settings and enable the USART */
++static void usart_enable(QTestState *qts, uint32_t ctrlb)
++{
++    qtest_writel(qts, SERCOM4 + U_CTRLA, U_CTRLA_VCOM);
++    qtest_writew(qts, SERCOM4 + U_BAUD, U_BAUD_115200);
++    qtest_writel(qts, SERCOM4 + U_CTRLB, ctrlb);
++    qtest_writel(qts, SERCOM4 + U_CTRLA, U_CTRLA_VCOM | U_CTRLA_ENABLE);
++}
++
++static void wait_for_flag(QTestState *qts, uint32_t flag)
++{
++    for (int i = 0; i < 5000; i++) {
++        if (sercom_readb(qts, U_INTFLAG) & flag) {
++            return;
++        }
++        g_usleep(1000);
++    }
++    g_assert_not_reached();
++}
++
++static void test_reset_values(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    g_assert_cmphex(qtest_readl(qts, SERCOM4 + U_CTRLA), ==, 0);
++    g_assert_cmphex(qtest_readl(qts, SERCOM4 + U_CTRLB), ==, 0);
++    g_assert_cmphex(qtest_readw(qts, SERCOM4 + U_BAUD), ==, 0);
++    g_assert_cmphex(sercom_readb(qts, U_INTENSET), ==, 0);
++    g_assert_cmphex(sercom_readb(qts, U_INTFLAG), ==, 0);
++    g_assert_cmphex(qtest_readw(qts, SERCOM4 + U_STATUS), ==, 0);
++    g_assert_cmphex(qtest_readl(qts, SERCOM4 + U_SYNCBUSY), ==, 0);
++    g_assert_cmphex(qtest_readw(qts, SERCOM4 + U_DATA), ==, 0);
++
++    /* DRE needs the transmitter: enabled USART and U_CTRLB.TXEN */
++    qtest_writel(qts, SERCOM4 + U_CTRLA, U_CTRLA_VCOM | U_CTRLA_ENABLE);
++    g_assert_cmphex(sercom_readb(qts, U_INTFLAG), ==, 0);
++    qtest_quit(qts);
++}
++
++static void test_tx(void)
++{
++    int sock;
++    QTestState *qts = qtest_init_with_serial(MACHINE, &sock);
++    char c;
++
++    usart_enable(qts, U_CTRLB_TXEN | U_CTRLB_RXEN);
++    g_assert_cmphex(sercom_readb(qts, U_INTFLAG), ==, INT_DRE);
++
++    qtest_writew(qts, SERCOM4 + U_DATA, 'P');
++    g_assert_cmpint(recv(sock, &c, 1, 0), ==, 1);
++    g_assert_cmpint(c, ==, 'P');
++    g_assert_cmphex(sercom_readb(qts, U_INTFLAG), ==, INT_DRE | INT_TXC);
++
++    /* W1C clears TXC; DRE and RXC follow the buffers only */
++    qtest_writeb(qts, SERCOM4 + U_INTFLAG, 0xFF);
++    g_assert_cmphex(sercom_readb(qts, U_INTFLAG), ==, INT_DRE);
++
++    /* Writing U_DATA clears TXC too, until the frame is out */
++    qtest_writew(qts, SERCOM4 + U_DATA, 'X');
++    g_assert_cmpint(recv(sock, &c, 1, 0), ==, 1);
++    g_assert_cmpint(c, ==, 'X');
++
++    closesocket(sock);
++    qtest_quit(qts);
++}
++
++static void test_intenset_alias(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    usart_enable(qts, U_CTRLB_TXEN);
++    g_assert_false(irq_pending(qts));
++
++    qtest_writeb(qts, SERCOM4 + U_INTENSET, INT_DRE);
++    g_assert_cmphex(sercom_readb(qts, U_INTENSET), ==, INT_DRE);
++    g_assert_cmphex(sercom_readb(qts, U_INTENCLR), ==, INT_DRE);
++    g_assert_true(irq_pending(qts));
++
++    qtest_writeb(qts, SERCOM4 + U_INTENCLR, INT_DRE);
++    g_assert_cmphex(sercom_readb(qts, U_INTENSET), ==, 0);
++    irq_clear(qts);
++    g_assert_false(irq_pending(qts));
++    qtest_quit(qts);
++}
++
++static void test_rx(void)
++{
++    int sock;
++    QTestState *qts = qtest_init_with_serial(MACHINE, &sock);
++
++    usart_enable(qts, U_CTRLB_TXEN | U_CTRLB_RXEN);
++    qtest_writeb(qts, SERCOM4 + U_INTENSET, INT_RXC);
++    g_assert_false(irq_pending(qts));
++
++    g_assert_cmpint(send(sock, "ab", 2, 0), ==, 2);
++    wait_for_flag(qts, INT_RXC);
++    g_assert_true(irq_pending(qts));
++
++    /* A debugger read (gdbstub, monitor x) does not pop the receive buffer */
++    g_free(qtest_hmp(qts, "x /1hx 0x%x", SERCOM4 + U_DATA));
++    g_assert_cmphex(sercom_readb(qts, U_INTFLAG) & INT_RXC, ==, INT_RXC);
++
++    /* W1C does not clear RXC */
++    qtest_writeb(qts, SERCOM4 + U_INTFLAG, INT_RXC);
++    g_assert_cmphex(sercom_readb(qts, U_INTFLAG) & INT_RXC, ==, INT_RXC);
++
++    g_assert_cmphex(qtest_readw(qts, SERCOM4 + U_DATA), ==, 'a');
++    wait_for_flag(qts, INT_RXC);
++    g_assert_cmphex(qtest_readw(qts, SERCOM4 + U_DATA), ==, 'b');
++    g_assert_cmphex(sercom_readb(qts, U_INTFLAG) & INT_RXC, ==, 0);
++    irq_clear(qts);
++    g_assert_false(irq_pending(qts));
++
++    /* Disabling the receiver flushes it */
++    g_assert_cmpint(send(sock, "c", 1, 0), ==, 1);
++    wait_for_flag(qts, INT_RXC);
++    qtest_writel(qts, SERCOM4 + U_CTRLB, U_CTRLB_TXEN);
++    g_assert_cmphex(sercom_readb(qts, U_INTFLAG) & INT_RXC, ==, 0);
++
++    closesocket(sock);
++    qtest_quit(qts);
++}
++
++static void test_status_w1c(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    usart_enable(qts, U_CTRLB_TXEN | U_CTRLB_RXEN);
++    /* Writing 1 never sets a flag, and CTS is read-only */
++    qtest_writew(qts, SERCOM4 + U_STATUS, 0xFFFF);
++    g_assert_cmphex(qtest_readw(qts, SERCOM4 + U_STATUS), ==, 0);
++    qtest_quit(qts);
++}
++
++static void test_enable_protect(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    usart_enable(qts, U_CTRLB_TXEN | U_CTRLB_RXEN);
++
++    /* U_BAUD and U_CTRLA (but ENABLE and SWRST) are enable-protected */
++    qtest_writew(qts, SERCOM4 + U_BAUD, 0x1234);
++    g_assert_cmphex(qtest_readw(qts, SERCOM4 + U_BAUD), ==, U_BAUD_115200);
++    qtest_writel(qts, SERCOM4 + U_CTRLA, U_CTRLA_ENABLE);
++    g_assert_cmphex(qtest_readl(qts, SERCOM4 + U_CTRLA), ==,
++                    U_CTRLA_VCOM | U_CTRLA_ENABLE);
++
++    /* U_CTRLB: only RXEN and TXEN may change while enabled */
++    qtest_writel(qts, SERCOM4 + U_CTRLB, U_CTRLB_RXEN | 0x5);
++    g_assert_cmphex(qtest_readl(qts, SERCOM4 + U_CTRLB), ==, U_CTRLB_RXEN);
++    g_assert_cmphex(sercom_readb(qts, U_INTFLAG) & INT_DRE, ==, 0);
++
++    /* Once disabled, everything is writable again */
++    qtest_writel(qts, SERCOM4 + U_CTRLA, U_CTRLA_VCOM);
++    qtest_writew(qts, SERCOM4 + U_BAUD, 0x1234);
++    g_assert_cmphex(qtest_readw(qts, SERCOM4 + U_BAUD), ==, 0x1234);
++
++    /* SWRST returns every register to its reset value */
++    qtest_writel(qts, SERCOM4 + U_CTRLA, 0x1);
++    g_assert_cmphex(qtest_readl(qts, SERCOM4 + U_CTRLA), ==, 0);
++    g_assert_cmphex(qtest_readw(qts, SERCOM4 + U_BAUD), ==, 0);
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++
++    qtest_add_func("pic32cm-jh/sercom/reset-values", test_reset_values);
++    qtest_add_func("pic32cm-jh/sercom/tx", test_tx);
++    qtest_add_func("pic32cm-jh/sercom/intenset-alias", test_intenset_alias);
++    qtest_add_func("pic32cm-jh/sercom/rx", test_rx);
++    qtest_add_func("pic32cm-jh/sercom/status-w1c", test_status_w1c);
++    qtest_add_func("pic32cm-jh/sercom/enable-protect", test_enable_protect);
++
++    return g_test_run();
++}
 -- 
-2.51.2.windows.1
+2.53.0.windows.2
 

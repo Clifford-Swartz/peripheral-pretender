@@ -26,6 +26,13 @@ def server_params(qemu_path=None):
                                  cwd=PROJECT_ROOT, env=env)
 
 
+def field(obj, name):
+    """Read a result field: mcp 1.x spells it camelCase (structuredContent),
+    mcp 2.x snake_case (structured_content)."""
+    snake = "".join("_" + c.lower() if c.isupper() else c for c in name)
+    return getattr(obj, snake) if hasattr(obj, snake) else getattr(obj, name)
+
+
 def call_server(calls, qemu_path=None):
     """Run [(tool, arguments)] in one server session; return the tool list
     and the results."""
@@ -45,11 +52,11 @@ def test_tools_are_listed():
     tools, _ = call_server([])
     by_name = {t.name: t for t in tools.tools}
     assert set(by_name) == {"twin_run", "twin_machines"}
-    schema = by_name["twin_run"].inputSchema
+    schema = field(by_name["twin_run"], "inputSchema")
     assert list(schema["properties"])[:4] == ["elf_path", "timeout_s",
                                               "input_text", "icount_shift"]
     assert schema["required"] == ["elf_path"]
-    assert by_name["twin_run"].outputSchema is not None
+    assert field(by_name["twin_run"], "outputSchema") is not None
 
 
 @pytest.mark.qemu
@@ -65,21 +72,21 @@ def test_twin_run_and_machines(qemu_path, mps2_images):
         ("twin_run", {"elf_path": "no/such.elf", "machine": "mps2-an385"}),
     ], qemu_path)
 
-    info = machines.structuredContent
+    info = field(machines, "structuredContent")
     assert info["default_machine"] == "pic32cm-jh01-cpro"
     assert "mps2-an385" in {m["name"] for m in info["machines"]}
 
-    result = exited.structuredContent
-    assert not exited.isError
+    result = field(exited, "structuredContent")
+    assert not field(exited, "isError")
     assert (result["exit_code"], result["status"]) == (0, "exit")
     assert result["uart"].endswith("PP:EXIT 0\n")
     assert result["unimplemented_summary"]["total"] == 6
     assert set(result) >= {"exit_code", "uart", "unimplemented_summary",
                            "qemu_stderr_tail", "duration_s"}
 
-    result = echoed.structuredContent
+    result = field(echoed, "structuredContent")
     assert result["exit_code"] == 9
     assert "echo: from mcp\n" in result["uart"]
 
-    assert missing.isError
+    assert field(missing, "isError")
     assert "ELF not found" in missing.content[0].text

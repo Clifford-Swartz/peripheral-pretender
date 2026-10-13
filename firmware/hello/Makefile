@@ -25,7 +25,7 @@ SRCS     := src/main.c src/console.c src/sys_init.c dfp/startup_$(DEVICE).c
 OBJS     := $(SRCS:%.c=$(BUILD)/%.o)
 
 ARCH     := -mcpu=cortex-m0plus -mthumb
-CPPFLAGS := -Isrc -isystem $(DFP)/include -isystem $(CMSIS)
+CPPFLAGS := -Isrc -isystem "$(DFP)/include" -isystem "$(CMSIS)"
 CFLAGS   := $(ARCH) -std=gnu11 -Os -g -ffunction-sections -fdata-sections \
             -Wall -Wextra -MMD -MP
 # The DFP startup replaces newlib's crt0 (-nostartfiles) but still calls

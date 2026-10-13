@@ -2,14 +2,18 @@
 
 ## Status
 - [x] read contract + research (boot-path finding 18, busy-wait table, overlay), part A code
-- [ ] include/hw/char/mchp_sercom.h + hw/char/mchp_sercom.c
-- [ ] include/hw/gpio/mchp_port.h + hw/gpio/mchp_port.c
-- [ ] Kconfig/meson/trace-events (hw/char, hw/gpio); PIC32CM_JH_SOC selects MCHP_SERCOM/MCHP_PORT; board selects LED
-- [ ] SoC model table (2 lines) + board LED0 (PC05 -> port-out[69]) / sw0-pressed (PB19 port-in[51])
-- [ ] qtests pic32cm-jh-sercom-test.c + pic32cm-jh-port-test.c (+ tests/qtest/meson.build)
-- [ ] docs/system/arm/pic32cm-jh01-cpro.rst update
-- [ ] e2e: py -m tools.pp run firmware/hello/build/hello.elf -> 0; -trace led_set_intensity; MCP twin_run
-- [ ] regression qtests (pic32cm-jh-test, microbit, stm32l4x5 x5, device-introspect, qom-test, test-hmp)
+- [x] include/hw/char/mchp_sercom.h + hw/char/mchp_sercom.c
+- [x] include/hw/gpio/mchp_port.h + hw/gpio/mchp_port.c
+- [x] Kconfig/meson/trace-events (hw/char, hw/gpio); PIC32CM_JH_SOC selects MCHP_SERCOM/MCHP_PORT; board selects LED
+- [x] SoC model table (2 lines) + board LED0 (PC05 -> port-out[69]) / sw0-pressed (PB19 port-in[51])
+- [x] qtests pic32cm-jh-sercom-test.c + pic32cm-jh-port-test.c (+ tests/qtest/meson.build)
+- [x] docs/system/arm/pic32cm-jh01-cpro.rst update
+- [x] e2e: py -m tools.pp run firmware/hello/build/hello.elf -> 0; -trace led_set_intensity; MCP twin_run
+- [x] regression qtests (pic32cm-jh-test, microbit, stm32l4x5 x5, device-introspect, qom-test, test-hmp)
+
+## Done 2026-10-13
+All items finished on the personal PC; results in docs/handoff.md ("Part B result"). The qtests
+live in the two new files, not in pic32cm-jh-test.c.
 
 ## Design decisions
 - Both types subclass mchp-regblock (part A), state private in .c, type names in headers.
