@@ -1,5 +1,5 @@
 /*
- * EDBG VCOM console on SERCOM4.
+ * EDBG VCOM console on the board's SERCOM (VCOM_USART).
  *
  * Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
  */
@@ -18,7 +18,7 @@ void console_put_dec(uint32_t value);
 void console_flush(void);           /* wait until the last stop bit is out */
 
 /*
- * Interrupt-driven output: SERCOM4_Handler sends @s, one byte per DRE
+ * Interrupt-driven output: VCOM_Handler sends @s, one byte per DRE
  * interrupt.  Do not use the blocking functions while it is busy.
  * console_irq_cancel() returns the part of @s that was not sent.
  */

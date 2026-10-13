@@ -73,7 +73,11 @@ def test_device_types_header_exists():
 def test_each_header_compiles_alone(generated, gcc, tmp_path):
     failures = {}
     names = headers(generated)
-    assert len(names) == 34
+    # 32 shared constant headers, 31 register-table headers of the device,
+    # and its _gen.h, _nvmrows.h and _device.h
+    assert len([n for n in names if n.count("/") == 3]) == 32
+    assert len([n for n in names if "/gen/pic32cm5164jh01100/" in n]) == 31
+    assert len(names) == 66
     for i, inc in enumerate(names):
         src = tmp_path / f"h{i}.c"
         src.write_text(PRELUDE + f'#include "{inc}"\n', encoding="utf-8")
@@ -116,7 +120,7 @@ int main(int argc, char **argv)
                         str(src), "-o", str(exe)])
     assert res.returncode == 0 and not res.stderr, res.stderr
     subprocess.run([str(exe), str(out)], check=True, env=gcc_env(gcc), timeout=60)
-    assert out.read_bytes() == nvmrows.image(ds.device)
+    assert out.read_bytes() == nvmrows.image(ds.device, ds.profile.nvm_rows)
 
 
 @pytest.mark.skipif(not (QEMU / "build" / "config-host.h").exists(),

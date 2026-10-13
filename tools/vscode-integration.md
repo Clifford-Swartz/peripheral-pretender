@@ -44,7 +44,7 @@ and upper-case register names that the backlog uses.
     "label": "twin: start paused",
     "type": "process",
     "command": "py",
-    "args": ["-m", "tools.pp", "run", "${workspaceFolder}/firmware/hello/build/hello.elf",
+    "args": ["-m", "tools.pp", "run", "${workspaceFolder}/firmware/hello/build/pic32cm_jh01_cpro/hello.elf",
              "--gdb", "1234"],
     "options": { "cwd": "${workspaceFolder}" },
     "isBackground": true,
@@ -68,7 +68,7 @@ and upper-case register names that the backlog uses.
     "name": "hello on the twin",
     "type": "cppdbg",
     "request": "launch",
-    "program": "${workspaceFolder}/firmware/hello/build/hello.elf",
+    "program": "${workspaceFolder}/firmware/hello/build/pic32cm_jh01_cpro/hello.elf",
     "cwd": "${workspaceFolder}",
     "MIMode": "gdb",
     "miDebuggerPath": "C:/msys64/ucrt64/bin/gdb-multiarch.exe",
@@ -93,7 +93,7 @@ that dashboards and the silicon harness diff against (`harness/hw_run.py` uses t
 and `uart` field):
 
 ```sh
-py -m tools.pp run firmware/hello/build/hello.elf --icount 4 --timeout 60 --json > twin-hello.json
+py -m tools.pp run firmware/hello/build/pic32cm_jh01_cpro/hello.elf --icount 4 --timeout 60 --json > twin-hello.json
 ```
 
 `--icount` makes guest time deterministic (instruction-count based, idle time skipped), so timing

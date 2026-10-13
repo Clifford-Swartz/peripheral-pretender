@@ -366,7 +366,10 @@ class _RegBuilder:
 
     def fmask(self, names, what: str) -> int:
         mask = 0
+        optional = set(self.rules.optional_fields) if self.rules else set()
         for n in names:
+            if n not in self.fields and n in optional:
+                continue
             if n not in self.fields:
                 self.ctx.error(f"{self.slot.name}.{n} ({what}) is not an ATDF "
                                f"field; fields are {sorted(self.fields)}")
@@ -565,7 +568,12 @@ class _ViewBuilder:
 
     def build(self, prefix: str) -> ViewSem:
         rules = self.rules.registers if self.rules else {}
-        unknown = sorted(set(rules) - {s.reg.name for s in self.slots})
+        present = {s.reg.name for s in self.slots}
+        unknown = sorted(n for n in set(rules) - present
+                         if not rules[n].optional)
+        for name in sorted(n for n in set(rules) - present
+                           if rules[n].optional):
+            self.ctx.info(f"{name}: optional register absent on this device")
         if unknown:
             self.ctx.error(f"overlay names registers absent from the ATDF: "
                            f"{unknown}")

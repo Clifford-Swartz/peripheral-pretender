@@ -13,6 +13,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0004 | part A: register-file helper, generic regblock, clock and system models, SoC, `pic32cm-jh01-cpro` board, qtest, board docs |
 | 0005 | part B: SERCOM USART and PORT models, LED0 and SW0 on the board, SERCOM and PORT qtests |
 | 0006 | review fixes: clock migration, SERCOM loadvm, ICSR.RETTOBASE on ARMv6-M, unimplemented-write log cap, WDT CONFIG/EWCTRL protection |
+| 0007 | generic `pic32cm-soc` built from generated device descriptors; PIC32CM1216MC00048 and the `pic32cm-mc00-cpro` board; tables regenerated for both devices (shared constants, per-device tables); MC00 qtest and board docs |
 
 ## Setting it up
 
@@ -54,9 +55,9 @@ Once the fork grows, it may be easier to keep it as its own private GitHub repo 
 ## Running
 
 ```
-../pp-qemu/build/qemu-system-arm -M pic32cm-jh01-cpro -kernel firmware/hello/build/hello.elf \
+../pp-qemu/build/qemu-system-arm -M pic32cm-jh01-cpro -kernel firmware/hello/build/pic32cm_jh01_cpro/hello.elf \
     -display none -serial stdio -d unimp,guest_errors
-python -m tools.pp run firmware/hello/build/hello.elf     # runner: UART transcript + exit code
+python -m tools.pp run firmware/hello/build/pic32cm_jh01_cpro/hello.elf     # runner: UART transcript + exit code
 ```
 
 For a debugger, use `-gdb tcp:127.0.0.1:1234 -S`, not `-s`. On Windows, `-s` listens on every

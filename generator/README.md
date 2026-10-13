@@ -4,9 +4,10 @@ Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE). Open questions ke
 while pp-qemu is GPLv2; GPL obligations when shipping binaries; AI-generated
 code.
 
-The generator reads a device ATDF from the DFP and the per-IP behavior
-overlays in `overlays/`. From them it writes the register tables and device
-description that the pp-qemu models and the tools use (spec sections 5.2,
+The generator reads device ATDFs from the DFPs, the per-IP behavior overlays
+in `overlays/` and the per-device profiles in `profiles/`. From them it
+writes the register tables and device descriptions that the pp-qemu models
+and the tools use (spec sections 5.2,
 5.3 and 6.1 in `docs/design/v0-vertical-slice.md`). Dependencies: Python 3.10+
 standard library and PyYAML.
 
@@ -19,18 +20,24 @@ pp-qemu sits next to this repo):
 ```
 py generator/atdf2qemu.py \
     --atdf ~/.mchp_packs/Microchip/PIC32CM-JH_DFP/1.3.221/PIC32CM-JH01/atdf/PIC32CM5164JH01100.atdf \
+    --atdf ~/.mchp_packs/Microchip/PIC32CM-MC_DFP/1.4.67/PIC32CM1216MC00048/atdf/PIC32CM1216MC00048.atdf \
     --qemu-out ../pp-qemu \
     --json-out devices \
-    --report generator/out/report-pic32cm5164jh01100.md
+    --report "generator/out/report-{device}.md"
 ```
+
+Always pass every supported device: the per-IP constant headers are merged
+over all of them, so generating one device alone rewrites the shared headers
+for that device only.
 
 | option | meaning |
 |---|---|
-| `--atdf FILE` | device ATDF (required); the DFP name and version come from the `.pdsc` above it |
+| `--atdf FILE` | device ATDF (required, repeatable); the DFP name and version come from the `.pdsc` above it |
 | `--overlays DIR` | overlay directory (default `overlays/` of this repo) |
+| `--profiles DIR` | device profile directory (default `profiles/`); every device needs `<device>.yaml` |
 | `--qemu-out DIR` | pp-qemu source root; C headers are written under it |
 | `--json-out DIR` | directory for `<device>.json` |
-| `--report FILE` | Markdown provenance report |
+| `--report FILE` | Markdown provenance report; with several ATDFs the path must contain `{device}` |
 | `--check` | write nothing; exit 1 if any output is missing or stale (for CI) |
 | `-v` | print informational diagnostics as well as warnings |
 
@@ -45,15 +52,41 @@ overlay, unknown register or field, inconsistent ATDF).
 
 | file | content |
 |---|---|
-| `pp-qemu/include/hw/mchp/gen/<ip>_<id>.h` | one per IP: `REGn`/`FIELD` constants, value-group constants, `MchpRegInfo` tables per view, reset overrides, fuse-loaded resets, the view table for multi-mode IPs |
-| `pp-qemu/include/hw/arm/<device>_gen.h` | memory segments, `MchpInstanceInfo` table (all 55 instances), NVIC lines and OR-gate sizes, GCLK channel users, DMAC triggers, pad signals |
+| `pp-qemu/include/hw/mchp/gen/<ip>_<id>.h` | one per IP, shared by every device that has it: `REGn`/`FIELD` constants, value-group constants, view selector constants |
+| `pp-qemu/include/hw/mchp/gen/<device>/<ip>_<id>.h` | per device: `MchpRegInfo` tables per view, reset overrides, fuse-loaded resets, the view table for multi-mode IPs |
+| `pp-qemu/include/hw/arm/<device>_gen.h` | memory segments, `MchpInstanceInfo` table, NVIC lines and OR-gate sizes, GCLK channel users, DMAC triggers, pad signals |
 | `pp-qemu/hw/arm/<device>_nvmrows.h` | `<device>_nvmrows_fill(buf, serial)`: the default 64 KiB NVM rows image (spec 4.3) |
+| `pp-qemu/hw/arm/<device>_device.h` | `<device>_device`, the `MchpDeviceInfo` the generic `pic32cm-soc` model is built from (memory map, tables above, CPUID, silicon revisions) |
 | `devices/<device>.json` | the same description for tools: memory, instances, IRQs, register maps (offset/size/count/reset/access/masks/flags/fields/provenance), signals, events, NVM rows |
 | `generator/out/report-<device>.md` | where every semantic came from (ATDF, overlay or heuristic), conflicts, missing initvals |
 
 `pp-qemu/include/hw/mchp/mchp_device.h` is written by hand, not generated.
 It defines `MchpInstanceInfo`, `MchpRegView`, `MchpFuseReset`, `MchpIrqLine`,
-`MchpMemSegment`, `MchpSignalInfo` and `MchpPeriphRef`. `MchpRegInfo` and
+`MchpMemSegment`, `MchpSignalInfo`, `MchpPeriphRef`, `MchpSiliconRev` and
+`MchpDeviceInfo`.
+
+### Several devices
+
+Devices often share an IP id while differing in details: the JH01 NVMCTRL
+has ECC registers the MC00 lacks, MCLK mask bits sit at different positions,
+EIC NMIFLAG is 8 bits on one and 16 on the other. The shared constant header
+is the merge:
+
+- registers and fields present on any device are defined; a register
+  widened on one device gets the wider `REGn`, a field widened at the same
+  position gets the wider `FIELD`;
+- a field at different bit positions on different devices, or a value name
+  that means different numbers (DSU.DID.DEVSEL part codes), is left out, so
+  a model that needs it fails to compile instead of being wrong on one
+  device;
+- a register at different offsets is an error.
+
+Array counts (`_COUNT`) are the largest; models take the real count from
+the device's table at run time (`mchp-port` groups, `mchp-gclk` channels).
+Devices with different IP ids of the same module (RTC 03608 on the JH01,
+U2250 on the MC00) define the same constant names differently, so the
+pp-qemu code includes one device's headers per translation unit
+(`hw/arm/<device>.c`). `MchpRegInfo` and
 `MchpResetOverride` come from `include/hw/misc/mchp_regfile.h` (spec 5.1).
 
 ### Generated C names
@@ -65,11 +98,11 @@ It defines `MchpInstanceInfo`, `MchpRegView`, `MchpFuseReset`, `MchpIrqLine`,
 | arrays | `#define MCHP_<...>_<REG>_COUNT n` (stride = size) |
 | field values | `#define MCHP_<...>_<REG>_<FIELD>_<VALUE> v` from ATDF value-groups |
 | nested groups (PORT) | constants are group-relative: `MCHP_PORT_GROUP_<REG>` plus `MCHP_PORT_GROUP_OFFSET/STRIDE/COUNT` |
-| register table | `mchp_<ip>[_<mode>]_regs[]`, `MCHP_<IP>[_<MODE>]_NREGS` |
-| register file size | `MCHP_<IP>_SIZE` (register extent rounded up to 4 bytes; PORT 0x180, DSU 0x2000) |
-| per-element reset exceptions | `mchp_<ip>[_<mode>]_reset_overrides[]`, `MCHP_<...>_NRESET_OVERRIDES` |
-| resets loaded from fuses | `mchp_<ip>_reset_from[]`, `MCHP_<IP>_NRESET_FROM` (`MchpFuseReset`) |
-| views of multi-mode IPs | `mchp_<ip>_views[]`, `MCHP_<IP>_NVIEWS`, `MCHP_<IP>_DEFAULT_VIEW`, selector `MCHP_<IP>_VIEW_SEL_OFFSET/_SHIFT/_LENGTH`, values `MCHP_<IP>_<SELFIELD>_<MODE>` |
+| register table | `<device>_<ip>[_<mode>]_regs[]`, `<DEVICE>_<IP>[_<MODE>]_NREGS` |
+| register file size | `<DEVICE>_<IP>_REGS_SIZE` (register extent rounded up to 4 bytes; JH01 PORT 0x180, MC00 PORT 0x100) |
+| per-element reset exceptions | `<device>_<ip>[_<mode>]_reset_overrides[]`, `<DEVICE>_<...>_NRESET_OVERRIDES` |
+| resets loaded from fuses | `<device>_<ip>_reset_from[]`, `<DEVICE>_<IP>_NRESET_FROM` (`MchpFuseReset`) |
+| views of multi-mode IPs | `<device>_<ip>_views[]`, `<DEVICE>_<IP>_NVIEWS`, `<DEVICE>_<IP>_DEFAULT_VIEW`; shared: selector `MCHP_<IP>_VIEW_SEL_OFFSET/_SHIFT/_LENGTH`, values `MCHP_<IP>_<SELFIELD>_<MODE>` |
 | constants-only groups | DMA/ICM descriptors, CAN message RAM elements, fuse rows: `MCHP_DMAC_DESCRIPTOR_*`, `MCHP_CAN_RXBE_*`, `MCHP_FUSES_USER_WORD_0_*` |
 | SoC tables | `<device>_instances[]` + `<DEVICE>_NUM_INSTANCES` + `<DEVICE>_INST_<NAME>` indexes; `<device>_irq_lines[]`; `<device>_mem_segments[]`; `<device>_signals[]`; `<device>_gclk_channels[]`; `<device>_dmac_triggers[]` |
 
@@ -114,6 +147,8 @@ reset_from: {CONFIG.PER: USER_FUSES.USER_WORD_0.WDT_PER}
 | `read_only: true`, `write_only: true` | `MCHP_F_READ_ONLY` (`wmask` 0), `MCHP_F_WRITE_ONLY` (`rdz` = impl) |
 | `irq_source: {enable: R}` | recorded in JSON/report (IRQ = flag & enable) |
 | `note: text` | carried into JSON and the report |
+| `optional: true` | the register may be absent on some devices (skipped there); absent registers without it are errors |
+| `optional_fields: [F..]` | fields of this register that may be absent on some devices; other unknown field names are errors |
 
 Top-level (or per-mode) keys:
 
@@ -123,6 +158,28 @@ Top-level (or per-mode) keys:
 * `reset_from`: `REG.FIELD: GROUP.REGISTER.FIELD` (or `{fuse: ..., invert:
   true}`) produces `MchpFuseReset` entries. Both sides are checked against the
   ATDF and must have the same width.
+
+## Device profiles
+
+One file per device, `profiles/<device-lowercase>.yaml`, for what belongs
+to the device rather than to an IP version. Profile reset overrides replace
+the overlay's override of the same register.
+
+```yaml
+device: PIC32CM1216MC00048
+references: ["DS60001638E Table 8-2 ..."]
+silicon_revisions: {A2: 1, A1: 0}     # name: DSU.DID.REVISION; default first
+reset_overrides:
+  DSU: {DID: 0x11070106}
+  NVMCTRL: {PARAM: 0x04030800}
+  SUPC: {VREG: 0x00000002}            # data sheet value where the ATDF is wrong
+nvm_rows:
+  user_row: [0xB15088FF, 0xFFFFF8BB]  # production user row
+  serial_addrs: [0x0080A00C, 0x0080A040, 0x0080A044, 0x0080A048]
+  serial_default: [0x50500000, 0x00000001, 0x00000002, 0x00000003]
+  words:                              # other words, e.g. the calibration row
+    - {addr: 0x00806020, value: 0x1103F924, what: "OTP5 word 0 ..."}
+```
 
 ## Heuristics (no overlay rule for that aspect)
 

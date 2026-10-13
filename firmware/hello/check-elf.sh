@@ -72,7 +72,7 @@ check_word "vector 0 (initial SP) = _estack" 0 "$(sym _estack)"
 check_vector 1 Reset_Handler
 check_vector 3 Dummy_Handler            # HardFault: the DFP default
 check_vector 15 Dummy_Handler           # SysTick: polled, never enabled
-check_vector $((16 + 13)) SERCOM4_Handler
+check_vector $((16 + ${VCOM_IRQ:-13})) "${VCOM_HANDLER:-SERCOM4_Handler}"
 
 entry=$("${cross}readelf" -h "$elf" | awk '/Entry point/ { print $4 }')
 if [ $((entry | 1)) -eq $(($(sym Reset_Handler) | 1)) ]; then

@@ -17,11 +17,10 @@ registers:
   INTFLAGA: {w1c: all}
   INTFLAGB: {w1c: all}
   INTFLAGC: {w1c: all}
-  INTFLAGD: {w1c: all}
+  INTFLAGD: {w1c: all, optional: true}            # no bridge D on MC00
   STATUSA: {note: "updated by the WRCTRL hook"}
   STATUSB: {note: "updated by the WRCTRL hook"}
   STATUSC: {note: "bit 24 is set at reset but has no ATDF bitfield"}
-  STATUSD: {note: "updated by the WRCTRL hook"}
+  STATUSD: {note: "updated by the WRCTRL hook", optional: true}
 reset_overrides:
   STATUSB: 0x00000002             # DSU write-protected
-  STATUSC: 0x09000000             # SMBIST (bit 27) and unnamed bit 24

@@ -3,6 +3,10 @@
 **2026-10-13:** set up on the personal PC and finished QEMU part B. The twin now runs `hello.elf`
 to `PP:EXIT 0` with an empty model backlog. See "Part B result" below.
 
+**2026-10-13, later:** second target, the **PIC32CM MC00 Curiosity Pro** (EV15N46A,
+PIC32CM1216MC00048, machine `pic32cm-mc00-cpro`). Its `hello.elf` reaches `PP:EXIT 0` with an
+empty backlog. See "Second target: PIC32CM MC00" below.
+
 Work started on a locked-down corporate Windows workstation and moves to a personal PC because
 background work there kept raising admin prompts. The prompts were most likely Windows Firewall
 dialogs: some agent scratch scripts started QEMU with `-s`, which listens on all interfaces. The
@@ -21,6 +25,7 @@ committed tools use `-gdb tcp:127.0.0.1:<port>`; keep it that way.
 | Silicon harness | done: 72 tests pass; no board was connected, so nothing has touched hardware | `docs/handoff/agent-reports/silicon-harness.md`, `docs/silicon-harness.md` |
 | QEMU part A | done: `pic32cm-jh01-cpro` boots `hello.elf` through the full Harmony clock bring-up and reaches the first UART poll with the CPU at 48 MHz; 12/12 board qtests; microbit, stm32l4x5, device-introspect, qom-test and test-hmp all still pass | `docs/handoff/agent-reports/qemu-core-a.md`, patch 0004 |
 | QEMU part B (SERCOM, PORT, LED0/SW0, end to end) | done: acceptance in spec §6.6 met; see "Part B result" | `docs/handoff/agent-progress/qemu-core-b.md`, patch 0005 |
+| Second target: PIC32CM MC00 Curiosity Pro | done: generic SoC, MC00 device and board, hello, qtests | "Second target: PIC32CM MC00" below, patch 0007 |
 
 ## Setting up the new machine
 
@@ -41,14 +46,16 @@ Notes from the 2026-10-13 setup on Windows 11 (personal PC):
    goes next to it and QEMU's configure rejects spaces.
 2. Install the build dependencies listed in `qemu/README.md` for your OS, then
    `python -m pip install --user -r requirements.txt`.
-3. `python scripts/fetch_packs.py`: downloads the PIC32CM-JH DFP 1.3.221 and CMSIS 6.1.0 into
+3. `python scripts/fetch_packs.py`: downloads the PIC32CM-JH DFP 1.3.221, PIC32CM-MC DFP 1.4.67 and
+   CMSIS 6.1.0 into
    `~/.mchp_packs` (verified byte-identical to the MPLAB-installed copies).
 4. `qemu/setup.sh`: clones QEMU v11.1.2 to `../pp-qemu`, applies `qemu/patches/`, builds.
    It ends by printing the `pic32cm-jh01-cpro` machine line.
-5. `make -C firmware/hello`, then optionally `make -C firmware/hello check`.
+5. `make -C firmware/hello` and `make -C firmware/hello BOARD=pic32cm_mc00_cpro`, then optionally
+   `make check` with the same `BOARD`.
 6. `python -m pytest tests harness/tests`. The generator tests also need gcc and the pp-qemu
    source; set `PP_QEMU_SRC` if pp-qemu is not at `../pp-qemu`.
-7. `python -m tools.pp run firmware/hello/build/hello.elf`: prints the transcript and exits 0.
+7. `python -m tools.pp run firmware/hello/build/pic32cm_jh01_cpro/hello.elf`: prints the transcript and exits 0.
 
 Environment variables: `PP_PACKS` (pack root), `PP_QEMU` (QEMU binary for tools/harness),
 `PP_QEMU_SRC` (pp-qemu source root for generator tests), `PP_GCC`, `PP_ARM_GCC`, and on Windows
@@ -73,6 +80,43 @@ Environment variables: `PP_PACKS` (pack root), `PP_QEMU` (QEMU binary for tools/
   debugger access and **does** pop SERCOM DATA. HMP `x` and the gdbstub use debug attributes.
 - `tools/pp_mcp`: `mcp` 2.x renamed FastMCP to MCPServer and hides the message of any exception
   but `ToolError`. The server imports either, and maps runner errors to `ToolError`.
+
+## Second target: PIC32CM MC00 (2026-10-13)
+
+Board facts (primary sources, collected in this session): kit EV15N46A, user guide DS70005440A;
+data sheet DS60001638E; errata DS80000905G; Harmony `csp_apps_pic32cm_mc00`, configuration
+`pic32cm_mc00_curiosity_pro`. EDBG VCOM on SERCOM0 (PA06 TX PAD2, PA07 RX PAD3, function D, IRQ9);
+LED0 PA24 and SW0 PA25, both active low, no external pull-up on SW0; 12 MHz MEMS oscillator on XIN
+and 32.768 kHz on XIN32 (external clocks, XTALEN = 0); EXT1/EXT2 USART on SERCOM3 (PA22/PA23).
+DSU.DID 0x11070006 (A1) / 0x11070106 (A2). VDD defaults to 3.3 V.
+
+What changed to support a second device:
+- **Generator:** several `--atdf` in one run. Per-IP constant headers are merged over all devices
+  (wider registers and fields win; fields at different positions and clashing value names are
+  dropped; different offsets are errors). Register tables are per device in
+  `include/hw/mchp/gen/<device>/`. New `hw/arm/<device>_device.h` with the `MchpDeviceInfo`
+  descriptor. Overlays gained `optional: true` (register absent on some devices) and
+  `optional_fields`; five overlays list the MC00's IP versions (register-identical).
+- **Profiles** (`profiles/<device>.yaml`): device-specific reset overrides (DSU.DID, NVMCTRL.PARAM,
+  PAC.STATUSC on the JH01; SUPC.VREG and MCLK.AHBMASK on the MC00, where the ATDF disagrees with the
+  data sheet), silicon revisions and the NVM rows image. The JH01 values moved out of the overlays
+  and `nvmrows.py`; its generated tables are unchanged.
+- **QEMU:** `pic32cm-soc` (abstract) with one subtype per device; each device's generated tables
+  are compiled in their own file (`hw/arm/<device>.c`), because the JH01 and MC00 have different
+  RTC IPs with the same constant names. `mchp-port` and `mchp-gclk` take their group/channel
+  counts from the device table. New board `pic32cm-mc00-cpro` and qtest `pic32cm-mc00-test`.
+- **Firmware:** `firmware/hello` builds per board (`make BOARD=...`, output `build/<board>/`);
+  `boards/<board>/board.c` replays that board's Harmony sequence.
+- **Tests:** generator tests check outputs for both devices; the e2e test runs hello on both
+  boards. Regression qtests (qom-test, test-hmp: 80 machines) pass.
+
+Open MC00 items:
+- The production user row (0xB15088FF / 0xFFFFF8BB) is computed from a garbled data-sheet table
+  and is UNCONFIRMED; the calibration row is the JH01 placeholder. Dump both from silicon.
+- NVMCTRL.PARAM's data-flash page field (0x04030800 vs 0x00030800) is unconfirmed.
+- `tools.pp` still defaults to `pic32cm-jh01-cpro`; MC00 runs need `--machine pic32cm-mc00-cpro`.
+- DS SERIES field inconsistency for DSU.DID (6 in the header and bit drawing, 7 in text, errata
+  and signature); the twin uses 7.
 
 ## Next steps, in order
 

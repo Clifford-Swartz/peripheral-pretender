@@ -20,8 +20,12 @@ PACKS = Path(os.environ.get("PP_PACKS", Path.home() / ".mchp_packs"))
 ATDF = Path(os.environ.get(
     "PP_ATDF", PACKS / "Microchip/PIC32CM-JH_DFP/1.3.221/PIC32CM-JH01/atdf"
                        / "PIC32CM5164JH01100.atdf"))
+# Second device: the generator merges per-IP constants over both
+ATDF_MC00 = PACKS / ("Microchip/PIC32CM-MC_DFP/1.4.67/PIC32CM1216MC00048/atdf/"
+                     "PIC32CM1216MC00048.atdf")
 QEMU = Path(os.environ.get("PP_QEMU_SRC", ROOT.parent / "pp-qemu"))
 OVERLAYS = ROOT / "overlays"
+PROFILES = ROOT / "profiles"
 SHIM = Path(__file__).resolve().parent / "shim"
 SPEC = ROOT / "docs" / "design" / "v0-vertical-slice.md"
 RESEARCH = ROOT / "docs" / "research" / "microchip-data.md"

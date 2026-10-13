@@ -12,6 +12,8 @@ import re
 from dataclasses import dataclass, field
 
 from . import atdf, semantics
+from . import profile as profile_mod
+from .profile import Profile
 from .semantics import Diag, IpSem
 
 APB_SLOT = 0x400
@@ -83,6 +85,7 @@ class DeviceSem:
     gclk_users: list[PeriphRef]
     dmac_triggers: list[PeriphRef]
     diags: list[Diag]
+    profile: Profile | None = None
 
     @property
     def symbol(self) -> str:
@@ -227,7 +230,14 @@ def _refs(device: atdf.Device, prefix: str) -> list[PeriphRef]:
     return sorted(out, key=lambda r: (r.id, r.instance, r.param))
 
 
-def build(device: atdf.Device, overlays) -> DeviceSem:
+def build(device: atdf.Device, overlays, prof: Profile | None = None
+          ) -> DeviceSem:
+    if prof is not None:
+        if prof.device != device.name:
+            raise ValueError(f"profile {prof.file} is for {prof.device}, not "
+                             f"{device.name}")
+        overlays = profile_mod.apply(
+            overlays, prof, {n: m.id or "" for n, m in device.modules.items()})
     ips = {name: semantics.build_ip(device, mod, overlays)
            for name, mod in sorted(device.modules.items())}
     diags = [d for ip in ips.values() for d in ip.diags]
@@ -256,4 +266,5 @@ def build(device: atdf.Device, overlays) -> DeviceSem:
     return DeviceSem(device=device, ips=ips, instances=instances, irqs=lines,
                      exceptions=exceptions, signals=signals,
                      gclk_users=_refs(device, "GCLK_ID"),
-                     dmac_triggers=_refs(device, "DMAC_ID_"), diags=diags)
+                     dmac_triggers=_refs(device, "DMAC_ID_"), diags=diags,
+                     profile=prof)

@@ -4,12 +4,15 @@
 #
 # Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
 
-DEVICE   := pic32cm5164jh01100
+# Board: boards/<BOARD>/ holds board.mk (device, DFP, VCOM vector), board.h
+# and board.c (Harmony bring-up). make BOARD=pic32cm_mc00_cpro
+BOARD    ?= pic32cm_jh01_cpro
+include boards/$(BOARD)/board.mk
 
 # Read-only inputs: the packs MPLAB installs under ~/.mchp_packs
 # (%USERPROFILE%\.mchp_packs on Windows); scripts/fetch_packs.py fetches them.
 PACKS    ?= $(if $(USERPROFILE),$(subst \,/,$(USERPROFILE)),$(HOME))/.mchp_packs
-DFP      ?= $(PACKS)/Microchip/PIC32CM-JH_DFP/1.3.221/PIC32CM-JH01
+DFP      ?= $(PACKS)/Microchip/$(DFP_DIR)
 CMSIS    ?= $(PACKS)/ARM/CMSIS/6.1.0/CMSIS/Core/Include
 
 CROSS    ?= arm-none-eabi-
@@ -18,14 +21,15 @@ OBJCOPY  := $(CROSS)objcopy
 OBJDUMP  := $(CROSS)objdump
 SIZE     := $(CROSS)size
 
-BUILD    := build
+BUILD    := build/$(BOARD)
 ELF      := $(BUILD)/hello.elf
 LDSCRIPT := dfp/$(DEVICE)_flash.ld
-SRCS     := src/main.c src/console.c src/sys_init.c dfp/startup_$(DEVICE).c
+SRCS     := src/main.c src/console.c boards/$(BOARD)/board.c \
+            dfp/startup_$(DEVICE).c
 OBJS     := $(SRCS:%.c=$(BUILD)/%.o)
 
 ARCH     := -mcpu=cortex-m0plus -mthumb
-CPPFLAGS := -Isrc -isystem "$(DFP)/include" -isystem "$(CMSIS)"
+CPPFLAGS := -Isrc -Iboards/$(BOARD) -isystem "$(DFP)/include" -isystem "$(CMSIS)"
 CFLAGS   := $(ARCH) -std=gnu11 -Os -g -ffunction-sections -fdata-sections \
             -Wall -Wextra -MMD -MP
 # The DFP startup replaces newlib's crt0 (-nostartfiles) but still calls
@@ -44,7 +48,7 @@ LDFLAGS  := $(ARCH) -T$(LDSCRIPT) -nostartfiles --specs=nano.specs \
 all: $(ELF) $(BUILD)/hello.hex $(BUILD)/hello.lst
 	$(SIZE) $(ELF)
 
-$(ELF): $(OBJS) $(LDSCRIPT) Makefile
+$(ELF): $(OBJS) $(LDSCRIPT) Makefile boards/$(BOARD)/board.mk
 	$(CC) $(LDFLAGS) $(CRTI) $(OBJS) $(CRTN) -o $@
 
 $(BUILD)/%.o: %.c Makefile | packs
@@ -58,7 +62,8 @@ $(BUILD)/hello.lst: $(ELF)
 	$(OBJDUMP) -h -S $< > $@
 
 check: $(ELF)
-	CROSS=$(CROSS) sh check-elf.sh $(ELF) $(BUILD)/hello.map
+	CROSS=$(CROSS) VCOM_IRQ=$(VCOM_IRQ) VCOM_HANDLER=$(VCOM_HANDLER) \
+	    sh check-elf.sh $(ELF) $(BUILD)/hello.map
 
 clean:
 	rm -rf $(BUILD)

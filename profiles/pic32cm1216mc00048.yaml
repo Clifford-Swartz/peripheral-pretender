@@ -1,0 +1,34 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Device profile for PIC32CM1216MC00048 (on the PIC32CM MC00 Curiosity Pro,
+# EV15N46A): facts that belong to this device rather than to an IP version
+# (see generator/mchpgen/profile.py).
+device: PIC32CM1216MC00048
+references:
+  - "DS60001638E (PIC32CM MC00 data sheet): Table 8-2 (user row), DSU.DID, SUPC.VREG, MCLK.AHBMASK"
+  - "DS80000905G (errata): DSU.DID revisions A1 0x11070006, A2 0x11070106"
+  - "ATDF PIC32CM1216MC00048 (PIC32CM-MC_DFP 1.4.67): NVMCTRL parameters"
+# DSU.DID.REVISION per silicon revision (DS80000905G); default first
+silicon_revisions: {A2: 1, A1: 0}
+reset_overrides:
+  DSU:
+    DID: 0x11070106                 # rev A2 (SERIES 7, DEVSEL 0x06)
+  NVMCTRL:
+    PARAM: 0x04030800               # NVMP 2048, PSZ 3 (64 B), DFP 64 pages
+  SUPC:
+    VREG: 0x00000002                # DS: ENABLE at reset (the ATDF says 0)
+  MCLK:
+    AHBMASK: 0x000005FF             # DS reset value (the ATDF says 0x7FFF)
+nvm_rows:
+  # Production settings computed from DS60001638E Table 8-2 (BOOTPROT is 3
+  # bits here). UNCONFIRMED: check against a dump from silicon.
+  user_row: [0xB15088FF, 0xFFFFF8BB]
+  serial_addrs: [0x0080A00C, 0x0080A040, 0x0080A044, 0x0080A048]
+  serial_default: [0x50500000, 0x00000001, 0x00000002, 0x00000003]
+  words:
+    # Software calibration row: CAL48M in bits 40:19 (Harmony copies it into
+    # OSCCTRL.CAL48M). Placeholder value as on the JH01 until dumped.
+    - {addr: 0x00806020, value: 0x1103F924,
+       what: "OTP5 word 0: placeholder calibration, CAL48M low"}
+    - {addr: 0x00806024, value: 0xFFFFFF00,
+       what: "OTP5 word 1: CAL48M high, reserved"}

@@ -13,7 +13,8 @@ from harness import hw_run, silicon, vcom
 from harness.silicon import NvmProtection, Preflight
 
 PRODUCTION_ROW = (0xB15088FB, 0xFFFFF8BB)       # DS60001632H Table 10-3
-HELLO_ELF = Path(__file__).resolve().parents[2] / "firmware" / "hello" / "build" / "hello.elf"
+HELLO_ELF = (Path(__file__).resolve().parents[2] / "firmware" / "hello" / "build"
+             / "pic32cm_jh01_cpro" / "hello.elf")
 
 
 def elf_bytes(segments, entry=0x00000101, machine=40):

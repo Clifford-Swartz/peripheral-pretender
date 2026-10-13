@@ -22,5 +22,3 @@ registers:
   DATA: {pac_protected: true}
   DID:
     note: "REVISION[11:8] comes from the SoC silicon-rev property (B0=1, C0=2)"
-reset_overrides:
-  DID: 0x11060100                 # PIC32CM5164JH01100 rev B0

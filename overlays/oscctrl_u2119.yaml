@@ -3,7 +3,7 @@
 # Behavior overlay for OSCCTRL U2119 (XOSC, OSC48M, FDPLL96M; shared IRQ 0).
 ip: OSCCTRL
 id: U2119
-versions: ["2.2.0"]
+versions: ["2.1.0", "2.2.0"]   # 2.1.0: MC00
 references:
   - "DS60001632H 17.7 (OSCCTRL registers), 7.2 (clocks after reset)"
   - "docs/research/microchip-data.md, Table: Clock bring-up status bits"

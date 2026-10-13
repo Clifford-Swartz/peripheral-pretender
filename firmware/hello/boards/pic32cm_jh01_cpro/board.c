@@ -10,6 +10,7 @@
  * Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
  */
 
+#include "console.h"
 #include "sys_init.h"
 
 /* 65536 * (1 - 16 * 115200 / 48 MHz), truncated the way MCC does. */
@@ -136,4 +137,48 @@ void sys_initialize(void)
     /* EVSYS_Initialize() has nothing to do in this configuration. */
     sercom4_usart_initialize();
     nvic_initialize();
+}
+
+/*
+ * One line per SYS_Initialize step, read back afterwards so that the
+ * sequence itself stays identical to Harmony's.  The expected values are
+ * the ones docs/research/boot-path.md records, not copies of sys_init.c.
+ */
+void report_steps(void)
+{
+    port_group_registers_t *pb = &PORT_REGS->GROUP[1];
+    sercom_usart_int_registers_t *usart = VCOM_USART;
+
+    console_puts("step 3 nvmctrl: CTRLB <- RWS(3)\r\n");
+
+    console_puts("step 4 port:");
+    put_checked("PB.PINCFG10", pb->PORT_PINCFG[10], 0x01U, 2);
+    put_checked("PB.PINCFG11", pb->PORT_PINCFG[11], 0x01U, 2);
+    put_checked("PB.PMUX5", pb->PORT_PMUX[5], 0x33U, 2);
+    put_checked("PC.DIR", LED0_GROUP->PORT_DIR, 0x00000020U, 8);
+    console_puts("\r\n");
+
+    console_puts("step 5 clock:");
+    put_field("CAL48M", OSCCTRL_REGS->OSCCTRL_CAL48M, 8);
+    put_checked("OSC48MDIV", OSCCTRL_REGS->OSCCTRL_OSC48MDIV, 0x00U, 2);
+    put_checked("GENCTRL0", GCLK_REGS->GCLK_GENCTRL[0], 0x00010106U, 8);
+    put_checked("PCHCTRL22", GCLK_REGS->GCLK_PCHCTRL[SERCOM4_GCLK_ID_CORE],
+                0x00000040U, 8);
+    put_checked("APBCMASK", MCLK_REGS->MCLK_APBCMASK, 0x08000020U, 8);
+    console_puts("\r\n");
+
+    console_puts("step 6 nvmctrl:");
+    put_checked("CTRLB", NVMCTRL_REGS->NVMCTRL_CTRLB, 0x00000084U, 8);
+    console_puts("\r\n");
+
+    console_puts("step 7 sercom4:");
+    put_checked("CTRLA", usart->SERCOM_CTRLA, 0x40310106U, 8);
+    put_checked("BAUD", usart->SERCOM_BAUD, 63019U, 4);
+    put_checked("CTRLB", usart->SERCOM_CTRLB, 0x00030000U, 8);
+    console_puts("\r\n");
+
+    console_puts("step 8 nvic:");
+    put_checked("ISER", NVIC->ISER[0], 0x00002000U, 8);
+    put_checked("IPR3", NVIC->IPR[3], 0x0000C000U, 8);
+    console_puts("\r\n");
 }

@@ -35,8 +35,10 @@ def test_in_and_wrconfig(port):
 
 
 def test_group_constants_in_header(generated):
-    text = (generated / "qemu/include/hw/mchp/gen/port_u2210.h").read_text()
-    for line in ("#define MCHP_PORT_SIZE 0x180",
+    gen = generated / "qemu/include/hw/mchp/gen"
+    text = ((gen / "port_u2210.h").read_text() +
+            (gen / "pic32cm5164jh01100/port_u2210.h").read_text())
+    for line in ("#define PIC32CM5164JH01100_PORT_REGS_SIZE 0x180",
                  "#define MCHP_PORT_GROUP_STRIDE 0x80",
                  "#define MCHP_PORT_GROUP_COUNT 3",
                  "REG8(MCHP_PORT_GROUP_PMUX, 0x30)",

@@ -4,7 +4,7 @@
 Python API::
 
     from tools.pp import RunOptions, run
-    result = run(RunOptions("firmware/hello/build/hello.elf"))
+    result = run(RunOptions("firmware/hello/build/pic32cm_jh01_cpro/hello.elf"))
     result.exit_code, result.uart, result.unimplemented_summary
 """
 

@@ -1,5 +1,5 @@
 /*
- * EDBG VCOM console on SERCOM4.
+ * EDBG VCOM console on the board's SERCOM (VCOM_USART).
  *
  * Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
  */
@@ -9,7 +9,7 @@
 #include "console.h"
 #include "sys_init.h"
 
-/* Rest of the text SERCOM4_Handler still has to send; NULL when idle. */
+/* Rest of the text VCOM_Handler still has to send; NULL when idle. */
 static const char *volatile irq_text;
 
 void console_putc(char c)
@@ -86,7 +86,7 @@ const char *console_irq_cancel(void)
  * On silicon it can also be entered while DATA is still full; that entry
  * just returns.
  */
-void SERCOM4_Handler(void)
+void VCOM_Handler(void)
 {
     sercom_usart_int_registers_t *usart = VCOM_USART;
     const char *p = irq_text;

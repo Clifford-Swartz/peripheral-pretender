@@ -114,9 +114,9 @@ def device_json(ds: DeviceSem) -> str:
         "nvm_rows": {
             "base": nvmrows.BASE, "size": nvmrows.SIZE, "fill": nvmrows.FILL,
             "words": [{"addr": w.addr, "value": w.value, "what": w.what}
-                      for w in nvmrows.default_words(dev)],
-            "serial_addrs": list(nvmrows.SERIAL_ADDRS),
-            "serial_default": list(nvmrows.SERIAL_DEFAULT),
+                      for w in nvmrows.default_words(dev, ds.profile.nvm_rows)],
+            "serial_addrs": list(ds.profile.nvm_rows.serial_addrs),
+            "serial_default": list(ds.profile.nvm_rows.serial_default),
         },
         "interrupts": [{"line": l.index, "name": l.name, "caption": l.caption,
                         "instances": l.instances} for l in ds.irqs],

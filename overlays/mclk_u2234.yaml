@@ -20,6 +20,6 @@ registers:
   APBAMASK: {pac_protected: true}
   APBBMASK: {pac_protected: true}
   APBCMASK: {pac_protected: true}
-  APBDMASK: {pac_protected: true}
+  APBDMASK: {pac_protected: true, optional: true}   # JH only
 reset_overrides:
   INTFLAG: 0x01                   # CKRDY: clocks are ready out of reset

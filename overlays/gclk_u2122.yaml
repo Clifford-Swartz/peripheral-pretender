@@ -3,7 +3,7 @@
 # Behavior overlay for GCLK U2122 (9 generators, 43 peripheral channels).
 ip: GCLK
 id: U2122
-versions: ["1.1.2"]
+versions: ["1.1.1", "1.1.2"]   # 1.1.1: MC00 (SRC 3 bits, 35 channels)
 references:
   - "DS60001632H 14.7 (GCLK registers), 7.2 (clocks after reset)"
   - "docs/research/boot-path.md findings 6, 8, 17"

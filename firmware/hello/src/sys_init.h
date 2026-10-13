@@ -1,5 +1,6 @@
 /*
- * Harmony SYS_Initialize replica for the PIC32CM JH01 Curiosity Pro.
+ * Board bring-up interface of the hello image. Each board directory
+ * (boards/<BOARD>/) provides board.h and board.c.
  *
  * Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
  */
@@ -7,16 +8,18 @@
 #ifndef SYS_INIT_H
 #define SYS_INIT_H
 
-#include "pic32cm5164jh01100.h"
+#include <stdint.h>
 
-/* EV81X90A wiring (DS70005482B): EDBG VCOM on SERCOM4, LED0 on PC05. */
-#define VCOM_USART      (&SERCOM4_REGS->USART_INT)
-#define LED0_GROUP      (&PORT_REGS->GROUP[2])     /* group 2 = port C */
-#define LED0_MASK       PORT_PC05                  /* active low */
+#include "board.h"
 
-/* GCLK0 runs from OSC48M divided by 1 once sys_initialize() returns. */
-#define CPU_CLOCK_HZ    48000000U
-
+/* board.c: Harmony's SYS_Initialize for the board, access for access */
 void sys_initialize(void);
+/* board.c: one line per SYS_Initialize step, read back with checks */
+void report_steps(void);
+
+/* main.c: " NAME=0x<value>", and the same counting a failed check */
+void put_field(const char *name, uint32_t value, unsigned int digits);
+void put_checked(const char *name, uint32_t value, uint32_t expected,
+                 unsigned int digits);
 
 #endif /* SYS_INIT_H */

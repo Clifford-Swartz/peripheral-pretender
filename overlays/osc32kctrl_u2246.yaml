@@ -3,7 +3,7 @@
 # Behavior overlay for OSC32KCTRL U2246 (XOSC32K, OSC32K, OSCULP32K).
 ip: OSC32KCTRL
 id: U2246
-versions: ["2.2.0"]
+versions: ["2.1.0", "2.2.0"]   # 2.1.0: MC00
 references:
   - "DS60001632H 16.7 (OSC32KCTRL registers)"
 registers:

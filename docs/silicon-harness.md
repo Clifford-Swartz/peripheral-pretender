@@ -234,11 +234,11 @@ DIVAS RESULT/REM are valid only while STATUS.BUSY is clear, which is always the 
 ### 6.6 Procedure
 
 ```
-py -m harness.hw_run firmware/hello/build/hello.elf --check            # read-only
+py -m harness.hw_run firmware/hello/build/pic32cm_jh01_cpro/hello.elf --check            # read-only
 py -m harness.dump_regs --pyocd --out identify.json                    # read-only
 py -m harness.dump_regs --pyocd --reset-halt --allow-halt --out golden-gated.json
 py -m harness.dump_regs --pyocd --reset-halt --allow-halt --unmask-clocks --out golden.json
-py -m harness.dump_regs --twin --kernel firmware/hello/build/hello.elf --out twin.json   # QEMU, -S at reset
+py -m harness.dump_regs --twin --kernel firmware/hello/build/pic32cm_jh01_cpro/hello.elf --out twin.json   # QEMU, -S at reset
 py -m harness.compare reset golden.json --by-instance --emit-overrides from-silicon.yaml
 py -m harness.compare regs twin.json golden.json --by-instance --emit-overrides twin-vs-silicon.yaml
 ```
@@ -481,14 +481,14 @@ Open questions:
 
 1. Connect the Curiosity Pro's DEBUG USB port. Read-only, no approval needed:
    `py -m pyocd list`, `py -m harness.vcom list`,
-   `py -m harness.hw_run firmware/hello/build/hello.elf --check` (attach: DID, CPUID, STATUSB, user
+   `py -m harness.hw_run firmware/hello/build/pic32cm_jh01_cpro/hello.elf --check` (attach: DID, CPUID, STATUSB, user
    row, words at 0x0/0x4/0x1000/0x1004).
 2. Configure the twin to match the DID revision that `--check` prints: the contract's SoC property,
    e.g. `-global pic32cm5164jh01100-soc.silicon-rev=C0` (the SoC is not in the QEMU build yet).
 3. If `--check` reports BOOTPROT=0xB: approve **one MPLAB programming pass** (MPLAB X, IPE or
    `mplab_program_device` with an MPLAB project for hello, "erase before program" set). It erases
    the factory bootloader and clears BOOTPROT; the BODCORE calibration is kept.
-4. Approve **flashing** `firmware/hello/build/hello.elf` with pyOCD and capturing the transcript:
-   `py -m harness.hw_run firmware/hello/build/hello.elf --allow-program --json --out silicon.bin`.
+4. Approve **flashing** `firmware/hello/build/pic32cm_jh01_cpro/hello.elf` with pyOCD and capturing the transcript:
+   `py -m harness.hw_run firmware/hello/build/pic32cm_jh01_cpro/hello.elf --allow-program --json --out silicon.bin`.
 5. Approve **halt and system reset** for the golden dumps (section 6.6).
 6. Approve **halting** for breakpoint snapshots through `pyocd gdbserver` (section 7).

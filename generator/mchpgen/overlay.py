@@ -22,7 +22,8 @@ class OverlayError(Exception):
 REGISTER_KEYS = {
     "pac_protected", "enable_protected", "sync", "write_while_syncbusy",
     "strobe", "self_clearing", "w1c", "ro", "alias", "hooks", "dynamic",
-    "write_only", "read_only", "irq_source", "note",
+    "write_only", "read_only", "irq_source", "note", "optional",
+    "optional_fields",
 }
 TOP_KEYS = {"ip", "id", "versions", "references", "notes", "registers",
             "modes", "reset_overrides", "reset_from"}
@@ -53,6 +54,8 @@ class RegisterRules:
     read_only: bool = False
     irq_enable: str | None = None
     note: str = ""
+    optional: bool = False              # absent on some device variants
+    optional_fields: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -108,6 +111,10 @@ def _parse_rules(where: str, raw) -> RegisterRules:
         _fail(where, f"unknown keys {sorted(unknown)}")
     r = RegisterRules()
     r.pac_protected = bool(raw.get("pac_protected", False))
+    r.optional = bool(raw.get("optional", False))
+    if "optional_fields" in raw:
+        r.optional_fields = _name_list(where + ".optional_fields",
+                                       raw["optional_fields"])
     ep = raw.get("enable_protected")
     if ep is not None:
         if ep == "all":

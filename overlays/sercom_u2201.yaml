@@ -41,7 +41,7 @@ modes:
       SYNCBUSY: {dynamic: true}
       DATA:
         hooks: [pre_read, post_write]       # pop RX / push TX; DRE, TXC, RXC
-      DBGCTRL: {pac_protected: true}
+      DBGCTRL: {pac_protected: true, optional: true}   # absent on MC00
   USART_EXT:
     registers: *usart
   SPIM:
@@ -69,7 +69,7 @@ modes:
       SYNCBUSY: {dynamic: true}
       ADDR: {pac_protected: true, enable_protected: all}
       DATA: {hooks: [pre_read, post_write]}
-      DBGCTRL: {pac_protected: true}
+      DBGCTRL: {pac_protected: true, optional: true}   # absent on MC00
   SPIS:
     registers: *spi
   I2CM:
@@ -100,7 +100,7 @@ modes:
       SYNCBUSY: {dynamic: true}
       ADDR: {sync: SYSOP, hooks: [post_write]}            # starts a transfer
       DATA: {sync: SYSOP, hooks: [pre_read, post_write]}
-      DBGCTRL: {pac_protected: true}
+      DBGCTRL: {pac_protected: true, optional: true}   # absent on MC00
   I2CS:
     registers:
       CTRLA:

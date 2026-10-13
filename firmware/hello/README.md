@@ -1,4 +1,15 @@
-# hello: bring-up image for PIC32CM5164JH01100 (EV81X90A)
+# hello: bring-up image for the PIC32CM Curiosity Pro boards
+
+One test image, built per board with `make BOARD=<board>`:
+
+| `BOARD` | kit | device | twin machine |
+|---|---|---|---|
+| `pic32cm_jh01_cpro` (default) | PIC32CM JH01 Curiosity Pro (EV81X90A) | PIC32CM5164JH01100 | `pic32cm-jh01-cpro` |
+| `pic32cm_mc00_cpro` | PIC32CM MC00 Curiosity Pro (EV15N46A) | PIC32CM1216MC00048 | `pic32cm-mc00-cpro` |
+
+Most of this README describes the JH01 build; the MC00 build differs only
+where its board does (see [PIC32CM MC00 Curiosity Pro](#pic32cm-mc00-curiosity-pro)).
+
 
 Bare-metal test image for the PIC32CM JH01 Curiosity Pro. It brings the chip
 up exactly the way MPLAB Harmony does, reports what the hardware returns over
@@ -20,10 +31,12 @@ the user's approval).
 
 | path | purpose |
 |---|---|
-| `src/sys_init.c` | Harmony `SYS_Initialize` replica: the same registers, values, access widths, order and busy-waits as the generated code |
-| `src/console.c` | SERCOM4 VCOM output: blocking DRE-polled TX, hex/decimal formatting, the interrupt-driven print and `SERCOM4_Handler` (IRQ13) |
-| `src/main.c` | Test sequence: read-back report with checks, identity data, IRQ print, SysTick-timed LED0 blinks, exit line |
-| `dfp/` | `startup_pic32cm5164jh01100.c` and `pic32cm5164jh01100_flash.ld`, copied unmodified from PIC32CM-JH_DFP 1.3.221 (`PIC32CM-JH01/gcc/gcc/`); Apache-2.0 headers intact |
+| `boards/<board>/board.c` | Harmony `SYS_Initialize` replica for the board (the same registers, values, access widths, order and busy-waits as the generated code), and the read-back report of each step |
+| `boards/<board>/board.h` | Board wiring: device header, VCOM SERCOM and its handler, LED0 pin, banner |
+| `boards/<board>/board.mk` | Device, DFP directory and VCOM vector for the Makefile and `make check` |
+| `src/console.c` | VCOM output: blocking DRE-polled TX, hex/decimal formatting, the interrupt-driven print and `VCOM_Handler` (`SERCOM4_Handler`, IRQ13, on the JH01) |
+| `src/main.c` | Test sequence: identity data, IRQ print, SysTick-timed LED0 blinks, exit line |
+| `dfp/` | Startup files and flash linker scripts copied unmodified from the DFPs: `startup_pic32cm5164jh01100.c`, `pic32cm5164jh01100_flash.ld` (PIC32CM-JH_DFP 1.3.221, `PIC32CM-JH01/gcc/gcc/`), `startup_pic32cm1216mc00048.c`, `pic32cm1216mc00048_flash.ld` (PIC32CM-MC_DFP 1.4.67, `PIC32CM1216MC00048/gcc/gcc/`); Apache-2.0 headers intact |
 | `check-elf.sh` | Static checks on the ELF (`make check`) |
 
 ## Build
@@ -45,12 +58,13 @@ From an MSYS2 UCRT64 shell: `make -C firmware/hello` and
 `PACKS=<dir holding Microchip/ and ARM/>`, or set `DFP=` and `CMSIS=`
 individually.
 
-Outputs in `build/`: `hello.elf`, `hello.hex`, `hello.map` and `hello.lst`
+Add `BOARD=pic32cm_mc00_cpro` for the MC00 board. Outputs in
+`build/<board>/`: `hello.elf`, `hello.hex`, `hello.map` and `hello.lst`
 (`objdump -h -S`). The build ends by printing `arm-none-eabi-size`:
 
 ```
    text    data     bss     dec     hex filename
-   2604       0    1544    4148    1034 build/hello.elf
+   2604       0    1544    4148    1034 build/pic32cm_jh01_cpro/hello.elf
 ```
 
 (bss includes the linker script's 0x200 heap and 0x400 stack.)
@@ -70,7 +84,7 @@ prints "not implemented" link warnings.
 
 `make check` verifies:
 - the vector table (`exception_table`, section `.vectors`) sits at 0x0
-- word 0 is `_estack`, the reset vector and the ELF entry are `Reset_Handler`, and the IRQ13 vector is the strong `SERCOM4_Handler`
+- word 0 is `_estack`, the reset vector and the ELF entry are `Reset_Handler`, and the VCOM vector is the strong handler (`board.mk`: IRQ13 `SERCOM4_Handler` on the JH01, IRQ9 `SERCOM0_Handler` on the MC00)
 - HardFault and SysTick go to the DFP's `Dummy_Handler`, which must be an endless `b .`
 - there are no BKPT or SVC instructions and no semihosting symbols
 
@@ -170,7 +184,7 @@ OSC48MSYNCBUSY, OSC48MRDY, GCLK SYNCBUSY.GENCTRL0, PCHCTRL[22].CHEN, the two
 SERCOM4 SYNCBUSY waits, DRE before each byte and TXC at the end. A model that
 never sets one of these bits therefore hangs before or during the first line,
 and the runner reports a timeout. To find the loop, run the twin with `-s -S`
-and attach `gdb-multiarch build/hello.elf` (`target remote :1234`, `continue`,
+and attach `gdb-multiarch build/pic32cm_jh01_cpro/hello.elf` (`target remote :1234`, `continue`,
 Ctrl-C, then `bt` or `info symbol $pc`). The functions involved are
 `oscctrl_initialize`, `gclk0_initialize`, `clock_initialize`,
 `sercom4_usart_initialize`, `console_putc` and `console_flush`. A model that
@@ -226,15 +240,52 @@ and zeroes `.bss`) and writes VTOR = 0.
 ## Running it
 
 Twin, once `pic32cm-jh01-cpro` exists: `py -m tools.pp run
-firmware/hello/build/hello.elf` (design §6.3). The raw equivalent is
-`qemu-system-arm -M pic32cm-jh01-cpro -kernel firmware/hello/build/hello.elf
+firmware/hello/build/pic32cm_jh01_cpro/hello.elf` (design §6.3). The raw equivalent is
+`qemu-system-arm -M pic32cm-jh01-cpro -kernel firmware/hello/build/pic32cm_jh01_cpro/hello.elf
 -display none -serial stdio -d unimp,guest_errors`, stopped once
 `PP:EXIT` appears.
 
-Silicon: program `build/hello.hex` with MPLAB IPE or pyOCD, which needs the
+Silicon: program `build/<board>/hello.hex` with MPLAB IPE or pyOCD, which needs the
 user's approval (design §6.4). Then open the EDBG virtual COM port at
 115200 8N1 with DTR asserted and press reset. LED0 lights at PORT init and
 then blinks three times.
+
+## PIC32CM MC00 Curiosity Pro
+
+`make BOARD=pic32cm_mc00_cpro`, run with `py -m tools.pp run
+firmware/hello/build/pic32cm_mc00_cpro/hello.elf --machine pic32cm-mc00-cpro`.
+`boards/pic32cm_mc00_cpro/board.c` replays what Harmony generates for the
+`csp_apps_pic32cm_mc00` usart_echo_interrupt example (configuration
+`pic32cm_mc00_curiosity_pro`). The differences from the JH01 build:
+
+- EDBG VCOM on SERCOM0 (PA06 TX = PAD2, PA07 RX = PAD3, function D; IRQ9),
+  core clock on GCLK channel 19, APBCMASK = 0x2.
+- LED0 on PA24 (active low). PORT_Initialize writes DIR and OUT of group 0
+  directly (PA24 high, LED off) instead of the JH01's PC05 DIR write.
+- DSU.DID is 0x11070X06 (X = revision: A1 = 0, A2 = 1).
+- The board has a 12 MHz oscillator on XIN and a 32.768 kHz one on XIN32;
+  like Harmony, the image uses neither.
+
+Transcript on the twin (default NVM image):
+
+```
+PP hello: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+step 3 nvmctrl: CTRLB <- RWS(3)
+step 4 port: PA.PINCFG6=0x01 PA.PINCFG7=0x01 PA.PMUX3=0x33 PA.DIR=0x01000000
+step 5 clock: CAL48M=0x00200220 OSC48MDIV=0x00 GENCTRL0=0x00010106 PCHCTRL19=0x00000040 APBCMASK=0x00000002
+step 6 nvmctrl: CTRLB=0x00000084
+step 7 sercom0: CTRLA=0x40310106 BAUD=0xF62B CTRLB=0x00030000
+step 8 nvic: ISER=0x00000200 IPR2=0x0000C000
+dsu: DID=0x11070106
+scb: CPUID=0x410CC601
+serial: 0x50500000 0x00000001 0x00000002 0x00000003
+calrow: 0xFFFFFF001103F924
+irq9: sent by SERCOM0_Handler, one byte per DRE interrupt
+led0: blink 1/3
+led0: blink 2/3
+led0: blink 3/3
+PP:EXIT 0
+```
 
 ## Notes on Harmony fidelity
 

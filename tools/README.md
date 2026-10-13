@@ -14,7 +14,7 @@ server needs the `mcp` package (1.28.1 tested). Run from the project root.
 ## Quick start
 
 ```powershell
-py -m tools.pp run firmware/hello/build/hello.elf                  # live UART, verdict on stderr
+py -m tools.pp run firmware/hello/build/pic32cm_jh01_cpro/hello.elf                  # live UART, verdict on stderr
 py -m tools.pp run tests/assets/mps2/build/exit.elf -M mps2-an385 --json
 py -m tools.pp run tests/assets/mps2/build/echo.elf -M mps2-an385 --input "hi\r\nexit 5\r\n"
 py -m tools.pp machines                                             # what the QEMU build offers
@@ -244,7 +244,7 @@ py -m pytest tests/runner tests/mcp_server tests/e2e -rs
   as a subprocess, and a `--gdb` session driven over the GDB remote protocol.
 - `tests/mcp_server/`: starts `py -m tools.pp_mcp` with the SDK's stdio client, lists the tools and
   calls `twin_machines` and `twin_run` on the mps2 images.
-- `tests/e2e/test_hello_twin.py`: `firmware/hello/build/hello.elf` on `pic32cm-jh01-cpro`, through
+- `tests/e2e/test_hello_twin.py`: `firmware/hello/build/pic32cm_jh01_cpro/hello.elf` on `pic32cm-jh01-cpro`, through
   the API and the CLI. It skips, with the reason, until both the machine and the ELF exist.
 - Test images: `tests/assets/mps2/` (`exit.c`, built as `exit` and `exit3`, `fault.c`, built as
   `fault` and `lockup`, plus `echo.c`, `burst.c`, `startup.c`, `cmsdk_uart.h`, `mps2.ld`). `py tests/assets/mps2/build.py [--force]`

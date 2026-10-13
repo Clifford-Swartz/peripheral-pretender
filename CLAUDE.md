@@ -1,8 +1,9 @@
 # Peripheral Pretender
 
 QEMU-based digital twin of Microchip MCU peripherals, growing toward board-level simulation that
-customers can scale to their own boards. First target: PIC32CM5164JH01100 on the PIC32CM JH01
-Curiosity Pro (EV81X90A). A personal side project; MIT License.
+customers can scale to their own boards. Targets: PIC32CM5164JH01100 on the PIC32CM JH01
+Curiosity Pro (EV81X90A, machine `pic32cm-jh01-cpro`) and PIC32CM1216MC00048 on the PIC32CM MC00
+Curiosity Pro (EV15N46A, `pic32cm-mc00-cpro`). A personal side project; MIT License.
 
 **Start here:** `docs/handoff.md` (status, setup, next steps), then `docs/design/v0-vertical-slice.md`
 (the build contract: architecture, interfaces, acceptance criteria). Background:
@@ -21,16 +22,18 @@ Curiosity Pro (EV81X90A). A personal side project; MIT License.
 
 ## Layout
 
-- `generator/` + `overlays/` — ATDF + per-IP behavior overlays → generated QEMU register tables and
-  `devices/<device>.json`.
+- `generator/` + `overlays/` + `profiles/` — ATDFs + per-IP behavior overlays + per-device profiles
+  → generated QEMU register tables, device descriptors and `devices/<device>.json`. Always generate
+  every device in one run (the per-IP constant headers are merged); see `generator/README.md`.
 - `qemu/` — the pp-qemu fork as patches on QEMU v11.1.2; `qemu/setup.sh` recreates it at
   `../pp-qemu`. QEMU's configure rejects paths with spaces.
 - `firmware/hello/` — bare-metal test image that runs unchanged on twin and silicon; ends with a
-  `PP:EXIT <n>` line.
+  `PP:EXIT <n>` line. One image per board: `make BOARD=pic32cm_jh01_cpro|pic32cm_mc00_cpro`,
+  output in `build/<board>/`.
 - `tools/pp` (runner CLI), `tools/pp_mcp` (MCP server), `harness/` (silicon comparison via
   pyOCD/EDBG), `tests/`.
-- `scripts/fetch_packs.py` — pins and fetches the PIC32CM-JH DFP 1.3.221 and CMSIS 6.1.0 into
-  `~/.mchp_packs`.
+- `scripts/fetch_packs.py` — pins and fetches the PIC32CM-JH DFP 1.3.221, PIC32CM-MC DFP 1.4.67 and
+  CMSIS 6.1.0 into `~/.mchp_packs`.
 
 ## Rules
 
@@ -51,8 +54,9 @@ Curiosity Pro (EV81X90A). A personal side project; MIT License.
 ```
 python scripts/fetch_packs.py                 # device packs → ~/.mchp_packs
 qemu/setup.sh                                 # pp-qemu fork → ../pp-qemu, built
-make -C firmware/hello                        # hello.elf (arm-none-eabi-gcc)
+make -C firmware/hello [BOARD=pic32cm_mc00_cpro]   # hello.elf (arm-none-eabi-gcc)
 python -m pytest tests harness/tests          # Python test suites
-python -m tools.pp run firmware/hello/build/hello.elf
+python -m tools.pp run firmware/hello/build/pic32cm_jh01_cpro/hello.elf
+python -m tools.pp run firmware/hello/build/pic32cm_mc00_cpro/hello.elf --machine pic32cm-mc00-cpro
 ```
 On Windows use `py` for Python and run the build steps in an MSYS2 UCRT64 shell.

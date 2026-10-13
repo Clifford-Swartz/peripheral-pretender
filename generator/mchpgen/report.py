@@ -131,9 +131,10 @@ def _device_notes(ds: DeviceSem) -> list[str]:
 
 def _nvm(ds: DeviceSem) -> list[str]:
     rows = [[_h(w.addr), _h(w.value), w.what]
-            for w in nvmrows.default_words(ds.device)]
+            for w in nvmrows.default_words(ds.device, ds.profile.nvm_rows)]
     rows += [[_h(a), _h(s), "serial number (default; SoC property serial-number)"]
-             for a, s in zip(nvmrows.SERIAL_ADDRS, nvmrows.SERIAL_DEFAULT)]
+             for a, s in zip(ds.profile.nvm_rows.serial_addrs,
+                             ds.profile.nvm_rows.serial_default)]
     return (_table(["address", "value", "content"], rows) +
             ["", f"Everything else in 0x{nvmrows.BASE:08X}-"
                  f"0x{nvmrows.BASE + nvmrows.SIZE - 1:08X} reads 0x{nvmrows.FILL:02X}. "

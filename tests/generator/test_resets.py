@@ -3,7 +3,10 @@
 
 import pytest
 
-from mchpgen import nvmrows
+from gen_support import PROFILES
+from mchpgen import nvmrows, profile
+
+ROWS = profile.find(str(PROFILES), "PIC32CM5164JH01100").nvm_rows
 
 ERASED = (0xFFFFFFFF, 0xFFFFFFFF)
 
@@ -76,7 +79,7 @@ def test_rcause_and_did(ds):
 
 
 @pytest.mark.parametrize("row, ctrla, config, ewctrl", [
-    (nvmrows.USER_ROW_PRODUCTION, 0x00, 0xBB, 0x0B),
+    (ROWS.user_row, 0x00, 0xBB, 0x0B),
     (ERASED, 0x86, 0xFF, 0x0F),     # always-on WDT: why the DFP default is wrong
 ])
 def test_wdt_reset_from_user_row(ds, row, ctrla, config, ewctrl):
@@ -86,7 +89,7 @@ def test_wdt_reset_from_user_row(ds, row, ctrla, config, ewctrl):
 
 @pytest.mark.parametrize("row, bodvdd", [
     # ENABLE=1, ACTION=1 (reset), LEVEL=8, HYST=0
-    (nvmrows.USER_ROW_PRODUCTION, 0x2 | (1 << 3) | (8 << 16)),
+    (ROWS.user_row, 0x2 | (1 << 3) | (8 << 16)),
     (ERASED, (3 << 3) | (0x3F << 16) | 0x4),   # BODVDD disabled
 ])
 def test_supc_reset_from_user_row(ds, row, bodvdd):
@@ -95,12 +98,12 @@ def test_supc_reset_from_user_row(ds, row, bodvdd):
 
 
 def test_nvmctrl_lock_from_user_row(ds):
-    regs = apply_reset_from(ds.ip("NVMCTRL").view(""), nvmrows.USER_ROW_PRODUCTION)
+    regs = apply_reset_from(ds.ip("NVMCTRL").view(""), ROWS.user_row)
     assert regs[0x20] == 0xFFFF
 
 
 def test_nvm_image(dev):
-    img = nvmrows.image(dev)
+    img = nvmrows.image(dev, ROWS)
     assert len(img) == 0x10000
     word = lambda off: int.from_bytes(img[off:off + 4], "little")  # noqa: E731
     assert (word(0x4000), word(0x4004)) == (0xB15088FB, 0xFFFFF8BB)
@@ -110,8 +113,8 @@ def test_nvm_image(dev):
     otp1 = word(0x6000)
     assert (otp1 >> 16) & 0x3FFF == 8192 and (otp1 >> 8) & 0x3 == 3
     assert word(0x6004) & 0xFF == 128
-    assert [word(a - nvmrows.BASE) for a in nvmrows.SERIAL_ADDRS] == \
-        list(nvmrows.SERIAL_DEFAULT)
+    assert [word(a - nvmrows.BASE) for a in ROWS.serial_addrs] == \
+        list(ROWS.serial_default)
     assert img[0x0:0x8] == b"\xff" * 8 and img[0x6030:0x6038] == b"\xff" * 8
 
 
@@ -124,7 +127,7 @@ def test_user_row_decodes_to_production_settings(dev):
     def get(word, name):
         mask = fields[name]
         return (word & mask) >> ((mask & -mask).bit_length() - 1)
-    w0, w1 = nvmrows.USER_ROW_PRODUCTION
+    w0, w1 = ROWS.user_row
     assert get(w0, "NVMCTRL_BOOTPROT") == 0xB
     assert get(w0, "BODVDDUSERLEVEL") == 8 and get(w0, "BODVDD_DIS") == 0
     assert get(w0, "BODVDD_ACTION") == 1

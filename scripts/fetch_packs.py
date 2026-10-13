@@ -25,6 +25,12 @@ PACKS = [
         "check": "PIC32CM-JH01/atdf/PIC32CM5164JH01100.atdf",
     },
     {
+        "path": ("Microchip", "PIC32CM-MC_DFP", "1.4.67"),
+        "url": "https://packs.download.microchip.com/"
+               "Microchip.PIC32CM-MC_DFP.1.4.67.atpack",
+        "check": "Microchip.PIC32CM-MC_DFP.pdsc",
+    },
+    {
         "path": ("ARM", "CMSIS", "6.1.0"),
         "url": "https://github.com/ARM-software/CMSIS_6/releases/download/"
                "v6.1.0/ARM.CMSIS.6.1.0.pack",

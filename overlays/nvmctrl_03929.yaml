@@ -21,19 +21,19 @@ registers:
   INTFLAG:
     w1c: [ERROR, SERR, DERR, FLTCAP]
     ro: [READY, FLASHERR]         # DS 26.6.6: READY access R, FLASHERR reset-only
+    optional_fields: [SERR, DERR, FLTCAP, FLASHERR]   # JH only (ECC)
     irq_source: {enable: INTENSET}
   STATUS:
     w1c: [LOAD, PROGE, LOCKE, NVME]
     ro: [PRM, SB]
   ADDR: {pac_protected: true}
   LOCK: {read_only: true}         # DS 26.6.9: R, loaded from the user row
-  ECCCTRL: {pac_protected: true}
-  FLTCTRL: {pac_protected: true}
-  FFLTPTR: {pac_protected: true}
-  FFLTADR: {pac_protected: true}
-  DBGCTRL: {pac_protected: true}
+  ECCCTRL: {pac_protected: true, optional: true}   # JH only (ECC)
+  FLTCTRL: {pac_protected: true, optional: true}   # JH only (ECC)
+  FFLTPTR: {pac_protected: true, optional: true}   # JH only (ECC)
+  FFLTADR: {pac_protected: true, optional: true}   # JH only (ECC)
+  DBGCTRL: {pac_protected: true, optional: true}   # JH only (ECC)
 reset_overrides:
-  PARAM: 0x08032000               # NVMP 8192, PSZ 3 (64 B), DFP 128 pages
   CTRLB: 0x00000080               # MANW (DS 26.6.2)
   INTFLAG: 0x00000001             # READY: idle, ready for a command
 reset_from:

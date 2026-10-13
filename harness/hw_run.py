@@ -11,8 +11,8 @@ Nothing touches the board without an explicit flag:
   --allow-program  program main flash (sector erase only), reset, capture
   --allow-reset    with --programmer none: reset through the probe
 
-  py -m harness.hw_run firmware/hello/build/hello.elf --check
-  py -m harness.hw_run firmware/hello/build/hello.elf --allow-program --out silicon.txt
+  py -m harness.hw_run firmware/hello/build/pic32cm_jh01_cpro/hello.elf --check
+  py -m harness.hw_run firmware/hello/build/pic32cm_jh01_cpro/hello.elf --allow-program --out silicon.txt
 """
 from __future__ import annotations
 

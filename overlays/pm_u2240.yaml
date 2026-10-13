@@ -3,7 +3,7 @@
 # Behavior overlay for PM U2240 (sleep configuration; shared IRQ 0).
 ip: PM
 id: U2240
-versions: ["2.1.1"]
+versions: ["2.1.0", "2.1.1"]   # 2.1.0: MC00
 references:
   - "DS60001632H 19.6 (PM registers)"
 registers:
