@@ -65,6 +65,27 @@ identified from their pads and the schematic. The DXF coordinates are mm. `origi
 `size_mm` in `clicks.json` place the image, and LED and signal positions (`at_mm`) are in the
 same coordinates. The zip also holds a STEP model for the 3D view later.
 
-On the board view, a plugged Click is centred on the header's `click_at_mm` in `board.json`.
-`view_mm` widens the stage beyond the board so the Click fits. Its PWR LED glows while the
+## Adapter assets: `adapters/<id>/`
+
+The Curiosity Pro's EXT1/EXT2 are Xplained Pro extension headers, so a Click needs an adapter:
+the mikroBUS Xplained Pro (ATMBUSADAPTER-XPRO, user guide DS50002671A). Its edge socket J100
+plugs face down onto the header, so the adapter lies flat beyond the board edge. The Click
+sits on J103/J104 turned 90 degrees (AN and PWM toward the far end); a medium-size Click
+overhangs the adapter. Mapping: INT on extension pin 9, I2C on 11/12, SPI on 15-18, UART on
+13/14, RST on 5, PWM on 7, AN on 3.
+
+`top.png` is rendered from the adapter's production Gerbers (design documentation rev4, from
+the product page) with tracespace, recoloured blue with part bodies from `parts.json`
+(pick-and-place positions):
+
+```
+py tools/pp_web/boards/recolor_board.py <tracespace top.svg> out.svg --mask "#1d4fa0"     --palette blue --opacity 0.85 --unit in --edge=-220.5,0,2189,1181.1 --flip 1181.1     --parts tools/pp_web/adapters/mikrobus-xpro/parts.json
+```
+
+`adapters.json` gives each adapter's image (`origin_mm`, `size_mm` in its pick-and-place
+coordinates), the centre of the socket that goes on the board's header (`header_at_mm`), and
+where and how it holds the Click (`socket`). A header in `board.json` names its `adapter`;
+the page lines the socket up with the header (`at_mm`) and draws the Click on top. A header
+without an adapter takes the Click at `click_at_mm`. `view_mm` widens the stage beyond the
+board so the stack fits. Its PWR LED glows while the
 twin runs, and a signal pin (ALERT on INT) glows while the pad is at its active level.

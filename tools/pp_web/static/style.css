@@ -26,9 +26,9 @@ header h1 { font-size: 16px; margin: 0; letter-spacing: .3px; }
 main { flex: 1; display: flex; min-height: 0; }
 #board-pane {
   flex: 1; display: flex; align-items: center; justify-content: center;
-  padding: 16px; min-width: 0;
+  padding: 16px; min-width: 0; container-type: size;
 }
-#board { position: relative; height: 100%; aspect-ratio: 58.98 / 99.026; max-width: 100%; }
+#board { position: relative; height: auto; width: 100%; aspect-ratio: 58.98 / 99.026; }
 #board-img { position: absolute; transform: translate(-50%, -50%); display: block;
   border-radius: 6px; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
 #overlays { position: absolute; inset: 0; }
@@ -89,12 +89,14 @@ h2 small { color: var(--muted); font-weight: normal; }
 .signal small { color: var(--muted); }
 .signal i { width: 10px; height: 10px; border-radius: 50%; background: #2a3038; }
 .signal.active i { background: #ff5252; box-shadow: 0 0 8px #ff5252; }
-.click-board {
-  position: absolute; transform: translate(-50%, -50%);
-  filter: drop-shadow(0 8px 14px rgba(0,0,0,.65)); animation: plug .25s ease-out;
+.ext-stack { position: absolute; inset: 0; pointer-events: none; }
+.adapter-board, .click-board {
+  position: absolute; transform: translate(-50%, -50%); pointer-events: auto;
+  filter: drop-shadow(0 6px 12px rgba(0,0,0,.6)); animation: plug .25s ease-out;
 }
+.click-board { filter: drop-shadow(0 10px 16px rgba(0,0,0,.7)); }
 .click-board img { width: 100%; height: 100%; display: block; }
-@keyframes plug { from { opacity: 0; transform: translate(-50%, -54%); } }
+@keyframes plug { from { opacity: 0; } }
 .click-led, .click-pin {
   position: absolute; aspect-ratio: 1; transform: translate(-50%, -50%);
   border-radius: 50%; pointer-events: none;
@@ -107,5 +109,5 @@ h2 small { color: var(--muted); font-weight: normal; }
 @media (max-width: 800px) {
   main { flex-direction: column; }
   #side { width: auto; max-width: none; border-left: 0; }
-  #board { height: 70vh; }
+  #board-pane { flex: none; height: 70vh; }
 }

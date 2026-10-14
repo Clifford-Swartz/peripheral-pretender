@@ -2,7 +2,7 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-let ws, board, catalog = {}, leds = [], clicks = {}, levels = {};
+let ws, board, catalog = {}, adapters = {}, leds = [], clicks = {}, levels = {};
 
 function connect() {
   ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
@@ -44,14 +44,17 @@ function pinRef(pin) {
   return { group: pin[1].toLowerCase(), bit: +pin.slice(2) };
 }
 
-function buildBoard(b, cat) {
+function buildBoard(b, cat, ads) {
   board = b;
   catalog = cat || {};
+  adapters = ads || {};
   $("board-name").textContent = b.name;
   $("board-img").src = `/board/${b.image}`;
   // The image covers the board outline; the stage may be larger
   const v = view();
+  // Fit the stage in the pane at its aspect ratio (container query units)
   $("board").style.aspectRatio = `${v.size[0]} / ${v.size[1]}`;
+  $("board").style.width = `min(100cqw, calc(100cqh * ${v.size[0] / v.size[1]}))`;
   place($("board-img"), [b.origin_mm[0] + b.size_mm[0] / 2,
                          b.origin_mm[1] - b.size_mm[1] / 2], b.size_mm);
   const layer = $("overlays");
@@ -108,29 +111,47 @@ function buildSlots() {
     row.append(head, body);
     box.appendChild(row);
     const art = document.createElement("div");
-    art.className = "click-board";
+    art.className = "ext-stack";
     art.dataset.slot = h.slot;
-    art.style.display = "none";
     $("overlays").appendChild(art);
   }
 }
 
-// Draw a plugged Click from its rendered top side, centred where the board
-// file says (click_at_mm), with its LEDs and signal pins as overlays
-function drawClick(art, h, id, def) {
-  if (art.dataset.click === (id || "")) return;
-  art.dataset.click = id || "";
-  art.textContent = "";
-  art.style.display = def && def.image ? "" : "none";
+// Draw a plugged Click from its rendered top side. On a header that needs
+// an adapter, the adapter's socket sits on the header and the Click on the
+// adapter's mikroBUS socket (rotated as the adapter holds it); otherwise
+// the Click is centred on click_at_mm. LEDs and signal pins are overlays.
+function drawClick(stack, h, id, def) {
+  if (stack.dataset.click === (id || "")) return;
+  stack.dataset.click = id || "";
+  stack.textContent = "";
   if (!def || !def.image) return;
+  const ad = h.adapter && adapters[h.adapter];
+  let at = h.click_at_mm, rot = 0;
+  if (ad) {
+    const dx = h.at_mm[0] - ad.header_at_mm[0], dy = h.at_mm[1] - ad.header_at_mm[1];
+    const img = document.createElement("img");
+    img.className = "adapter-board";
+    img.src = `/adapters/${ad.image}`;
+    img.alt = img.title = `${ad.name} (${ad.part}) on ${h.id}`;
+    place(img, [ad.origin_mm[0] + ad.size_mm[0] / 2 + dx,
+                ad.origin_mm[1] - ad.size_mm[1] / 2 + dy], ad.size_mm);
+    stack.appendChild(img);
+    at = [ad.socket.at_mm[0] + dx, ad.socket.at_mm[1] + dy];
+    rot = ad.socket.rotation;
+  }
+  const art = document.createElement("div");
+  art.className = "click-board";
+  stack.appendChild(art);
   const [ox, oy] = def.origin_mm, [w, hh] = def.size_mm;
-  place(art, h.click_at_mm, def.size_mm);
+  place(art, at, def.size_mm);
+  art.style.transform = `translate(-50%, -50%) rotate(${rot}deg)`;
   art.title = `${def.name} on ${h.id}`;
   const img = document.createElement("img");
   img.src = `/clicks/${def.image}`;
   img.alt = def.name;
   art.appendChild(img);
-  const at = (el, mm, d) => {
+  const put = (el, mm, d) => {
     el.style.left = `${((mm[0] - ox) / w) * 100}%`;
     el.style.top = `${((oy - mm[1]) / hh) * 100}%`;
     el.style.width = `${(d / w) * 100}%`;
@@ -141,7 +162,7 @@ function drawClick(art, h, id, def) {
     el.className = "click-led";
     el.style.background = `radial-gradient(circle, #fff 0 12%, ${led.color} 25%, ${led.color}55 48%, transparent 70%)`;
     el.title = led.id;
-    at(el, led.at_mm, 3.2);
+    put(el, led.at_mm, 3.2);
   }
   for (const sig of def.signals) {
     if (!sig.at_mm) continue;
@@ -150,7 +171,7 @@ function drawClick(art, h, id, def) {
     el.dataset.pin = sig.pin === "int" ? h.int_pin : sig.pin;
     el.dataset.activeLow = sig.active_low ? "1" : "";
     el.title = `${sig.id} (${el.dataset.pin})`;
-    at(el, sig.at_mm, 2.6);
+    put(el, sig.at_mm, 2.6);
   }
 }
 
@@ -159,7 +180,7 @@ function showClicks(state) {
   for (const h of board.headers.filter((x) => x.slot)) {
     const c = state[h.slot], def = c && catalog[c.id];
     const row = document.querySelector(`.slot[data-slot="${h.slot}"]`);
-    const art = document.querySelector(`.click-board[data-slot="${h.slot}"]`);
+    const art = document.querySelector(`.ext-stack[data-slot="${h.slot}"]`);
     const sel = row.querySelector("select"), body = row.querySelector(".slot-body");
     sel.value = c ? c.id : "";
     drawClick(art, h, c && c.id, def);
@@ -234,7 +255,7 @@ function appendUart(text) {
 
 function handle(msg) {
   switch (msg.type) {
-  case "board": buildBoard(msg.board, msg.catalog); break;
+  case "board": buildBoard(msg.board, msg.catalog, msg.adapters); break;
   case "clicks": showClicks(msg.clicks); break;
   case "levels": showSignals(msg.levels); break;
   case "pins": showPins(msg.pins); break;

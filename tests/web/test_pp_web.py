@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.pp_web.server import BOARDS, CLICKS
+from tools.pp_web.server import ADAPTERS, BOARDS, CLICKS
 from tools.pp_web.session import Session
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -31,17 +31,42 @@ def test_board_description():
     assert (led["id"], led["ref"], led["pin"]) == ("LED0", "D700", "PA24")
     slots = {h["slot"]: h["int_pin"] for h in board["headers"]}
     assert slots == {"ext1": "PB02", "ext2": "PA28"}
-    # A plugged Click is drawn inside the stage, and two never overlap
+    # Adapter and Click stacks are drawn inside the stage and never overlap
     (vx, vy), (vw, vh) = board["view_mm"]["origin"], board["view_mm"]["size"]
-    h = max(c["size_mm"][1] for c in CLICKS.values())
-    w = max(c["size_mm"][0] for c in CLICKS.values())
-    centres = sorted(hd["click_at_mm"] for hd in board["headers"])
-    for x, y in centres:
-        assert vx <= x - w / 2 and x + w / 2 <= vx + vw
-        assert vy - vh <= y - h / 2 and y + h / 2 <= vy
-    assert abs(centres[0][1] - centres[1][1]) >= h
+    spans = []
+    for hd in board["headers"]:
+        boxes = _stack_boxes(hd, CLICKS["thermo8"])
+        for x0, y0, x1, y1 in boxes:
+            assert vx <= x0 and x1 <= vx + vw, (hd["id"], x0, x1)
+            assert vy - vh <= y0 and y1 <= vy, (hd["id"], y0, y1)
+        spans.append((min(b[1] for b in boxes), max(b[3] for b in boxes)))
+    spans.sort()
+    assert spans[0][1] <= spans[1][0], spans
     assert _png_size(BOARDS / "ev15n46a" / board["image"]) == tuple(
         round(v * board["px_per_mm"]) for v in board["size_mm"])
+
+
+def _stack_boxes(header: dict, click: dict) -> list[tuple[float, ...]]:
+    """Board-mm boxes (x0, y0, x1, y1) of the adapter and Click on @header."""
+    ad = ADAPTERS[header["adapter"]]
+    dx = header["at_mm"][0] - ad["header_at_mm"][0]
+    dy = header["at_mm"][1] - ad["header_at_mm"][1]
+    (ox, oy), (w, h) = ad["origin_mm"], ad["size_mm"]
+    cx, cy = ad["socket"]["at_mm"][0] + dx, ad["socket"]["at_mm"][1] + dy
+    cw, ch = click["size_mm"]
+    if ad["socket"]["rotation"] % 180:
+        cw, ch = ch, cw
+    return [(ox + dx, oy - h + dy, ox + w + dx, oy + dy),
+            (cx - cw / 2, cy - ch / 2, cx + cw / 2, cy + ch / 2)]
+
+
+def test_adapter_catalog():
+    for ad in ADAPTERS.values():
+        image = BOARDS.parent / "adapters" / ad["image"]
+        assert _png_size(image) == tuple(round(v * 20) for v in ad["size_mm"])
+        (ox, oy), (w, h) = ad["origin_mm"], ad["size_mm"]
+        for x, y in (ad["header_at_mm"], ad["socket"]["at_mm"]):
+            assert ox <= x <= ox + w and oy - h <= y <= oy
 
 
 def _png_size(path: Path) -> tuple[int, int]:

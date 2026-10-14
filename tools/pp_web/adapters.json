@@ -1,0 +1,27 @@
+{
+  "mikrobus-xpro": {
+    "name": "mikroBUS Xplained Pro",
+    "part": "ATMBUSADAPTER-XPRO",
+    "description": "Xplained Pro extension header to one mikroBUS socket (user guide DS50002671A)",
+    "image": "mikrobus-xpro/top.png",
+    "origin_mm": [
+      -5.6007,
+      30.0
+    ],
+    "size_mm": [
+      55.6007,
+      30.0
+    ],
+    "header_at_mm": [
+      -2.7,
+      15.0
+    ],
+    "socket": {
+      "at_mm": [
+        39.073,
+        15.0
+      ],
+      "rotation": 90
+    }
+  }
+}

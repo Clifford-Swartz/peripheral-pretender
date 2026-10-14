@@ -7,8 +7,8 @@ state over a WebSocket.
 Messages to the page: {"type": "status"|"pins"|"uart"|"board"|"clicks",
 ...}; "pins" maps a PORT group ("a", "b") to 32 [driven-high, driven-low]
 fractions of the last frame, "levels" each group's pad levels as a
-32-bit mask (whoever drives them); "board" carries the board and the Click
-catalog; "clicks" maps each header slot ("ext1") to its Click and control
+32-bit mask (whoever drives them); "board" carries the board, the Click
+catalog and the adapters; "clicks" maps each header slot ("ext1") to its Click and control
 values, or null.
 Messages from the page: {"type": "button", "id": "sw0"|"reset",
 "pressed": bool}, {"type": "uart", "data": str}, {"type": "click",
@@ -37,6 +37,7 @@ STATIC = HERE / "static"
 BOARDS = HERE / "boards"
 MAX_ELF = 4 * 1024 * 1024
 CLICKS = json.loads((HERE / "clicks.json").read_text(encoding="utf-8"))
+ADAPTERS = json.loads((HERE / "adapters.json").read_text(encoding="utf-8"))
 
 
 class App:
@@ -140,7 +141,8 @@ class App:
         await ws.prepare(request)
         self.clients.add(ws)
         await ws.send_str(json.dumps({"type": "board", "board": self.board,
-                                      "catalog": CLICKS}))
+                                      "catalog": CLICKS,
+                                      "adapters": ADAPTERS}))
         await ws.send_str(json.dumps({"type": "clicks", "clicks": self.clicks}))
         if self.session:
             await ws.send_str(json.dumps({"type": "status", "state": "running",
@@ -180,10 +182,10 @@ class App:
             await self.session.stop()
 
 
-async def click_file(request: web.Request) -> web.StreamResponse:
-    """A Click board's rendered image (clicks/<id>/top.png)."""
-    root = (HERE / "clicks").resolve()
-    path = (root / request.match_info["click"] / request.match_info["name"]).resolve()
+async def part_image(request: web.Request) -> web.StreamResponse:
+    """A Click's or adapter's rendered image (clicks/<id>/top.png)."""
+    root = (HERE / request.match_info["kind"]).resolve()
+    path = (root / request.match_info["id"] / request.match_info["name"]).resolve()
     if path.parent.parent != root or path.suffix != ".png" or not path.is_file():
         raise web.HTTPNotFound()
     return web.FileResponse(path)
@@ -198,7 +200,7 @@ def make_app(board: str = "ev15n46a", elf: Path | None = None) -> web.Applicatio
         web.post("/api/firmware", state.firmware),
         web.get("/ws", state.ws),
         web.static("/static", STATIC),
-        web.get("/clicks/{click}/{name}", click_file),
+        web.get("/{kind:clicks|adapters}/{id}/{name}", part_image),
     ])
     app.on_startup.append(state.on_startup)
     app.on_cleanup.append(state.on_cleanup)

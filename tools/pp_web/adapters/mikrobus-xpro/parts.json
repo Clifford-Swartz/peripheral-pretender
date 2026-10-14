@@ -1,0 +1,20 @@
+{
+  "source": "Microchip mikroBUS Xplained Pro (ATMBUSADAPTER-XPRO) design documentation rev4: Gerbers, pick and place; user guide DS50002671A",
+  "parts": [
+    {"ref": "J100", "kind": "socket", "value": "Xplained Pro extension socket, 2x10 female, edge mounted, sockets facing down",
+     "at_mm": [-2.7, 15.0], "size_mm": [5.8, 25.6], "pins": [2, 10],
+     "legs": [[2.9, -11.43, 7.77, -11.43], [2.9, -8.89, 7.77, -8.89], [2.9, -6.35, 7.77, -6.35],
+              [2.9, -3.81, 7.77, -3.81], [2.9, -1.27, 7.77, -1.27], [2.9, 1.27, 7.77, 1.27],
+              [2.9, 3.81, 7.77, 3.81], [2.9, 6.35, 7.77, 6.35], [2.9, 8.89, 7.77, 8.89],
+              [2.9, 11.43, 7.77, 11.43]]},
+    {"ref": "J101", "kind": "header_male", "value": "EXT power +5V GND +3.3V", "at_mm": [11.0, 26.43], "size_mm": [7.62, 2.54], "pins": [3, 1]},
+    {"ref": "J102", "kind": "header_male", "value": "VCC select", "at_mm": [11.0, 3.57], "size_mm": [7.62, 2.54], "pins": [3, 1]},
+    {"ref": "J102-jumper", "kind": "jumper", "value": "+3.3V", "at_mm": [12.27, 3.57], "size_mm": [4.9, 2.4]},
+    {"ref": "J103", "kind": "header_female", "value": "mikroBUS AN..GND", "at_mm": [30.312, 26.43], "size_mm": [20.32, 2.54], "pins": [8, 1]},
+    {"ref": "J104", "kind": "header_female", "value": "mikroBUS PWM..GND", "at_mm": [30.312, 3.57], "size_mm": [20.32, 2.54], "pins": [8, 1]},
+    {"ref": "U100", "kind": "ic", "value": "ATSHA204A (ID chip)", "at_mm": [11.2192, 19.869], "size_mm": [3.0, 2.0], "rotation": 270},
+    {"ref": "R100", "kind": "resistor", "at_mm": [13.1093, 19.1312], "size_mm": [1.0, 0.5], "rotation": 270},
+    {"ref": "C100", "kind": "capacitor", "at_mm": [14.3915, 19.124], "size_mm": [1.0, 0.5], "rotation": 90},
+    {"ref": "C101", "kind": "capacitor", "at_mm": [3.7488, 1.2928], "size_mm": [1.0, 0.5]}
+  ]
+}

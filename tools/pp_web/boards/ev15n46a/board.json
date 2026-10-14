@@ -7,7 +7,7 @@
   "px_per_mm": 20,
   "origin_mm": [0.458, 99.626],
   "size_mm": [58.98, 99.026],
-  "view_mm": {"origin": [0.458, 99.626], "size": [80.4, 99.026]},
+  "view_mm": {"origin": [0.458, 99.626], "size": [118.6, 99.026]},
   "leds": [
     {"id": "LED0", "ref": "D700", "at_mm": [27.2258, 88.0858],
      "pin": "PA24", "active_low": true, "color": "#ffc400"}
@@ -21,9 +21,9 @@
   "headers": [
     {"id": "EXT1", "ref": "J200", "at_mm": [54.3, 59.84], "pins": 20,
      "slot": "ext1", "int_pin": "PB02",
-     "click_at_mm": [67.0, 65.1]},
+     "adapter": "mikrobus-xpro"},
     {"id": "EXT2", "ref": "J201", "at_mm": [54.3, 24.28], "pins": 20,
      "slot": "ext2", "int_pin": "PA28",
-     "click_at_mm": [67.0, 22.1]}
+     "adapter": "mikrobus-xpro"}
   ]
 }

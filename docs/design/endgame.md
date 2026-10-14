@@ -48,6 +48,9 @@ Decisions so far:
    (`-M pic32cm-mc00-cpro,ext1=thermo8`). The page has a Click picker per header and a live
    temperature slider; ALERT on the INT pin shows as a signal light, and the `thermo` demo
    lights LED0 from it. Modelled from the data sheet only (no physical Click to check against).
+   On the page the Click is drawn from MikroElektronika's 2D files, on a mikroBUS Xplained Pro
+   adapter (ATMBUSADAPTER-XPRO, rendered from its Gerbers) plugged into the header, as on a
+   real bench; the board is red, as in real life.
    **Next:** an LED/button Click (GPIO), a potentiometer Click (needs an ADC model), an SPI
    Click.
 4. **3D board.** A glTF slab with top and bottom textures, components from the pick-and-place
