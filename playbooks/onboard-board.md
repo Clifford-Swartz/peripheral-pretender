@@ -167,7 +167,8 @@ and note.
      y flip is read from the SVG.
    - Rasterize at 20 px/mm: `new Resvg(svg, {fitTo: {mode: "width", value: <mm * 20>}})`.
 2. **Board file.** `tools/pp_web/boards/<id>/board.json` (copy EV81X90A's): machine, `vcom`
-   label, image origin and size, LEDs, buttons, headers. A header gets `slot` (and `adapter`)
+   label, image origin and size, LEDs, buttons, headers, and `demo_elf` (a firmware build the page
+   starts when someone picks this board in its board picker; the blinky demo is a good choice). A header gets `slot` (and `adapter`)
    only if the QEMU machine has a Click slot for it; otherwise give `int_pin` and leave `slot`
    out, and the page hides the Click section. The server polls every PORT group that the LEDs
    and INT pins use.

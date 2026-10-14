@@ -18,7 +18,8 @@ header {
   background: var(--panel); border-bottom: 1px solid #262c34;
 }
 header h1 { font-size: 16px; margin: 0; letter-spacing: .3px; }
-#board-name { color: var(--muted); }
+#board-select { background: #232a33; color: var(--text); border: 1px solid #2c333c;
+  border-radius: 6px; padding: 4px 8px; font: inherit; max-width: 50vw; }
 .status { margin-left: auto; padding: 2px 10px; border-radius: 10px; font-size: 12px; }
 .status.idle { background: #2a3038; color: var(--muted); }
 .status.running { background: #173d26; color: var(--ok); }

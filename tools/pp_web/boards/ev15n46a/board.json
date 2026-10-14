@@ -2,6 +2,7 @@
   "id": "ev15n46a",
   "name": "PIC32CM MC00 Curiosity Pro (EV15N46A)",
   "machine": "pic32cm-mc00-cpro",
+  "demo_elf": "firmware/hello/build/pic32cm_mc00_cpro/blinky.elf",
   "vcom": "SERCOM0 (PA06/PA07), EDBG virtual COM port",
   "source": "Microchip board design files R3 (Gerbers, pick and place); see README.md",
   "image": "top.png",

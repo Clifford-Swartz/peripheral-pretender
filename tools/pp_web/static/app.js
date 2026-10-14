@@ -75,9 +75,9 @@ function buildBoard(b, cat, ads) {
   board = b;
   catalog = cat || {};
   adapters = ads || {};
-  $("board-name").textContent = b.name;
+  $("board-select").value = b.id;
   $("vcom").textContent = b.vcom || "";
-  $("board-img").src = `/board/${b.image}`;
+  $("board-img").src = `/board/${b.image}?board=${b.id}`;   // per board: no stale cache
   // The image covers the board outline; the stage may be larger
   const v = view();
   // Fit the stage in the pane at its aspect ratio (container query units)
@@ -387,7 +387,14 @@ function appendUart(text) {
 
 function handle(msg) {
   switch (msg.type) {
-  case "board": buildBoard(msg.board, msg.catalog, msg.adapters); break;
+  case "board":
+    if (msg.boards) {
+      const sel = $("board-select");
+      sel.innerHTML = msg.boards.map((x) => `<option value="${x.id}">${x.name}</option>`).join("");
+    }
+    pinsNow = {}; levels = {}; clickState = {};
+    buildBoard(msg.board, msg.catalog, msg.adapters);
+    break;
   case "clicks": showClicks(msg.clicks); break;
   case "levels": showSignals(msg.levels); break;
   case "clickstate": clickState = msg.state; updateClickParts(); break;
@@ -423,6 +430,11 @@ $("send").addEventListener("submit", (e) => {
   e.preventDefault();
   send({ type: "uart", data: $("send-text").value + "\r\n" });
   $("send-text").value = "";
+});
+
+$("board-select").addEventListener("change", (e) => {
+  setStatus("idle", "switching board");
+  send({ type: "select-board", board: e.target.value });
 });
 
 connect();

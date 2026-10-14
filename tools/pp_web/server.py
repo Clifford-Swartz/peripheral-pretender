@@ -16,7 +16,8 @@ fractions of the last frame, "levels" each group's pad levels as a
 the value of each plugged Click's display property; "board" carries the board, the Click
 catalog and the adapters; "clicks" maps each header slot ("ext1") to its Click and control
 values, or null.
-Messages from the page: {"type": "button", "id": "sw0"|"reset",
+Messages from the page: {"type": "select-board", "board": "<id>"}
+(switches boards), {"type": "button", "id": "sw0"|"reset",
 "pressed": bool}, {"type": "uart", "data": str}, {"type": "click",
 "slot": "ext1", "click": "thermo8"|null} (plugs or unplugs a Click: the
 twin restarts with it, like a power cycle) and {"type": "control",
@@ -43,6 +44,7 @@ HERE = Path(__file__).resolve().parent
 STATIC = HERE / "static"
 BOARDS = HERE / "boards"
 MAX_ELF = 4 * 1024 * 1024
+ROOT = HERE.parents[1]
 WATCH_S = 1.0
 WATCH_GLOBS = ("**/out/**/*.elf", "**/dist/**/*.elf")
 
@@ -57,6 +59,15 @@ CLICKS = json.loads((HERE / "clicks.json").read_text(encoding="utf-8"))
 ADAPTERS = json.loads((HERE / "adapters.json").read_text(encoding="utf-8"))
 
 
+def board_list() -> list[dict]:
+    """Every board the page can show: id and name, from boards/*/board.json."""
+    boards = []
+    for path in sorted(BOARDS.glob("*/board.json")):
+        b = json.loads(path.read_text(encoding="utf-8"))
+        boards.append({"id": b["id"], "name": b["name"]})
+    return boards
+
+
 def pin_groups(board: dict) -> tuple[str, ...]:
     """PORT groups ("a", "b", ...) the page shows: those of the board's
     LEDs and header INT pins, and always A and B."""
@@ -69,8 +80,7 @@ def pin_groups(board: dict) -> tuple[str, ...]:
 class App:
     def __init__(self, board: str, elf: Path | None,
                  watch: Path | None = None):
-        self.board_dir = BOARDS / board
-        self.board = json.loads((self.board_dir / "board.json").read_text(encoding="utf-8"))
+        self.load_board(board)
         self.clients: set[web.WebSocketResponse] = set()
         self.session: Session | None = None
         self.elf = elf
@@ -78,9 +88,40 @@ class App:
         self.tmp = Path(tempfile.mkdtemp(prefix="pp_web_"))
         self.uart_log = ""
         self.lock = asyncio.Lock()
+
+    def load_board(self, board: str) -> None:
+        """Make @board (a folder under boards/) current; no Clicks plugged."""
+        self.board_dir = BOARDS / board
+        self.board = json.loads((self.board_dir / "board.json").read_text(encoding="utf-8"))
         self.slots = [h["slot"] for h in self.board["headers"] if "slot" in h]
         # slot -> {"id": click, "values": {control: value}} or None
         self.clicks: dict[str, dict | None] = {s: None for s in self.slots}
+
+    def board_message(self) -> dict:
+        return {"type": "board", "board": self.board, "boards": board_list(),
+                "catalog": CLICKS, "adapters": ADAPTERS}
+
+    async def select_board(self, board: str) -> None:
+        """Switch boards: the twin stops, the page redraws, and the board's
+        demo firmware (board.json "demo_elf", if built) starts."""
+        if board == self.board["id"] or not (BOARDS / board / "board.json").is_file():
+            return
+        async with self.lock:
+            if self.session:
+                await self.session.stop()
+                self.session = None
+            self.load_board(board)
+            self.uart_log = ""
+            demo = ROOT / self.board["demo_elf"] if "demo_elf" in self.board else None
+            self.elf = demo if demo and demo.is_file() else None
+        self.emit({"type": "reset"})
+        self.emit(self.board_message())
+        self.emit({"type": "clicks", "clicks": self.clicks})
+        if self.elf:
+            await self.run(self.elf)
+        else:
+            self.emit({"type": "status", "state": "idle",
+                       "text": "no firmware: drop an ELF built for this board"})
 
     def machine(self) -> str:
         opts = [f"{slot}={c['id']}" for slot, c in self.clicks.items() if c]
@@ -184,9 +225,7 @@ class App:
         ws = web.WebSocketResponse(heartbeat=20)
         await ws.prepare(request)
         self.clients.add(ws)
-        await ws.send_str(json.dumps({"type": "board", "board": self.board,
-                                      "catalog": CLICKS,
-                                      "adapters": ADAPTERS}))
+        await ws.send_str(json.dumps(self.board_message()))
         await ws.send_str(json.dumps({"type": "clicks", "clicks": self.clicks}))
         if self.session:
             await ws.send_str(json.dumps({"type": "status", "state": "running",
@@ -202,6 +241,9 @@ class App:
             if msg.type != WSMsgType.TEXT:
                 continue
             req = json.loads(msg.data)
+            if req.get("type") == "select-board":
+                await self.select_board(str(req.get("board")))
+                continue
             if req.get("type") == "click":
                 await self.plug(str(req.get("slot")), req.get("click"))
                 continue

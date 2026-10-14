@@ -387,3 +387,15 @@ def test_session_button_g_and_7seg(qemu_path, qemu_machines):
     assert held > 0.9
     # U1 (bits 7:0) is the left digit: 0; U2 the right digit: 4
     assert state["ext2.outputs"] == 0xCA << 8 | 0x7E, hex(state["ext2.outputs"])
+
+
+def test_board_list_and_demos():
+    """The page's board picker: every board, and each demo_elf names a
+    firmware build for that board's machine."""
+    from tools.pp_web.server import board_list
+    ids = [b["id"] for b in board_list()]
+    assert {"ev15n46a", "ev81x90a"} <= set(ids)
+    for bid in ids:
+        board = json.loads((BOARDS / bid / "board.json").read_text(encoding="utf-8"))
+        if "demo_elf" in board:
+            assert board["demo_elf"].startswith("firmware/"), board["demo_elf"]
