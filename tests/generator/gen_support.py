@@ -23,6 +23,8 @@ ATDF = Path(os.environ.get(
 # Second device: the generator merges per-IP constants over both
 ATDF_MC00 = PACKS / ("Microchip/PIC32CM-MC_DFP/1.4.67/PIC32CM1216MC00048/atdf/"
                      "PIC32CM1216MC00048.atdf")
+# Third device, 8-bit AVR (AVR8X): its own device-level outputs
+ATDF_AVR = PACKS / "Microchip/AVR-Ex_DFP/2.8.189/atdf/AVR64EA48.atdf"
 QEMU = Path(os.environ.get("PP_QEMU_SRC", ROOT.parent / "pp-qemu"))
 OVERLAYS = ROOT / "overlays"
 PROFILES = ROOT / "profiles"

@@ -73,7 +73,8 @@ def _ip(ip: IpSem) -> dict:
 
 
 def _instance(i: InstanceSem) -> dict:
-    return {
+    avr = {"vectors": list(i.vectors)} if i.vectors else {}
+    return avr | {
         "name": i.name, "module": i.module, "ip": i.ip.key, "ip_id": i.ip_id,
         "ip_version": i.ip_version, "base": i.base, "slot_size": i.slot_size,
         "bus": i.bus,
@@ -87,6 +88,17 @@ def _instance(i: InstanceSem) -> dict:
     }
 
 
+def _avr_core(ds: DeviceSem) -> dict:
+    """AVR: the core type and the signature instead of NVIC facts."""
+    sig = ds.device.property_groups.get("SIGNATURES", {})
+    cpu = next((i for i in ds.device.instances if i.module == "CPU"), None)
+    return {"type": "avrxt",
+            "core_version": cpu.params.get("CORE_VERSION") if cpu else None,
+            "num_vectors": max((l.index for l in ds.irqs), default=0) + 1,
+            "signature": [int(sig[f"SIGNATURE{n}"], 0) for n in range(3)],
+            "revisions": {n: v for n, v in ds.profile.silicon_revisions}}
+
+
 def device_json(ds: DeviceSem) -> str:
     dev = ds.device
     p = dev.params
@@ -98,7 +110,7 @@ def device_json(ds: DeviceSem) -> str:
         "device": {"name": dev.name, "architecture": dev.architecture,
                    "family": dev.family, "series": dev.series,
                    "variants": dev.variants},
-        "core": {"num_irq": int(p["NUM_IRQ"]),
+        "core": _avr_core(ds) if dev.is_avr else {"num_irq": int(p["NUM_IRQ"]),
                  "nvic_prio_bits": int(p["__NVIC_PRIO_BITS"]),
                  "cm0p_rev": int(p["__CM0P_REV"], 0),
                  "mpu_present": p["__MPU_PRESENT"] == "1",
@@ -111,7 +123,7 @@ def device_json(ds: DeviceSem) -> str:
                     "address_space": s.address_space}
                    for s in sorted(dev.memory_segments,
                                    key=lambda s: (s.address_space, s.start))],
-        "nvm_rows": {
+        "nvm_rows": None if dev.is_avr else {
             "base": nvmrows.BASE, "size": nvmrows.SIZE, "fill": nvmrows.FILL,
             "words": [{"addr": w.addr, "value": w.value, "what": w.what}
                       for w in nvmrows.default_words(dev, ds.profile.nvm_rows)],
@@ -141,4 +153,8 @@ def device_json(ds: DeviceSem) -> str:
                       for e in sorted(dev.event_users, key=lambda e: e.index)],
         },
     }
+    if dev.is_avr:
+        del doc["nvm_rows"]
+        doc["data_rows"] = [{"addr": a, "bytes": list(b), "what": w}
+                            for a, b, w in ds.profile.data_rows]
     return json.dumps(doc, indent=1) + "\n"

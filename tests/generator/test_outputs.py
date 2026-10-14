@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from gen_support import ATDF, ATDF_MC00, OVERLAYS, QEMU, ROOT
+from gen_support import ATDF, ATDF_AVR, ATDF_MC00, OVERLAYS, QEMU, ROOT
 from mchpgen import cli, device
 
 JSON_OUT = ROOT / "devices"
@@ -67,7 +67,8 @@ def test_checked_in_outputs_are_current(ds_all):
     stale = [p for p, c in files.items()
              if not Path(p).exists() or Path(p).read_text(encoding="utf-8") != c]
     assert not stale, ("regenerate: py generator/atdf2qemu.py --atdf "
-                       f"{ATDF} --atdf {ATDF_MC00} --qemu-out {QEMU} "
+                       f"{ATDF} --atdf {ATDF_MC00} --atdf {ATDF_AVR} "
+                       f"--qemu-out {QEMU} "
                        f"--json-out devices --report "
                        f"\"{REPORT.relative_to(ROOT)}\"", stale)
     assert not cli.stale_generated(str(QEMU), files)

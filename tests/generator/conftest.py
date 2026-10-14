@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from gen_support import ATDF, ATDF_MC00, OVERLAYS, PROFILES, find_gcc
+from gen_support import ATDF, ATDF_AVR, ATDF_MC00, OVERLAYS, PROFILES, find_gcc
 from mchpgen import atdf, cli, device, overlay, profile
 
 
@@ -29,10 +29,14 @@ def ds(dev, overlays):
 @pytest.fixture(scope="session")
 def ds_all(ds, overlays):
     """Every supported device, in the order the checked-in outputs use."""
-    if not ATDF_MC00.exists():
-        pytest.skip(f"ATDF not found: {ATDF_MC00}")
-    mc = atdf.parse(str(ATDF_MC00))
-    return [ds, device.build(mc, overlays, profile.find(str(PROFILES), mc.name))]
+    out = [ds]
+    for path in (ATDF_MC00, ATDF_AVR):
+        if not path.exists():
+            pytest.skip(f"ATDF not found: {path}")
+        d = atdf.parse(str(path))
+        out.append(device.build(d, overlays,
+                                profile.find(str(PROFILES), d.name)))
+    return out
 
 
 @pytest.fixture(scope="session")

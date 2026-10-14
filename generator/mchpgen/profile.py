@@ -21,7 +21,7 @@ import yaml
 from .overlay import Overlay, OverlayError, _parse_overrides
 
 TOP_KEYS = {"device", "references", "notes", "reset_overrides", "nvm_rows",
-            "silicon_revisions"}
+            "silicon_revisions", "data_rows"}
 NVM_KEYS = {"user_row", "serial_addrs", "serial_default", "words"}
 
 
@@ -40,9 +40,12 @@ class Profile:
     device: str
     references: list[str]
     reset_overrides: dict[str, dict]    # module -> {key: (ResetOverrideKey, value)}
-    nvm_rows: NvmRows
-    # (name, DSU.DID.REVISION); the first one is the default
+    nvm_rows: NvmRows | None            # Arm parts; None on AVR
+    # (name, DSU.DID.REVISION on Arm, SYSCFG.REVID on AVR); first = default
     silicon_revisions: list[tuple[str, int]] = field(default_factory=list)
+    # AVR: bytes of the data space that differ from the defaults (SIGROW
+    # serial number, calibration): (data address, bytes, comment)
+    data_rows: list[tuple[int, bytes, str]] = field(default_factory=list)
     sha1: str = ""
 
     @property
@@ -83,6 +86,22 @@ def _nvm_rows(where: str, raw) -> NvmRows:
                    words=words)
 
 
+def _data_rows(where: str, raw) -> list[tuple[int, bytes, str]]:
+    if not isinstance(raw, list):
+        _fail(where, f"expected a list, got {raw!r}")
+    rows = []
+    for i, r in enumerate(raw):
+        if (not isinstance(r, dict) or set(r) - {"addr", "bytes", "what"}
+                or not isinstance(r.get("addr"), int)
+                or not isinstance(r.get("bytes"), list)
+                or not all(isinstance(b, int) and 0 <= b <= 255
+                           for b in r["bytes"])):
+            _fail(f"{where}[{i}]", "expected {addr: int, bytes: [0-255...], "
+                                   f"what: text}}, got {r!r}")
+        rows.append((r["addr"], bytes(r["bytes"]), str(r.get("what", ""))))
+    return rows
+
+
 def load(path: str) -> Profile:
     with open(path, "rb") as f:
         data = f.read()
@@ -93,9 +112,8 @@ def load(path: str) -> Profile:
     unknown = set(raw) - TOP_KEYS
     if unknown:
         _fail(where, f"unknown top-level keys {sorted(unknown)}")
-    for key in ("device", "nvm_rows"):
-        if key not in raw:
-            _fail(where, f"missing '{key}'")
+    if "device" not in raw:
+        _fail(where, "missing 'device'")
     expected = f"{str(raw['device']).lower()}.yaml"
     if os.path.basename(path) != expected:
         _fail(where, f"file name must be {expected}")
@@ -105,14 +123,20 @@ def load(path: str) -> Profile:
             f"{where}.reset_overrides.{module}", regs)
     revs = raw.get("silicon_revisions")
     if (not isinstance(revs, dict) or not revs
-            or not all(isinstance(v, int) and 0 <= v <= 15 for v in revs.values())):
-        _fail(where, "silicon_revisions must map names to DID.REVISION "
-                     f"values 0-15 (default first), got {revs!r}")
+            or not all(isinstance(v, int) and 0 <= v <= 255
+                       for v in revs.values())):
+        _fail(where, "silicon_revisions must map names to revision ids "
+                     "(DSU.DID.REVISION 0-15 on Arm, SYSCFG.REVID on AVR; "
+                     f"default first), got {revs!r}")
+    nvm = raw.get("nvm_rows")
     prof = Profile(path=os.path.abspath(path), device=str(raw["device"]),
                    references=list(raw.get("references") or []),
                    reset_overrides=overrides,
-                   nvm_rows=_nvm_rows(where + ".nvm_rows", raw["nvm_rows"]),
-                   silicon_revisions=[(str(k), v) for k, v in revs.items()])
+                   nvm_rows=(_nvm_rows(where + ".nvm_rows", nvm)
+                             if nvm is not None else None),
+                   silicon_revisions=[(str(k), v) for k, v in revs.items()],
+                   data_rows=_data_rows(where + ".data_rows",
+                                        raw.get("data_rows") or []))
     prof.sha1 = hashlib.sha1(data).hexdigest()
     return prof
 

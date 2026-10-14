@@ -355,8 +355,10 @@ class _RegBuilder:
     """Computes one RegSem from ATDF facts, overlay rules and heuristics."""
 
     def __init__(self, ctx: Context, module: atdf.Module, slot: _Slot,
-                 rules: RegisterRules | None, scope_names: set[str]):
+                 rules: RegisterRules | None, scope_names: set[str],
+                 avr: bool = False):
         self.ctx = ctx
+        self.avr = avr
         self.module = module
         self.slot = slot
         self.reg = slot.reg
@@ -494,6 +496,10 @@ class _RegBuilder:
             sem.alias_of = self.slot.scope + alias["storage"]
             return
         atdf_w1c = sem.impl if r.atomic_op == f"clear:{r.name}" else 0
+        if self.avr and r.name.endswith("INTFLAGS") and not atdf_w1c:
+            # AVR8X: every INTFLAGS register clears by writing 1 (the AVR
+            # ATDFs carry no atomic-op)
+            atdf_w1c = sem.impl
         if rules and rules.w1c is not None:
             w1c = (sem.impl if rules.w1c == "all"
                    else self.fmask(rules.w1c, "w1c"))
@@ -581,7 +587,7 @@ class _ViewBuilder:
         for s in self.slots:
             by_scope.setdefault(s.scope, set()).add(s.reg.name)
         regs = [_RegBuilder(self.ctx, self.module, s, rules.get(s.reg.name),
-                            by_scope[s.scope]).build()
+                            by_scope[s.scope], self.device.is_avr).build()
                 for s in self.slots]
         index = {r.name: i for i, r in enumerate(regs)}
         for r in regs:
@@ -820,7 +826,7 @@ def _selector(ctx: Context, group: atdf.RegisterGroup,
 def _mmio_groups(device: atdf.Device, module: atdf.Module) -> set[str]:
     return {g.name_in_module for inst in device.instances
             if inst.module == module.name for g in inst.groups
-            if g.address_space == "base"}
+            if g.address_space in atdf.MMIO_SPACES}
 
 
 def _const_prefix(module: atdf.Module, group: atdf.RegisterGroup) -> str:

@@ -18,7 +18,10 @@ EXPECTED = {("SERCOM", "U2201"), ("PORT", "U2210"), ("OSCCTRL", "U2119"),
             # reset values only (from silicon)
             ("MTB", "U2002"), ("HMATRIXB", "I7638"),
             ("EIC", "U2254"), ("TC", "U2249"), ("RTC", "U2250"),
-            ("TCC", "U2213")}
+            ("TCC", "U2213"),
+            # AVR64EA48 (AVR8X; AVR ATDF modules have no version)
+            ("USART", "uart_autobd_v4"), ("CPUINT", "int_8bit_v3"),
+            ("CLKCTRL", "avrea"), ("NVMCTRL", "nvm_ctrl_avr_v3")}
 
 
 def edited(tmp_path, name, change):

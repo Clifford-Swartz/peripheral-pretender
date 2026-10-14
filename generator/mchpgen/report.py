@@ -36,11 +36,13 @@ def _summary(ds: DeviceSem) -> list[str]:
         ["device", f"{dev.name} ({dev.architecture}, {dev.series})"],
         ["source", f"{dev.atdf_file} (timestamp {dev.timestamp}), "
                    f"{dev.dfp_name} {dev.dfp_version}"],
-        ["instances", f"{len(ds.instances)} ({flags['CORE']} Arm core, "
+        ["instances", f"{len(ds.instances)} ({flags['CORE']} "
+                      f"{'CPU' if dev.is_avr else 'Arm core'}, "
                       f"{flags['FUSES']} fuse rows, {flags['NO_REGS']} without "
                       f"registers)"],
         ["module types", len(dev.modules)],
-        ["NVIC lines", f"{len(ds.irqs)}; shared: {'; '.join(shared)}"],
+        ["interrupt vectors" if dev.is_avr else "NVIC lines",
+         f"{len(ds.irqs)}; shared: {'; '.join(shared)}"],
         ["signals", len(ds.signals)],
         ["overlays applied", f"{len(applied)}: {', '.join(applied)}"],
         ["heuristics only", f"{len(heuristic)}: {', '.join(heuristic)}"],
@@ -124,12 +126,22 @@ def _device_notes(ds: DeviceSem) -> list[str]:
         if len(l.instances) > 1:
             out.append(f"- IRQ {l.index} {l.name}: OR gate, inputs "
                        + ", ".join(f"{n}={k}" for k, n in enumerate(l.instances)))
-    out.append(f"- Default slot size 0x{0x400:X} (APB); larger only when the "
-               f"registers extend further, smaller when the memory segment is.")
+    if ds.device.is_avr:
+        out.append("- AVR: each instance maps exactly its registers; the CPU "
+                   "instance is the core's (SP, SREG).")
+    else:
+        out.append(f"- Default slot size 0x{0x400:X} (APB); larger only when "
+                   f"the registers extend further, smaller when the memory "
+                   f"segment is.")
     return out
 
 
 def _nvm(ds: DeviceSem) -> list[str]:
+    if ds.profile.nvm_rows is None:
+        rows = [[f"0x{a:04X}", " ".join(f"{b:02X}" for b in data), what]
+                for a, data, what in ds.profile.data_rows]
+        return (_table(["data address", "bytes", "content"], rows) if rows
+                else ["- none (the SoC fills SIGROW from the ATDF signature)"])
     rows = [[_h(w.addr), _h(w.value), w.what]
             for w in nvmrows.default_words(ds.device, ds.profile.nvm_rows)]
     rows += [[_h(a), _h(s), "serial number (default; SoC property serial-number)"]
@@ -204,7 +216,8 @@ def report(ds: DeviceSem) -> str:
             ", ".join(missing) or "none"]
     out += ["", "## Reset values set by overlays", ""] + (changed or ["- none"])
     out += ["", "## Device-level decisions", ""] + _device_notes(ds)
-    out += ["", "## NVM rows default image", ""] + _nvm(ds)
+    out += ["", "## Data rows (profile)" if dev.is_avr
+            else "## NVM rows default image", ""] + _nvm(ds)
     out += ["", "## Register semantics per IP", "",
             "Masks are per element. `ro bits`: implemented bits that writes "
             "cannot change (omitted for READ_ONLY registers).", ""]

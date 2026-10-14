@@ -31,6 +31,14 @@ PACKS = [
         "check": "Microchip.PIC32CM-MC_DFP.pdsc",
     },
     {
+        # AVR64EA48 (Curiosity Nano EV66E56A): ATDF at atdf/AVR64EA48.atdf
+        # (no family subfolder), avr-gcc device specs under gcc/dev/.
+        "path": ("Microchip", "AVR-Ex_DFP", "2.8.189"),
+        "url": "https://packs.download.microchip.com/"
+               "Microchip.AVR-Ex_DFP.2.8.189.atpack",
+        "check": "atdf/AVR64EA48.atdf",
+    },
+    {
         "path": ("ARM", "CMSIS", "6.1.0"),
         "url": "https://github.com/ARM-software/CMSIS_6/releases/download/"
                "v6.1.0/ARM.CMSIS.6.1.0.pack",

@@ -12,6 +12,11 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
 
+# Address spaces whose register groups are memory mapped: "base" on Arm
+# parts, "data" on AVR (8-bit) parts, where I/O sits in the data space.
+MMIO_SPACES = ("base", "data")
+
+
 def parse_int(text: str | None) -> int | None:
     """ATDF numbers are '0x..' hex or decimal; returns None for missing."""
     if text is None:
@@ -196,10 +201,20 @@ class Device:
                 return inst
         raise KeyError(name)
 
+    @property
+    def is_avr(self) -> bool:
+        """8-bit AVR (architecture AVR8X): data/prog address spaces,
+        several interrupt vectors per instance, no NVIC."""
+        return self.architecture.startswith("AVR")
+
 
 def _parse_mode(el: ET.Element) -> Mode:
+    # AVR ATDFs give a mode several selector values ("0x1 0x2": AC WINDOW
+    # for WINSEL 1 and 2); the first one names the view.
+    value = el.get("value")
+    value = value.split()[0] if value and value.split() else value
     return Mode(name=el.get("name"), qualifier=el.get("qualifier", ""),
-                value=parse_int(el.get("value")) or 0, mask=el.get("mask"),
+                value=parse_int(value) or 0, mask=el.get("mask"),
                 caption=el.get("caption", ""))
 
 
@@ -299,7 +314,7 @@ def parse(path: str) -> Device:
             segments.append(MemorySegment(
                 name=s.get("name"), start=parse_int(s.get("start")),
                 size=parse_int(s.get("size")), type=s.get("type", ""),
-                rw=s.get("rw", ""), exec=s.get("exec") == "true",
+                rw=s.get("rw", ""), exec=s.get("exec") in ("true", "1"),
                 pagesize=parse_int(s.get("pagesize")),
                 address_space=space.get("id")))
     instances = []

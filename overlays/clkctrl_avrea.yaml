@@ -1,0 +1,17 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for the AVR Ex clock controller (CLKCTRL "avrea").
+ip: CLKCTRL
+id: avrea
+versions: [""]
+references:
+  - "DS40002324 (AVR64EA48) chapter CLKCTRL, register descriptions"
+registers:
+  MCLKCTRLA: {hooks: [post_write]}         # CLKSEL: main clock source
+  MCLKCTRLB: {hooks: [post_write]}         # PDIV/PEN: prescaler
+  MCLKINTFLAGS: {w1c: [CFD]}
+  MCLKSTATUS:
+    read_only: true           # oscillator status, from the model
+    dynamic: true
+  XOSC32KCTRLA: {hooks: [post_write]}
+  XOSCHFCTRLA: {hooks: [post_write]}

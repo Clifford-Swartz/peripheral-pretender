@@ -220,14 +220,17 @@ def arm_elf_header(machine=40):
 @pytest.mark.parametrize("content, message", [
     (b"MZ\x90\x00 not an elf at all", "not an ELF file"),
     (b"\x7fELF\x01", "truncated ELF header"),
-    (arm_elf_header(machine=62), r"not an Arm ELF \(e_machine 62"),
+    (arm_elf_header(machine=62), r"not an Arm or AVR ELF \(e_machine 62"),
 ])
 def test_non_arm_elf_images_are_usage_errors(tmp_path, content, message):
     image = tmp_path / "fw.bin"
     image.write_bytes(content)
     with pytest.raises(runner.RunnerError, match=message):
         runner.check_elf(image)
-    runner.check_elf(_write(tmp_path / "ok.elf", arm_elf_header()))
+    assert runner.check_elf(_write(tmp_path / "ok.elf",
+                                   arm_elf_header())) == "arm"
+    assert runner.check_elf(_write(tmp_path / "avr.elf",
+                                   arm_elf_header(machine=83))) == "avr"
 
 
 def _write(path, data):

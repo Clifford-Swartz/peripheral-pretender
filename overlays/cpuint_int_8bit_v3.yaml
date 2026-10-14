@@ -1,0 +1,17 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for the AVR8X interrupt controller (CPUINT int_8bit_v3).
+# Its state lives in the AVRxt CPU (target/avr: cpuint_* fields), which
+# takes the interrupts; the model mirrors the registers there.
+ip: CPUINT
+id: int_8bit_v3
+versions: [""]
+references:
+  - "DS40002324 (AVR64EA48) chapter CPUINT, register descriptions"
+registers:
+  CTRLA: {hooks: [pre_read, post_write]}   # protected by CCP (IOREG)
+  STATUS:
+    read_only: true           # LVL0EX/LVL1EX/NMIEX: set and cleared by the CPU
+    hooks: [pre_read]
+  LVL0PRI: {hooks: [pre_read, post_write]}
+  LVL1VEC: {hooks: [pre_read, post_write]}
