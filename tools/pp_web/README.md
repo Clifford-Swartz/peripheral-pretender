@@ -131,7 +131,9 @@ the product page) with tracespace, recoloured blue with part bodies from `parts.
 (pick-and-place positions):
 
 ```
-py tools/pp_web/boards/recolor_board.py <tracespace top.svg> out.svg --mask "#1d4fa0"     --palette blue --opacity 0.85 --unit in --edge=-220.5,0,2189,1181.1 --flip 1181.1     --parts tools/pp_web/adapters/mikrobus-xpro/parts.json
+py tools/pp_web/boards/recolor_board.py <tracespace top.svg> out.svg --mask "#1d4fa0" \
+    --palette blue --opacity 0.85 --unit in --edge=-220.5,0,2189,1181.1 \
+    --parts tools/pp_web/adapters/mikrobus-xpro/parts.json
 ```
 
 `adapters.json` gives each adapter's image (`origin_mm`, `size_mm` in its pick-and-place

@@ -88,6 +88,7 @@ class Session:
     elf: Path
     emit: Callable[[dict], None]
     groups: tuple[str, ...] = ("a", "b")
+    extra_args: tuple[str, ...] = ()        # more QEMU arguments (-d, -D)
     proc: asyncio.subprocess.Process | None = None
     qmp: Qmp | None = None
     uart_writer: asyncio.StreamWriter | None = None
@@ -104,7 +105,8 @@ class Session:
                 "-chardev", f"socket,id=vcom,host=127.0.0.1,port={uart_port},"
                             "server=on,wait=on",
                 "-serial", "chardev:vcom",
-                "-qmp", f"tcp:127.0.0.1:{qmp_port},server=on,wait=off"]
+                "-qmp", f"tcp:127.0.0.1:{qmp_port},server=on,wait=off",
+                *self.extra_args]
         self.proc = await asyncio.create_subprocess_exec(
             *args, env=qemu_env(), stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE)

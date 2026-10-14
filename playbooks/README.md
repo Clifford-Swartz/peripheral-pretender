@@ -35,13 +35,36 @@ guesses, the playbook is missing something, so fix the playbook, not just the bo
 | 0. Inputs | Kit part number, chip, design files, packs, examples located | Every input found or listed as missing |
 | 1. Chip | Generated device (registers, IRQs, signals, events) | `py -m pytest tests` green; QEMU builds; `qom-test` passes |
 | 2. Board | Board render, board file, QEMU machine | The machine boots `hello` and prints `PP:EXIT 0` |
-| 3. Acceptance | Microchip examples run; silicon comparison if the kit is on the desk | Results table; every failure triaged |
+| 3. Acceptance | `acceptance/<kit>.yaml`: Microchip's examples on the twin; silicon if the kit is on the desk | `tools.pp_accept suite` passes; every example has a verdict |
 | 4. Web | The board in `tools/pp_web` | LEDs and buttons work on the page (web tests) |
 | 5. Hand-back | Docs, patches, commit | Full test suite green; commit pushed |
 
 ## What the agent does and what the owner does
 
-The agent does everything in the phases, including programming the boards on the desk. The owner
-has granted that for the project's development boards. The owner decides which board comes next,
-supplies hardware, and reviews the results table. Nothing here is ever sent to upstream QEMU (see
-`CLAUDE.md`).
+The agent does everything in the phases. The owner decides which board comes next, supplies
+hardware, approves hardware access, and reviews the acceptance results. Nothing here is ever sent
+to upstream QEMU (see `CLAUDE.md`).
+
+## Hardware
+
+`CLAUDE.md` makes the boards read-only unless the owner approves programming, erasing, resetting
+or halting them. Approvals so far:
+
+| Kit | Approved | Scope |
+|---|---|---|
+| EV15N46A (PIC32CM MC00 Curiosity Pro) | 2026-10-13 | everything |
+| EV81X90A (PIC32CM JH01 Curiosity Pro) | 2026-10-14 | everything, including the first chip erase |
+
+For any other kit, ask the owner first and add a row here. Even with approval, never set the
+security bit or anything else that cannot be undone.
+
+## Tools the playbook uses
+
+| Tool | For |
+|---|---|
+| `generator/atdf2qemu.py` | Chip: ATDF + overlays to QEMU tables |
+| `py -m tools.pp run` | Run an ELF that prints `PP:EXIT` (test firmware) |
+| `py -m tools.pp_accept build / run / suite` | Microchip's examples: build with XC32, play scenarios, check expectations |
+| `py -m harness.hw_run` | Silicon: program, reset, capture the VCOM |
+| `tools/pp_web/boards/recolor_board.py`, `clicks/render_click.py` | Board, adapter and Click art |
+| `py -m tools.pp_web --watch` | The web view, following a firmware project's builds |

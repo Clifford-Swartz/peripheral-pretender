@@ -4,12 +4,13 @@ tracespace 4.2.1), crop it to the board outline and optionally draw part
 bodies on it.
 
     py tools/pp_web/boards/recolor_board.py top.svg out.svg \\
-        --mask "#a8101a" --edge 458,600,58980,99026 --flip 118447
+        --mask "#a8101a" --edge 458,600,58980,99026
 
 --edge is the board outline in the SVG's units (Gerber micrometres or
-mils: x, y of the lower-left corner, width, height); --flip is the SVG's
-y flip (the viewBox height tracespace wrote); --unit says which units the
-Gerbers used. --parts adds part bodies from a JSON list in board mm (y up,
+mils: x, y of the lower-left corner, width, height); without an outline
+layer, take it from the silkscreen frame or the user guide's board size.
+--flip is the Y of tracespace's "translate(0,Y) scale(1,-1)", read from the
+SVG when omitted; --unit says which units the Gerbers used. --parts adds part bodies from a JSON list in board mm (y up,
 the pick-and-place coordinates). Rasterize out.svg at 20 px/mm with
 resvg-js. The EV15N46A uses the defaults: red solder mask, gold pads.
 """
@@ -75,7 +76,7 @@ def main() -> None:
     ap.add_argument("--opacity", type=float, default=0.82,
                     help="mask opacity: copper shows through as traces")
     ap.add_argument("--edge", default="458,600,58980,99026")
-    ap.add_argument("--flip", type=float, default=118447)
+    ap.add_argument("--flip", type=float, help="default: from the SVG")
     ap.add_argument("--unit", choices=UNITS, default="mm")
     ap.add_argument("--parts", help="JSON file: {\"parts\": [...]}")
     args = ap.parse_args()
@@ -88,6 +89,10 @@ def main() -> None:
         s, n = re.subn(r"(\.\w+_%s \{color: )[^}]*\}" % layer,
                        r"\g<1>%s;}" % color, s, count=1)
         assert n == 1, f"no .{layer} style in {args.src}"
+    if args.flip is None:
+        m = re.search(r"translate\(0,([-\d.]+)\) scale\(1,-1\)", s)
+        assert m, "no translate(0,Y) scale(1,-1): pass --flip"
+        args.flip = float(m.group(1))
     k = UNITS[args.unit]
     x0, y0, w, h = (float(v) for v in args.edge.split(","))
     top = args.flip - (y0 + h)          # SVG y grows downwards

@@ -1,0 +1,212 @@
+# Acceptance: Microchip's Harmony examples for the PIC32CM JH01 Curiosity Pro
+# (EV81X90A) on the twin. First triaged by the fresh-agent playbook trial,
+# 2026-10-14 (XC32 v4.45, examples at commit d6dc61a).
+#
+#   py -m tools.pp_accept build <clone> --kit pic32cm_jh01_curiosity_pro --out <elves>
+#   py -m tools.pp_accept suite acceptance/pic32cm_jh01_curiosity_pro.yaml --elves <elves>
+#
+# should:  what the example does, from its main.c (the readme.md files only
+#          link to onlinedocs)
+# steps:   the scenario (tools/pp_accept/scenario.py)
+# expect:  machine-checked; only for examples that pass today
+# verdict: pass | gap (model gap) | nt (not testable on this twin)
+# note:    the triage
+
+kit: pic32cm_jh01_curiosity_pro
+machine: pic32cm-jh01-cpro
+examples_repo: Microchip-MPLAB-Harmony/csp_apps_pic32cm_jh00_jh01
+examples_commit: d6dc61a
+packs: [PIC32CM-JH_DFP 1.5.236, CMSIS 5.9.0]
+
+examples:
+  port__port_led_on_off_polling:
+    should: LED0 on while SW0 is held
+    steps: wait 1; press; wait .5; release; wait .5
+    expect: {led_toggles: {LED0: [2, 2]}}
+    verdict: pass
+  eic__eic_led_on_off:
+    should: each SW0 release (EXTINT rising edge) toggles LED0
+    steps: wait 1; press; wait .5; release; wait .5; press; wait .5; release; wait .5
+    expect: {led_toggles: {LED0: [2, 2]}}
+    verdict: pass
+  evsys__evsys_trigger:
+    should: an EIC event through EVSYS toggles PC05 (LED0) on each SW0 release
+    steps: wait 1; press; wait .5; release; wait .5; press; wait .5; release; wait .5
+    expect: {led_toggles: {LED0: [2, 2]}}
+    verdict: pass
+  systick__systick_periodic_timeout:
+    should: LED0 toggles every 100 ms
+    steps: wait 3
+    expect: {led_toggles: {LED0: [24, 32]}}
+    verdict: pass
+  tc__tc_timer_mode:
+    should: TC0 at 1 Hz toggles LED0
+    steps: wait 3.5
+    expect: {led_toggles: {LED0: [2, 4]}}
+    verdict: pass
+  clock__clock_config:
+    should: LED0 toggles every 1 s; a GCLK on a pin (not observed)
+    steps: wait 3.5
+    expect: {led_toggles: {LED0: [2, 4]}}
+    verdict: pass
+  divas__divas_c_operator_override:
+    should: prints signed and unsigned divide results (-5 r1, 5 r2)
+    steps: wait 2
+    expect:
+      uart: ["Quotient = -5 Remainder = 1", "Quotient = 5, Remainder = 2"]
+      backlog_max: 0
+    verdict: pass
+  sercom__usart__usart_echo_interrupt:
+    should: echoes 10 characters and toggles LED0
+    steps: wait 1; send 0123456789; wait 1
+    expect: {uart: ["0123456789"]}
+    verdict: pass
+  pm__pm_wakeup_eic:
+    should: idle and standby sleep, SW0 wakes
+    steps: wait 1; send a; wait 1; press; wait .3; release; wait 1; send b; wait 1; press; wait .3; release; wait 1
+    verdict: pass
+  rstc__rstc_reset_cause:
+    should: shows the reset cause (power-on, external, WDT after SW0)
+    steps: wait 1; press; wait .3; release; wait 9
+    verdict: gap
+    note: power-on 0x01 and External Reset correct; WDT time-out not modelled
+  wdt__wdt_timeout:
+    should: LED blinks; SW0 stalls the loop and the WDT resets in 4 s
+    steps: wait 2; press; wait .3; release; wait 9
+    verdict: gap
+    note: WDT time-out not modelled
+  rtc__rtc_alarm:
+    should: alarm prints the advancing time and toggles LED0
+    steps: wait 5
+    verdict: gap
+    note: JH01 RTC (rtc_03608) has no overlay or model; time never advances
+  pm__pm_wakeup_rtc:
+    should: RTC compare wakes from idle or standby
+    steps: wait 1; send a; wait 6; send b; wait 6
+    verdict: gap
+    note: RTC (rtc_03608)
+  dmac__dmac_usart_echo:
+    should: DMA banner and echo
+    steps: wait 1; send 0123456789; wait 1
+    verdict: gap
+    note: DMAC not modelled; no output at all
+  dsu__dsu_crc32_generate:
+    should: LED0 on if hardware and software CRC32 match
+    steps: wait 2
+    verdict: gap
+    note: DSU CRC32 not modelled
+  nvmctrl__nvmctrl_flash_read_write:
+    should: program and verify flash, LED0 on
+    steps: wait 2
+    verdict: gap
+    note: NVMCTRL programming not modelled
+  nvmctrl__nvmctrl_data_flash:
+    should: counts reads during erase (read-while-write)
+    steps: wait 3
+    verdict: gap
+    note: NVMCTRL; prints counts of 0
+  nvmctrl__nvmctrl_ecc_testing:
+    should: ECC fault injection results
+    steps: wait 1; send a; wait 2
+    verdict: gap
+    note: NVMCTRL write and ECC; data reads 0xFFFFFFFF
+  mcramc__mcramc_ecc_mbist_testing:
+    should: SRAM self-test passes, ECC demo
+    steps: wait 1; send a; wait 2
+    verdict: gap
+    note: SMBIST and MCRAMC not modelled ("MBIST Test on SRAM failed")
+  freqm__freqm_measure_clock_freq:
+    should: measures 48 MHz
+    steps: wait 3
+    verdict: gap
+    note: FREQM not modelled; hangs
+  adc__adc_sample:
+    should: ADC readings
+    steps: wait 3
+    verdict: gap
+    note: ADC not modelled
+  adc__adc_window_sleepwalking:
+    should: ADC window events while asleep
+    steps: wait 3
+    verdict: gap
+    note: ADC, RTC
+  adc__adc_dmac_sleepwalking:
+    should: ADC results by DMA while asleep
+    steps: wait 3
+    verdict: gap
+    note: ADC, DMAC
+  ac__ac_sleepwalk_singleshot:
+    should: RTC-triggered AC comparisons
+    steps: wait 3
+    verdict: gap
+    note: AC, RTC
+  ac__ac_wav_gen:
+    should: AC comparing a DAC waveform
+    steps: wait 3
+    verdict: gap
+    note: AC, DAC
+  dac__dac_wav_gen:
+    should: DAC waveform
+    steps: wait 2
+    verdict: gap
+    note: DAC
+  dac__dac_wav_gen_dma:
+    should: DAC waveform by DMA
+    steps: wait 2
+    verdict: gap
+    note: DAC, DMAC
+  ccl__manchester_encoder:
+    should: Manchester-encoded pin output
+    steps: wait 2
+    verdict: gap
+    note: CCL
+  tc__tc_capture_mode:
+    should: prints the measured PWM
+    steps: wait 3
+    verdict: gap
+    note: TC capture and event action 5
+  tc__tc_compare_mode:
+    should: PWM on a pin
+    steps: wait 2
+    verdict: nt
+    note: pin waveform not checked yet (the twin has pad duty; add an expectation)
+  tcc__tcc_synchronous_pwm_channels:
+    should: 3 PWM channels with dead time
+    steps: wait 2
+    verdict: gap
+    note: TCC dead time (WEXCTRL)
+  can__can_fd_operation_blocking:
+    should: menu, send over CAN
+    steps: wait 1; send 0; wait 2
+    verdict: gap
+    note: CAN not modelled; prints "Success" only because the registers store values
+  can__can_fd_operation_interrupt_timestamp:
+    should: menu, send over CAN with timestamps
+    steps: wait 1; send 0; wait 2
+    verdict: gap
+    note: CAN (misleading "Success")
+  sercom__i2c__master__i2c_eeprom:
+    should: write and read an AT24MAC at 0x54 on an extension board
+    steps: wait 2
+    verdict: nt
+    note: needs an AT24MAC part model on EXT
+  sercom__spi__spi_eeprom_write_read:
+    should: SPI EEPROM on EXT1
+    steps: wait 2
+    verdict: nt
+    note: needs an SPI EEPROM part model
+  sercom__i2c__slave__i2c_eeprom_emulation:
+    should: I2C client for an external host
+    steps: wait 2
+    verdict: gap
+    note: I2C client mode not modelled; needs a host
+  sercom__usart__usart_lin__master:
+    should: LIN master to a second board
+    steps: wait 2
+    verdict: gap
+    note: LIN frames not modelled; needs a second board
+  sercom__usart__usart_lin__slave:
+    should: LIN slave for a second board
+    steps: wait 2
+    verdict: gap
+    note: LIN frames not modelled; needs a second board
