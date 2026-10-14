@@ -1,0 +1,119 @@
+From e7e2e54a659bc11dae63d1bacae7d1a127d8215c Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 14 Oct 2026 01:59:08 -0700
+Subject: [PATCH] hw/arm: Thermo 8 Click's pull-up on INT
+
+The Thermo 8 Click has a 4.7 kOhm pull-up (R3) on the MCP9808's
+open-drain ALERT (MikroElektronika schematic v100). Without it, INT
+floated and read low whenever firmware had not enabled the pad's own
+pull-up, which looked like an active alert. A Click entry can now ask
+for a pull-up: a released output leaves the INT pad high.
+
+Peripheral Pretender: AI-assisted, not for upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  4 ++--
+ hw/arm/pic32cm_mc00_cpro.c            | 23 +++++++++++++++++++----
+ tests/qtest/pic32cm-click-test.c      | 11 +++++++++++
+ 3 files changed, 32 insertions(+), 6 deletions(-)
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 9fbe73d..512f1ce 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -52,8 +52,8 @@ is ``/machine/ext1-click`` or ``/machine/ext2-click``.
+ 
+ ``thermo8``
+   Thermo 8 Click: an MCP9808 temperature sensor (``mchp-mcp9808``) at I2C
+-  address 0x18, its open-drain ALERT output on INT (no pull-up: firmware
+-  enables the pad's). The registers follow the MCP9808 data sheet
++  address 0x18, its open-drain ALERT output on INT with the Click's 4.7 kOhm
++  pull-up (R3), so INT reads high while ALERT is inactive. The registers follow the MCP9808 data sheet
+   (DS25095); conversion time and hysteresis are not modelled. The QOM
+   property ``temperature`` (milli-degrees C, -40000 to 125000, default
+   25000) sets the temperature, also at run time:
+diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
+index 4fed807..44cfebe 100644
+--- a/hw/arm/pic32cm_mc00_cpro.c
++++ b/hw/arm/pic32cm_mc00_cpro.c
+@@ -55,11 +55,12 @@ typedef struct CproClick {
+     const char *type;           /* an I2C target */
+     uint8_t addr;
+     const char *int_out;        /* its GPIO output on the INT pin */
++    bool int_pullup;            /* a pull-up resistor on INT on the Click */
+ } CproClick;
+ 
+ static const CproClick pic32cm_mc00_cpro_clicks[] = {
+     { "thermo8", "Thermo 8 Click (MCP9808 temperature sensor, ALERT on INT)",
+-      TYPE_MCHP_MCP9808, 0x18, MCHP_MCP9808_ALERT },
++      TYPE_MCHP_MCP9808, 0x18, MCHP_MCP9808_ALERT, true },     /* R3 4.7k */
+ };
+ 
+ /* serial_hd(i) is wired to SERCOM pic32cm_mc00_cpro_serial[i] */
+@@ -140,6 +141,15 @@ static void pic32cm_mc00_cpro_set_ext2(Object *obj, const char *value,
+     pic32cm_mc00_cpro_set_ext(obj, 1, value, errp);
+ }
+ 
++/*
++ * A pull-up on the Click: an open-drain output that lets go (-1) leaves the
++ * INT pad high instead of floating.
++ */
++static void pic32cm_mc00_cpro_int_pullup(void *opaque, int n, int level)
++{
++    qemu_set_irq(opaque, level < 0 ? 1 : level);
++}
++
+ /* Plug the Click boards named by ext1= and ext2= into their headers. */
+ static void pic32cm_mc00_cpro_add_clicks(Pic32cmMc00CproState *s)
+ {
+@@ -179,9 +189,14 @@ static void pic32cm_mc00_cpro_add_clicks(Pic32cmMc00CproState *s)
+         object_property_add_child(OBJECT(s), child, OBJECT(dev));
+         i2c_slave_realize_and_unref(dev, i2c, &error_fatal);
+         if (c->int_out) {
+-            qdev_connect_gpio_out_named(DEVICE(dev), c->int_out, 0,
+-                qdev_get_gpio_in_named(port, MCHP_PORT_IN,
+-                                       pic32cm_mc00_cpro_ext_int[n]));
++            qemu_irq pad = qdev_get_gpio_in_named(port, MCHP_PORT_IN,
++                                                  pic32cm_mc00_cpro_ext_int[n]);
++
++            if (c->int_pullup) {
++                qemu_set_irq(pad, 1);
++                pad = qemu_allocate_irq(pic32cm_mc00_cpro_int_pullup, pad, 0);
++            }
++            qdev_connect_gpio_out_named(DEVICE(dev), c->int_out, 0, pad);
+         }
+     }
+ }
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index 5c95e87..19526f0 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -132,6 +132,16 @@ static void test_identity(void)
+     qtest_quit(qts);
+ }
+ 
++/* The Click's pull-up (R3) holds INT high with no pull on the pad */
++static void test_int_pullup(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writeb(qts, PB + P_PINCFG + INT1_PIN, 0x02);     /* INEN only */
++    g_assert_true(int_high(qts));
++    qtest_quit(qts);
++}
++
+ static void test_not_fitted(void)
+ {
+     QTestState *qts = qtest_init("-M pic32cm-mc00-cpro ");
+@@ -258,6 +268,7 @@ int main(int argc, char **argv)
+     g_test_init(&argc, &argv, NULL);
+     qtest_add_func("pic32cm-click/thermo8-identity", test_identity);
+     qtest_add_func("pic32cm-click/not-fitted", test_not_fitted);
++    qtest_add_func("pic32cm-click/thermo8-int-pullup", test_int_pullup);
+     qtest_add_func("pic32cm-click/thermo8-ta", test_ta_encoding);
+     qtest_add_func("pic32cm-click/thermo8-limits", test_limit_flags);
+     qtest_add_func("pic32cm-click/thermo8-alert", test_alert);
+-- 
+2.53.0.windows.2
+
