@@ -47,7 +47,8 @@ def cmd_run(a) -> int:
     else:
         for led, trace in res.leds.items():
             print(f"{led}: {res.toggles(led)} toggles {trace[:20]}")
-        print("uart:", res.uart[-1500:])
+        print("uart:", res.uart[-1500:].encode("ascii", "backslashreplace")
+              .decode())
         print("backlog:", res.backlog.get("total", 0), res.backlog.get("instances", {}))
     return 0
 
@@ -86,8 +87,8 @@ def cmd_suite(a) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="pp_accept")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    b = sub.add_parser("build", help="build a kit's example projects with XC32")
-    b.add_argument("clone", help="Harmony examples clone (has apps/)")
+    b = sub.add_parser("build", help="build a kit's example projects (XC32 or XC8)")
+    b.add_argument("clone", help="Harmony examples clone (has apps/), or a folder of example repositories")
     b.add_argument("--kit", required=True, help="project name, e.g. pic32cm_jh01_curiosity_pro")
     b.add_argument("--out", required=True, help="folder for <app>.elf and logs")
     b.add_argument("--force", action="store_true", help="rebuild cached ELFs")

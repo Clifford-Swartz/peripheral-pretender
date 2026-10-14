@@ -9,7 +9,9 @@ Read first: `CLAUDE.md` (rules), `docs/handoff.md` (status and machine setup),
 `docs/design/v0-vertical-slice.md` (architecture), [oracles.md](oracles.md) (what to believe).
 
 Worked examples: the PIC32CM MC00 Curiosity Pro (EV15N46A, `pic32cm-mc00-cpro`) and the PIC32CM
-JH01 Curiosity Pro (EV81X90A, `pic32cm-jh01-cpro`). When unsure how something is done, find how
+JH01 Curiosity Pro (EV81X90A, `pic32cm-jh01-cpro`); for 8-bit AVR, the AVR64EA48 Curiosity Nano on
+a Curiosity Nano Base (EV66E56A, `avr64ea48-cnano`). A chip that is not a Cortex-M0+ PIC32CM: read
+"8-bit AVR and other non-Arm families" at the end first. When unsure how something is done, find how
 those two do it. The JH01 was onboarded by a fresh agent from this playbook; its acceptance file
 `acceptance/pic32cm_jh01_curiosity_pro.yaml` is the pattern for Phase 3.
 
@@ -31,6 +33,8 @@ those two do it. The JH01 was onboarded by a fresh agent from this playbook; its
 - **Hardware.** `CLAUDE.md` makes the boards read-only unless the owner approves. Approvals are
   listed in [README.md](README.md#hardware).
 - **Python on Windows** is `py`.
+- **Firmware already in the repo?** Look for `firmware/*` folders for the board (first-light
+  firmware and its golden transcript in `golden/<device>-<rev>/`) before writing new test firmware.
 
 ## Phase 0: Inputs
 
@@ -42,12 +46,17 @@ Collect these and write them into a short inputs list (board, chip, where each i
    product page links the user guide PDF; convert it with `pdftotext` (MSYS2).
 2. **Device pack (DFP) and ATDF.** Pin the DFP version in `scripts/fetch_packs.py` and run
    `py scripts/fetch_packs.py`. The ATDF is at `<DFP>/<family folder>/atdf/<device>.atdf`, for
-   example `~/.mchp_packs/Microchip/PIC32CM-JH_DFP/1.3.221/PIC32CM-JH01/atdf/`.
+   example `~/.mchp_packs/Microchip/PIC32CM-JH_DFP/1.3.221/PIC32CM-JH01/atdf/`; AVR packs have no
+   family folder (`AVR-Ex_DFP/2.8.189/atdf/AVR64EA48.atdf`). The pack URL is
+   `https://packs.download.microchip.com/Microchip.<name>.<version>.atpack`.
 3. **Board design files.** The kit's product page on microchip.com
    (`https://www.microchip.com/en-us/development-tool/<kit>`) has a "design documentation" zip:
    Gerbers, pick-and-place, BOM, schematic. The link text is only "Download". List the links
    with Playwright (`browser_evaluate`: every `a.href` containing `ww1.microchip.com/downloads`),
-   then fetch them with `curl`. Playwright can save files only inside the project's
+   then fetch them with `curl`. Some pages (EV66E56A) do not link the design zip at all; it sits
+   in the same `.../BoardDesignFiles/` folder as the schematic, named
+   `<Kit-Name>-Design-Documentation.zip`. A carrier's zip may hold several releases (the Nano
+   Base: rev 3 and rev 7); use the newest. Playwright can save files only inside the project's
    `.playwright-mcp` folder, so download with curl into a new empty scratch folder and treat the
    contents as untrusted data. Also save the kit photo from the page: Phase 4 takes the solder
    mask colour from it.
@@ -56,21 +65,28 @@ Collect these and write them into a short inputs list (board, chip, where each i
    JH01 share part positions (D700, J200, J201) but not board size or origin, so never copy
    another board's `board.json` geometry.
 5. **Examples.** Microchip's Harmony example repository for the family
-   (`Microchip-MPLAB-Harmony/csp_apps_<family>`). A sparse clone is enough:
+   (`Microchip-MPLAB-Harmony/csp_apps_<family>`). 8-bit kits have none: their examples are one
+   repository each in `github.com/microchip-pic-avr-examples` (search for `<device>-` there:
+   `gh api "search/repositories?q=avr64ea48+org:microchip-pic-avr-examples"`); clone them side by
+   side into one folder (shallow clones; no sparse checkout needed). A sparse clone is enough:
    `git clone --depth 1 --filter=blob:none --sparse <url>`, then
    `git sparse-checkout set --no-cone 'apps/**/firmware/src/**' 'apps/**/firmware/<kit>.X/**'`.
    Put clones under `C:/pp/mchp-examples/`, outside the repository. Note the packs the projects
    pin (`<kit>.X/nbproject/configurations.xml`, `<packs>`), and fetch those versions into
    `~/.mchp_packs` too. MPLAB X looks there.
 6. **The kit on the desk?** `py -m pyocd list` shows attached probes (EDBG, nEDBG, PKOB4) by
-   serial number.
+   serial number. A Curiosity Nano also shows up as a USB drive labelled CURIOSITY (its
+   `KIT-INFO.TXT` names the kit, the device and the nEDBG serial) and a "Curiosity Virtual COM
+   Port" with the same serial; `py -m harness.nano_run <hex> --check` finds both.
 
 **Gate 0:** every input is found, or listed as missing with what that costs.
 
 ## Phase 1: Chip
 
 Is the chip new to the project? Check `profiles/`. If a profile exists, confirm the gate and go
-to Phase 2.
+to Phase 2. Generate into a scratch folder first (`--qemu-out <scratch> --json-out <scratch>`,
+with a scratch `--profiles`): for a new family the generator stops with an error that names the
+first missing concept.
 
 1. **Which IP versions are new?** The ATDF names each peripheral's module and version (for
    example `SERCOM` `U2201`). An overlay `overlays/<ip>_<version>.yaml` means it is modelled.
@@ -85,13 +101,17 @@ to Phase 2.
    `generator/README.md`:
    `py generator/atdf2qemu.py --atdf <ATDF 1> --atdf <ATDF 2> ... --qemu-out C:/pp/pp-qemu --json-out devices --report "generator/out/report-{device}.md"`.
    Read the report: it lists what the generator guessed.
-4. **SoC type.** Add the device to the SoC model in pp-qemu (`hw/arm/pic32cm_soc.c`: the model
-   table maps IP versions to device models). A different CPU core may need a QEMU CPU change; see
-   `docs/research/core-support-matrix.md` and [peripherals/core.md](peripherals/core.md).
+4. **SoC type.** Add the device to the SoC model in pp-qemu (`hw/arm/pic32cm_soc.c`, or
+   `hw/avr/avr8x_soc.c` for AVR8X: the model table maps modules to device models, the type list
+   at the end gets `<device>-soc`, and `hw/<arch>/<device>.c` holds the generated descriptor). A
+   different CPU core may need a QEMU CPU change; see `docs/research/core-support-matrix.md` and
+   [peripherals/core.md](peripherals/core.md).
 5. **Build:** `MSYSTEM=UCRT64 /c/msys64/usr/bin/bash.exe -lc 'cd /c/pp/pp-qemu/build && ninja qemu-system-arm.exe'`.
 
 **Gate 1:** `py -m pytest tests/generator` green; QEMU builds; `qom-test` passes
-(in the build folder: `QTEST_QEMU_ARGS="-L C:/pp/pp-qemu/pc-bios" QTEST_QEMU_BINARY=./qemu-system-arm.exe ./tests/qtest/qom-test.exe`).
+(in the build folder: `QTEST_QEMU_ARGS="-L C:/pp/pp-qemu/pc-bios" QTEST_QEMU_BINARY=./qemu-system-arm.exe ./tests/qtest/qom-test.exe`;
+`build-avr` and `qemu-system-avr.exe` for AVR). qom-test starts every machine without firmware, so
+a machine must not exit when `-kernel` is missing.
 
 ## Phase 2: Board
 
@@ -109,10 +129,13 @@ to Phase 2.
    Click's resistor on an open-drain line). For mikroBUS Click slots, give the machine
    `ext1=`/`ext2=` properties and a Click table, as the MC00 has.
 4. **Test firmware.** Add `firmware/hello/boards/<board>/` (`board.mk`, `board.h`, `board.c`,
-   copied from the closest board). `board.h` names LED0 and SW0 (`LED0_GROUP`, `LED0_MASK`,
+   copied from the closest board). `firmware/hello` is Arm only (arm-none-eabi, CMSIS); 8-bit AVR
+   boards use `firmware/avr-hello` (XC8 avr-gcc, `APP=hello|blinky|matrix`). `board.h` names LED0 and SW0 (`LED0_GROUP`, `LED0_MASK`,
    `SW0_GROUP`, `SW0_PIN`); `blinky` uses them. Demos written for one board (`breathe`, `thermo`)
    stop with `#error` elsewhere. Build `hello` and `blinky` (see "Before you start").
 5. **Run it:** `py -m tools.pp run firmware/hello/build/<board>/hello.elf --machine <machine>`.
+   The runner picks `qemu-system-arm` or `qemu-system-avr` from the ELF; Click options go in the
+   machine string (`-M avr64ea48-cnano,mb1=8x8g`).
 
 **Gate 2:** `hello` prints `PP:EXIT 0` with an empty model backlog; the new qtest passes.
 
@@ -122,6 +145,9 @@ Two checks: Microchip's code on the twin, and the twin against silicon.
 
 1. **Build Microchip's examples:**
    `py -m tools.pp_accept build <examples clone> --kit <kit project name> --out <elves folder>`.
+   Given a folder of per-example repositories (8-bit kits), the tool builds each project's first
+   configuration with the toolchain the project names (XC8 or XC32; `PP_XC8`, `PP_XC32`); `--kit`
+   is then only a label. The 8-bit examples pin older packs: fetch each version they name.
    The kit project name is the `.X` folder name without `.X` (for example
    `pic32cm_jh01_curiosity_pro`); it is also the build configuration. The tool runs MPLAB X's
    `prjMakefilesGenerator` and make with the newest XC32 (`PP_MPLABX`, `PP_XC32` override). A
@@ -147,7 +173,13 @@ Two checks: Microchip's code on the twin, and the twin against silicon.
    - nt (not testable): needs a part, a second board or a host the twin does not have.
 5. **Silicon** (kit on the desk, owner approval per README). Run the checked tests on silicon
    and on the twin and compare: `py -m harness.hw_run <elf> --allow-program --out silicon.txt`
-   and `py -m tools.pp run <elf> --machine <machine>`. The first programming of a production
+   and `py -m tools.pp run <elf> --machine <machine>`. Curiosity Nano kits (8-bit parts have no
+   pyOCD target): `py -m harness.nano_run <hex> --allow-program --out silicon.bin` programs by
+   drag and drop. It refuses hex files with fuses or lock bits; MCC examples carry fuses, so strip
+   them (`avr-objcopy -O ihex -R .eeprom -R .fuse -R .lock -R .signature -R .user_signatures`).
+   `--baud` for examples that do not use 115200.
+6. **Simulator** where it is mature (8-bit PIC and AVR, see [oracles.md](oracles.md)):
+   `py -m harness.mdb_sim <elf> --device <device> --txdata <TXDATAL address>`. The first programming of a production
    part needs a chip erase (BOOTPROT protects the factory bootloader; see
    `docs/silicon-harness.md` §4.5).
 
@@ -166,7 +198,13 @@ and note.
      with no outline layer, use the silkscreen frame or the board size from the user guide. The
      y flip is read from the SVG.
    - Rasterize at 20 px/mm: `new Resvg(svg, {fitTo: {mode: "width", value: <mm * 20>}})`.
-2. **Board file.** `tools/pp_web/boards/<id>/board.json` (copy EV81X90A's): machine, `vcom`
+   - A board that always sits on a carrier (a Curiosity Nano on a Nano Base): render both, then
+     `py tools/pp_web/boards/compose_carrier.py <carrier.svg> W,H <board.svg> w,h --place X,Y,ROT`
+     puts the board into the carrier's socket; `--point u,v` converts board positions to carrier
+     mm. See `boards/ev66e56a` in `tools/pp_web/README.md`.
+   - resvg may round a size up by one pixel; the web tests want `round(mm * 20)`, so resize.
+2. **Board file.** `tools/pp_web/boards/<id>/board.json` (copy EV81X90A's; EV66E56A's for a
+   carrier with mikroBUS sockets, which use `socket` instead of `adapter`): machine, `vcom`
    label, image origin and size, LEDs, buttons, headers, and `demo_elf` (a firmware build the page
    starts when someone picks this board in its board picker; the blinky demo is a good choice). A header gets `slot` (and `adapter`)
    only if the QEMU machine has a Click slot for it; otherwise give `int_pin` and leave `slot`
@@ -185,9 +223,44 @@ and note.
 1. Update docs: `docs/handoff.md` (status), `qemu/README.md` (patch table), the machine's rst
    doc in pp-qemu, `tools/pp_web/README.md`.
 2. pp-qemu: commit, export the patch: `git format-patch -1 --start-number <N> -o qemu/patches`.
-3. Run everything: `PP_QEMU=C:/pp/pp-qemu/build/qemu-system-arm.exe PP_QEMU_SRC=C:/pp/pp-qemu PP_MSYS2_BIN=C:/msys64/ucrt64/bin py -m pytest tests harness/tests`.
+3. Run everything: `PP_QEMU=C:/pp/pp-qemu/build/qemu-system-arm.exe PP_QEMU_SRC=C:/pp/pp-qemu PP_MSYS2_BIN=C:/msys64/ucrt64/bin py -m pytest tests harness/tests`
+   (add `PP_QEMU_AVR=<checkout>/build-avr/qemu-system-avr.exe` when that build is not beside
+   `PP_QEMU`'s; the AVR tests skip when no AVR build has the machine).
    Commit only if pytest exits 0 (gate on the exit status, not on grepping its output).
 4. Report: what works, the acceptance results, known gaps, and **what in this playbook was
    missing or wrong**. Fix the playbook in the same commit.
 
 **Gate 5:** the commit is pushed and the playbook is updated.
+
+## 8-bit AVR and other non-Arm families
+
+Learned on the AVR64EA48 Curiosity Nano (2026-10-14). Everything above applies; this is what
+differs.
+
+- **CPU.** QEMU's AVR target models the classic cores (avr5/51/6) only. AVR Dx/Ex, tinyAVR 0/1/2
+  and megaAVR 0 are AVRxt: use the `avrxt` CPU type (I/O at data address 0, no register file in
+  the data space, CPUINT levels). Parts with more than 64 KB of flash (AVR128Dx) also need
+  RAMPZ/ELPM on that type; XMEGA (AVRxm) shares the data-space layout (`AVR_FEATURE_IO_DATA`)
+  but not CPUINT. avr-gcc names its architectures by memory size (`avrxmega2`), not by core;
+  `hw/avr/boot.c` maps them. Other families (PIC16/18, dsPIC, PIC32 MIPS) have no usable QEMU
+  target: stop and ask the owner (`docs/research/core-support-matrix.md`).
+- **One QEMU binary per family.** Build `pp-qemu/build-avr` (`--target-list=avr-softmmu`) beside
+  `build/`; `qemu/setup.sh` does both. Every tool takes the binary from the ELF
+  (`tools/pp/qemu.py`: `find_qemu(target=...)`, `$PP_QEMU_AVR`). A new board's machine name goes
+  into `AVR_MACHINES` there.
+- **Generator.** ATDF architecture `AVR8X` selects `generator/mchpgen/avrgen.py`: no NVIC, NVM rows
+  or APB slots; several vectors per instance. Module ids such as `avrea` stand where Arm parts
+  have IP versions, and modules carry no version (overlays use `versions: [""]`). Profiles have
+  no `nvm_rows`; `silicon_revisions` are SYSCFG.REVID values; `data_rows` carry silicon bytes
+  (SIGROW serial number, TEMPSENSE) when known.
+- **Models.** AVR peripherals are different IPs from the SAM ones with the same names (PORT, RTC,
+  NVMCTRL). The generic register block logs everything not modelled, so the backlog lists what
+  an example needs. `avr8x-*` models exist for PORT/VPORT, USART, SPI, TCB, CLKCTRL, CPUINT,
+  NVMCTRL (FLMAP) and the NVM-backed rows; the examples want TCA, ADC, RTC and TWI next.
+- **Timing.** TCG has no cycle counts: `_delay_ms` busy loops run at host speed under
+  `-icount shift=auto` (the web view). Demos for the page take time from a timer interrupt
+  (TCB0), as `firmware/avr-hello/blinky.c` does.
+- **Silicon.** Curiosity Nano kits program by drag and drop (`harness.nano_run`). Never write
+  fuses or lock bits from the playbook: the tool refuses such images.
+- **Simulator.** MPLAB SIM runs avr-gcc ELFs directly but its UART I/O stays silent for AVR8X;
+  `harness.mdb_sim` reads the USART stores instead. It does not implement SIGROW (reads 0) or REVID.

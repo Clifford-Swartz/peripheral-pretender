@@ -7,6 +7,12 @@ to `PP:EXIT 0` with an empty model backlog. See "Part B result" below.
 PIC32CM1216MC00048, machine `pic32cm-mc00-cpro`). Its `hello.elf` reaches `PP:EXIT 0` with an
 empty backlog. See "Second target: PIC32CM MC00" below.
 
+**2026-10-14:** first non-Arm board, the **AVR64EA48 Curiosity Nano** (EV66E56A, machine
+`avr64ea48-cnano`, `qemu-system-avr` built in `pp-qemu/build-avr`), on a Curiosity Nano Base for
+Click boards with the 8x8 G Click. `firmware/avr-hello` prints byte for byte what the kit prints
+(`golden/avr64ea48-b1/`); the MPLAB simulator differs only in SIGROW and REVID. See "AVR64EA48
+Curiosity Nano" below and the playbook section "8-bit AVR and other non-Arm families".
+
 Work started on a locked-down corporate Windows workstation and moves to a personal PC because
 background work there kept raising admin prompts. The prompts were most likely Windows Firewall
 dialogs: some agent scratch scripts started QEMU with `-s`, which listens on all interfaces. The
@@ -26,6 +32,7 @@ committed tools use `-gdb tcp:127.0.0.1:<port>`; keep it that way.
 | QEMU part A | done: `pic32cm-jh01-cpro` boots `hello.elf` through the full Harmony clock bring-up and reaches the first UART poll with the CPU at 48 MHz; 12/12 board qtests; microbit, stm32l4x5, device-introspect, qom-test and test-hmp all still pass | `docs/handoff/agent-reports/qemu-core-a.md`, patch 0004 |
 | QEMU part B (SERCOM, PORT, LED0/SW0, end to end) | done: acceptance in spec §6.6 met; see "Part B result" | `docs/handoff/agent-progress/qemu-core-b.md`, patch 0005 |
 | Second target: PIC32CM MC00 Curiosity Pro | done: generic SoC, MC00 device and board, hello, qtests | "Second target: PIC32CM MC00" below, patch 0007 |
+| First 8-bit target: AVR64EA48 Curiosity Nano | done: AVRxt CPU, generic AVR8X SoC, board, Nano Base Click slots, 8x8 G Click, web view; checked on silicon and in MPLAB SIM | "AVR64EA48 Curiosity Nano" below, patches 0021-0025 |
 
 ## Setting up the new machine
 
@@ -46,8 +53,8 @@ Notes from the 2026-10-13 setup on Windows 11 (personal PC):
    goes next to it and QEMU's configure rejects spaces.
 2. Install the build dependencies listed in `qemu/README.md` for your OS, then
    `python -m pip install --user -r requirements.txt`.
-3. `python scripts/fetch_packs.py`: downloads the PIC32CM-JH DFP 1.3.221, PIC32CM-MC DFP 1.4.67 and
-   CMSIS 6.1.0 into
+3. `python scripts/fetch_packs.py`: downloads the PIC32CM-JH DFP 1.3.221, PIC32CM-MC DFP 1.4.67,
+   AVR-Ex DFP 2.8.189 and CMSIS 6.1.0 into
    `~/.mchp_packs` (verified byte-identical to the MPLAB-installed copies).
 4. `qemu/setup.sh`: clones QEMU v11.1.2 to `../pp-qemu`, applies `qemu/patches/`, builds.
    It ends by printing the `pic32cm-jh01-cpro` machine line.
@@ -229,3 +236,29 @@ still need checking against DS60001632H):
 `docs/handoff/workflows/pp-v0-build.js` is the build workflow that produced this state. The paths at
 its top (`ROOT`, `QEMU`, `SCRATCH`) refer to the original workstation and must be updated. To finish
 part B, reuse its `COREB` prompt and pass in the reports from `docs/handoff/agent-reports/`.
+
+
+## AVR64EA48 Curiosity Nano (2026-10-14)
+
+- **QEMU:** `target/avr` gains an `avrxt` CPU (patch 0021); `hw/avr/avr8x_soc.c` builds the SoC
+  from the generated `hw/avr/avr64ea48_device.h` like `pic32cm-soc` does (0023). Modelled: PORT/
+  VPORT, USART, SPI host, TCB periodic interrupt, CLKCTRL, CPUINT, NVMCTRL FLMAP, SIGROW/SYSCFG/
+  USERROW/FUSE/LOCK; everything else is a logging regblock (TCA, ADC, RTC, TWI, EVSYS, ...).
+  Machine options `mb1=`..`mb3=` plug Clicks into the Nano Base's mikroBUS sockets; the Click
+  catalog is now shared (`hw/misc/mikrobus.c`).
+- **Build:** `qemu/setup.sh` builds `build/` (Arm) and `build-avr/` (AVR). Tools find the AVR
+  binary from the ELF: `$PP_QEMU_AVR`, else `build-avr/` beside `$PP_QEMU`, else
+  `../pp-qemu/build-avr`.
+- **Firmware:** `make -C firmware/avr-hello` (MPLAB XC8 v2.50 avr-gcc; `PACKS=` for the fetched DFP):
+  `hello` (golden), `blinky` (web demo, TCB0 interrupt), `matrix` (8x8 G Click on mikroBUS 1).
+- **Silicon:** `py -m harness.nano_run <hex> --allow-program` programs by drag and drop onto the kit's
+  CURIOSITY drive and captures the VCOM; it refuses images with fuses or lock bits.
+- **Simulator:** `py -m harness.mdb_sim <elf> --device AVR64EA48 --txdata 0x0822` recovers the MPLAB
+  simulator's USART output (its UART I/O is silent for AVR8X).
+- **Results:** hello: twin = silicon = golden; simulator: SIGROW reads 0 (W0035 unimplemented memory),
+  REVID 0. matrix: twin = silicon VCOM. Microchip's examples: `acceptance/avr64ea48_curiosity_nano.yaml`
+  (3 pass, 5 gaps: TCA, ADC, RTC, NVMCTRL commands; 1 does not link with XC8 v2.50).
+- **Open:** TCA, ADC, TWI (thermo8 on the Nano Base), RTC, EVSYS, NVM writes, CCP enforcement,
+  NMI/compact vector table, cycle timing (busy-wait delays under `-icount shift=auto` run fast);
+  SIGROW serial number and TEMPSENSE from silicon into `profiles/avr64ea48.yaml` `data_rows`;
+  the 8x8 G Click's physical LED order (the schematic's is used).

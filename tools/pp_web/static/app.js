@@ -152,17 +152,20 @@ function buildSlots() {
 
 // Draw a plugged Click from its rendered top side. On a header that needs
 // an adapter, the adapter's socket sits on the header and the Click on the
-// adapter's mikroBUS socket (rotated as the adapter holds it); otherwise
-// the Click is centred on click_at_mm. LEDs and signal pins are overlays.
+// adapter's mikroBUS socket (rotated as the adapter holds it); a header
+// that is a mikroBUS socket itself (a Curiosity Nano Base) gives "socket"
+// (where the Click's header centre goes, rotation); otherwise the Click is
+// centred on click_at_mm. LEDs and signal pins are overlays.
 function drawClick(stack, h, id, def) {
   if (stack.dataset.click === (id || "")) return;
   stack.dataset.click = id || "";
   stack.textContent = "";
   if (!def || !def.image) return;
   const ad = h.adapter && adapters[h.adapter];
-  let at = h.click_at_mm, rot = 0;
+  let at = h.click_at_mm, rot = 0, socket = h.socket, dx = 0, dy = 0;
   if (ad) {
-    const dx = h.at_mm[0] - ad.header_at_mm[0], dy = h.at_mm[1] - ad.header_at_mm[1];
+    dx = h.at_mm[0] - ad.header_at_mm[0];
+    dy = h.at_mm[1] - ad.header_at_mm[1];
     const img = document.createElement("img");
     img.className = "adapter-board";
     img.src = `/adapters/${ad.image}`;
@@ -170,15 +173,18 @@ function drawClick(stack, h, id, def) {
     place(img, [ad.origin_mm[0] + ad.size_mm[0] / 2 + dx,
                 ad.origin_mm[1] - ad.size_mm[1] / 2 + dy], ad.size_mm);
     stack.appendChild(img);
-    rot = ad.socket.rotation;
+    socket = ad.socket;
+  }
+  if (socket) {
+    rot = socket.rotation;
     // The socket holds the Click's header centre; the image centre is
     // off it by the Click's own geometry, turned with the Click
     const hc = def.header_center_mm || [11.43, 8.89];
     const ox = def.origin_mm[0] + def.size_mm[0] / 2 - hc[0];
     const oy = def.origin_mm[1] - def.size_mm[1] / 2 - hc[1];
     const r = (rot * Math.PI) / 180;
-    at = [ad.socket.at_mm[0] + dx + ox * Math.cos(r) + oy * Math.sin(r),
-          ad.socket.at_mm[1] + dy - ox * Math.sin(r) + oy * Math.cos(r)];
+    at = [socket.at_mm[0] + dx + ox * Math.cos(r) + oy * Math.sin(r),
+          socket.at_mm[1] + dy - ox * Math.sin(r) + oy * Math.cos(r)];
   }
   const art = document.createElement("div");
   art.className = "click-board";
@@ -254,6 +260,21 @@ function drawClick(stack, h, id, def) {
       put(el, d.at_mm, d.size_mm[0], d.size_mm[1]);
     }
   }
+  // An LED matrix: digit d of the display property ("d0 d1 ... d7", hex
+  // bytes) lights column col_digits.indexOf(d), bit row_bits[r] row r
+  if (def.display && def.display.type === "matrix") {
+    const m = def.display;
+    m.rows_mm.forEach((y, r) => m.cols_mm.forEach((x, c) => {
+      const el = document.createElement("div");
+      el.className = "click-dot";
+      el.dataset.prop = `${h.slot}.${m.property}`;
+      el.dataset.digit = m.col_digits[c];
+      el.dataset.bit = m.row_bits[r];
+      el.style.setProperty("--seg", m.color);
+      put(el, [x - m.size_mm[0] / 2, y + m.size_mm[1] / 2], m.size_mm[0],
+          m.size_mm[1]);
+    }));
+  }
   updateClickParts();
   for (const sig of def.signals) {
     if (!sig.at_mm) continue;
@@ -324,6 +345,11 @@ function updateClickParts() {
     if (on !== el.classList.contains("on") && el.dataset.seen) tick();
     el.dataset.seen = "1";
     el.classList.toggle("on", on);
+  }
+  for (const el of document.querySelectorAll(".click-dot")) {
+    const bytes = String(clickState[el.dataset.prop] || "").split(" ");
+    const v = parseInt(bytes[Number(el.dataset.digit)] || "0", 16) || 0;
+    el.classList.toggle("on", ((v >>> Number(el.dataset.bit)) & 1) === 1);
   }
   for (const el of document.querySelectorAll(".click-7seg")) {
     const value = Number(clickState[el.dataset.prop] || 0);

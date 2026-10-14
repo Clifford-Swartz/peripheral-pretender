@@ -1,0 +1,18 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for the AVR8X SPI (spi_8bit_v2: AVR Dx, AVR Ex). The
+# INTFLAGS bits depend on CTRLB.BUFEN (normal: IF, WRCOL; buffered: RXCIF,
+# TXCIF, DREIF, SSIF, BUFOVF), so the model computes them.
+ip: SPI
+id: spi_8bit_v2
+versions: [""]
+references:
+  - "DS40002324 (AVR64EA48) chapter SPI, register descriptions"
+registers:
+  CTRLA: {hooks: [post_write]}             # ENABLE, MASTER, DORD
+  CTRLB: {hooks: [post_write]}             # BUFEN
+  INTCTRL: {hooks: [post_write]}           # interrupt enables
+  INTFLAGS:
+    dynamic: true
+    hooks: [pre_read, post_write]          # W1C where the mode allows it
+  DATA: {hooks: [pre_read, post_write]}    # transfer / receive buffer

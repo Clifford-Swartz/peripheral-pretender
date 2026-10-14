@@ -27,6 +27,11 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0018 | Click boards on the MC00 board (`ext1=`/`ext2=` machine options); the Thermo 8 Click (`mchp-mcp9808` I2C temperature sensor with a live `temperature` property and an open-drain ALERT on INT); PORT `pX-levels`; qtests |
 | 0019 | Thermo 8 Click: its 4.7 kOhm pull-up (R3) on INT, so an inactive ALERT reads high without the pad's pull-up |
 | 0020 | Click table per mikroBUS signal (RST/PWM/INT/CS, I2C or SPI, the Clicks' pull resistors); Button G (`click-button`), 7seg (`74hc595` chain on SPI) and Relay Clicks; qtests |
+| 0021 | `target/avr`: `avrxt` CPU type for the AVRxt core (AVR Dx/Ex, tinyAVR 0/1/2, megaAVR 0): I/O from data address 0 with no mapped register file, CPUINT interrupt levels (SREG.I kept on entry, RETI ends a level); loader accepts avr-gcc avrxmega ELFs |
+| 0022 | generated AVR64EA48 tables (`include/hw/mchp/gen/avr64ea48/`, `include/hw/avr/avr64ea48_gen.h`, `hw/avr/avr64ea48_device.h`) and the AVR types in `mchp_device.h` |
+| 0023 | generic `avr8x-soc` (flash, FLMAP window, SRAM, EEPROM, CCP, regblocks wired by vector); PORT/VPORT, USART, CLKCTRL, CPUINT, NVMCTRL and NVM-byte models; the `avr64ea48-cnano` board (LED0, SW0, VCOM on USART1); qtest |
+| 0024 | regenerated AVR64EA48 tables: SPI and TCB overlays, CLKCTRL.MCLKSTATUS read-only by field |
+| 0025 | AVR8X SPI host and TCB (periodic interrupt); MAX7219 (8x8 G Click); shared mikroBUS Click catalog `hw/misc/mikrobus.c` (the MC00 board uses it too); `mb1=`..`mb3=` Click slots of a Curiosity Nano Base on `avr64ea48-cnano`; qtests, board docs |
 
 ## Setting it up
 
@@ -50,7 +55,9 @@ Build dependencies:
 - **macOS:** `brew install ninja pkg-config glib pixman dtc` plus an Arm GNU toolchain.
 
 Configure options used everywhere: `--target-list=arm-softmmu --without-default-features
---enable-fdt=system --disable-docs --disable-werror`. `-Werror` is off because GCC 16 is newer than
+--enable-fdt=system --disable-docs --disable-werror` in `build/`, and for the 8-bit AVR boards
+`--target-list=avr-softmmu --without-default-features --disable-docs --disable-werror` in
+`build-avr/` (one QEMU binary per CPU family; `tools.pp` picks it from the ELF). `-Werror` is off because GCC 16 is newer than
 anything QEMU 11.1 was tested with.
 
 ## Working on the fork

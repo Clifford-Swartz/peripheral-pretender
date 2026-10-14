@@ -242,5 +242,73 @@
       }
     ],
     "signals": []
+  },
+  "8x8g": {
+    "name": "8x8 G Click",
+    "vendor": "MikroElektronika",
+    "chip": "MAX7219",
+    "bus": "SPI",
+    "description": "8x8 green LED matrix on a MAX7219; LOAD on CS",
+    "image": "8x8g/top.png",
+    "origin_mm": [
+      -1.27,
+      46.0248
+    ],
+    "size_mm": [
+      25.4,
+      49.8348
+    ],
+    "controls": [],
+    "leds": [],
+    "signals": [],
+    "display": {
+      "type": "matrix",
+      "property": "display",
+      "color": "#5dff7a",
+      "cols_mm": [
+        0.28,
+        3.455,
+        6.63,
+        9.83,
+        12.98,
+        16.18,
+        19.355,
+        22.53
+      ],
+      "rows_mm": [
+        43.675,
+        40.5,
+        37.325,
+        34.15,
+        30.975,
+        27.8,
+        24.625,
+        21.45
+      ],
+      "col_digits": [
+        7,
+        6,
+        5,
+        4,
+        3,
+        2,
+        1,
+        0
+      ],
+      "row_bits": [
+        7,
+        6,
+        5,
+        4,
+        3,
+        2,
+        1,
+        0
+      ],
+      "size_mm": [
+        1.6,
+        2.2
+      ]
+    }
   }
 }

@@ -41,3 +41,16 @@ where the kit is not available, and only for families where it is mature.
 
 So for PIC32CM, silicon is the only behavioural reference. The simulator becomes useful for
 8-bit PIC and AVR boards, where it is not beta.
+
+## MPLAB simulator on AVR64EA48 (checked 2026-10-14, MPLAB X v6.20)
+
+- MDB loads avr-gcc ELFs (`program <elf>`) and runs them; program addresses (breakpoints, `print
+  pc`, "Stop at address") are word addresses.
+- It warns: TCB "only Normal Mode", USART0-2 "beta mode", AC and ADC missing.
+- UART I/O (`set uartNio.uartioenabled true`, output file or window) produces nothing for its
+  USARTs, before or after `hwtool SIM`. `harness.mdb_sim` breaks on every `sts TXDATAL` and reads
+  the stored register instead (slow: about 1 s a character).
+- SIGROW reads 0 with "W0035-CORE: Unimplemented RAM memory access", and SYSCFG.REVID reads 0;
+  CLKCTRL reset values match silicon. firmware/avr-hello otherwise prints what the kit prints.
+- Rank: below silicon and the data sheet, as above; a useful third opinion on CPU and basic
+  register behaviour, not on identity rows or analog peripherals.

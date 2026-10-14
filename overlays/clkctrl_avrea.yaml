@@ -11,7 +11,9 @@ registers:
   MCLKCTRLB: {hooks: [post_write]}         # PDIV/PEN: prescaler
   MCLKINTFLAGS: {w1c: [CFD]}
   MCLKSTATUS:
-    read_only: true           # oscillator status, from the model
+    # Oscillator status, from the model; MCC's init writes 0 to it, which
+    # silicon ignores
+    ro: [SOSC, OSCHFS, OSC32KS, XOSC32KS, EXTS]
     dynamic: true
   XOSC32KCTRLA: {hooks: [post_write]}
   XOSCHFCTRLA: {hooks: [post_write]}

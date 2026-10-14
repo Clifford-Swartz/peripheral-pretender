@@ -6132,7 +6132,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/clkctrl_avrea.yaml",
-    "sha1": "0aac9ad6ee30551bcd58694569db293de89ab957",
+    "sha1": "72c0df2949e442c1ab8470cc5c1dec7d38201e4c",
     "status": "applied",
     "versions": [
      ""
@@ -6508,8 +6508,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "DYNAMIC",
-        "READ_ONLY"
+        "DYNAMIC"
        ],
        "alias_of": null,
        "read_side_effect": false,
@@ -6559,9 +6558,9 @@
        ],
        "provenance": [
         [
-         "access",
+         "ro",
          "overlay",
-         "READ_ONLY (ATDF rw=RW)"
+         "read-only SOSC, OSCHFS, OSC32KS, XOSC32KS, EXTS = 0x1F"
         ],
         [
          "dynamic",
@@ -17552,7 +17551,14 @@
    "version": "",
    "caption": "Serial Peripheral Interface",
    "core": false,
-   "overlay": null,
+   "overlay": {
+    "file": "overlays/spi_spi_8bit_v2.yaml",
+    "sha1": "ccde426982ecaa65b84513fae158051bae476b88",
+    "status": "applied",
+    "versions": [
+     ""
+    ]
+   },
    "size": 8,
    "selector": null,
    "default_view": "",
@@ -17581,7 +17587,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control A",
@@ -17649,7 +17657,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CTRLB",
@@ -17669,7 +17683,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control B",
@@ -17729,7 +17745,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "INTCTRL",
@@ -17749,7 +17771,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Interrupt Control",
@@ -17796,7 +17820,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "INTFLAGS",
@@ -17816,9 +17846,13 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC",
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Interrupt Flags",
        "note": "",
        "fields": [
@@ -17844,6 +17878,21 @@
          "w1c",
          "heuristic",
          "ATDF atomic-op=None: all fields W1C (0xF1)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -17865,9 +17914,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Data",
        "note": "",
        "fields": [],
@@ -17881,6 +17933,16 @@
          "reset",
          "heuristic",
          "no ATDF initval: 0"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       }
@@ -20295,7 +20357,14 @@
    "version": "",
    "caption": "16-bit Timer Type B",
    "core": false,
-   "overlay": null,
+   "overlay": {
+    "file": "overlays/tcb_tmr_16b_capture_v1.yaml",
+    "sha1": "e9cfe5df534226a9b4506f968833247d93ebf07f",
+    "status": "applied",
+    "versions": [
+     ""
+    ]
+   },
    "size": 16,
    "selector": null,
    "default_view": "",
@@ -20324,7 +20393,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control A",
@@ -20397,7 +20468,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CTRLB",
@@ -20417,7 +20494,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control Register B",
@@ -20497,7 +20576,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "EVCTRL",
@@ -20661,6 +20746,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -20682,6 +20768,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -20775,9 +20866,13 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC",
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Count",
        "note": "",
        "fields": [],
@@ -20786,6 +20881,21 @@
          "impl",
          "heuristic",
          "no ATDF bitfields: all bits implemented"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -20807,7 +20917,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Compare or Capture",
@@ -20823,6 +20935,11 @@
          "reset",
          "heuristic",
          "no ATDF initval: 0"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       }

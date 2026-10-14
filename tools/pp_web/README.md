@@ -107,6 +107,31 @@ DS70005482B tables 4-4 to 4-6). The `pic32cm-jh01-cpro` machine has no Click
 slots yet, so the headers carry no `slot`. LED0 is on port C: the server
 polls every PORT group a board's LEDs and INT pins use (`pin_groups`).
 
+## Board assets: `boards/ev66e56a/`
+
+The AVR64EA48 Curiosity Nano (EV66E56A) plugged into a Curiosity Nano Base for Click boards
+(AC164162): `py -m tools.pp_web --board ev66e56a --elf firmware/avr-hello/build/blinky.elf`
+(the twin runs on `qemu-system-avr`; see `tools/pp/qemu.py`). A Curiosity Nano always sits on
+a carrier here, so `top.png` is one picture of both, in the base's coordinates:
+
+```
+tracespace -o nano <Nano Gerbers: PCBA rev 3, Gerber/ + NC Drill/*Holes.TXT>
+tracespace -o base <Base Gerbers: PCBA rev 7, Gerber/ + NC Drill/*-RoundHoles*.TXT>
+py tools/pp_web/boards/recolor_board.py nano/AVR64EA48_Curiosity_Nano.top.svg nano.svg --edge 0,0,83820,20320
+py tools/pp_web/boards/recolor_board.py base/Curiosity_Nano_Base_for_Click_boards_.top.svg base.svg --edge 0,0,74930,107950
+py tools/pp_web/boards/compose_carrier.py base.svg 74.93,107.95 nano.svg 83.82,20.32 --place 8.89,107.32,90 > top.svg
+```
+
+then resvg at 20 px/mm (resvg gave 2160 px for 107.95 mm; the PNG is resized to 2159).
+`--place`: the Nano's pick-and-place origin lands at (8.89, 107.32) on the base, turned 90
+degrees clockwise: its pins 1-28 sit on J17 (x = 11.43, pin 1 at y = 99.70) and 56-29 on J18
+(x = 26.67). `compose_carrier.py --point u,v` converts Nano positions (LED0 D200 (74.22, 10.18),
+SW0 SW200 (80.39, 10.16)) to base mm for `board.json`. The three mikroBUS sockets (J3/J4, J5/J6,
+J7/J8, centres from the base's pick-and-place) are headers with `socket` instead of `adapter`:
+the Click's header centre goes on the socket, turned 90 degrees (AN to the right, as the base's
+silkscreen shows). Pins per socket: Nano Base user guide DS50002839B Figure 3-1 through the
+Nano's edge pins (schematic sheet 2).
+
 ## Click assets: `clicks/<id>/`
 
 `top.png` is the Click's top side, rendered by `clicks/render_click.py` from MikroElektronika's
@@ -116,6 +141,11 @@ and the mask openings (GTS). It has no part bodies, so `parts.json` lists them b
 identified from their pads and the schematic. The DXF coordinates are mm. `origin_mm` and
 `size_mm` in `clicks.json` place the image, and LED and signal positions (`at_mm`) are in the
 same coordinates. The zip also holds a STEP model for the 3D view later.
+
+The 8x8 G Click (`clicks/8x8g/`) shows an LED matrix: `display` `{"type": "matrix"}` reads the
+MAX7219's `display` property ("d0 ... d7", hex) and lights dot (row r, column c) from bit
+`row_bits[r]` of digit `col_digits[c]`. Rows and columns follow the schematic (DIG7 left, DP at
+the top); the physical LED order is not confirmed. LED positions come from the DXF's pads.
 
 ## Adapter assets: `adapters/<id>/`
 

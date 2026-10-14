@@ -1,0 +1,2636 @@
+From 214161713ca0fce67057259862f96bed695854bf Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 14 Oct 2026 13:12:03 -0700
+Subject: [PATCH 23/25] hw/avr: AVR8X SoC and the avr64ea48-cnano machine
+
+avr8x-soc builds an AVRxt device from its generated descriptor: flash in
+the program space and, through NVMCTRL.CTRLB.FLMAP, in a 32 KB data-space
+window; SRAM; EEPROM (also at avr-gcc's .eeprom load address 0x810000);
+CCP; one mchp-regblock per I/O instance, connected to the CPU's interrupt
+inputs by vector number; everything without a model logs its accesses.
+
+Dedicated models (DS40002324, AVR64EA48):
+- avr8x-port: PORTA-F and VPORTA-F in one device: DIR/OUT with
+  SET/CLR/TGL, IN (write 1 toggles OUT), PINnCTRL (ISC, PULLUPEN, INVEN)
+  and the PINCONFIG multi-pin update, INTFLAGS, pads, external drivers,
+  peripheral overrides and the per-pad duty statistics the web view
+  reads ("p<x>-levels", "p<x>-stats").
+- avr8x-usart: asynchronous USART, TX buffer and shift register (DREIF,
+  TXCIF), 2-character RX FIFO, RXC/DRE/TXC interrupts, optional pacing
+  at the baud rate from CLK_PER.
+- avr8x-clkctrl: CLK_PER from CLKSEL and the prescaler (OSCHF 20 MHz / 6
+  at reset), oscillator status.
+- avr8x-cpuint: CPUINT registers on the CPU's interrupt state.
+- avr8x-nvmctrl: FLMAP; NVM commands are logged.
+- avr8x-nvmbytes: SIGROW (signature), SYSCFG (REVID), USERROW, FUSE, LOCK.
+
+avr64ea48-cnano: the AVR64EA48 Curiosity Nano (EV66E56A): LED0 on PB3
+(active low), SW0 on PB2 ("sw0-pressed"), the virtual COM port on USART1
+(serial 0), USART2 on serial 1; firmware from -kernel or -bios.
+firmware/avr-hello prints byte for byte what the kit printed
+(golden/avr64ea48-b1/hello-vcom.bin) with an empty model backlog.
+qtest: identity, memory map and FLMAP, PORT/VPORT/LED0/SW0, USART flags,
+CPUINT.
+
+Peripheral Pretender: AI-assisted, not for upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/avr/Kconfig                     |  14 +
+ hw/avr/avr64ea48.c                 |  18 +
+ hw/avr/avr64ea48_cnano.c           | 140 ++++++++
+ hw/avr/avr8x_periph.c              | 415 ++++++++++++++++++++++
+ hw/avr/avr8x_soc.c                 | 464 +++++++++++++++++++++++++
+ hw/avr/meson.build                 |   4 +
+ hw/char/Kconfig                    |   4 +
+ hw/char/avr8x_usart.c              | 380 +++++++++++++++++++++
+ hw/char/meson.build                |   1 +
+ hw/char/trace-events               |   4 +
+ hw/gpio/Kconfig                    |   3 +
+ hw/gpio/avr8x_port.c               | 529 +++++++++++++++++++++++++++++
+ hw/gpio/meson.build                |   1 +
+ hw/gpio/trace-events               |   4 +
+ include/hw/avr/avr8x_periph.h      |  48 +++
+ include/hw/avr/avr8x_soc.h         |  81 +++++
+ include/hw/char/avr8x_usart.h      |  20 ++
+ include/hw/gpio/avr8x_port.h       |  84 +++++
+ tests/qtest/avr64ea48-cnano-test.c | 181 ++++++++++
+ tests/qtest/meson.build            |   3 +-
+ 20 files changed, 2397 insertions(+), 1 deletion(-)
+ create mode 100644 hw/avr/avr64ea48.c
+ create mode 100644 hw/avr/avr64ea48_cnano.c
+ create mode 100644 hw/avr/avr8x_periph.c
+ create mode 100644 hw/avr/avr8x_soc.c
+ create mode 100644 hw/char/avr8x_usart.c
+ create mode 100644 hw/gpio/avr8x_port.c
+ create mode 100644 include/hw/avr/avr8x_periph.h
+ create mode 100644 include/hw/avr/avr8x_soc.h
+ create mode 100644 include/hw/char/avr8x_usart.h
+ create mode 100644 include/hw/gpio/avr8x_port.h
+ create mode 100644 tests/qtest/avr64ea48-cnano-test.c
+
+diff --git a/hw/avr/Kconfig b/hw/avr/Kconfig
+index b29937b..01bdfef 100644
+--- a/hw/avr/Kconfig
++++ b/hw/avr/Kconfig
+@@ -4,6 +4,20 @@ config AVR_ATMEGA_MCU
+     select AVR_USART
+     select AVR_POWER
+ 
++config AVR8X_SOC
++    bool
++    select AVR8X_PORT
++    select AVR8X_USART
++    select MCHP_REGFILE
++    select UNIMP
++    select LED
++
++config AVR64EA48_CNANO
++    bool
++    default y
++    depends on AVR
++    select AVR8X_SOC
++
+ config ARDUINO
+     bool
+     default y
+diff --git a/hw/avr/avr64ea48.c b/hw/avr/avr64ea48.c
+new file mode 100644
+index 0000000..abd7570
+--- /dev/null
++++ b/hw/avr/avr64ea48.c
+@@ -0,0 +1,18 @@
++/*
++ * Microchip AVR64EA48 device descriptor
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The generated tables of one device live in their own translation unit:
++ * devices with different versions of an IP define the same register
++ * constants differently.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "hw/avr/avr8x_soc.h"
++#include "avr64ea48_device.h"
++
++const MchpAvrDeviceInfo *const avr64ea48_info = &avr64ea48_device;
+diff --git a/hw/avr/avr64ea48_cnano.c b/hw/avr/avr64ea48_cnano.c
+new file mode 100644
+index 0000000..a2a7609
+--- /dev/null
++++ b/hw/avr/avr64ea48_cnano.c
+@@ -0,0 +1,140 @@
++/*
++ * Microchip AVR64EA48 Curiosity Nano (EV66E56A)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * AVR64EA48 (TQFP48) with LED0 on PB3 (yellow, to VCC through 1 kOhm,
++ * active low), SW0 on PB2 (to ground, no external pull-up) and the
++ * debugger's virtual COM port on USART1 (PC0 TX, PC1 RX). The 32.768 kHz
++ * crystal (PF0/PF1) and the 20 MHz crystal (PA0/PA1) are fitted.
++ * Board user guide DS50003494A, Tables 4-1 to 4-5; schematic rev 3.
++ *
++ * serial_hd(0) is the virtual COM port, serial_hd(1) USART2 (PF4/PF5,
++ * the UART of mikroBUS sockets 1 and 3 on a Curiosity Nano Base).
++ * The firmware comes from -kernel or -bios (ELF or raw binary).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/error-report.h"
++#include "hw/avr/avr8x_soc.h"
++#include "hw/core/boards.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/misc/led.h"
++#include "system/qtest.h"
++#include "system/system.h"
++#include "boot.h"
++
++#define CNANO_XOSCHF_HZ     20000000
++
++#define AVR8X_PIN(g, n)     (((g) - 'A') * AVR8X_PORT_PINS + (n))
++#define CNANO_LED0_PIN      AVR8X_PIN('B', 3)
++#define CNANO_SW0_PIN       AVR8X_PIN('B', 2)
++
++#define TYPE_AVR64EA48_CNANO_MACHINE MACHINE_TYPE_NAME("avr64ea48-cnano")
++OBJECT_DECLARE_SIMPLE_TYPE(Avr64ea48CnanoState, AVR64EA48_CNANO_MACHINE)
++
++struct Avr64ea48CnanoState {
++    MachineState parent_obj;
++
++    Avr8xSocState soc;
++    LEDState *led0;
++    qemu_irq sw0;
++    bool sw0_pressed;
++};
++
++/* A pressed SW0 pulls PB2 low; a released one leaves the pad undriven. */
++static void avr64ea48_cnano_update_sw0(Avr64ea48CnanoState *s)
++{
++    if (s->sw0) {
++        qemu_set_irq(s->sw0, s->sw0_pressed ? 0 : -1);
++    }
++}
++
++static bool avr64ea48_cnano_get_sw0(Object *obj, Error **errp)
++{
++    return AVR64EA48_CNANO_MACHINE(obj)->sw0_pressed;
++}
++
++static void avr64ea48_cnano_set_sw0(Object *obj, bool value, Error **errp)
++{
++    Avr64ea48CnanoState *s = AVR64EA48_CNANO_MACHINE(obj);
++
++    s->sw0_pressed = value;
++    avr64ea48_cnano_update_sw0(s);
++}
++
++static void avr64ea48_cnano_init(MachineState *machine)
++{
++    Avr64ea48CnanoState *s = AVR64EA48_CNANO_MACHINE(machine);
++    const char *firmware = machine->kernel_filename ?: machine->firmware;
++    DeviceState *soc, *port;
++
++    object_initialize_child(OBJECT(machine), "soc", &s->soc,
++                            TYPE_AVR64EA48_SOC);
++    soc = DEVICE(&s->soc);
++    qdev_prop_set_uint32(soc, "xoschf-hz", CNANO_XOSCHF_HZ);
++    avr8x_soc_connect_serial(&s->soc, 1, serial_hd(0));
++    avr8x_soc_connect_serial(&s->soc, 2, serial_hd(1));
++    sysbus_realize(SYS_BUS_DEVICE(soc), &error_fatal);
++
++    port = DEVICE(&s->soc.port);
++    s->led0 = led_create_simple(OBJECT(machine), GPIO_POLARITY_ACTIVE_LOW,
++                                LED_COLOR_YELLOW, "LED0");
++    qdev_connect_gpio_out_named(port, AVR8X_PORT_PAD, CNANO_LED0_PIN,
++                                qdev_get_gpio_in(DEVICE(s->led0), 0));
++    /* The LED from VCC pulls its pad high while nothing drives it */
++    qemu_set_irq(qdev_get_gpio_in_named(port, AVR8X_PORT_IN, CNANO_LED0_PIN),
++                 1);
++    s->sw0 = qdev_get_gpio_in_named(port, AVR8X_PORT_IN, CNANO_SW0_PIN);
++    avr64ea48_cnano_update_sw0(s);
++
++    if (!firmware) {
++        /* qom-test and friends start machines without firmware */
++        if (!qtest_enabled()) {
++            warn_report("avr64ea48-cnano: no firmware (use -kernel or "
++                        "-bios); the flash is empty");
++        }
++        return;
++    }
++    if (!avr_load_firmware(&s->soc.cpu, machine, avr8x_soc_flash(&s->soc),
++                           firmware)) {
++        exit(1);
++    }
++}
++
++static void avr64ea48_cnano_class_init(ObjectClass *oc, const void *data)
++{
++    MachineClass *mc = MACHINE_CLASS(oc);
++
++    mc->desc = "Microchip AVR64EA48 Curiosity Nano (EV66E56A, AVRxt)";
++    mc->init = avr64ea48_cnano_init;
++    mc->default_cpus = 1;
++    mc->min_cpus = 1;
++    mc->max_cpus = 1;
++    mc->no_floppy = 1;
++    mc->no_cdrom = 1;
++    mc->no_parallel = 1;
++    /* SRAM is part of the SoC */
++    mc->default_ram_size = 0;
++    object_class_property_add_bool(oc, "sw0-pressed",
++                                   avr64ea48_cnano_get_sw0,
++                                   avr64ea48_cnano_set_sw0);
++    object_class_property_set_description(oc, "sw0-pressed",
++                                          "Hold user switch SW0 (PB2) down");
++}
++
++static const TypeInfo avr64ea48_cnano_types[] = {
++    {
++        .name = TYPE_AVR64EA48_CNANO_MACHINE,
++        .parent = TYPE_MACHINE,
++        .instance_size = sizeof(Avr64ea48CnanoState),
++        .class_init = avr64ea48_cnano_class_init,
++    },
++};
++
++DEFINE_TYPES(avr64ea48_cnano_types)
+diff --git a/hw/avr/avr8x_periph.c b/hw/avr/avr8x_periph.c
+new file mode 100644
+index 0000000..d765717
+--- /dev/null
++++ b/hw/avr/avr8x_periph.c
+@@ -0,0 +1,415 @@
++/*
++ * Microchip AVR8X system blocks: CLKCTRL, CPUINT, NVMCTRL and the
++ * NVM-backed byte blocks (SIGROW, SYSCFG, USERROW, FUSE, LOCK)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Behaviour from DS40002324 (AVR64EA48), chapters CLKCTRL, CPUINT and
++ * NVMCTRL; register files from the generated tables.
++ *
++ * CLKCTRL: CLK_MAIN from MCLKCTRLA.CLKSEL (OSCHF, OSC32K, XOSC32K, EXTCLK)
++ * divided by MCLKCTRLB.PDIV when PEN is set, on the "clk_per" output.
++ * Oscillators are stable as soon as they are enabled (MCLKSTATUS).
++ * Not modelled: clock failure detection, auto-tune, CLKOUT, start-up
++ * times and the CCP protection of the registers.
++ *
++ * CPUINT: the registers mirror the AVRxt CPU's interrupt state, which
++ * target/avr uses to take interrupts (levels, LVL1VEC, LVL0PRI with round
++ * robin, IVSEL). Not modelled: the compact vector table (CVT), NMI.
++ *
++ * NVMCTRL: CTRLB.FLMAP selects the flash section in the data space ("flmap"
++ * output). Commands (CTRLA.CMD: page buffer, erase, write) are not
++ * modelled and are logged; STATUS always reads ready.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qapi/error.h"
++#include "hw/avr/avr8x_periph.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-clock.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/mchp/gen/clkctrl_avrea.h"
++#include "hw/mchp/gen/cpuint_int_8bit_v3.h"
++#include "hw/mchp/gen/nvmctrl_nvm_ctrl_avr_v3.h"
++#include "migration/vmstate.h"
++#include "target/avr/cpu.h"
++
++#define AVR8X_OSC32K_HZ     32768
++
++/* ---------------------------------------------------------------- CLKCTRL */
++
++OBJECT_DECLARE_SIMPLE_TYPE(Avr8xClkctrlState, AVR8X_CLKCTRL)
++
++struct Avr8xClkctrlState {
++    MchpRegBlock parent_obj;
++
++    Clock *clk_per;
++    uint32_t oschf_hz;
++    uint32_t xoschf_hz;
++};
++
++static uint8_t avr8x_clkctrl_reg(Avr8xClkctrlState *s, hwaddr reg)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, reg, 1);
++}
++
++static uint64_t avr8x_clkctrl_main_hz(Avr8xClkctrlState *s)
++{
++    uint8_t a = avr8x_clkctrl_reg(s, A_MCHP_CLKCTRL_MCLKCTRLA);
++
++    switch (FIELD_EX8(a, MCHP_CLKCTRL_MCLKCTRLA, CLKSEL)) {
++    case 0:
++        return s->oschf_hz;
++    case 1:
++        return AVR8X_OSC32K_HZ;
++    case 2:
++        return AVR8X_OSC32K_HZ;         /* the 32.768 kHz crystal */
++    case 3:
++        return s->xoschf_hz;
++    default:
++        return 0;
++    }
++}
++
++static unsigned avr8x_clkctrl_div(uint8_t b)
++{
++    static const uint8_t div[16] = {
++        2, 4, 8, 16, 32, 64, 0, 0, 6, 10, 12, 24, 48, 0, 0, 0,
++    };
++
++    if (!FIELD_EX8(b, MCHP_CLKCTRL_MCLKCTRLB, PEN)) {
++        return 1;
++    }
++    return div[FIELD_EX8(b, MCHP_CLKCTRL_MCLKCTRLB, PDIV)];
++}
++
++static void avr8x_clkctrl_update(Avr8xClkctrlState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint8_t b = avr8x_clkctrl_reg(s, A_MCHP_CLKCTRL_MCLKCTRLB);
++    unsigned div = avr8x_clkctrl_div(b);
++    uint64_t hz = avr8x_clkctrl_main_hz(s);
++
++    if (!div) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s.MCLKCTRLB: reserved PDIV 0x%x\n",
++                      rb->name, FIELD_EX8(b, MCHP_CLKCTRL_MCLKCTRLB, PDIV));
++        div = 1;
++    }
++    if (!hz) {
++        qemu_log_mask(LOG_UNIMP, "%s: main clock source has no frequency "
++                      "on this board\n", rb->name);
++    }
++    mchp_regblock_set_clock(rb, s->clk_per, hz / div);
++}
++
++static uint32_t avr8x_clkctrl_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                                       unsigned idx, uint32_t stored,
++                                       bool side_effects)
++{
++    Avr8xClkctrlState *s = AVR8X_CLKCTRL(rf->opaque);
++    uint8_t x32 = avr8x_clkctrl_reg(s, A_MCHP_CLKCTRL_XOSC32KCTRLA);
++    uint8_t xhf = avr8x_clkctrl_reg(s, A_MCHP_CLKCTRL_XOSCHFCTRLA);
++
++    if (ri->offset != A_MCHP_CLKCTRL_MCLKSTATUS) {
++        return stored;
++    }
++    return R_MCHP_CLKCTRL_MCLKSTATUS_OSCHFS_MASK |
++           R_MCHP_CLKCTRL_MCLKSTATUS_OSC32KS_MASK |
++           (FIELD_EX8(x32, MCHP_CLKCTRL_XOSC32KCTRLA, ENABLE) ?
++            R_MCHP_CLKCTRL_MCLKSTATUS_XOSC32KS_MASK : 0) |
++           (FIELD_EX8(xhf, MCHP_CLKCTRL_XOSCHFCTRLA, ENABLE) && s->xoschf_hz ?
++            R_MCHP_CLKCTRL_MCLKSTATUS_EXTS_MASK : 0);
++}
++
++static void avr8x_clkctrl_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                     unsigned idx, uint32_t old,
++                                     uint32_t written, uint32_t we)
++{
++    avr8x_clkctrl_update(AVR8X_CLKCTRL(rf->opaque));
++}
++
++static void avr8x_clkctrl_reset_exit(MchpRegBlock *rb)
++{
++    avr8x_clkctrl_update(AVR8X_CLKCTRL(rb));
++}
++
++static void avr8x_clkctrl_init(Object *obj)
++{
++    Avr8xClkctrlState *s = AVR8X_CLKCTRL(obj);
++
++    s->clk_per = qdev_init_clock_out(DEVICE(obj), "clk_per");
++}
++
++static const VMStateDescription vmstate_avr8x_clkctrl = {
++    .name = TYPE_AVR8X_CLKCTRL,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, Avr8xClkctrlState, 1,
++                       vmstate_mchp_regblock, MchpRegBlock),
++        VMSTATE_CLOCK(clk_per, Avr8xClkctrlState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static const Property avr8x_clkctrl_properties[] = {
++    DEFINE_PROP_UINT32("oschf-hz", Avr8xClkctrlState, oschf_hz, 20000000),
++    DEFINE_PROP_UINT32("xoschf-hz", Avr8xClkctrlState, xoschf_hz, 0),
++};
++
++static void avr8x_clkctrl_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    dc->vmsd = &vmstate_avr8x_clkctrl;
++    device_class_set_props(dc, avr8x_clkctrl_properties);
++    c->pre_read = avr8x_clkctrl_pre_read;
++    c->post_write = avr8x_clkctrl_post_write;
++    c->reset_exit = avr8x_clkctrl_reset_exit;
++    c->is_enabled = avr8x_never_enabled;
++    c->log_writes = false;
++}
++
++/* ----------------------------------------------------------------- CPUINT */
++
++OBJECT_DECLARE_SIMPLE_TYPE(Avr8xCpuintState, AVR8X_CPUINT)
++
++struct Avr8xCpuintState {
++    MchpRegBlock parent_obj;
++
++    AVRCPU *cpu;
++    uint32_t boot_size;
++};
++
++static uint32_t avr8x_cpuint_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                                      unsigned idx, uint32_t stored,
++                                      bool side_effects)
++{
++    CPUAVRState *env = &AVR8X_CPUINT(rf->opaque)->cpu->env;
++
++    switch (ri->offset) {
++    case A_MCHP_CPUINT_CTRLA:
++        return env->cpuint_ctrla;
++    case A_MCHP_CPUINT_STATUS:
++        return env->cpuint_status;
++    case A_MCHP_CPUINT_LVL0PRI:
++        return env->cpuint_lvl0pri;
++    case A_MCHP_CPUINT_LVL1VEC:
++        return env->cpuint_lvl1vec;
++    }
++    return stored;
++}
++
++static void avr8x_cpuint_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                    unsigned idx, uint32_t old,
++                                    uint32_t written, uint32_t we)
++{
++    Avr8xCpuintState *s = AVR8X_CPUINT(rf->opaque);
++    CPUAVRState *env = &s->cpu->env;
++    uint8_t value = mchp_regfile_peek(rf, ri->offset, 1);
++
++    switch (ri->offset) {
++    case A_MCHP_CPUINT_CTRLA:
++        env->cpuint_ctrla = value;
++        env->vector_base = FIELD_EX8(value, MCHP_CPUINT_CTRLA, IVSEL) ?
++                           0 : s->boot_size;
++        if (FIELD_EX8(value, MCHP_CPUINT_CTRLA, CVT)) {
++            qemu_log_mask(LOG_UNIMP, "%s.CTRLA: compact vector table not "
++                          "modelled\n", MCHP_REGBLOCK(s)->name);
++        }
++        break;
++    case A_MCHP_CPUINT_LVL0PRI:
++        env->cpuint_lvl0pri = value;
++        break;
++    case A_MCHP_CPUINT_LVL1VEC:
++        env->cpuint_lvl1vec = value;
++        break;
++    }
++}
++
++static void avr8x_cpuint_reset_hold(MchpRegBlock *rb)
++{
++    Avr8xCpuintState *s = AVR8X_CPUINT(rb);
++
++    /* The CPU resets its copy; IVSEL 0 puts the vectors after BOOT */
++    s->cpu->env.vector_base = s->boot_size;
++}
++
++static bool avr8x_cpuint_realize(MchpRegBlock *rb, Error **errp)
++{
++    if (!AVR8X_CPUINT(rb)->cpu) {
++        error_setg(errp, "%s: link \"cpu\" not set", rb->name);
++        return false;
++    }
++    return true;
++}
++
++static const Property avr8x_cpuint_properties[] = {
++    DEFINE_PROP_LINK("cpu", Avr8xCpuintState, cpu, TYPE_AVR_CPU, AVRCPU *),
++    DEFINE_PROP_UINT32("boot-size", Avr8xCpuintState, boot_size, 0),
++};
++
++static void avr8x_cpuint_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    device_class_set_props(dc, avr8x_cpuint_properties);
++    c->realize = avr8x_cpuint_realize;
++    c->pre_read = avr8x_cpuint_pre_read;
++    c->post_write = avr8x_cpuint_post_write;
++    c->reset_hold = avr8x_cpuint_reset_hold;
++    c->is_enabled = avr8x_never_enabled;
++    c->log_writes = false;
++}
++
++/* ---------------------------------------------------------------- NVMCTRL */
++
++OBJECT_DECLARE_SIMPLE_TYPE(Avr8xNvmctrlState, AVR8X_NVMCTRL)
++
++struct Avr8xNvmctrlState {
++    MchpRegBlock parent_obj;
++
++    qemu_irq flmap;
++};
++
++static void avr8x_nvmctrl_update(Avr8xNvmctrlState *s)
++{
++    uint8_t b = mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf,
++                                  A_MCHP_NVMCTRL_CTRLB, 1);
++
++    qemu_set_irq(s->flmap, FIELD_EX8(b, MCHP_NVMCTRL_CTRLB, FLMAP));
++}
++
++static void avr8x_nvmctrl_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                     unsigned idx, uint32_t old,
++                                     uint32_t written, uint32_t we)
++{
++    Avr8xNvmctrlState *s = AVR8X_NVMCTRL(rf->opaque);
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint8_t cmd = FIELD_EX8(written, MCHP_NVMCTRL_CTRLA, CMD);
++
++    if (ri->offset == A_MCHP_NVMCTRL_CTRLA && cmd) {
++        qemu_log_mask(LOG_UNIMP, "%s.CTRLA: command 0x%02x not modelled\n",
++                      rb->name, cmd);
++    } else if (ri->offset == A_MCHP_NVMCTRL_CTRLB) {
++        if (FIELD_EX8(old, MCHP_NVMCTRL_CTRLB, FLMAPLOCK)) {
++            /* FLMAP is locked until reset */
++            mchp_regfile_poke(rf, A_MCHP_NVMCTRL_CTRLB, 1,
++                              deposit32(mchp_regfile_peek(rf, ri->offset, 1),
++                                        R_MCHP_NVMCTRL_CTRLB_FLMAP_SHIFT,
++                                        R_MCHP_NVMCTRL_CTRLB_FLMAP_LENGTH,
++                                        FIELD_EX8(old, MCHP_NVMCTRL_CTRLB,
++                                                  FLMAP)) |
++                              R_MCHP_NVMCTRL_CTRLB_FLMAPLOCK_MASK);
++        }
++        if ((written & we) & (R_MCHP_NVMCTRL_CTRLB_APPCODEWP_MASK |
++                              R_MCHP_NVMCTRL_CTRLB_BOOTRP_MASK |
++                              R_MCHP_NVMCTRL_CTRLB_APPDATAWP_MASK |
++                              R_MCHP_NVMCTRL_CTRLB_EEWP_MASK)) {
++            qemu_log_mask(LOG_UNIMP, "%s.CTRLB: write protection 0x%02x not "
++                          "modelled\n", rb->name, (uint8_t)written);
++        }
++        avr8x_nvmctrl_update(s);
++    }
++}
++
++static void avr8x_nvmctrl_reset_exit(MchpRegBlock *rb)
++{
++    avr8x_nvmctrl_update(AVR8X_NVMCTRL(rb));
++}
++
++static void avr8x_nvmctrl_init(Object *obj)
++{
++    Avr8xNvmctrlState *s = AVR8X_NVMCTRL(obj);
++
++    qdev_init_gpio_out_named(DEVICE(obj), &s->flmap, AVR8X_NVMCTRL_FLMAP, 1);
++}
++
++static void avr8x_nvmctrl_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    c->post_write = avr8x_nvmctrl_post_write;
++    c->reset_exit = avr8x_nvmctrl_reset_exit;
++    c->is_enabled = avr8x_never_enabled;
++    c->log_writes = false;
++}
++
++/* --------------------------------------------------------------- NVMBYTES */
++
++OBJECT_DECLARE_SIMPLE_TYPE(Avr8xNvmbytesState, AVR8X_NVMBYTES)
++
++struct Avr8xNvmbytesState {
++    MchpRegBlock parent_obj;
++
++    uint8_t *image;
++    unsigned len;
++};
++
++void avr8x_nvmbytes_set_image(DeviceState *dev, const uint8_t *bytes,
++                              unsigned len)
++{
++    Avr8xNvmbytesState *s = AVR8X_NVMBYTES(dev);
++
++    assert(!dev->realized);
++    g_free(s->image);
++    s->image = g_memdup2(bytes, len);
++    s->len = len;
++}
++
++static void avr8x_nvmbytes_reset_hold(MchpRegBlock *rb)
++{
++    Avr8xNvmbytesState *s = AVR8X_NVMBYTES(rb);
++
++    for (unsigned i = 0; i < s->len && i < rb->rf.size; i++) {
++        mchp_regfile_poke(&rb->rf, i, 1, s->image[i]);
++    }
++}
++
++static void avr8x_nvmbytes_finalize(Object *obj)
++{
++    g_free(AVR8X_NVMBYTES(obj)->image);
++}
++
++static void avr8x_nvmbytes_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    c->reset_hold = avr8x_nvmbytes_reset_hold;
++    c->is_enabled = avr8x_never_enabled;
++}
++
++static const TypeInfo avr8x_periph_types[] = {
++    {
++        .name = TYPE_AVR8X_CLKCTRL,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(Avr8xClkctrlState),
++        .instance_init = avr8x_clkctrl_init,
++        .class_init = avr8x_clkctrl_class_init,
++    }, {
++        .name = TYPE_AVR8X_CPUINT,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(Avr8xCpuintState),
++        .class_init = avr8x_cpuint_class_init,
++    }, {
++        .name = TYPE_AVR8X_NVMCTRL,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(Avr8xNvmctrlState),
++        .instance_init = avr8x_nvmctrl_init,
++        .class_init = avr8x_nvmctrl_class_init,
++    }, {
++        .name = TYPE_AVR8X_NVMBYTES,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(Avr8xNvmbytesState),
++        .instance_finalize = avr8x_nvmbytes_finalize,
++        .class_init = avr8x_nvmbytes_class_init,
++    },
++};
++
++DEFINE_TYPES(avr8x_periph_types)
+diff --git a/hw/avr/avr8x_soc.c b/hw/avr/avr8x_soc.c
+new file mode 100644
+index 0000000..98574d0
+--- /dev/null
++++ b/hw/avr/avr8x_soc.c
+@@ -0,0 +1,464 @@
++/*
++ * Microchip AVR8X SoCs (AVRxt core: AVR Dx, AVR Ex, ...)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Everything comes from the generated device descriptor: the memory map,
++ * one mchp-regblock (or dedicated subclass, see avr8x_models) per
++ * peripheral instance and the interrupt vectors of each instance. Adding
++ * a device takes its descriptor file (hw/avr/<device>.c) and an entry in
++ * avr8x_soc_types[].
++ *
++ * Data space (DS40002324, Memory Map): I/O registers from 0, NVM-backed
++ * rows (fuses, user row, signature row), EEPROM, SRAM and a 32 KB window
++ * on the flash that NVMCTRL.CTRLB.FLMAP selects. The CPU sees the data
++ * space at OFFSET_DATA and the flash at OFFSET_CODE. CCP (CPU.CCP) is
++ * stored, but protected registers accept writes without it.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/log.h"
++#include "hw/avr/avr8x_soc.h"
++#include "hw/avr/avr8x_periph.h"
++#include "hw/char/avr8x_usart.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-clock.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/core/qdev-properties-system.h"
++#include "hw/misc/unimp.h"
++#include "system/address-spaces.h"
++
++/*
++ * The QOM type modelling each ATDF module. Every other instance is a
++ * generic mchp-regblock; a dedicated model only needs a line here.
++ */
++static const struct {
++    const char *module;
++    const char *type;
++} avr8x_models[] = {
++    { "CLKCTRL", TYPE_AVR8X_CLKCTRL },
++    { "CPUINT", TYPE_AVR8X_CPUINT },
++    { "FUSE", TYPE_AVR8X_NVMBYTES },
++    { "LOCK", TYPE_AVR8X_NVMBYTES },
++    { "NVMCTRL", TYPE_AVR8X_NVMCTRL },
++    { "SIGROW", TYPE_AVR8X_NVMBYTES },
++    { "SYSCFG", TYPE_AVR8X_NVMBYTES },
++    { "USART", TYPE_AVR8X_USART },
++    { "USERROW", TYPE_AVR8X_NVMBYTES },
++};
++
++static const char *avr8x_model_type(const MchpInstanceInfo *info)
++{
++    for (unsigned i = 0; i < ARRAY_SIZE(avr8x_models); i++) {
++        if (!strcmp(avr8x_models[i].module, info->module)) {
++            return avr8x_models[i].type;
++        }
++    }
++    return TYPE_MCHP_REGBLOCK;
++}
++
++/* PORT and VPORT instances are groups of the one avr8x-port device */
++static int avr8x_port_group(const MchpInstanceInfo *info)
++{
++    const char *name = info->name;
++
++    if (!strcmp(info->module, "VPORT")) {
++        name++;
++    } else if (strcmp(info->module, "PORT")) {
++        return -1;
++    }
++    return name[4] - 'A';
++}
++
++static bool avr8x_has_model(const MchpInstanceInfo *info)
++{
++    return !(info->flags & (MCHP_INST_CORE | MCHP_INST_NO_REGS)) &&
++           info->regs && info->slot_size && avr8x_port_group(info) < 0;
++}
++
++DeviceState *avr8x_soc_periph(Avr8xSocState *s, const char *name)
++{
++    for (unsigned i = 0; i < s->dev->ninstances; i++) {
++        if (!strcmp(s->dev->instances[i].name, name)) {
++            return s->periph[i];
++        }
++    }
++    return NULL;
++}
++
++MemoryRegion *avr8x_soc_flash(Avr8xSocState *s)
++{
++    return &s->flash;
++}
++
++void avr8x_soc_connect_serial(Avr8xSocState *s, unsigned usart, Chardev *chr)
++{
++    assert(usart < AVR8X_MAX_USART);
++    s->usart_chr[usart] = chr;
++}
++
++static void avr8x_soc_init(Object *obj)
++{
++    Avr8xSocState *s = AVR8X_SOC(obj);
++    const MchpAvrDeviceInfo *dev = AVR8X_SOC_GET_CLASS(obj)->dev;
++
++    s->dev = dev;
++    s->periph = g_new0(DeviceState *, dev->ninstances);
++    object_initialize_child(obj, "cpu", &s->cpu, AVR_CPU_TYPE_NAME("avrxt"));
++    object_initialize_child(obj, "port", &s->port, TYPE_AVR8X_PORT);
++
++    for (unsigned i = 0; i < dev->ninstances; i++) {
++        const MchpInstanceInfo *info = &dev->instances[i];
++        g_autofree char *name = g_ascii_strdown(info->name, -1);
++        Object *child;
++
++        if (!avr8x_has_model(info)) {
++            continue;
++        }
++        child = object_new(avr8x_model_type(info));
++        object_property_add_child(obj, name, child);
++        object_unref(child);
++        mchp_regblock_set_info(MCHP_REGBLOCK(child), info);
++        s->periph[i] = DEVICE(child);
++    }
++}
++
++static void avr8x_soc_finalize(Object *obj)
++{
++    g_free(AVR8X_SOC(obj)->periph);
++}
++
++static bool avr8x_revision(Avr8xSocState *s, uint8_t *rev, Error **errp)
++{
++    const MchpAvrDeviceInfo *dev = s->dev;
++
++    if (!s->silicon_rev) {
++        *rev = dev->revisions[0].revision;
++        return true;
++    }
++    for (unsigned i = 0; i < dev->nrevisions; i++) {
++        if (!g_ascii_strcasecmp(s->silicon_rev, dev->revisions[i].name)) {
++            *rev = dev->revisions[i].revision;
++            return true;
++        }
++    }
++    error_setg(errp, "%s: unknown silicon-rev '%s'", dev->name,
++               s->silicon_rev);
++    return false;
++}
++
++/* The bytes of data rows that fall into [@base, @base + @len) */
++static void avr8x_apply_rows(Avr8xSocState *s, uint8_t *buf, uint32_t base,
++                             uint32_t len)
++{
++    for (unsigned r = 0; r < s->dev->ndata_rows; r++) {
++        const MchpAvrDataRow *row = &s->dev->data_rows[r];
++
++        for (unsigned i = 0; i < row->len; i++) {
++            if (row->addr + i >= base && row->addr + i < base + len) {
++                buf[row->addr + i - base] = row->bytes[i];
++            }
++        }
++    }
++}
++
++/* EEPROM writes go through NVMCTRL commands, which are not modelled */
++static void avr8x_eeprom_write(void *opaque, hwaddr addr, uint64_t val,
++                               unsigned size)
++{
++    qemu_log_mask(LOG_UNIMP, "eeprom: write 0x%02" PRIx64 " at 0x%04"
++                  HWADDR_PRIx " not modelled (NVMCTRL commands)\n", val, addr);
++}
++
++static const MemoryRegionOps avr8x_eeprom_ops = {
++    .write = avr8x_eeprom_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = { .min_access_size = 1, .max_access_size = 1 },
++};
++
++static uint64_t avr8x_ccp_read(void *opaque, hwaddr addr, unsigned size)
++{
++    return AVR8X_SOC(opaque)->ccp_value;
++}
++
++static void avr8x_ccp_write(void *opaque, hwaddr addr, uint64_t val,
++                            unsigned size)
++{
++    /* Protected registers do not check CCP: writes always succeed */
++    AVR8X_SOC(opaque)->ccp_value = val;
++}
++
++static const MemoryRegionOps avr8x_ccp_ops = {
++    .read = avr8x_ccp_read,
++    .write = avr8x_ccp_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = { .min_access_size = 1, .max_access_size = 1 },
++};
++
++/* NVMCTRL "flmap": the flash section the data-space window shows */
++static void avr8x_set_flmap(void *opaque, int n, int section)
++{
++    Avr8xSocState *s = opaque;
++    uint32_t window = s->dev->progmem_map_size;
++    unsigned sections = MAX(s->dev->flash_size / window, 1);
++
++    memory_region_set_alias_offset(&s->flash_map,
++                                   (section % sections) * window);
++}
++
++static bool avr8x_init_memory(Avr8xSocState *s, Error **errp)
++{
++    const MchpAvrDeviceInfo *dev = s->dev;
++    MemoryRegion *sysmem = get_system_memory();
++    Object *obj = OBJECT(s);
++    g_autofree uint8_t *erased = NULL;
++
++    if (!memory_region_init_rom(&s->flash, obj, "flash", dev->flash_size,
++                                errp) ||
++        !memory_region_init_ram(&s->sram, obj, "sram", dev->sram_size,
++                                errp) ||
++        !memory_region_init_rom_device(&s->eeprom, obj, &avr8x_eeprom_ops, s,
++                                       "eeprom", dev->eeprom_size, errp)) {
++        return false;
++    }
++    memory_region_add_subregion(sysmem, OFFSET_CODE, &s->flash);
++    memory_region_add_subregion(sysmem, OFFSET_DATA + dev->sram_base,
++                                &s->sram);
++
++    erased = g_malloc(dev->eeprom_size);
++    memset(erased, 0xff, dev->eeprom_size);
++    avr8x_apply_rows(s, erased, dev->eeprom_base, dev->eeprom_size);
++    memcpy(memory_region_get_ram_ptr(&s->eeprom), erased, dev->eeprom_size);
++    memory_region_add_subregion(sysmem, OFFSET_DATA + dev->eeprom_base,
++                                &s->eeprom);
++    memory_region_init_alias(&s->eeprom_elf, obj, "eeprom-elf", &s->eeprom,
++                             0, dev->eeprom_size);
++    memory_region_add_subregion(sysmem, OFFSET_DATA + AVR8X_ELF_EEPROM,
++                                &s->eeprom_elf);
++
++    memory_region_init_alias(&s->flash_map, obj, "flash-map", &s->flash, 0,
++                             MIN(dev->progmem_map_size, dev->flash_size));
++    memory_region_add_subregion(sysmem, OFFSET_DATA + dev->progmem_map_base,
++                                &s->flash_map);
++
++    /* Accesses to I/O addresses without a model are logged */
++    create_unimplemented_device("io", OFFSET_DATA, dev->io_size);
++    return true;
++}
++
++static bool avr8x_realize_cpu(Avr8xSocState *s, Error **errp)
++{
++    const MchpAvrDeviceInfo *dev = s->dev;
++
++    /* SP resets to the last SRAM byte (DS: CPU.SP reset value) */
++    qdev_prop_set_uint32(DEVICE(&s->cpu), "init-sp",
++                         dev->sram_base + dev->sram_size - 1);
++    return qdev_realize(DEVICE(&s->cpu), NULL, errp);
++}
++
++/* Connect the first @nirqs vectors of instance @info to sysbus IRQ 0.. */
++static void avr8x_connect_vectors(Avr8xSocState *s, SysBusDevice *sbd,
++                                  const MchpInstanceInfo *info,
++                                  unsigned nirqs)
++{
++    unsigned n = 0;
++
++    for (unsigned v = 0; v < s->dev->nvectors && n < nirqs; v++) {
++        const MchpAvrVector *vec = &s->dev->vectors[v];
++
++        if (vec->instance && !strcmp(vec->instance, info->name)) {
++            sysbus_connect_irq(sbd, n++,
++                               qdev_get_gpio_in(DEVICE(&s->cpu),
++                                                vec->vector));
++        }
++    }
++}
++
++static void avr8x_connect_ccp(Avr8xSocState *s, const MchpInstanceInfo *info)
++{
++    memory_region_init_io(&s->ccp, OBJECT(s), &avr8x_ccp_ops, s, "ccp", 1);
++    /* CPU.CCP at offset 4 of the CPU instance (SP and SREG are the CPU's) */
++    memory_region_add_subregion(get_system_memory(),
++                                OFFSET_DATA + info->base + 4, &s->ccp);
++}
++
++static bool avr8x_realize_port(Avr8xSocState *s, Error **errp)
++{
++    SysBusDevice *sbd = SYS_BUS_DEVICE(&s->port);
++    unsigned groups = 0;
++
++    for (unsigned i = 0; i < s->dev->ninstances; i++) {
++        const MchpInstanceInfo *info = &s->dev->instances[i];
++
++        if (!strcmp(info->module, "PORT")) {
++            groups = MAX(groups, avr8x_port_group(info) + 1);
++        }
++    }
++    qdev_prop_set_uint32(DEVICE(&s->port), "groups", groups);
++    if (!sysbus_realize(sbd, errp)) {
++        return false;
++    }
++    for (unsigned i = 0; i < s->dev->ninstances; i++) {
++        const MchpInstanceInfo *info = &s->dev->instances[i];
++        int g = avr8x_port_group(info);
++        bool vport = !strcmp(info->module, "VPORT");
++
++        if (g < 0 || g >= groups) {
++            continue;
++        }
++        sysbus_mmio_map(sbd, 2 * g + vport, OFFSET_DATA + info->base);
++        if (!vport) {
++            /* One PORT vector per group: sysbus IRQ g */
++            for (unsigned v = 0; v < s->dev->nvectors; v++) {
++                const MchpAvrVector *vec = &s->dev->vectors[v];
++
++                if (vec->instance && !strcmp(vec->instance, info->name)) {
++                    sysbus_connect_irq(sbd, g,
++                                       qdev_get_gpio_in(DEVICE(&s->cpu),
++                                                        vec->vector));
++                }
++            }
++        }
++    }
++    return true;
++}
++
++/* Reset contents of the NVM-backed blocks */
++static void avr8x_nvm_image(Avr8xSocState *s, DeviceState *dev,
++                            const MchpInstanceInfo *info, uint8_t rev)
++{
++    g_autofree uint8_t *buf = g_malloc0(info->slot_size);
++    bool image = true;
++
++    if (!strcmp(info->module, "SIGROW")) {
++        memcpy(buf, s->dev->signature, 3);
++    } else if (!strcmp(info->module, "SYSCFG")) {
++        buf[1] = rev;                   /* REVID */
++    } else if (!strcmp(info->module, "USERROW")) {
++        memset(buf, 0xff, info->slot_size);
++    } else {
++        image = false;                  /* FUSE, LOCK: ATDF reset values */
++    }
++    for (unsigned r = 0; r < s->dev->ndata_rows; r++) {
++        const MchpAvrDataRow *row = &s->dev->data_rows[r];
++
++        if (row->addr < info->base + info->slot_size &&
++            row->addr + row->len > info->base) {
++            image = true;
++        }
++    }
++    if (image) {
++        avr8x_apply_rows(s, buf, info->base, info->slot_size);
++        avr8x_nvmbytes_set_image(dev, buf, info->slot_size);
++    }
++}
++
++static bool avr8x_realize_periph(Avr8xSocState *s, uint8_t rev, Error **errp)
++{
++    DeviceState *clkctrl = avr8x_soc_periph(s, "CLKCTRL");
++    Clock *clk_per = clkctrl ? qdev_get_clock_out(clkctrl, "clk_per") : NULL;
++    DeviceState *nvmctrl = avr8x_soc_periph(s, "NVMCTRL");
++
++    for (unsigned i = 0; i < s->dev->ninstances; i++) {
++        const MchpInstanceInfo *info = &s->dev->instances[i];
++        DeviceState *dev = s->periph[i];
++        SysBusDevice *sbd;
++
++        if (!strcmp(info->module, "CPU")) {
++            avr8x_connect_ccp(s, info);
++            continue;
++        }
++        if (!dev) {
++            continue;
++        }
++        sbd = SYS_BUS_DEVICE(dev);
++        if (!strcmp(info->module, "USART")) {
++            unsigned n = info->name[strlen(info->name) - 1] - '0';
++
++            if (n < AVR8X_MAX_USART && s->usart_chr[n]) {
++                qdev_prop_set_chr(dev, "chardev", s->usart_chr[n]);
++            }
++        } else if (!strcmp(info->module, "CPUINT")) {
++            object_property_set_link(OBJECT(dev), "cpu", OBJECT(&s->cpu),
++                                     &error_abort);
++        } else if (!strcmp(info->module, "CLKCTRL")) {
++            qdev_prop_set_uint32(dev, "xoschf-hz", s->xoschf_hz);
++        } else if (object_dynamic_cast(OBJECT(dev), TYPE_AVR8X_NVMBYTES)) {
++            avr8x_nvm_image(s, dev, info, rev);
++        }
++        if (clk_per && dev != clkctrl) {
++            qdev_connect_clock_in(dev, "gclk", clk_per);
++        }
++        if (!sysbus_realize(sbd, errp)) {
++            return false;
++        }
++        sysbus_mmio_map(sbd, 0, OFFSET_DATA + info->base);
++        /* USART: RXC, DRE, TXC; generic blocks: their first vector */
++        avr8x_connect_vectors(s, sbd, info,
++                              object_dynamic_cast(OBJECT(dev),
++                                                  TYPE_AVR8X_USART) ? 3 : 1);
++    }
++    if (nvmctrl) {
++        qdev_connect_gpio_out_named(nvmctrl, AVR8X_NVMCTRL_FLMAP, 0,
++                                    qemu_allocate_irq(avr8x_set_flmap, s, 0));
++    }
++    return true;
++}
++
++static void avr8x_soc_realize(DeviceState *dev, Error **errp)
++{
++    Avr8xSocState *s = AVR8X_SOC(dev);
++    uint8_t rev;
++
++    if (!avr8x_revision(s, &rev, errp) || !avr8x_init_memory(s, errp) ||
++        !avr8x_realize_cpu(s, errp) || !avr8x_realize_port(s, errp) ||
++        !avr8x_realize_periph(s, rev, errp)) {
++        return;
++    }
++}
++
++static const Property avr8x_soc_properties[] = {
++    DEFINE_PROP_STRING("silicon-rev", Avr8xSocState, silicon_rev),
++    /* Frequency on XTALHF1 (external clock or crystal); 0: nothing fitted */
++    DEFINE_PROP_UINT32("xoschf-hz", Avr8xSocState, xoschf_hz, 0),
++};
++
++static void avr8x_soc_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->realize = avr8x_soc_realize;
++    device_class_set_props(dc, avr8x_soc_properties);
++    /* Reason: mapped at fixed addresses on the system bus */
++    dc->user_creatable = false;
++}
++
++/* @data points to the device's descriptor pointer (hw/avr/<device>.c) */
++static void avr8x_soc_device_class_init(ObjectClass *klass, const void *data)
++{
++    AVR8X_SOC_CLASS(klass)->dev = *(const MchpAvrDeviceInfo *const *)data;
++}
++
++static const TypeInfo avr8x_soc_types[] = {
++    {
++        .name = TYPE_AVR8X_SOC,
++        .parent = TYPE_SYS_BUS_DEVICE,
++        .instance_size = sizeof(Avr8xSocState),
++        .instance_init = avr8x_soc_init,
++        .instance_finalize = avr8x_soc_finalize,
++        .class_size = sizeof(Avr8xSocClass),
++        .class_init = avr8x_soc_class_init,
++        .abstract = true,
++    }, {
++        .name = TYPE_AVR64EA48_SOC,
++        .parent = TYPE_AVR8X_SOC,
++        .class_init = avr8x_soc_device_class_init,
++        .class_data = &avr64ea48_info,
++    },
++};
++
++DEFINE_TYPES(avr8x_soc_types)
+diff --git a/hw/avr/meson.build b/hw/avr/meson.build
+index 46d53fb..0c75040 100644
+--- a/hw/avr/meson.build
++++ b/hw/avr/meson.build
+@@ -2,5 +2,9 @@ avr_ss = ss.source_set()
+ avr_ss.add(files('boot.c'))
+ avr_ss.add(when: 'CONFIG_AVR_ATMEGA_MCU', if_true: files('atmega.c'))
+ avr_ss.add(when: 'CONFIG_ARDUINO', if_true: files('arduino.c'))
++avr_ss.add(when: 'CONFIG_AVR8X_SOC', if_true: files('avr8x_soc.c',
++                                                  'avr8x_periph.c',
++                                                  'avr64ea48.c'))
++avr_ss.add(when: 'CONFIG_AVR64EA48_CNANO', if_true: files('avr64ea48_cnano.c'))
+ 
+ hw_arch += {'avr': avr_ss}
+diff --git a/hw/char/Kconfig b/hw/char/Kconfig
+index 123616a..a6fb5a7 100644
+--- a/hw/char/Kconfig
++++ b/hw/char/Kconfig
+@@ -75,6 +75,10 @@ config RENESAS_SCI
+ config AVR_USART
+     bool
+ 
++config AVR8X_USART
++    bool
++    select MCHP_REGFILE
++
+ config DIVA_GSP
+     bool
+ 
+diff --git a/hw/char/avr8x_usart.c b/hw/char/avr8x_usart.c
+new file mode 100644
+index 0000000..b3fd4e0
+--- /dev/null
++++ b/hw/char/avr8x_usart.c
+@@ -0,0 +1,380 @@
++/*
++ * Microchip AVR8X USART (uart_autobd_v4: AVR Dx, AVR Ex), asynchronous mode
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Behaviour from DS40002324 (AVR64EA48), chapter USART. The register file
++ * comes from the generated tables (overlays/usart_uart_autobd_v4.yaml):
++ *  - TX: a one-character buffer (TXDATAL, DREIF) in front of the shift
++ *    register; TXCIF when the shift register empties with nothing queued.
++ *    With "pace-tx" each character takes its frame time at the baud rate
++ *    from BAUD and CLK_PER (the "gclk" clock input); otherwise it is sent
++ *    at once.
++ *  - RX: a two-character FIFO (RXDATAL/RXDATAH, RXCIF); a third character
++ *    sets BUFOVF and is lost.
++ *  - Interrupts: RXC (RXCIF & RXCIE), DRE (DREIF & DREIE), TXC (TXCIF &
++ *    TXCIE) on sysbus IRQ 0, 1 and 2, the instance's vectors in order.
++ * Not modelled: synchronous, IrDA, RS485, LIN/auto-baud, MPCM, open drain,
++ * loop-back and the start-of-frame detector; writes to their bits are
++ * logged.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "chardev/char-fe.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/core/qdev-properties-system.h"
++#include "hw/char/avr8x_usart.h"
++#include "hw/mchp/gen/usart_uart_autobd_v4.h"
++#include "migration/vmstate.h"
++#include "trace.h"
++
++#define AVR8X_USART_RX_DEPTH    2
++
++/* Control bits the model does not implement, per register */
++#define CTRLA_UNMODELLED  (R_MCHP_USART_CTRLA_RS485_MASK | \
++                           R_MCHP_USART_CTRLA_ABEIE_MASK | \
++                           R_MCHP_USART_CTRLA_LBME_MASK | \
++                           R_MCHP_USART_CTRLA_RXSIE_MASK)
++#define CTRLB_UNMODELLED  (R_MCHP_USART_CTRLB_MPCM_MASK | \
++                           R_MCHP_USART_CTRLB_ODME_MASK | \
++                           R_MCHP_USART_CTRLB_SFDEN_MASK)
++
++OBJECT_DECLARE_SIMPLE_TYPE(Avr8xUsartState, AVR8X_USART)
++
++struct Avr8xUsartState {
++    MchpRegBlock parent_obj;
++
++    CharFrontend chr;
++    bool pace_tx;
++    qemu_irq irq_dre;
++    qemu_irq irq_txc;
++    QEMUTimer *frame_timer;
++    guint watch_tag;
++
++    uint16_t tx_buf;
++    bool tx_buf_full;
++    uint16_t tx_shift;
++    bool tx_busy;
++    uint16_t rx_buf[AVR8X_USART_RX_DEPTH];  /* bit 8: DATA8, 15: BUFOVF */
++    uint8_t rx_count;
++    bool rx_overflow;
++};
++
++static MchpRegFile *avr8x_usart_rf(Avr8xUsartState *s)
++{
++    return &MCHP_REGBLOCK(s)->rf;
++}
++
++static uint8_t avr8x_usart_reg(Avr8xUsartState *s, hwaddr reg)
++{
++    return mchp_regfile_peek(avr8x_usart_rf(s), reg, 1);
++}
++
++static void avr8x_usart_set_flag(Avr8xUsartState *s, uint8_t mask)
++{
++    MchpRegFile *rf = avr8x_usart_rf(s);
++
++    mchp_regfile_poke(rf, A_MCHP_USART_STATUS, 1,
++                      mchp_regfile_peek(rf, A_MCHP_USART_STATUS, 1) | mask);
++}
++
++/* STATUS as read: the stored W1C flags plus the buffer states */
++static uint8_t avr8x_usart_status(Avr8xUsartState *s)
++{
++    uint8_t status = avr8x_usart_reg(s, A_MCHP_USART_STATUS) &
++                     ~(R_MCHP_USART_STATUS_DREIF_MASK |
++                       R_MCHP_USART_STATUS_RXCIF_MASK);
++
++    if (!s->tx_buf_full) {
++        status |= R_MCHP_USART_STATUS_DREIF_MASK;
++    }
++    if (s->rx_count) {
++        status |= R_MCHP_USART_STATUS_RXCIF_MASK;
++    }
++    return status;
++}
++
++/* The RXC level; DRE and TXC are set here too */
++static bool avr8x_usart_irq_pending(MchpRegBlock *rb)
++{
++    Avr8xUsartState *s = AVR8X_USART(rb);
++    uint8_t status = avr8x_usart_status(s);
++    uint8_t ctrla = avr8x_usart_reg(s, A_MCHP_USART_CTRLA);
++
++    qemu_set_irq(s->irq_dre, status & ctrla & R_MCHP_USART_STATUS_DREIF_MASK);
++    qemu_set_irq(s->irq_txc, status & ctrla & R_MCHP_USART_STATUS_TXCIF_MASK);
++    return status & ctrla & R_MCHP_USART_STATUS_RXCIF_MASK;
++}
++
++/* Frame time in ns at the configured baud rate, 0 when not known */
++static uint64_t avr8x_usart_frame_ns(Avr8xUsartState *s)
++{
++    uint64_t fper = clock_get_hz(MCHP_REGBLOCK(s)->gclk);
++    uint16_t baud = avr8x_usart_reg(s, A_MCHP_USART_BAUD) |
++                    avr8x_usart_reg(s, A_MCHP_USART_BAUD + 1) << 8;
++    uint8_t ctrlb = avr8x_usart_reg(s, A_MCHP_USART_CTRLB);
++    uint8_t ctrlc = avr8x_usart_reg(s, A_MCHP_USART_CTRLC);
++    unsigned samples = FIELD_EX8(ctrlb, MCHP_USART_CTRLB, RXMODE) ==
++                       MCHP_USART_CTRLB_RXMODE_CLK2X ? 8 : 16;
++    unsigned chsize = FIELD_EX8(ctrlc, MCHP_USART_CTRLC_NORMAL, CHSIZE);
++    unsigned bits;
++
++    if (!fper || baud < 64) {
++        return 0;
++    }
++    /* Start, 5-9 data bits, parity, 1 or 2 stop bits */
++    bits = 1 + (chsize >= 4 ? 9 : 5 + chsize) +
++           (FIELD_EX8(ctrlc, MCHP_USART_CTRLC_NORMAL, PMODE) ? 1 : 0) +
++           1 + FIELD_EX8(ctrlc, MCHP_USART_CTRLC_NORMAL, SBMODE);
++    /* f_baud = 64 f_per / (S BAUD) */
++    return muldiv64(bits * samples * baud, NANOSECONDS_PER_SECOND, 64 * fper);
++}
++
++static void avr8x_usart_tx_load(Avr8xUsartState *s);
++
++static void avr8x_usart_tx_done(Avr8xUsartState *s)
++{
++    s->tx_busy = false;
++    if (s->tx_buf_full) {
++        avr8x_usart_tx_load(s);
++    } else {
++        avr8x_usart_set_flag(s, R_MCHP_USART_STATUS_TXCIF_MASK);
++    }
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++static void avr8x_usart_frame_end(void *opaque)
++{
++    avr8x_usart_tx_done(opaque);
++}
++
++static gboolean avr8x_usart_tx_send(void *do_not_use, GIOCondition cond,
++                                    void *opaque)
++{
++    Avr8xUsartState *s = opaque;
++    uint8_t ch = s->tx_shift;
++    uint64_t frame_ns;
++
++    s->watch_tag = 0;
++    if (qemu_chr_fe_write(&s->chr, &ch, 1) <= 0) {
++        s->watch_tag = qemu_chr_fe_add_watch(&s->chr, G_IO_OUT | G_IO_HUP,
++                                             avr8x_usart_tx_send, s);
++        if (s->watch_tag) {
++            return G_SOURCE_REMOVE;
++        }
++        /* No backend that could ever take it: the character is lost. */
++    }
++    trace_avr8x_usart_tx(MCHP_REGBLOCK(s)->name, ch);
++    frame_ns = s->pace_tx ? avr8x_usart_frame_ns(s) : 0;
++    if (frame_ns) {
++        timer_mod(s->frame_timer,
++                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + frame_ns);
++    } else {
++        avr8x_usart_tx_done(s);
++    }
++    return G_SOURCE_REMOVE;
++}
++
++static void avr8x_usart_tx_load(Avr8xUsartState *s)
++{
++    s->tx_shift = s->tx_buf;
++    s->tx_buf_full = false;
++    s->tx_busy = true;
++    avr8x_usart_tx_send(NULL, 0, s);
++}
++
++static int avr8x_usart_can_receive(void *opaque)
++{
++    Avr8xUsartState *s = opaque;
++
++    if (!(avr8x_usart_reg(s, A_MCHP_USART_CTRLB) &
++          R_MCHP_USART_CTRLB_RXEN_MASK)) {
++        return 0;
++    }
++    return AVR8X_USART_RX_DEPTH - s->rx_count;
++}
++
++static void avr8x_usart_receive(void *opaque, const uint8_t *buf, int size)
++{
++    Avr8xUsartState *s = opaque;
++
++    for (int i = 0; i < size; i++) {
++        trace_avr8x_usart_rx(MCHP_REGBLOCK(s)->name, buf[i]);
++        if (s->rx_count == AVR8X_USART_RX_DEPTH) {
++            s->rx_overflow = true;
++            continue;
++        }
++        s->rx_buf[s->rx_count++] = buf[i] | (s->rx_overflow ? 0x8000 : 0);
++        s->rx_overflow = false;
++    }
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++static uint32_t avr8x_usart_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                                     unsigned idx, uint32_t stored,
++                                     bool side_effects)
++{
++    Avr8xUsartState *s = AVR8X_USART(rf->opaque);
++    uint16_t head = s->rx_count ? s->rx_buf[0] : 0;
++
++    switch (ri->offset) {
++    case A_MCHP_USART_RXDATAL:
++        if (side_effects && s->rx_count) {
++            s->rx_buf[0] = s->rx_buf[1];
++            s->rx_count--;
++            mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++            qemu_chr_fe_accept_input(&s->chr);
++        }
++        return head & 0xff;
++    case A_MCHP_USART_RXDATAH:
++        return (s->rx_count ? R_MCHP_USART_RXDATAH_RXCIF_MASK : 0) |
++               ((head >> 8) & R_MCHP_USART_RXDATAH_DATA8_MASK) |
++               (head & 0x8000 ? R_MCHP_USART_RXDATAH_BUFOVF_MASK : 0);
++    case A_MCHP_USART_STATUS:
++        return avr8x_usart_status(s);
++    }
++    return stored;
++}
++
++static void avr8x_usart_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                   unsigned idx, uint32_t old,
++                                   uint32_t written, uint32_t we)
++{
++    Avr8xUsartState *s = AVR8X_USART(rf->opaque);
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint8_t ctrlb = avr8x_usart_reg(s, A_MCHP_USART_CTRLB);
++
++    switch (ri->offset) {
++    case A_MCHP_USART_TXDATAL:
++        if (!(ctrlb & R_MCHP_USART_CTRLB_TXEN_MASK)) {
++            qemu_log_mask(LOG_GUEST_ERROR, "%s.TXDATAL: write while TXEN "
++                          "is 0; character dropped\n", rb->name);
++            break;
++        }
++        if (s->tx_buf_full) {
++            qemu_log_mask(LOG_GUEST_ERROR, "%s.TXDATAL: write while DREIF "
++                          "is 0; character dropped\n", rb->name);
++            break;
++        }
++        s->tx_buf = written & 0xff;
++        s->tx_buf_full = true;
++        if (!s->tx_busy) {
++            avr8x_usart_tx_load(s);
++        }
++        break;
++    case A_MCHP_USART_CTRLA:
++        if (written & we & CTRLA_UNMODELLED) {
++            qemu_log_mask(LOG_UNIMP, "%s.CTRLA: write 0x%02x not modelled\n",
++                          rb->name, written & CTRLA_UNMODELLED);
++        }
++        break;
++    case A_MCHP_USART_CTRLB:
++        if (written & we & CTRLB_UNMODELLED) {
++            qemu_log_mask(LOG_UNIMP, "%s.CTRLB: write 0x%02x not modelled\n",
++                          rb->name, written & CTRLB_UNMODELLED);
++        }
++        if (!(ctrlb & R_MCHP_USART_CTRLB_RXEN_MASK)) {
++            s->rx_count = 0;            /* disabling RX flushes the FIFO */
++        } else if (!(old & R_MCHP_USART_CTRLB_RXEN_MASK)) {
++            qemu_chr_fe_accept_input(&s->chr);
++        }
++        break;
++    }
++}
++
++static void avr8x_usart_reset_hold(MchpRegBlock *rb)
++{
++    Avr8xUsartState *s = AVR8X_USART(rb);
++
++    timer_del(s->frame_timer);
++    s->tx_buf_full = false;
++    s->tx_busy = false;
++    s->rx_count = 0;
++    s->rx_overflow = false;
++}
++
++static bool avr8x_usart_realize(MchpRegBlock *rb, Error **errp)
++{
++    Avr8xUsartState *s = AVR8X_USART(rb);
++
++    s->frame_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, avr8x_usart_frame_end,
++                                  s);
++    qemu_chr_fe_set_handlers(&s->chr, avr8x_usart_can_receive,
++                             avr8x_usart_receive, NULL, NULL, s, NULL, true);
++    return true;
++}
++
++static void avr8x_usart_init(Object *obj)
++{
++    Avr8xUsartState *s = AVR8X_USART(obj);
++
++    sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq_dre);
++    sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq_txc);
++}
++
++static void avr8x_usart_finalize(Object *obj)
++{
++    Avr8xUsartState *s = AVR8X_USART(obj);
++
++    g_clear_handle_id(&s->watch_tag, g_source_remove);
++    timer_free(s->frame_timer);
++}
++
++static const VMStateDescription vmstate_avr8x_usart = {
++    .name = TYPE_AVR8X_USART,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, Avr8xUsartState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_UINT16(tx_buf, Avr8xUsartState),
++        VMSTATE_BOOL(tx_buf_full, Avr8xUsartState),
++        VMSTATE_UINT16(tx_shift, Avr8xUsartState),
++        VMSTATE_BOOL(tx_busy, Avr8xUsartState),
++        VMSTATE_TIMER_PTR(frame_timer, Avr8xUsartState),
++        VMSTATE_UINT16_ARRAY(rx_buf, Avr8xUsartState, AVR8X_USART_RX_DEPTH),
++        VMSTATE_UINT8(rx_count, Avr8xUsartState),
++        VMSTATE_BOOL(rx_overflow, Avr8xUsartState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static const Property avr8x_usart_properties[] = {
++    DEFINE_PROP_CHR("chardev", Avr8xUsartState, chr),
++    DEFINE_PROP_BOOL("pace-tx", Avr8xUsartState, pace_tx, false),
++};
++
++static void avr8x_usart_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    dc->vmsd = &vmstate_avr8x_usart;
++    device_class_set_props(dc, avr8x_usart_properties);
++    c->realize = avr8x_usart_realize;
++    c->pre_read = avr8x_usart_pre_read;
++    c->post_write = avr8x_usart_post_write;
++    c->irq_pending = avr8x_usart_irq_pending;
++    c->reset_hold = avr8x_usart_reset_hold;
++    c->is_enabled = avr8x_never_enabled;
++    c->log_writes = false;
++}
++
++static const TypeInfo avr8x_usart_types[] = {
++    {
++        .name = TYPE_AVR8X_USART,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(Avr8xUsartState),
++        .instance_init = avr8x_usart_init,
++        .instance_finalize = avr8x_usart_finalize,
++        .class_init = avr8x_usart_class_init,
++    },
++};
++
++DEFINE_TYPES(avr8x_usart_types)
+diff --git a/hw/char/meson.build b/hw/char/meson.build
+index 09ff1b5..4ff70da 100644
+--- a/hw/char/meson.build
++++ b/hw/char/meson.build
+@@ -37,6 +37,7 @@ system_ss.add(when: 'CONFIG_STM32F2XX_USART', if_true: files('stm32f2xx_usart.c'
+ system_ss.add(when: 'CONFIG_STM32L4X5_USART', if_true: files('stm32l4x5_usart.c'))
+ system_ss.add(when: 'CONFIG_MCHP_PFSOC_MMUART', if_true: files('mchp_pfsoc_mmuart.c'))
+ system_ss.add(when: 'CONFIG_MCHP_SERCOM', if_true: files('mchp_sercom.c'))
++system_ss.add(when: 'CONFIG_AVR8X_USART', if_true: files('avr8x_usart.c'))
+ system_ss.add(when: 'CONFIG_HTIF', if_true: files('riscv_htif.c'))
+ system_ss.add(when: 'CONFIG_GOLDFISH_TTY', if_true: files('goldfish_tty.c'))
+ 
+diff --git a/hw/char/trace-events b/hw/char/trace-events
+index 78c8295..6086526 100644
+--- a/hw/char/trace-events
++++ b/hw/char/trace-events
+@@ -142,6 +142,10 @@ stm32f2xx_usart_receive(char *id, uint8_t chr) " %s receiving '%c'"
+ htif_uart_write_to_host(uint8_t device, uint8_t cmd, uint64_t payload) "device: %u cmd: %02u payload: %016" PRIx64
+ htif_uart_unknown_device_command(uint8_t device, uint8_t cmd, uint64_t payload) "device: %u cmd: %02u payload: %016" PRIx64
+ 
++# avr8x_usart.c
++avr8x_usart_tx(const char *name, uint8_t ch) "%s: tx 0x%02x"
++avr8x_usart_rx(const char *name, uint8_t ch) "%s: rx 0x%02x"
++
+ # mchp_sercom.c
+ mchp_sercom_tx(const char *name, uint8_t ch) "%s: tx 0x%02x"
+ mchp_sercom_spi(const char *name, uint32_t tx, uint32_t rx) "%s: SPI out 0x%x, in 0x%x"
+diff --git a/hw/gpio/Kconfig b/hw/gpio/Kconfig
+index e9ec9a3..b8ce362 100644
+--- a/hw/gpio/Kconfig
++++ b/hw/gpio/Kconfig
+@@ -20,6 +20,9 @@ config MCHP_PORT
+     bool
+     select MCHP_REGFILE
+ 
++config AVR8X_PORT
++    bool
++
+ config PCA9552
+     bool
+     depends on I2C
+diff --git a/hw/gpio/avr8x_port.c b/hw/gpio/avr8x_port.c
+new file mode 100644
+index 0000000..7858b2c
+--- /dev/null
++++ b/hw/gpio/avr8x_port.c
+@@ -0,0 +1,529 @@
++/*
++ * Microchip AVR8X I/O ports (PORT and VPORT, gpio_ports_avr_v3)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Behaviour from DS40002324 (AVR64EA48), chapter PORT: DIR and OUT with
++ * their SET/CLR/TGL strobes, IN (writing 1 toggles OUT), PINnCTRL
++ * (ISC, PULLUPEN, INVEN) and the PINCONFIG/PINCTRLUPD/SET/CLR multi-pin
++ * configuration, INTFLAGS (write 1 to clear) with the input sense
++ * configuration, and the VPORT view of DIR, OUT, IN and INTFLAGS.
++ * A pad is driven by OUT (or a peripheral override) while DIR is set;
++ * otherwise an external driver sets it, else the pull-up, else it floats
++ * and reads 0. INVEN inverts both the output and the input. Not modelled:
++ * slew rate (PORTCTRL.SRL), input levels (INLVL) and the event generators
++ * (EVGENCTRL is stored only).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/gpio/avr8x_port.h"
++#include "hw/mchp/gen/port_gpio_ports_avr_v3.h"
++#include "hw/mchp/gen/vport_gpio_ports_avr_v3_vport.h"
++#include "migration/vmstate.h"
++#include "trace.h"
++
++#define ISC(ctrl)       FIELD_EX8(ctrl, MCHP_PORT_PINCONFIG, ISC)
++#define PULLUP(ctrl)    FIELD_EX8(ctrl, MCHP_PORT_PINCONFIG, PULLUPEN)
++#define INVEN(ctrl)     FIELD_EX8(ctrl, MCHP_PORT_PINCONFIG, INVEN)
++
++static uint8_t avr8x_port_mask_of(Avr8xPortGroup *g, uint8_t (*bit)(uint8_t))
++{
++    uint8_t mask = 0;
++
++    for (unsigned pin = 0; pin < AVR8X_PORT_PINS; pin++) {
++        if (bit(g->pinctrl[pin])) {
++            mask |= BIT(pin);
++        }
++    }
++    return mask;
++}
++
++static uint8_t avr8x_inven(uint8_t ctrl)
++{
++    return INVEN(ctrl);
++}
++
++static uint8_t avr8x_pullup(uint8_t ctrl)
++{
++    return PULLUP(ctrl);
++}
++
++/* Output level of each pin while it is an output (OUT or override) */
++static uint8_t avr8x_port_drive_level(Avr8xPortGroup *g)
++{
++    uint8_t out = (g->out & ~g->per_mask) | (g->per_level & g->per_mask);
++
++    return out ^ avr8x_port_mask_of(g, avr8x_inven);
++}
++
++/* Level of every pad of group @g */
++static uint8_t avr8x_port_pads(Avr8xPortGroup *g)
++{
++    uint8_t drive = g->dir;
++    uint8_t ext = g->ext_mask & ~drive;
++    uint8_t pull = avr8x_port_mask_of(g, avr8x_pullup) & ~drive & ~ext;
++
++    return (avr8x_port_drive_level(g) & drive) | (g->ext_level & ext) | pull;
++}
++
++/* IN: the pads as the input buffers see them (INVEN, input disable) */
++static uint8_t avr8x_port_in(Avr8xPortGroup *g)
++{
++    uint8_t in = avr8x_port_pads(g) ^ avr8x_port_mask_of(g, avr8x_inven);
++
++    for (unsigned pin = 0; pin < AVR8X_PORT_PINS; pin++) {
++        if (ISC(g->pinctrl[pin]) == MCHP_PORT_PINCONFIG_ISC_INPUT_DISABLE) {
++            in &= ~BIT(pin);
++        }
++    }
++    return in;
++}
++
++static void avr8x_port_account(Avr8xPortGroup *g)
++{
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    int64_t dt = now - g->acc_time;
++
++    for (unsigned pin = 0; pin < AVR8X_PORT_PINS && dt > 0; pin++) {
++        if (extract32(g->pad_mask, pin, 1)) {
++            if (extract32(g->pad_level, pin, 1)) {
++                g->high_ns[pin] += dt;
++            } else {
++                g->low_ns[pin] += dt;
++            }
++        }
++    }
++    g->acc_time = now;
++}
++
++/* Input sense: set INTFLAGS for the edges and levels PINnCTRL.ISC asks */
++static void avr8x_port_sense(Avr8xPortGroup *g)
++{
++    uint8_t in = avr8x_port_in(g);
++    uint8_t rose = in & ~g->in_last, fell = ~in & g->in_last;
++
++    for (unsigned pin = 0; pin < AVR8X_PORT_PINS; pin++) {
++        bool hit = false;
++
++        switch (ISC(g->pinctrl[pin])) {
++        case MCHP_PORT_PINCONFIG_ISC_BOTHEDGES:
++            hit = extract32(rose | fell, pin, 1);
++            break;
++        case MCHP_PORT_PINCONFIG_ISC_RISING:
++            hit = extract32(rose, pin, 1);
++            break;
++        case MCHP_PORT_PINCONFIG_ISC_FALLING:
++            hit = extract32(fell, pin, 1);
++            break;
++        case MCHP_PORT_PINCONFIG_ISC_LEVEL:
++            hit = !extract32(in, pin, 1);
++            break;
++        }
++        if (hit) {
++            g->intflags |= BIT(pin);
++        }
++    }
++    g->in_last = in;
++}
++
++static void avr8x_port_update(Avr8xPortState *s, unsigned n)
++{
++    Avr8xPortGroup *g = &s->g[n];
++    uint8_t pads = avr8x_port_pads(g);
++    uint8_t driven = g->dir;
++    uint8_t changed = (driven ^ g->pad_mask) |
++                      ((pads ^ g->pad_level) & driven);
++
++    avr8x_port_sense(g);
++    if (changed) {
++        avr8x_port_account(g);
++        g->pad_mask = driven;
++        g->pad_level = pads & driven;
++        for (unsigned pin = 0; pin < AVR8X_PORT_PINS; pin++) {
++            if (extract32(changed, pin, 1)) {
++                int level = extract32(driven, pin, 1) ?
++                            (int)extract32(pads, pin, 1) : -1;
++
++                trace_avr8x_port_pad('A' + n, pin, level);
++                qemu_set_irq(s->pad[n * AVR8X_PORT_PINS + pin], level);
++            }
++        }
++    }
++    qemu_set_irq(s->irq[n], g->intflags != 0);
++}
++
++/* PINCTRLUPD/SET/CLR: PINCONFIG into PINnCTRL of the pins written 1 */
++static void avr8x_port_pinctrl_multi(Avr8xPortGroup *g, hwaddr reg,
++                                     uint8_t pins)
++{
++    for (unsigned pin = 0; pin < AVR8X_PORT_PINS; pin++) {
++        if (!extract32(pins, pin, 1)) {
++            continue;
++        }
++        switch (reg) {
++        case A_MCHP_PORT_PINCTRLUPD:
++            g->pinctrl[pin] = g->pinconfig;
++            break;
++        case A_MCHP_PORT_PINCTRLSET:
++            g->pinctrl[pin] |= g->pinconfig;
++            break;
++        case A_MCHP_PORT_PINCTRLCLR:
++            g->pinctrl[pin] &= ~g->pinconfig;
++            break;
++        }
++    }
++}
++
++static uint64_t avr8x_port_read(void *opaque, hwaddr addr, unsigned size)
++{
++    Avr8xPortGroup *g = opaque;
++    unsigned n = g->index;
++    hwaddr reg = addr;
++
++    switch (reg) {
++    case A_MCHP_PORT_DIR ... A_MCHP_PORT_DIRTGL:
++        return g->dir;
++    case A_MCHP_PORT_OUT ... A_MCHP_PORT_OUTTGL:
++        return g->out;
++    case A_MCHP_PORT_IN:
++        return avr8x_port_in(g);
++    case A_MCHP_PORT_INTFLAGS:
++        return g->intflags;
++    case A_MCHP_PORT_PORTCTRL:
++        return g->portctrl;
++    case A_MCHP_PORT_PINCONFIG:
++        return g->pinconfig;
++    case A_MCHP_PORT_PINCTRLUPD ... A_MCHP_PORT_PINCTRLCLR:
++        return 0;
++    case A_MCHP_PORT_PIN0CTRL ... A_MCHP_PORT_PIN7CTRL:
++        return g->pinctrl[reg - A_MCHP_PORT_PIN0CTRL];
++    case A_MCHP_PORT_EVGENCTRL:
++        return g->evgenctrl;
++    }
++    qemu_log_mask(LOG_GUEST_ERROR, "port%c: read of reserved offset 0x%"
++                  HWADDR_PRIx "\n", 'a' + n, reg);
++    return 0;
++}
++
++static void avr8x_port_write(void *opaque, hwaddr addr, uint64_t val64,
++                             unsigned size)
++{
++    Avr8xPortGroup *g = opaque;
++    Avr8xPortState *s = g->owner;
++    unsigned n = g->index;
++    hwaddr reg = addr;
++    uint8_t val = val64;
++
++    switch (reg) {
++    case A_MCHP_PORT_DIR:
++        g->dir = val;
++        break;
++    case A_MCHP_PORT_DIRSET:
++        g->dir |= val;
++        break;
++    case A_MCHP_PORT_DIRCLR:
++        g->dir &= ~val;
++        break;
++    case A_MCHP_PORT_DIRTGL:
++        g->dir ^= val;
++        break;
++    case A_MCHP_PORT_OUT:
++        g->out = val;
++        break;
++    case A_MCHP_PORT_OUTSET:
++        g->out |= val;
++        break;
++    case A_MCHP_PORT_OUTCLR:
++        g->out &= ~val;
++        break;
++    case A_MCHP_PORT_OUTTGL:
++    case A_MCHP_PORT_IN:            /* writing 1 to IN toggles OUT */
++        g->out ^= val;
++        break;
++    case A_MCHP_PORT_INTFLAGS:
++        g->intflags &= ~val;
++        break;
++    case A_MCHP_PORT_PORTCTRL:
++        g->portctrl = val & R_MCHP_PORT_PORTCTRL_SRL_MASK;
++        break;
++    case A_MCHP_PORT_PINCONFIG:
++        g->pinconfig = val;
++        break;
++    case A_MCHP_PORT_PINCTRLUPD ... A_MCHP_PORT_PINCTRLCLR:
++        avr8x_port_pinctrl_multi(g, reg, val);
++        break;
++    case A_MCHP_PORT_PIN0CTRL ... A_MCHP_PORT_PIN7CTRL:
++        g->pinctrl[reg - A_MCHP_PORT_PIN0CTRL] = val;
++        break;
++    case A_MCHP_PORT_EVGENCTRL:
++        g->evgenctrl = val;
++        if (val) {
++            qemu_log_mask(LOG_UNIMP, "port%c.EVGENCTRL: write 0x%02x not "
++                          "modelled\n", 'a' + n, val);
++        }
++        break;
++    default:
++        qemu_log_mask(LOG_GUEST_ERROR, "port%c: write of reserved offset 0x%"
++                      HWADDR_PRIx "\n", 'a' + n, reg);
++        return;
++    }
++    avr8x_port_update(s, n);
++}
++
++static uint64_t avr8x_vport_read(void *opaque, hwaddr addr, unsigned size)
++{
++    Avr8xPortGroup *g = opaque;
++
++    switch (addr) {
++    case A_MCHP_VPORT_DIR:
++        return g->dir;
++    case A_MCHP_VPORT_OUT:
++        return g->out;
++    case A_MCHP_VPORT_IN:
++        return avr8x_port_in(g);
++    default:
++        return g->intflags;
++    }
++}
++
++static void avr8x_vport_write(void *opaque, hwaddr addr, uint64_t val64,
++                              unsigned size)
++{
++    Avr8xPortGroup *g = opaque;
++    Avr8xPortState *s = g->owner;
++    unsigned n = g->index;
++    uint8_t val = val64;
++
++    switch (addr) {
++    case A_MCHP_VPORT_DIR:
++        g->dir = val;
++        break;
++    case A_MCHP_VPORT_OUT:
++        g->out = val;
++        break;
++    case A_MCHP_VPORT_IN:
++        g->out ^= val;
++        break;
++    default:
++        g->intflags &= ~val;
++        break;
++    }
++    avr8x_port_update(s, n);
++}
++
++static const MemoryRegionOps avr8x_port_ops = {
++    .read = avr8x_port_read,
++    .write = avr8x_port_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = { .min_access_size = 1, .max_access_size = 1 },
++};
++
++static const MemoryRegionOps avr8x_vport_ops = {
++    .read = avr8x_vport_read,
++    .write = avr8x_vport_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = { .min_access_size = 1, .max_access_size = 1 },
++};
++
++/* "port-in": an external driver on pad @n (negative: released) */
++static void avr8x_port_set_input(void *opaque, int n, int level)
++{
++    Avr8xPortState *s = opaque;
++    unsigned grp = n / AVR8X_PORT_PINS, pin = n % AVR8X_PORT_PINS;
++    Avr8xPortGroup *g = &s->g[grp];
++
++    if (grp >= s->ngroups) {
++        return;
++    }
++    trace_avr8x_port_in('A' + grp, pin, level);
++    g->ext_mask = deposit32(g->ext_mask, pin, 1, level >= 0);
++    g->ext_level = deposit32(g->ext_level, pin, 1, level > 0);
++    avr8x_port_update(s, grp);
++}
++
++/* "periph-out": a peripheral overrides OUT of pad @n (negative: stops) */
++static void avr8x_port_set_periph(void *opaque, int n, int level)
++{
++    Avr8xPortState *s = opaque;
++    unsigned grp = n / AVR8X_PORT_PINS, pin = n % AVR8X_PORT_PINS;
++    Avr8xPortGroup *g = &s->g[grp];
++
++    if (grp >= s->ngroups) {
++        return;
++    }
++    g->per_mask = deposit32(g->per_mask, pin, 1, level >= 0);
++    g->per_level = deposit32(g->per_level, pin, 1, level > 0);
++    avr8x_port_update(s, grp);
++}
++
++static void avr8x_port_get_levels(Object *obj, Visitor *v, const char *name,
++                                  void *opaque, Error **errp)
++{
++    Avr8xPortState *s = AVR8X_PORT(obj);
++    uint32_t value = avr8x_port_pads(&s->g[GPOINTER_TO_UINT(opaque)]);
++
++    visit_type_uint32(v, name, &value, errp);
++}
++
++static void avr8x_port_get_stats(Object *obj, Visitor *v, const char *name,
++                                 void *opaque, Error **errp)
++{
++    Avr8xPortState *s = AVR8X_PORT(obj);
++    Avr8xPortGroup *g = &s->g[GPOINTER_TO_UINT(opaque)];
++    g_autoptr(GString) str = g_string_new(NULL);
++    g_autofree char *val = NULL;
++
++    avr8x_port_account(g);
++    g_string_append_printf(str, "%" PRId64, g->acc_time);
++    for (unsigned pin = 0; pin < AVR8X_PORT_PINS; pin++) {
++        g_string_append_printf(str, " %" PRIu64 " %" PRIu64, g->high_ns[pin],
++                               g->low_ns[pin]);
++    }
++    val = g_string_free(g_steal_pointer(&str), false);
++    visit_type_str(v, name, &val, errp);
++}
++
++static void avr8x_port_reset_hold(Object *obj, ResetType type)
++{
++    Avr8xPortState *s = AVR8X_PORT(obj);
++
++    for (unsigned n = 0; n < AVR8X_PORT_GROUPS; n++) {
++        Avr8xPortGroup *g = &s->g[n];
++
++        g->dir = g->out = g->intflags = 0;
++        g->portctrl = g->pinconfig = g->evgenctrl = 0;
++        memset(g->pinctrl, 0, sizeof(g->pinctrl));
++        g->per_mask = g->per_level = 0;
++    }
++}
++
++static void avr8x_port_reset_exit(Object *obj, ResetType type)
++{
++    Avr8xPortState *s = AVR8X_PORT(obj);
++
++    for (unsigned n = 0; n < s->ngroups; n++) {
++        s->g[n].in_last = avr8x_port_in(&s->g[n]);
++        avr8x_port_update(s, n);
++    }
++}
++
++static void avr8x_port_init(Object *obj)
++{
++    Avr8xPortState *s = AVR8X_PORT(obj);
++
++    qdev_init_gpio_out_named(DEVICE(obj), s->pad, AVR8X_PORT_PAD,
++                             AVR8X_PORT_NUM_PINS);
++    qdev_init_gpio_in_named(DEVICE(obj), avr8x_port_set_input, AVR8X_PORT_IN,
++                            AVR8X_PORT_NUM_PINS);
++    qdev_init_gpio_in_named(DEVICE(obj), avr8x_port_set_periph,
++                            AVR8X_PORT_PERIPH_OUT, AVR8X_PORT_NUM_PINS);
++}
++
++static void avr8x_port_realize(DeviceState *dev, Error **errp)
++{
++    Avr8xPortState *s = AVR8X_PORT(dev);
++    Object *obj = OBJECT(dev);
++
++    if (!s->ngroups || s->ngroups > AVR8X_PORT_GROUPS) {
++        error_setg(errp, "avr8x-port: groups must be 1-%d",
++                   AVR8X_PORT_GROUPS);
++        return;
++    }
++    for (unsigned n = 0; n < s->ngroups; n++) {
++        void *group = GUINT_TO_POINTER(n);
++        g_autofree char *port = g_strdup_printf("port%c", 'a' + n);
++        g_autofree char *vport = g_strdup_printf("vport%c", 'a' + n);
++        g_autofree char *stats = g_strdup_printf("p%c-stats", 'a' + n);
++        g_autofree char *levels = g_strdup_printf("p%c-levels", 'a' + n);
++
++        s->g[n].owner = s;
++        s->g[n].index = n;
++        memory_region_init_io(&s->port_mr[n], obj, &avr8x_port_ops, &s->g[n],
++                              port, AVR8X_PORT_GROUP_SIZE);
++        memory_region_init_io(&s->vport_mr[n], obj, &avr8x_vport_ops,
++                              &s->g[n], vport, AVR8X_VPORT_SIZE);
++        sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->port_mr[n]);
++        sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->vport_mr[n]);
++        sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq[n]);
++        object_property_add(obj, stats, "str", avr8x_port_get_stats,
++                            NULL, NULL, group);
++        object_property_add(obj, levels, "uint32", avr8x_port_get_levels,
++                            NULL, NULL, group);
++    }
++}
++
++static const VMStateDescription vmstate_avr8x_port_group = {
++    .name = "avr8x-port-group",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_UINT8(dir, Avr8xPortGroup),
++        VMSTATE_UINT8(out, Avr8xPortGroup),
++        VMSTATE_UINT8(intflags, Avr8xPortGroup),
++        VMSTATE_UINT8(portctrl, Avr8xPortGroup),
++        VMSTATE_UINT8(pinconfig, Avr8xPortGroup),
++        VMSTATE_UINT8_ARRAY(pinctrl, Avr8xPortGroup, AVR8X_PORT_PINS),
++        VMSTATE_UINT8(evgenctrl, Avr8xPortGroup),
++        VMSTATE_UINT8(ext_mask, Avr8xPortGroup),
++        VMSTATE_UINT8(ext_level, Avr8xPortGroup),
++        VMSTATE_UINT8(per_mask, Avr8xPortGroup),
++        VMSTATE_UINT8(per_level, Avr8xPortGroup),
++        VMSTATE_UINT8(in_last, Avr8xPortGroup),
++        VMSTATE_UINT8(pad_mask, Avr8xPortGroup),
++        VMSTATE_UINT8(pad_level, Avr8xPortGroup),
++        VMSTATE_INT64(acc_time, Avr8xPortGroup),
++        VMSTATE_UINT64_ARRAY(high_ns, Avr8xPortGroup, AVR8X_PORT_PINS),
++        VMSTATE_UINT64_ARRAY(low_ns, Avr8xPortGroup, AVR8X_PORT_PINS),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static const VMStateDescription vmstate_avr8x_port = {
++    .name = TYPE_AVR8X_PORT,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT_ARRAY(g, Avr8xPortState, AVR8X_PORT_GROUPS, 1,
++                             vmstate_avr8x_port_group, Avr8xPortGroup),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static const Property avr8x_port_properties[] = {
++    DEFINE_PROP_UINT32("groups", Avr8xPortState, ngroups, 0),
++};
++
++static void avr8x_port_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    ResettableClass *rc = RESETTABLE_CLASS(klass);
++
++    dc->realize = avr8x_port_realize;
++    dc->vmsd = &vmstate_avr8x_port;
++    device_class_set_props(dc, avr8x_port_properties);
++    rc->phases.hold = avr8x_port_reset_hold;
++    rc->phases.exit = avr8x_port_reset_exit;
++    /* Reason: part of an AVR8X SoC, mapped at its addresses */
++    dc->user_creatable = false;
++}
++
++static const TypeInfo avr8x_port_types[] = {
++    {
++        .name = TYPE_AVR8X_PORT,
++        .parent = TYPE_SYS_BUS_DEVICE,
++        .instance_size = sizeof(Avr8xPortState),
++        .instance_init = avr8x_port_init,
++        .class_init = avr8x_port_class_init,
++    },
++};
++
++DEFINE_TYPES(avr8x_port_types)
+diff --git a/hw/gpio/meson.build b/hw/gpio/meson.build
+index 17ea9b2..20d15c7 100644
+--- a/hw/gpio/meson.build
++++ b/hw/gpio/meson.build
+@@ -8,6 +8,7 @@ system_ss.add(when: 'CONFIG_ZAURUS_SCOOP', if_true: files('zaurus.c'))
+ 
+ system_ss.add(when: 'CONFIG_IMX', if_true: files('imx_gpio.c'))
+ system_ss.add(when: 'CONFIG_MCHP_PORT', if_true: files('mchp_port.c'))
++system_ss.add(when: 'CONFIG_AVR8X_PORT', if_true: files('avr8x_port.c'))
+ system_ss.add(when: 'CONFIG_NPCM7XX', if_true: files('npcm7xx_gpio.c'))
+ system_ss.add(when: 'CONFIG_NRF51_SOC', if_true: files('nrf51_gpio.c'))
+ system_ss.add(when: 'CONFIG_OMAP', if_true: files('omap_gpio.c'))
+diff --git a/hw/gpio/trace-events b/hw/gpio/trace-events
+index 61ecfa5..9d30242 100644
+--- a/hw/gpio/trace-events
++++ b/hw/gpio/trace-events
+@@ -47,6 +47,10 @@ stm32l4x5_gpio_write(char *gpio, uint64_t addr, uint64_t data) "GPIO%s addr: 0x%
+ stm32l4x5_gpio_update_idr(char *gpio, uint32_t old_idr, uint32_t new_idr) "GPIO%s from: 0x%x to: 0x%x"
+ stm32l4x5_gpio_pins(char *gpio, uint16_t disconnected, uint16_t high) "GPIO%s disconnected pins: 0x%x levels: 0x%x"
+ 
++# avr8x_port.c
++avr8x_port_pad(char group, unsigned pin, int level) "P%c%u: pad %d"
++avr8x_port_in(char group, unsigned pin, int level) "P%c%u: in %d"
++
+ # mchp_port.c
+ mchp_port_out(char group, unsigned pin, int level) "P%c%02u: out %d"
+ mchp_port_in(char group, unsigned pin, int level) "P%c%02u: in %d"
+diff --git a/include/hw/avr/avr8x_periph.h b/include/hw/avr/avr8x_periph.h
+new file mode 100644
+index 0000000..bdfa4b8
+--- /dev/null
++++ b/include/hw/avr/avr8x_periph.h
+@@ -0,0 +1,48 @@
++/*
++ * Microchip AVR8X system blocks: CLKCTRL, CPUINT, NVMCTRL and the
++ * NVM-backed byte blocks (SIGROW, SYSCFG, USERROW, FUSE, LOCK)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * All are mchp-regblock subclasses built from the generated tables.
++ *
++ * avr8x-clkctrl: clock output "clk_per" (CLK_PER = CLK_MAIN / prescaler);
++ *   properties "oschf-hz" (internal high-frequency oscillator) and
++ *   "xoschf-hz" (external clock or crystal on XTALHF, 0: none).
++ * avr8x-cpuint: link "cpu" to the AVRxt CPU, which holds the interrupt
++ *   level state; property "boot-size" (bytes, from FUSE.BOOTSIZE).
++ * avr8x-nvmctrl: GPIO out "flmap": the flash section mapped into the data
++ *   space (NVMCTRL.CTRLB.FLMAP).
++ * avr8x-nvmbytes: registers that read NVM contents; their reset values
++ *   come from avr8x_nvmbytes_set_image().
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_AVR_AVR8X_PERIPH_H
++#define HW_AVR_AVR8X_PERIPH_H
++
++#include "hw/misc/mchp_regblock.h"
++
++#define TYPE_AVR8X_CLKCTRL  "avr8x-clkctrl"
++#define TYPE_AVR8X_CPUINT   "avr8x-cpuint"
++#define TYPE_AVR8X_NVMCTRL  "avr8x-nvmctrl"
++#define TYPE_AVR8X_NVMBYTES "avr8x-nvmbytes"
++
++#define AVR8X_NVMCTRL_FLMAP "flmap"
++
++/* AVR8X blocks have no enable-protected registers */
++static inline bool avr8x_never_enabled(MchpRegFile *rf)
++{
++    return false;
++}
++
++/*
++ * Reset contents of an avr8x-nvmbytes block: @len bytes from offset 0
++ * (copied). Call before realize.
++ */
++void avr8x_nvmbytes_set_image(DeviceState *dev, const uint8_t *bytes,
++                              unsigned len);
++
++#endif /* HW_AVR_AVR8X_PERIPH_H */
+diff --git a/include/hw/avr/avr8x_soc.h b/include/hw/avr/avr8x_soc.h
+new file mode 100644
+index 0000000..41b6583
+--- /dev/null
++++ b/include/hw/avr/avr8x_soc.h
+@@ -0,0 +1,81 @@
++/*
++ * Microchip AVR8X SoCs (AVRxt core: AVR Dx, AVR Ex, ...)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Built from a generated MchpAvrDeviceInfo (hw/avr/<device>_device.h):
++ * flash in the program space (address OFFSET_CODE) and, through NVMCTRL
++ * FLMAP, in the data space; SRAM, EEPROM, the I/O registers as one
++ * mchp-regblock (or dedicated model) per instance, and an AVRxt CPU whose
++ * interrupt inputs are the vector numbers.
++ *
++ * Child "port" (avr8x-port) has every pad; the board wires LEDs, buttons
++ * and Click boards to its "pad"/"port-in" GPIOs.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_AVR_AVR8X_SOC_H
++#define HW_AVR_AVR8X_SOC_H
++
++#include "hw/core/sysbus.h"
++#include "hw/gpio/avr8x_port.h"
++#include "hw/mchp/mchp_device.h"
++#include "qom/object.h"
++#include "target/avr/cpu.h"
++
++#define TYPE_AVR8X_SOC "avr8x-soc"
++OBJECT_DECLARE_TYPE(Avr8xSocState, Avr8xSocClass, AVR8X_SOC)
++
++#define TYPE_AVR64EA48_SOC "avr64ea48-soc"
++
++/* Generated device descriptors, one translation unit each */
++extern const MchpAvrDeviceInfo *const avr64ea48_info;
++
++#define AVR8X_MAX_USART     8
++
++/* avr-gcc puts .eeprom at this data-space offset in ELF files */
++#define AVR8X_ELF_EEPROM    0x10000
++
++struct Avr8xSocClass {
++    SysBusDeviceClass parent_class;
++
++    const MchpAvrDeviceInfo *dev;
++};
++
++struct Avr8xSocState {
++    SysBusDevice parent_obj;
++
++    const MchpAvrDeviceInfo *dev;
++    AVRCPU cpu;
++    Avr8xPortState port;
++    /* Models by instance index; NULL for CPU, PORT and VPORT */
++    DeviceState **periph;
++    Chardev *usart_chr[AVR8X_MAX_USART];
++
++    MemoryRegion flash;
++    MemoryRegion flash_map;         /* FLMAP window in the data space */
++    MemoryRegion sram;
++    MemoryRegion eeprom;
++    MemoryRegion eeprom_elf;        /* ELF .eeprom load address */
++    MemoryRegion ccp;
++    uint8_t ccp_value;
++
++    char *silicon_rev;
++    uint32_t xoschf_hz;
++};
++
++/*
++ * Attach @chr to USART@usart; call before realize.
++ */
++void avr8x_soc_connect_serial(Avr8xSocState *s, unsigned usart,
++                              Chardev *chr);
++
++/* The model of ATDF instance @name (e.g. "SPI0"), or NULL */
++DeviceState *avr8x_soc_periph(Avr8xSocState *s, const char *name);
++
++/* The flash memory region (for the firmware loader) */
++MemoryRegion *avr8x_soc_flash(Avr8xSocState *s);
++
++#endif /* HW_AVR_AVR8X_SOC_H */
+diff --git a/include/hw/char/avr8x_usart.h b/include/hw/char/avr8x_usart.h
+new file mode 100644
+index 0000000..47e8783
+--- /dev/null
++++ b/include/hw/char/avr8x_usart.h
+@@ -0,0 +1,20 @@
++/*
++ * Microchip AVR8X USART (uart_autobd_v4), asynchronous mode
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * An mchp-regblock subclass. Property "chardev": the serial backend.
++ * sysbus IRQ 0, 1, 2: RXC, DRE, TXC. Clock input "gclk": CLK_PER.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_CHAR_AVR8X_USART_H
++#define HW_CHAR_AVR8X_USART_H
++
++#include "hw/avr/avr8x_periph.h"
++
++#define TYPE_AVR8X_USART "avr8x-usart"
++
++#endif /* HW_CHAR_AVR8X_USART_H */
+diff --git a/include/hw/gpio/avr8x_port.h b/include/hw/gpio/avr8x_port.h
+new file mode 100644
+index 0000000..8c6b316
+--- /dev/null
++++ b/include/hw/gpio/avr8x_port.h
+@@ -0,0 +1,84 @@
++/*
++ * Microchip AVR8X I/O ports (PORT and VPORT, gpio_ports_avr_v3)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * One device for all port groups of a device (PORTA..PORTF with their
++ * VPORTs), so the board and the tools find every pad on one object.
++ *
++ * sysbus MMIO 2g: PORT group g (0x20 bytes); MMIO 2g + 1: VPORT group g
++ * (4 bytes). sysbus IRQ g: the PORT interrupt of group g.
++ * GPIO out "pad"[8g + n]: the level of pad n of group g while the PORT or
++ * a peripheral drives it (0/1), -1 while it floats.
++ * GPIO in "port-in"[8g + n]: an external driver; 0/1 drives the pad, a
++ * negative level releases it.
++ * GPIO in "periph-out"[8g + n]: a peripheral output that overrides OUT of
++ * an output pin (USART TX, SPI MOSI, TCA WOn); negative: no override.
++ * QOM "p<x>-levels" (uint32): every pad's level (pulls and externals too);
++ * "p<x>-stats" (str): "<ns> <high0> <low0> ... <high7> <low7>", the
++ * virtual time and each pad's driven-high and driven-low time.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_GPIO_AVR8X_PORT_H
++#define HW_GPIO_AVR8X_PORT_H
++
++#include "hw/core/sysbus.h"
++#include "qom/object.h"
++
++#define TYPE_AVR8X_PORT "avr8x-port"
++
++#define AVR8X_PORT_GROUPS       6
++#define AVR8X_PORT_PINS         8
++#define AVR8X_PORT_NUM_PINS     (AVR8X_PORT_GROUPS * AVR8X_PORT_PINS)
++#define AVR8X_PORT_GROUP_SIZE   0x20
++#define AVR8X_VPORT_SIZE        4
++
++#define AVR8X_PORT_PAD          "pad"
++#define AVR8X_PORT_IN           "port-in"
++#define AVR8X_PORT_PERIPH_OUT   "periph-out"
++
++typedef struct Avr8xPortState Avr8xPortState;
++
++typedef struct Avr8xPortGroup {
++    Avr8xPortState *owner;          /* for the MMIO callbacks */
++    unsigned index;
++    uint8_t dir;
++    uint8_t out;
++    uint8_t intflags;
++    uint8_t portctrl;
++    uint8_t pinconfig;
++    uint8_t pinctrl[AVR8X_PORT_PINS];
++    uint8_t evgenctrl;
++    /* External drivers and peripheral overrides: pins and levels */
++    uint8_t ext_mask;
++    uint8_t ext_level;
++    uint8_t per_mask;
++    uint8_t per_level;
++    /* Input as last sensed (after INVEN), for edge detection */
++    uint8_t in_last;
++    /* Driven pads as last signalled on "pad", and their accounting */
++    uint8_t pad_mask;
++    uint8_t pad_level;
++    int64_t acc_time;
++    uint64_t high_ns[AVR8X_PORT_PINS];
++    uint64_t low_ns[AVR8X_PORT_PINS];
++} Avr8xPortGroup;
++
++DECLARE_INSTANCE_CHECKER(Avr8xPortState, AVR8X_PORT, TYPE_AVR8X_PORT)
++
++struct Avr8xPortState {
++    SysBusDevice parent_obj;
++
++    MemoryRegion port_mr[AVR8X_PORT_GROUPS];
++    MemoryRegion vport_mr[AVR8X_PORT_GROUPS];
++    qemu_irq irq[AVR8X_PORT_GROUPS];
++    qemu_irq pad[AVR8X_PORT_NUM_PINS];
++
++    uint32_t ngroups;
++    Avr8xPortGroup g[AVR8X_PORT_GROUPS];
++};
++
++#endif /* HW_GPIO_AVR8X_PORT_H */
+diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
+new file mode 100644
+index 0000000..90274bb
+--- /dev/null
++++ b/tests/qtest/avr64ea48-cnano-test.c
+@@ -0,0 +1,181 @@
++/*
++ * QTest for the AVR64EA48 Curiosity Nano machine (avr64ea48-cnano)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Device identity and reset values (DS40002324, silicon rev B1), the data
++ * space map (I/O, SIGROW, EEPROM, SRAM, the FLMAP flash window), PORT and
++ * VPORT, the board's LED0 (PB3) and SW0 (PB2), USART1 flags and CPUINT.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++#include "qobject/qdict.h"
++
++#define DATA            0x800000        /* data space in the system map */
++
++#define VPORTB          (DATA + 0x0004)
++#define CLKCTRL         (DATA + 0x0060)
++#define CPUINT          (DATA + 0x0110)
++#define PORTB           (DATA + 0x0420)
++#define USART1          (DATA + 0x0820)
++#define SYSCFG          (DATA + 0x0F00)
++#define NVMCTRL         (DATA + 0x1000)
++#define SIGROW          (DATA + 0x1100)
++#define EEPROM          (DATA + 0x1400)
++#define SRAM            (DATA + 0x6800)
++#define FLASH_MAP       (DATA + 0x8000)
++
++#define P_DIRSET        0x01
++#define P_OUT           0x04
++#define P_OUTCLR        0x06
++#define P_IN            0x08
++#define P_INTFLAGS      0x09
++#define P_PIN2CTRL      0x12
++#define PULLUPEN        0x08
++#define ISC_FALLING     0x03
++
++#define LED0            BIT(3)          /* PB3, active low */
++#define SW0             BIT(2)          /* PB2, to ground */
++
++/* A raw image: two words, then 0xA5 0x5A at the start of section 1 */
++static char *write_firmware(void)
++{
++    g_autofree uint8_t *image = g_malloc0(0x8002);
++    char *path = NULL;
++    int fd = g_file_open_tmp("avr64ea48-XXXXXX.bin", &path, NULL);
++
++    g_assert(fd >= 0);
++    image[0] = 0xff;                    /* rjmp .-2 */
++    image[1] = 0xcf;
++    image[0x8000] = 0xa5;
++    image[0x8001] = 0x5a;
++    g_assert(write(fd, image, 0x8002) == 0x8002);
++    close(fd);
++    return path;
++}
++
++static QTestState *start(const char *fw)
++{
++    return qtest_initf("-M avr64ea48-cnano -kernel %s", fw);
++}
++
++static uint32_t qom_uint(QTestState *qts, const char *path, const char *prop)
++{
++    QDict *rsp = qtest_qmp(qts, "{ 'execute': 'qom-get', 'arguments':"
++                           " { 'path': %s, 'property': %s } }", path, prop);
++    uint32_t value;
++
++    g_assert(qdict_haskey(rsp, "return"));
++    value = qdict_get_int(rsp, "return");
++    qobject_unref(rsp);
++    return value;
++}
++
++static void set_sw0(QTestState *qts, bool pressed)
++{
++    qobject_unref(qtest_qmp(qts, "{ 'execute': 'qom-set', 'arguments':"
++                            " { 'path': '/machine', 'property': "
++                            "'sw0-pressed', 'value': %i } }", pressed));
++}
++
++static void test_identity(const void *fw)
++{
++    QTestState *qts = start(fw);
++
++    g_assert_cmphex(qtest_readb(qts, SIGROW + 0), ==, 0x1e);
++    g_assert_cmphex(qtest_readb(qts, SIGROW + 1), ==, 0x96);
++    g_assert_cmphex(qtest_readb(qts, SIGROW + 2), ==, 0x1e);
++    g_assert_cmphex(qtest_readb(qts, SYSCFG + 1), ==, 0x21);   /* REVID B1 */
++    /* OSCHF 20 MHz / 6 after reset (DS: Main Clock After Reset) */
++    g_assert_cmphex(qtest_readb(qts, CLKCTRL + 0), ==, 0x00);
++    g_assert_cmphex(qtest_readb(qts, CLKCTRL + 1), ==, 0x11);
++    g_assert_cmphex(qtest_readb(qts, CLKCTRL + 5) & 0x02, ==, 0x02);
++    qtest_quit(qts);
++}
++
++static void test_memory(const void *fw)
++{
++    QTestState *qts = start(fw);
++
++    g_assert_cmphex(qtest_readb(qts, EEPROM), ==, 0xff);       /* erased */
++    qtest_writeb(qts, SRAM + 0x10, 0x42);
++    g_assert_cmphex(qtest_readb(qts, SRAM + 0x10), ==, 0x42);
++    /* FLMAP resets to 3: section 1 of 64 KB (32-64 KB) in the window */
++    g_assert_cmphex(qtest_readb(qts, NVMCTRL + 1), ==, 0x30);
++    g_assert_cmphex(qtest_readb(qts, FLASH_MAP), ==, 0xa5);
++    qtest_writeb(qts, NVMCTRL + 1, 0x00);
++    g_assert_cmphex(qtest_readb(qts, FLASH_MAP), ==, 0xff);
++    g_assert_cmphex(qtest_readb(qts, FLASH_MAP + 1), ==, 0xcf);
++    qtest_quit(qts);
++}
++
++static void test_port_led_sw0(const void *fw)
++{
++    QTestState *qts = start(fw);
++
++    /* LED0 pulls PB3 high through its resistor while undriven */
++    g_assert_cmphex(qom_uint(qts, "/machine/soc/port", "pb-levels") & LED0,
++                    ==, LED0);
++    qtest_writeb(qts, PORTB + P_DIRSET, LED0);
++    qtest_writeb(qts, PORTB + P_OUTCLR, LED0);
++    g_assert_cmphex(qom_uint(qts, "/machine/soc/port", "pb-levels") & LED0,
++                    ==, 0);
++    /* VPORT shows the same registers; writing IN toggles OUT */
++    g_assert_cmphex(qtest_readb(qts, VPORTB + 0) & LED0, ==, LED0);
++    qtest_writeb(qts, VPORTB + 2, LED0);
++    g_assert_cmphex(qtest_readb(qts, PORTB + P_OUT) & LED0, ==, LED0);
++
++    /* SW0 has no external pull-up: floating reads 0 until PULLUPEN */
++    g_assert_cmphex(qtest_readb(qts, PORTB + P_IN) & SW0, ==, 0);
++    qtest_writeb(qts, PORTB + P_PIN2CTRL, PULLUPEN | ISC_FALLING);
++    g_assert_cmphex(qtest_readb(qts, PORTB + P_IN) & SW0, ==, SW0);
++    set_sw0(qts, true);
++    g_assert_cmphex(qtest_readb(qts, PORTB + P_IN) & SW0, ==, 0);
++    g_assert_cmphex(qtest_readb(qts, PORTB + P_INTFLAGS), ==, SW0);
++    qtest_writeb(qts, PORTB + P_INTFLAGS, SW0);                /* W1C */
++    g_assert_cmphex(qtest_readb(qts, PORTB + P_INTFLAGS), ==, 0);
++    set_sw0(qts, false);
++    g_assert_cmphex(qtest_readb(qts, PORTB + P_IN) & SW0, ==, SW0);
++    g_assert_cmphex(qtest_readb(qts, PORTB + P_INTFLAGS), ==, 0);
++    qtest_quit(qts);
++}
++
++static void test_usart_cpuint(const void *fw)
++{
++    QTestState *qts = start(fw);
++
++    /* DREIF: the transmit buffer is empty */
++    g_assert_cmphex(qtest_readb(qts, USART1 + 4), ==, 0x20);
++    qtest_writeb(qts, USART1 + 6, 0x40);                        /* TXEN */
++    qtest_writeb(qts, USART1 + 2, 'A');
++    g_assert_cmphex(qtest_readb(qts, USART1 + 4), ==, 0x60);    /* +TXCIF */
++    qtest_writeb(qts, USART1 + 4, 0x40);
++    g_assert_cmphex(qtest_readb(qts, USART1 + 4), ==, 0x20);
++
++    qtest_writeb(qts, CPUINT + 3, 30);                          /* LVL1VEC */
++    g_assert_cmpuint(qtest_readb(qts, CPUINT + 3), ==, 30);
++    qtest_writeb(qts, CPUINT + 1, 0xff);            /* STATUS: read-only */
++    g_assert_cmphex(qtest_readb(qts, CPUINT + 1), ==, 0);
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_autofree char *fw = write_firmware();
++    int ret;
++
++    g_test_init(&argc, &argv, NULL);
++    qtest_add_data_func("avr64ea48-cnano/identity", fw, test_identity);
++    qtest_add_data_func("avr64ea48-cnano/memory", fw, test_memory);
++    qtest_add_data_func("avr64ea48-cnano/port", fw, test_port_led_sw0);
++    qtest_add_data_func("avr64ea48-cnano/usart-cpuint", fw,
++                        test_usart_cpuint);
++    ret = g_test_run();
++    unlink(fw);
++    return ret;
++}
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index 074bb52..e13e664 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -147,7 +147,8 @@ qtests_alpha = ['boot-serial-test'] + \
+   qtests_filter + \
+   (config_all_devices.has_key('CONFIG_VGA') ? ['display-vga-test'] : [])
+ 
+-qtests_avr = [ 'boot-serial-test' ]
++qtests_avr = [ 'boot-serial-test' ] + \
++  (config_all_devices.has_key('CONFIG_AVR64EA48_CNANO') ? ['avr64ea48-cnano-test'] : [])
+ 
+ qtests_hppa = \
+   qtests_filter + \
+-- 
+2.53.0.windows.2
+

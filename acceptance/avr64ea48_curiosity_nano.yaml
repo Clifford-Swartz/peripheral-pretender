@@ -1,0 +1,92 @@
+# Acceptance: Microchip's examples for the AVR64EA48 Curiosity Nano (EV66E56A)
+# on the twin. First triaged by the AVR playbook trial, 2026-10-14 (XC8 v2.50,
+# MPLAB X v6.20). 8-bit kits have no Harmony repository: each example is its
+# own repository under github.com/microchip-pic-avr-examples, cloned side by
+# side into one folder (some hold several projects: <repo>/<sub>/<sub>.X).
+#
+#   py -m tools.pp_accept build <folder of example repos> --kit avr64ea48_curiosity_nano --out <elves>
+#   py -m tools.pp_accept suite acceptance/avr64ea48_curiosity_nano.yaml --elves <elves>
+#
+# The projects pin AVR-Ex_DFP 2.0.44, 2.4.168, 2.5.176 and 2.6.181: fetch them
+# into ~/.mchp_packs first (scripts/fetch_packs.py pins only 2.8.189).
+# Their hex files carry fuses (config_bits.c): harness.nano_run refuses them;
+# strip with avr-objcopy -R .fuse -R .lock -R .signature -R .user_signatures.
+#
+# should / steps / expect / verdict / note: as in pic32cm_jh01_curiosity_pro.yaml
+
+kit: avr64ea48_curiosity_nano
+machine: avr64ea48-cnano
+examples_repo: github.com/microchip-pic-avr-examples (one repository per example)
+examples_commit:
+  avr64ea48-breathing-led-mplab-melody: 1050c0e
+  avr64ea48-digital-filters-mplab-mcc: bef3b7d
+  avr64ea48-lp-voltage-current-meas-mcc: 0398925
+  avr64ea48-nvm-read-while-write-mplab-mcc: 5b865e3
+  avr64ea48-temperature-calibration: 2f4caff
+packs: [AVR-Ex_DFP 2.0.44, 2.4.168, 2.5.176, 2.6.181]
+
+examples:
+  avr64ea48-digital-filters-mplab-mcc__median:
+    should: median filter over a synthetic signal, streamed to the MPLAB Data
+      Visualizer on USART1 (115200), one frame every 100 ms
+    steps: wait 2
+    expect: {backlog_max: 9}
+    verdict: pass
+    note: the first 234 bytes (3.9 s) on silicon equal the twin's byte for
+      byte. The 9 backlog lines are PORTMUX route writes (default routes;
+      routing is not modelled). Busy-wait delays run faster than real time
+      under icount shift=auto.
+  avr64ea48-digital-filters-mplab-mcc__iir:
+    should: band-pass and low-pass IIR over a synthetic signal, streamed to
+      the Data Visualizer on USART1
+    steps: wait 2
+    expect: {backlog_max: 9}
+    verdict: pass
+    note: runs with only PORTMUX in the backlog; the silicon capture through
+      the nEDBG CDC got 7 bytes (they match the twin's start), so the stream
+      is not yet compared in full
+  avr64ea48-digital-filters-mplab-mcc__kalman:
+    should: Kalman filter over a synthetic signal, streamed to the Data
+      Visualizer on USART1
+    steps: wait 2
+    expect: {backlog_max: 9}
+    verdict: pass
+    note: as iir; the silicon capture was empty (not investigated)
+  avr64ea48-digital-filters-mplab-mcc__fft:
+    should: kissfft over a sine table
+    verdict: nt
+    note: does not link with XC8 v2.50 (.rodata.sinewave, 8000 bytes, does
+      not fit the data memory); the project pins XC8 2.32/2.40
+  avr64ea48-breathing-led-mplab-melody:
+    should: LED0 (PB3) breathes by TCA0 PWM, TCA1 changes the duty; SW0
+      changes the speed
+    steps: wait 2; press; wait .5; release; wait 1
+    verdict: gap
+    note: TCA0/TCA1 not modelled (generic register blocks; LED0 never
+      toggles); PORTMUX routes TCA0 to PORTB
+  avr64ea48-nvm-read-while-write-mplab-mcc:
+    should: SW0 starts a flash write while TCB0 keeps toggling PA2; LED0
+      confirms
+    steps: wait 2; press; wait .5; release; wait 1
+    verdict: gap
+    note: NVMCTRL commands (page buffer, erase, write) not modelled
+      (16 backlog lines); LED0 toggles on the press
+  avr64ea48-lp-voltage-current-meas-mcc__analog_voltage_sensing_mcc:
+    should: low-power ADC voltage measurement, RTC-paced, results on USART1
+    steps: wait 2
+    verdict: gap
+    note: ADC0, RTC, DAC0, VREF and SLPCTRL not modelled
+  avr64ea48-lp-voltage-current-meas-mcc__analog_current_sensing_mcc:
+    should: low-power ADC current measurement, RTC-paced, results on USART1
+    steps: wait 2
+    verdict: gap
+    note: as the voltage example; prints "Starting..." only
+  avr64ea48-temperature-calibration:
+    should: internal temperature from ADC0 and the SIGROW calibration,
+      offset stored in EEPROM, output on USART1 at 9600
+    steps: wait 2
+    verdict: gap
+    note: ADC0 not modelled; SIGROW TEMPSENSE0/1 read 0 (no silicon values
+      in profiles/avr64ea48.yaml data_rows yet); EEPROM writes through
+      NVMCTRL not modelled. On silicon nothing arrived on the VCOM at 9600
+      within 10 s (not investigated).

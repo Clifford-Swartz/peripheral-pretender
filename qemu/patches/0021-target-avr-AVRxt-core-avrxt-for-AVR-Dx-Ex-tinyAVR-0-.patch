@@ -1,0 +1,502 @@
+From a22d3e8def5f29378aa548b8c1c1754f0bd833b5 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 14 Oct 2026 13:12:03 -0700
+Subject: [PATCH 21/25] target/avr: AVRxt core (avrxt) for AVR Dx/Ex, tinyAVR
+ 0/1/2, megaAVR 0
+
+The upstream AVR target models the classic cores only (avr5, avr51,
+avr6): register file mapped at data 0, I/O at data 0x20. AVRxt parts
+(AVR64EA48 and the other AVR8X families) differ in two ways that matter
+before any peripheral works:
+
+- Data space: the register file is not mapped; I/O starts at data 0, so
+  IN/OUT/SBI/CBI/SBIC/SBIS add no offset and SP/SREG sit at 0x3d-0x3f.
+  New feature AVR_FEATURE_IO_DATA (also right for AVRxm/XMEGA).
+- Interrupts (CPUINT): taking an interrupt leaves SREG.I alone and marks
+  level 0 or 1 as executing; RETI ends the level instead of setting I.
+  Two levels, LVL1VEC, LVL0PRI with round robin, IVSEL vector base; the
+  interrupt state lives in the CPU so the CPUINT device can mirror it.
+  New feature AVR_FEATURE_CPUINT. NMI and the compact vector table are
+  not modelled. SREG resets to 0 on these cores.
+
+New CPU type "avrxt" (up to 64 KB of flash: no RAMPZ/ELPM). The firmware
+loader accepts avr-gcc's avrxmega2..7 ELFs on it (gcc names these
+architectures by memory size, not by core). Classic cores are unchanged:
+an ATmega328P program with USART polling and a timer interrupt prints
+the same on arduino-uno before and after.
+
+Peripheral Pretender: AI-assisted, not for upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/avr/boot.c          |   9 ++++
+ target/avr/cpu.c       |  62 +++++++++++++++++++---
+ target/avr/cpu.h       |  32 ++++++++++++
+ target/avr/helper.c    | 114 +++++++++++++++++++++++++++++++++++------
+ target/avr/helper.h    |   1 +
+ target/avr/machine.c   |  26 ++++++++++
+ target/avr/translate.c |  11 ++--
+ 7 files changed, 229 insertions(+), 26 deletions(-)
+
+diff --git a/hw/avr/boot.c b/hw/avr/boot.c
+index 838378f..9691498 100644
+--- a/hw/avr/boot.c
++++ b/hw/avr/boot.c
+@@ -92,6 +92,15 @@ bool avr_load_firmware(AVRCPU *cpu, MachineState *ms,
+                          firmware, cpu_len, mcu_cpu_type);
+             return true;
+         }
++        /*
++         * avr-gcc names architectures by memory size (avrxmega2..7), not by
++         * core: AVRxt parts (AVR Dx/Ex, tinyAVR 0/1/2, megaAVR 0) build as
++         * avrxmega2/3/4 and run on the avrxt CPU.
++         */
++        if (!strcmp(mcu_cpu_type, AVR_CPU_TYPE_NAME("avrxt")) &&
++            g_str_has_prefix(elf_cpu, "xmega")) {
++            elf_cpu = mcu_cpu_type;
++        }
+         if (strcmp(elf_cpu, mcu_cpu_type)) {
+             error_report("Current machine: %s with '%.*s' CPU",
+                          MACHINE_GET_CLASS(ms)->desc, cpu_len, mcu_cpu_type);
+diff --git a/target/avr/cpu.c b/target/avr/cpu.c
+index 3591219..cf568c0 100644
+--- a/target/avr/cpu.c
++++ b/target/avr/cpu.c
+@@ -95,7 +95,8 @@ static void avr_cpu_reset_hold(Object *obj, ResetType type)
+     }
+ 
+     env->pc_w = 0;
+-    env->sregI = 1;
++    /* AVRxt resets with interrupts disabled (SREG reset value 0) */
++    env->sregI = !avr_feature(env, AVR_FEATURE_CPUINT);
+     env->sregC = 0;
+     env->sregZ = 0;
+     env->sregN = 0;
+@@ -113,6 +114,12 @@ static void avr_cpu_reset_hold(Object *obj, ResetType type)
+ 
+     env->skip = 0;
+ 
++    env->cpuint_ctrla = 0;
++    env->cpuint_status = 0;
++    env->cpuint_lvl0pri = 0;
++    env->cpuint_lvl1vec = 0;
++    env->vector_base = 0;
++
+     memset(env->r, 0, sizeof(env->r));
+ }
+ 
+@@ -143,16 +150,21 @@ static void avr_cpu_realizefn(DeviceState *dev, Error **errp)
+ 
+     /*
+      * Two blocks in the low data space loop back into cpu registers.
++     * AVRxm/AVRxt do not map the register file; their I/O space (with
++     * SP and SREG at 0x3d-0x3f) starts at data address 0.
+      */
+-    memory_region_init_io(&cpu->cpu_reg1, OBJECT(cpu), &avr_cpu_reg1, env,
+-                          "avr-cpu-reg1", 32);
+-    memory_region_add_subregion(get_system_memory(),
+-                                OFFSET_DATA, &cpu->cpu_reg1);
++    if (!avr_feature(env, AVR_FEATURE_IO_DATA)) {
++        memory_region_init_io(&cpu->cpu_reg1, OBJECT(cpu), &avr_cpu_reg1,
++                              env, "avr-cpu-reg1", 32);
++        memory_region_add_subregion(get_system_memory(),
++                                    OFFSET_DATA, &cpu->cpu_reg1);
++    }
+ 
+     memory_region_init_io(&cpu->cpu_reg2, OBJECT(cpu), &avr_cpu_reg2, env,
+                           "avr-cpu-reg2", 8);
+     memory_region_add_subregion(get_system_memory(),
+-                                OFFSET_DATA + 0x58, &cpu->cpu_reg2);
++                                OFFSET_DATA + avr_io_base(env) + 0x38,
++                                &cpu->cpu_reg2);
+ }
+ 
+ static void avr_cpu_set_int(void *opaque, int irq, int level)
+@@ -390,6 +402,43 @@ static void avr_avr6_initfn(Object *obj)
+     set_avr_feature(env, AVR_FEATURE_MUL);
+ }
+ 
++/*
++ * Setting features of AVR core type AVRxt
++ * ---------------------------------------
++ *
++ * The core of the AVR Dx, AVR Ex, tinyAVR 0/1/2 and megaAVR 0 families
++ * (AVR Instruction Set Manual, DS40002198, "AVRxt").  avr-gcc builds for
++ * these with -mmcu=avrxmega2/3/4 depending on the memory sizes.  This type
++ * covers parts with up to 64 KB of flash (no RAMPZ/ELPM); bigger ones
++ * (AVR128Dx) need RAMPZ and ELPM on top.
++ *
++ * Data space: I/O at 0x0000 (IN/OUT address = data address), CCP, SP and
++ * SREG at 0x34/0x3d/0x3f; the register file is not mapped.  Interrupts
++ * follow CPUINT: two levels, SREG.I unchanged on entry and by RETI.
++ */
++static void avr_avrxt_initfn(Object *obj)
++{
++    CPUAVRState *env = cpu_env(CPU(obj));
++
++    set_avr_feature(env, AVR_FEATURE_LPM);
++    set_avr_feature(env, AVR_FEATURE_IJMP_ICALL);
++    set_avr_feature(env, AVR_FEATURE_ADIW_SBIW);
++    set_avr_feature(env, AVR_FEATURE_SRAM);
++    set_avr_feature(env, AVR_FEATURE_BREAK);
++
++    set_avr_feature(env, AVR_FEATURE_2_BYTE_PC);
++    set_avr_feature(env, AVR_FEATURE_2_BYTE_SP);
++    set_avr_feature(env, AVR_FEATURE_JMP_CALL);
++    set_avr_feature(env, AVR_FEATURE_LPMX);
++    set_avr_feature(env, AVR_FEATURE_MOVW);
++    set_avr_feature(env, AVR_FEATURE_MUL);
++    set_avr_feature(env, AVR_FEATURE_SPM);
++    set_avr_feature(env, AVR_FEATURE_SPMX);
++
++    set_avr_feature(env, AVR_FEATURE_IO_DATA);
++    set_avr_feature(env, AVR_FEATURE_CPUINT);
++}
++
+ typedef struct AVRCPUInfo {
+     const char *name;
+     void (*initfn)(Object *obj);
+@@ -417,6 +466,7 @@ static const TypeInfo avr_cpu_type_info[] = {
+     DEFINE_AVR_CPU_TYPE("avr5", avr_avr5_initfn),
+     DEFINE_AVR_CPU_TYPE("avr51", avr_avr51_initfn),
+     DEFINE_AVR_CPU_TYPE("avr6", avr_avr6_initfn),
++    DEFINE_AVR_CPU_TYPE("avrxt", avr_avrxt_initfn),
+ };
+ 
+ DEFINE_TYPES(avr_cpu_type_info)
+diff --git a/target/avr/cpu.h b/target/avr/cpu.h
+index a818db7..88028fa 100644
+--- a/target/avr/cpu.h
++++ b/target/avr/cpu.h
+@@ -110,6 +110,17 @@ typedef enum AVRFeature {
+     AVR_FEATURE_RAMPX,
+     AVR_FEATURE_RAMPY,
+     AVR_FEATURE_RAMPZ,
++
++    /*
++     * AVRxm/AVRxt data space: the register file is not memory mapped and
++     * the I/O space starts at data address 0 (IN/OUT add no offset).
++     */
++    AVR_FEATURE_IO_DATA,
++    /*
++     * AVRxt interrupt levels (CPUINT): taking an interrupt leaves SREG.I
++     * alone and marks the level as executing; RETI ends that level.
++     */
++    AVR_FEATURE_CPUINT,
+ } AVRFeature;
+ 
+ typedef struct CPUArchState {
+@@ -138,6 +149,13 @@ typedef struct CPUArchState {
+     uint64_t intsrc; /* interrupt sources */
+     bool fullacc; /* CPU/MEM if true MEM only otherwise */
+ 
++    /* AVR_FEATURE_CPUINT: the CPUINT registers (the device reads them) */
++    uint8_t cpuint_ctrla;   /* LVL0RR, CVT, IVSEL */
++    uint8_t cpuint_status;  /* LVL0EX, LVL1EX, NMIEX */
++    uint8_t cpuint_lvl0pri;
++    uint8_t cpuint_lvl1vec;
++    uint32_t vector_base;   /* byte address of the vector table (IVSEL) */
++
+     uint64_t features;
+ } CPUAVRState;
+ 
+@@ -188,6 +206,20 @@ static inline int avr_feature(CPUAVRState *env, AVRFeature feature)
+     return (env->features & (1U << feature)) != 0;
+ }
+ 
++/* Data address of I/O address 0: after the register file on classic cores */
++static inline int avr_io_base(CPUAVRState *env)
++{
++    return avr_feature(env, AVR_FEATURE_IO_DATA) ? 0 : NUMBER_OF_CPU_REGISTERS;
++}
++
++/* CPUINT.CTRLA and STATUS bits (AVR_FEATURE_CPUINT) */
++#define AVR_CPUINT_LVL0RR   0x01
++#define AVR_CPUINT_CVT      0x20
++#define AVR_CPUINT_IVSEL    0x40
++#define AVR_CPUINT_LVL0EX   0x01
++#define AVR_CPUINT_LVL1EX   0x02
++#define AVR_CPUINT_NMIEX    0x80
++
+ static inline void set_avr_feature(CPUAVRState *env, int feature)
+ {
+     env->features |= (1U << feature);
+diff --git a/target/avr/helper.c b/target/avr/helper.c
+index f452c9d..93553e9 100644
+--- a/target/avr/helper.c
++++ b/target/avr/helper.c
+@@ -31,10 +31,60 @@
+ #include "exec/helper-proto.h"
+ #include "qemu/plugin.h"
+ 
++/*
++ * AVRxt (CPUINT): the vector to take now, or -1.  Sources stay pending
++ * until the peripheral drops its line.  The level 1 vector (LVL1VEC)
++ * preempts level 0; level 0 vectors are ordered from LVL0PRI + 1 upward,
++ * wrapping (LVL0PRI 0: the lowest vector number wins).  NMI and the
++ * compact vector table are not modelled.
++ */
++static int avr_xt_pending_vector(CPUAVRState *env)
++{
++    uint64_t pend = env->intsrc & ~1ULL;
++    unsigned lvl1 = env->cpuint_lvl1vec;
++    unsigned start;
++    int i;
++
++    if (!pend || !cpu_interrupts_enabled(env) ||
++        (env->cpuint_status & AVR_CPUINT_LVL1EX)) {
++        return -1;
++    }
++    if (lvl1 && lvl1 < 64 && (pend >> lvl1) & 1) {
++        return lvl1;
++    }
++    if (env->cpuint_status & AVR_CPUINT_LVL0EX) {
++        return -1;
++    }
++    start = env->cpuint_lvl0pri + 1;
++    for (i = 0; i < 64; i++) {
++        unsigned v = (start + i) % 64;
++
++        if (v && (pend >> v) & 1) {
++            return v;
++        }
++    }
++    return -1;
++}
++
+ bool avr_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
+ {
+     CPUAVRState *env = cpu_env(cs);
+ 
++    if (avr_feature(env, AVR_FEATURE_CPUINT)) {
++        int vector;
++
++        if (env->skip || !(interrupt_request & CPU_INTERRUPT_HARD)) {
++            return false;
++        }
++        vector = avr_xt_pending_vector(env);
++        if (vector < 0) {
++            return false;
++        }
++        cs->exception_index = EXCP_INT(vector - 1);
++        avr_cpu_do_interrupt(cs);
++        return true;
++    }
++
+     /*
+      * We cannot separate a skip from the next instruction,
+      * as the skip would not be preserved across the interrupt.
+@@ -83,7 +133,19 @@ void avr_cpu_do_interrupt(CPUState *cs)
+     int size = avr_feature(env, AVR_FEATURE_JMP_CALL) ? 2 : 1;
+     int base = 0;
+ 
+-    if (cs->exception_index == EXCP_RESET) {
++    if (avr_feature(env, AVR_FEATURE_CPUINT)) {
++        /* exception_index is EXCP_INT(vector - 1), see exec_interrupt */
++        vector = cs->exception_index - EXCP_INT(0) + 1;
++        base = env->vector_base / 2;
++        if (vector == env->cpuint_lvl1vec) {
++            env->cpuint_status |= AVR_CPUINT_LVL1EX;
++        } else {
++            env->cpuint_status |= AVR_CPUINT_LVL0EX;
++            if (env->cpuint_ctrla & AVR_CPUINT_LVL0RR) {
++                env->cpuint_lvl0pri = vector;
++            }
++        }
++    } else if (cs->exception_index == EXCP_RESET) {
+         vector = 0;
+     } else if (env->intsrc != 0) {
+         vector = ctz64(env->intsrc) + 1;
+@@ -101,7 +163,9 @@ void avr_cpu_do_interrupt(CPUState *cs)
+     }
+ 
+     env->pc_w = base + vector * size;
+-    env->sregI = 0; /* clear Global Interrupt Flag */
++    if (!avr_feature(env, AVR_FEATURE_CPUINT)) {
++        env->sregI = 0; /* clear Global Interrupt Flag */
++    }
+ 
+     cs->exception_index = -1;
+ 
+@@ -192,6 +256,18 @@ void helper_break(CPUAVRState *env)
+     cpu_loop_exit(cs);
+ }
+ 
++/* RETI on AVRxt ends the highest executing level; SREG.I is untouched */
++void helper_reti_level(CPUAVRState *env)
++{
++    if (env->cpuint_status & AVR_CPUINT_NMIEX) {
++        env->cpuint_status &= ~AVR_CPUINT_NMIEX;
++    } else if (env->cpuint_status & AVR_CPUINT_LVL1EX) {
++        env->cpuint_status &= ~AVR_CPUINT_LVL1EX;
++    } else {
++        env->cpuint_status &= ~AVR_CPUINT_LVL0EX;
++    }
++}
++
+ void helper_wdr(CPUAVRState *env)
+ {
+     qemu_log_mask(LOG_UNIMP, "WDG reset (not implemented)\n");
+@@ -276,51 +352,55 @@ const MemoryRegionOps avr_cpu_reg2 = {
+  */
+ void helper_fullwr(CPUAVRState *env, uint32_t data, uint32_t addr)
+ {
++    int io = avr_io_base(env);
++
+     env->fullacc = false;
+ 
+-    switch (addr) {
+-    case 0 ... 31:
++    if (addr < NUMBER_OF_CPU_REGISTERS &&
++        !avr_feature(env, AVR_FEATURE_IO_DATA)) {
+         /* CPU registers */
+         env->r[addr] = data;
+-        break;
++        return;
++    }
++    if (addr < io + 0x38 || addr > io + 0x3f) {
++        do_stb(env, addr, data, GETPC());
++        return;
++    }
+ 
+-    case REG_38_RAMPD + 0x38 + NUMBER_OF_CPU_REGISTERS:
++    switch (addr - io - 0x38) {
++    case REG_38_RAMPD:
+         if (avr_feature(env, AVR_FEATURE_RAMPD)) {
+             env->rampD = data << 16;
+         }
+         break;
+-    case REG_38_RAMPX + 0x38 + NUMBER_OF_CPU_REGISTERS:
++    case REG_38_RAMPX:
+         if (avr_feature(env, AVR_FEATURE_RAMPX)) {
+             env->rampX = data << 16;
+         }
+         break;
+-    case REG_38_RAMPY + 0x38 + NUMBER_OF_CPU_REGISTERS:
++    case REG_38_RAMPY:
+         if (avr_feature(env, AVR_FEATURE_RAMPY)) {
+             env->rampY = data << 16;
+         }
+         break;
+-    case REG_38_RAMPZ + 0x38 + NUMBER_OF_CPU_REGISTERS:
++    case REG_38_RAMPZ:
+         if (avr_feature(env, AVR_FEATURE_RAMPZ)) {
+             env->rampZ = data << 16;
+         }
+         break;
+-    case REG_38_EIDN + 0x38 + NUMBER_OF_CPU_REGISTERS:
++    case REG_38_EIDN:
+         env->eind = data << 16;
+         break;
+-    case REG_38_SPL + 0x38 + NUMBER_OF_CPU_REGISTERS:
++    case REG_38_SPL:
+         env->sp = (env->sp & 0xff00) | data;
+         break;
+-    case REG_38_SPH + 0x38 + NUMBER_OF_CPU_REGISTERS:
++    case REG_38_SPH:
+         if (avr_feature(env, AVR_FEATURE_2_BYTE_SP)) {
+             env->sp = (env->sp & 0x00ff) | (data << 8);
+         }
+         break;
+-    case REG_38_SREG + 0x38 + NUMBER_OF_CPU_REGISTERS:
++    case REG_38_SREG:
+         cpu_set_sreg(env, data);
+         break;
+-
+-    default:
+-        do_stb(env, addr, data, GETPC());
+-        break;
+     }
+ }
+diff --git a/target/avr/helper.h b/target/avr/helper.h
+index e8d13e9..0b51373 100644
+--- a/target/avr/helper.h
++++ b/target/avr/helper.h
+@@ -19,6 +19,7 @@
+  */
+ 
+ DEF_HELPER_1(wdr, void, env)
++DEF_HELPER_1(reti_level, void, env)
+ DEF_HELPER_1(debug, noreturn, env)
+ DEF_HELPER_1(break, noreturn, env)
+ DEF_HELPER_1(sleep, noreturn, env)
+diff --git a/target/avr/machine.c b/target/avr/machine.c
+index 8064a72..c10a5c5 100644
+--- a/target/avr/machine.c
++++ b/target/avr/machine.c
+@@ -97,6 +97,28 @@ static const VMStateInfo vms_eind = {
+     .put = put_segment,
+ };
+ 
++static bool avr_cpuint_needed(void *opaque)
++{
++    AVRCPU *cpu = opaque;
++
++    return avr_feature(&cpu->env, AVR_FEATURE_CPUINT);
++}
++
++static const VMStateDescription vms_avr_cpuint = {
++    .name = "cpu/cpuint",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .needed = avr_cpuint_needed,
++    .fields = (const VMStateField[]) {
++        VMSTATE_UINT8(env.cpuint_ctrla, AVRCPU),
++        VMSTATE_UINT8(env.cpuint_status, AVRCPU),
++        VMSTATE_UINT8(env.cpuint_lvl0pri, AVRCPU),
++        VMSTATE_UINT8(env.cpuint_lvl1vec, AVRCPU),
++        VMSTATE_UINT32(env.vector_base, AVRCPU),
++        VMSTATE_END_OF_LIST()
++    }
++};
++
+ const VMStateDescription vms_avr_cpu = {
+     .name = "cpu",
+     .version_id = 1,
+@@ -116,5 +138,9 @@ const VMStateDescription vms_avr_cpu = {
+         VMSTATE_SINGLE(env.eind, AVRCPU, 0, vms_eind, uint32_t),
+ 
+         VMSTATE_END_OF_LIST()
++    },
++    .subsections = (const VMStateDescription * const []) {
++        &vms_avr_cpuint,
++        NULL
+     }
+ };
+diff --git a/target/avr/translate.c b/target/avr/translate.c
+index 3c57606..74aef41 100644
+--- a/target/avr/translate.c
++++ b/target/avr/translate.c
+@@ -1169,7 +1169,11 @@ static bool trans_RET(DisasContext *ctx, arg_RET *a)
+ static bool trans_RETI(DisasContext *ctx, arg_RETI *a)
+ {
+     gen_pop_ret(ctx, cpu_pc);
+-    tcg_gen_movi_tl(cpu_If, 1);
++    if (avr_feature(ctx->env, AVR_FEATURE_CPUINT)) {
++        gen_helper_reti_level(tcg_env);
++    } else {
++        tcg_gen_movi_tl(cpu_If, 1);
++    }
+ 
+     /* Need to return to main loop to re-evaluate interrupts.  */
+     ctx->base.is_jmp = DISAS_EXIT;
+@@ -1509,13 +1513,14 @@ static void gen_data_load(DisasContext *ctx, TCGv data, TCGv addr)
+ 
+ static void gen_inb(DisasContext *ctx, TCGv data, int port)
+ {
+-    gen_data_load(ctx, data, tcg_constant_i32(port + NUMBER_OF_CPU_REGISTERS));
++    gen_data_load(ctx, data,
++                  tcg_constant_i32(port + avr_io_base(ctx->env)));
+ }
+ 
+ static void gen_outb(DisasContext *ctx, TCGv data, int port)
+ {
+     gen_helper_fullwr(tcg_env, data,
+-                      tcg_constant_i32(port + NUMBER_OF_CPU_REGISTERS));
++                      tcg_constant_i32(port + avr_io_base(ctx->env)));
+ }
+ 
+ /*
+-- 
+2.53.0.windows.2
+
