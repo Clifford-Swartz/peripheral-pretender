@@ -5,7 +5,7 @@
 #   make -C firmware/avr-hello            (in an MSYS2 UCRT64 shell)
 # XC8 and DFP default to the MPLAB X install; override XC8= / DFP=.
 
-XC8    ?= /c/Program Files/Microchip/xc8/v2.50
+XC8    ?= /c/Program Files/Microchip/xc8/v4.00
 DFP    ?= /c/Program Files/Microchip/MPLABX/v6.20/packs/Microchip/AVR-Ex_DFP/2.8.189
 DEVICE := avr64ea48
 CC     := "$(XC8)/avr/bin/avr-gcc"
@@ -13,7 +13,7 @@ OBJCOPY:= "$(XC8)/avr/bin/avr-objcopy"
 BUILD  := build
 
 CFLAGS := -mmcu=$(DEVICE) -B "$(DFP)/gcc/dev/$(DEVICE)" -isystem "$(DFP)/include" \
-          -O2 -std=gnu11 -Wall -Wextra -ffunction-sections -fdata-sections
+          -Os -std=gnu11 -Wall -Wextra -ffunction-sections -fdata-sections
 LDFLAGS:= -Wl,--gc-sections
 
 all: $(BUILD)/hello.elf $(BUILD)/hello.hex
