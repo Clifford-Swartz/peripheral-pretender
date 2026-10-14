@@ -2,9 +2,11 @@
 """One running twin: QEMU with a firmware image, its QMP monitor and its
 VCOM UART, plus the board-level state the web view shows.
 
-QEMU runs in real time (no icount): virtual time follows the host clock,
-so a 2 Hz blink looks like 2 Hz. Pad levels come from the PORT model's QOM
-properties (pa-out / pa-out-mask, ...), polled at the frame rate.
+QEMU runs with icount paced to the host clock (shift=auto, sleep=on), so
+a 2 Hz blink looks like 2 Hz and timer events land at exact virtual
+times. Each frame the PORT model's "pX-stats" give every pad's driven-high
+and driven-low time; their differences are the duty cycles the page shows
+(a PWM-dimmed LED at its brightness).
 """
 
 from __future__ import annotations
@@ -90,12 +92,14 @@ class Session:
     qmp: Qmp | None = None
     uart_writer: asyncio.StreamWriter | None = None
     tasks: list[asyncio.Task] = field(default_factory=list)
-    pads: dict[str, list[int]] = field(default_factory=dict)
+    pins: dict[str, list[list[float]]] = field(default_factory=dict)
+    _stats: dict[str, list[int]] = field(default_factory=dict)
 
     async def start(self) -> None:
         qmp_port, uart_port = free_port(), free_port()
         args = [str(find_qemu()), "-M", self.machine, "-kernel", str(self.elf),
                 "-display", "none", "-monitor", "none",
+                "-icount", "shift=auto,sleep=on",
                 "-chardev", f"socket,id=vcom,host=127.0.0.1,port={uart_port},"
                             "server=on,wait=on",
                 "-serial", "chardev:vcom",
@@ -127,18 +131,24 @@ class Session:
             self.emit({"type": "uart", "data": data.decode("latin-1")})
 
     async def _poll(self) -> None:
-        """Pad levels driven by the PORT, sent when they change."""
+        """Per-pad [driven-high, driven-low] fractions, sent on change."""
         while True:
-            pads = {}
+            pins = {}
             for g in self.groups:
-                out = await self.qmp.execute("qom-get", path=PORT_PATH,
-                                             property=f"p{g}-out")
-                mask = await self.qmp.execute("qom-get", path=PORT_PATH,
-                                              property=f"p{g}-out-mask")
-                pads[g] = [int(out), int(mask)]
-            if pads != self.pads:
-                self.pads = pads
-                self.emit({"type": "pads", "pads": pads})
+                text = await self.qmp.execute("qom-get", path=PORT_PATH,
+                                              property=f"p{g}-stats")
+                stats = [int(v) for v in str(text).split()]
+                prev = self._stats.get(g)
+                self._stats[g] = stats
+                if not prev or stats[0] <= prev[0]:
+                    continue
+                dt = stats[0] - prev[0]
+                pins[g] = [[round((stats[1 + 2 * n] - prev[1 + 2 * n]) / dt, 2),
+                            round((stats[2 + 2 * n] - prev[2 + 2 * n]) / dt, 2)]
+                           for n in range(32)]
+            if pins and pins != self.pins:
+                self.pins = pins
+                self.emit({"type": "pins", "pins": pins})
             await asyncio.sleep(POLL_S)
 
     async def _watch(self) -> None:

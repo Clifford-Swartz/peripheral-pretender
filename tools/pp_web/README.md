@@ -6,7 +6,7 @@ VCOM UART appears in a console. This is the first slice of the endgame in
 `docs/design/endgame.md`.
 
 ```
-make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=blinky
+make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=blinky     # or APP=breathe (PWM)
 py -m tools.pp_web --elf firmware/hello/build/pic32cm_mc00_cpro/blinky.elf
 # open http://127.0.0.1:8080/ ; drop another ELF on the page to switch firmware
 ```
@@ -15,10 +15,13 @@ You need a pp-qemu build (`PP_QEMU`, as for `tools.pp`) and `aiohttp`.
 
 ## How it works
 
-- `session.py` starts QEMU with the ELF in real time (no icount), connects to its QMP monitor
-  and to the VCOM UART, a socket chardev on SERCOM0. It polls the PORT pad levels
-  (`/machine/soc/port` `pa-out`/`pa-out-mask`, ...) at 30 Hz and reports changes. Buttons map
-  to `qom-set /machine sw0-pressed` and `system_reset`.
+- `session.py` starts QEMU with the ELF under icount paced to the host clock
+  (`-icount shift=auto,sleep=on`), so it runs in real time with timer events at exact virtual
+  times. It connects to the QMP monitor and to the VCOM UART, a socket chardev on SERCOM0.
+  Each frame (30 Hz) it reads the PORT's `pa-stats`/`pb-stats`, the total driven-high and
+  driven-low time of every pad, and sends each pad's high and low fraction of the frame. An
+  LED therefore shows its PWM duty cycle as brightness. Buttons map to
+  `qom-set /machine sw0-pressed` and `system_reset`.
 - `server.py` (aiohttp) serves the page, accepts `POST /api/firmware` with an ELF, and relays
   messages over `/ws`.
 - `static/` is the page. It places the board's LEDs and buttons from `board.json`.

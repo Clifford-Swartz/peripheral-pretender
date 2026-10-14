@@ -150,8 +150,9 @@ real board in 3D. Users plug in Mikroe Click boards and run their own (or AI-wri
 on the twin, live. See `docs/design/endgame.md` for the layers and roadmap. First slice done:
 `tools/pp_web`. It shows the EV15N46A rendered from Microchip's Gerbers, with LED0 following
 PA24, clickable SW0/RESET, the VCOM console and ELF upload (`py -m tools.pp_web --elf ...`).
-Next in that roadmap: PWM brightness (per-pin high time from the engine, TCC outputs on pads),
-SERCOM SPI/I2C and the first Click boards.
+PWM brightness is done too (patch 0016): peripheral outputs drive pads through the pin mux,
+PORT accounts the duty cycle per pad, and the `breathe` demo dims LED0 with TCC1. Next in that
+roadmap: SERCOM SPI/I2C and the first Click boards.
 
 ## Next steps, in order
 

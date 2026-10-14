@@ -66,13 +66,17 @@ function buildBoard(b) {
   }
 }
 
-function showPads(pads) {
+// Brightness: the fraction of the last frame the LED's pad was driven to
+// its "on" level, so a PWM-dimmed LED glows at its duty cycle
+function showPins(pins) {
   for (const led of leds) {
-    const g = pads[led.group];
-    if (!g) continue;
-    const driven = (g[1] >>> led.bit) & 1, level = (g[0] >>> led.bit) & 1;
-    const on = driven && (led.active_low ? !level : level);
-    led.el.classList.toggle("on", !!on);
+    const g = pins[led.group];
+    const f = g ? g[led.bit][led.active_low ? 1 : 0] : 0;
+    // Steps (blinking) show at once; PWM levels are smoothed over frames
+    led.level = Math.abs(f - (led.level ?? 0)) > 0.6 ? f
+              : 0.6 * f + 0.4 * (led.level ?? 0);
+    led.el.style.opacity = led.level > 0.01 ? Math.max(0.12, Math.pow(led.level, 0.6)) : 0;
+    led.el.classList.toggle("on", f > 0.5);
   }
 }
 
@@ -86,9 +90,9 @@ function appendUart(text) {
 function handle(msg) {
   switch (msg.type) {
   case "board": buildBoard(msg.board); break;
-  case "pads": showPads(msg.pads); break;
+  case "pins": showPins(msg.pins); break;
   case "uart": appendUart(msg.data); break;
-  case "reset": $("console").textContent = ""; showPads({}); break;
+  case "reset": $("console").textContent = ""; showPins({}); break;
   case "status":
     if (msg.state === "running") setStatus("running", `running ${msg.elf}`);
     else if (msg.state === "stopped") setStatus("stopped", `stopped (exit ${msg.code})`);

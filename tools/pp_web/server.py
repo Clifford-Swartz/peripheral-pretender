@@ -4,7 +4,9 @@ state over a WebSocket.
 
     py -m tools.pp_web [--port 8080] [--elf firmware.elf] [--board ev15n46a]
 
-Messages to the page: {"type": "status"|"pads"|"uart"|"board", ...}.
+Messages to the page: {"type": "status"|"pins"|"uart"|"board", ...};
+"pins" maps a PORT group ("a", "b") to 32 [driven-high, driven-low]
+fractions of the last frame.
 Messages from the page: {"type": "button", "id": "sw0"|"reset",
 "pressed": bool} and {"type": "uart", "data": str}. POST /api/firmware
 with the ELF as the body (re)starts the twin.
@@ -96,8 +98,8 @@ class App:
             await ws.send_str(json.dumps({"type": "status", "state": "running",
                                           "elf": self.session.elf.name}))
             await ws.send_str(json.dumps({"type": "uart", "data": self.uart_log}))
-            await ws.send_str(json.dumps({"type": "pads",
-                                          "pads": self.session.pads}))
+            await ws.send_str(json.dumps({"type": "pins",
+                                          "pins": self.session.pins}))
         async for msg in ws:
             if msg.type != WSMsgType.TEXT:
                 continue

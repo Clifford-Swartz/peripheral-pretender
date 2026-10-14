@@ -453,6 +453,9 @@ def _inst_entry(ds: DeviceSem, i: InstanceSem) -> list[str]:
     if i.module == "TCC" and "SIZE" in i.params:
         # Counter width of this instance (ATDF parameter SIZE)
         items.append(f".counter_bits = {int(i.params['SIZE'])}")
+    if i.module == "TCC" and "CC_NUM" in i.params:
+        # Compare/capture channels of this instance (ATDF parameter CC_NUM)
+        items.append(f".channels = {int(i.params['CC_NUM'])}")
     ip = i.ip
     if ip.views and not ip.core:
         view = ip.view(ip.default_view)

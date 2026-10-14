@@ -1,0 +1,1077 @@
+From 29e772ffb362c4d00dc404ed06418690b71a8ee5 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Tue, 13 Oct 2026 23:21:19 -0700
+Subject: [PATCH] hw/gpio, hw/timer: peripheral outputs on pads, TCC waveform
+ pins
+
+PORT: a pin muxed to a peripheral function is driven by that function's
+"pmux-in" line (0, 1, undriven, or floating with the pull off for an
+output peripheral that holds the pad); "pmux-active" tells the
+peripheral a pad selects it; "pad" gives every driven pad's level; and
+each pad's driven-high/driven-low time is accounted on the virtual clock
+("pX-stats") so a frontend can show duty cycles.
+
+TCC: waveform outputs WO[x] (channel x modulo CC_NUM, DRVCTRL.INVEN)
+drive the pads muxed to them; the counter only stops coasting over
+output changes while a pad selects one. Checked on PIC32CM MC00 silicon
+through the pad's input buffer: duty CC/(PER+1), floating with the pull
+off while disabled, the start-of-cycle level after STOP.
+
+SoC: peripheral pad outputs are wired from the generated signal table
+(split-irq fan-out, OR-ed "active" feedback); the generator emits each
+TCC's channel count. Boards: the LED from VCC pulls its pad high while
+undriven, and drives the LED from "pad".
+
+Fixes: TC and TCC deleted their timer after catching up on a late
+callback, stopping event and waveform outputs until the next register
+access; PORT re-entered itself when a peripheral drove a pad from its
+"pmux-active" callback.
+
+Peripheral Pretender: a personal project; not for upstream.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst   |  12 +-
+ hw/arm/Kconfig                          |   1 +
+ hw/arm/pic32cm_jh01_cpro.c              |   4 +-
+ hw/arm/pic32cm_mc00_cpro.c              |   4 +-
+ hw/arm/pic32cm_soc.c                    |  98 +++++++++++
+ hw/gpio/mchp_port.c                     | 220 ++++++++++++++++++++++--
+ hw/gpio/trace-events                    |   1 +
+ hw/timer/mchp_tc.c                      |  14 +-
+ hw/timer/mchp_tcc.c                     | 113 +++++++++++-
+ include/hw/arm/pic32cm1216mc00048_gen.h |   9 +-
+ include/hw/arm/pic32cm5164jh01100_gen.h |   6 +-
+ include/hw/gpio/mchp_port.h             |  15 ++
+ include/hw/mchp/mchp_device.h           |   1 +
+ include/hw/timer/mchp_tcc.h             |   4 +
+ tests/qtest/pic32cm-tcc-test.c          |  48 ++++++
+ 15 files changed, 509 insertions(+), 41 deletions(-)
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index 4dc6dc6..3b00c76 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -66,7 +66,10 @@ Supported devices
+   n = group * 32 + pin, use -1 for an undriven pad. The QOM properties
+   ``pa-in``, ``pa-in-mask``, ``pa-out`` and ``pa-out-mask`` (and ``pb-``,
+   ``pc-``) of ``/machine/soc/port`` show and drive the pads. Event inputs
+-  (EVCTRL) set, clear, toggle or drive OUT.
++  (EVCTRL) set, clear, toggle or drive OUT. A pin muxed to a peripheral is
++  driven by that peripheral's output (TCC waveform outputs today); the
++  GPIO output ``pad[n]`` gives every driven pad, and ``pa-stats`` each
++  pad's total driven-high and driven-low time (duty cycles).
+ - EIC: edge and level detection on the EXTINT inputs that PORT routes to
+   it (pins muxed to function A) and NMI, synchronous edges only with the
+   EIC clock, event outputs.
+@@ -79,7 +82,8 @@ Supported devices
+   instance's counter width, overflow and match flags, the waveform output
+   state in STATUS.CMPx, one-shot, commands, double buffering (a buffer
+   write keeps SYNCBUSY set until it is copied, as on silicon), the counter
+-  event selection and the event inputs and outputs.
++  event selection, the event inputs and outputs, and the waveform outputs
++  WO[x] on the pads muxed to them.
+ - RTC (U2250, PIC32CM MC00 only): the three modes, periodic flags,
+   calendar with alarm, event outputs; reset only at power-on.
+ - EVSYS: channels on the three paths, software events, the users that
+@@ -103,8 +107,8 @@ Missing devices
+   mode, LIN and auto-baud frames, IrDA, 9-bit characters and receive
+   errors. PORT: the sampling mode (CTRL).
+ - TC capture, waveform outputs on pins; the JH01 RTC (03608). TCC faults,
+-  dead time, pattern generation, dithering, capture, circular buffers,
+-  waveform pins and the DSCRITICAL waveform.
++  dead time, pattern generation, dithering, capture, circular buffers and
++  the DSCRITICAL waveform.
+ - Watchdog time-out, PAC write protection, flash programming through
+   NVMCTRL, DSU CRC32 and chip erase, sleep modes and every other
+   peripheral behaviour (DMAC, ADC, DAC, AC, CAN, ...).
+diff --git a/hw/arm/Kconfig b/hw/arm/Kconfig
+index 611543b..ebad213 100644
+--- a/hw/arm/Kconfig
++++ b/hw/arm/Kconfig
+@@ -704,6 +704,7 @@ config PIC32CM_SOC
+     select MCHP_REGFILE
+     select MCHP_SERCOM
+     select OR_IRQ
++    select SPLIT_IRQ
+     select UNIMP
+ 
+ config NRF51_SOC
+diff --git a/hw/arm/pic32cm_jh01_cpro.c b/hw/arm/pic32cm_jh01_cpro.c
+index d1b201d..09ecb44 100644
+--- a/hw/arm/pic32cm_jh01_cpro.c
++++ b/hw/arm/pic32cm_jh01_cpro.c
+@@ -97,8 +97,10 @@ static void pic32cm_jh01_cpro_init(MachineState *machine)
+     port = pic32cm_soc_periph(&s->soc, "PORT");
+     s->led0 = led_create_simple(OBJECT(machine), GPIO_POLARITY_ACTIVE_LOW,
+                                 LED_COLOR_YELLOW, "LED0");
+-    qdev_connect_gpio_out_named(port, MCHP_PORT_OUT, CPRO_LED0_PIN,
++    qdev_connect_gpio_out_named(port, MCHP_PORT_PAD, CPRO_LED0_PIN,
+                                 qdev_get_gpio_in(DEVICE(s->led0), 0));
++    /* The LED from VCC pulls its pad high while nothing drives it */
++    qemu_set_irq(qdev_get_gpio_in_named(port, MCHP_PORT_IN, CPRO_LED0_PIN), 1);
+     s->sw0 = qdev_get_gpio_in_named(port, MCHP_PORT_IN, CPRO_SW0_PIN);
+     pic32cm_jh01_cpro_update_sw0(s);
+ 
+diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
+index a9e74d3..c3bde49 100644
+--- a/hw/arm/pic32cm_mc00_cpro.c
++++ b/hw/arm/pic32cm_mc00_cpro.c
+@@ -95,8 +95,10 @@ static void pic32cm_mc00_cpro_init(MachineState *machine)
+     port = pic32cm_soc_periph(&s->soc, "PORT");
+     s->led0 = led_create_simple(OBJECT(machine), GPIO_POLARITY_ACTIVE_LOW,
+                                 LED_COLOR_YELLOW, "LED0");
+-    qdev_connect_gpio_out_named(port, MCHP_PORT_OUT, CPRO_LED0_PIN,
++    qdev_connect_gpio_out_named(port, MCHP_PORT_PAD, CPRO_LED0_PIN,
+                                 qdev_get_gpio_in(DEVICE(s->led0), 0));
++    /* The LED from VCC pulls its pad high while nothing drives it */
++    qemu_set_irq(qdev_get_gpio_in_named(port, MCHP_PORT_IN, CPRO_LED0_PIN), 1);
+     s->sw0 = qdev_get_gpio_in_named(port, MCHP_PORT_IN, CPRO_SW0_PIN);
+     pic32cm_mc00_cpro_update_sw0(s);
+ 
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index 89751df..671573d 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -22,6 +22,7 @@
+ #include "hw/core/qdev-clock.h"
+ #include "hw/core/qdev-properties.h"
+ #include "hw/core/qdev-properties-system.h"
++#include "hw/core/split-irq.h"
+ #include "hw/gpio/mchp_port.h"
+ #include "hw/misc/mchp_eic.h"
+ #include "hw/misc/mchp_evsys.h"
+@@ -610,6 +611,102 @@ static void pic32cm_connect_events(Pic32cmSocState *s)
+     }
+ }
+ 
++/* A child gate device (TYPE_OR_IRQ or TYPE_SPLIT_IRQ) of @n lines */
++static DeviceState *pic32cm_gate(Pic32cmSocState *s, const char *type,
++                                 const char *name, unsigned n)
++{
++    Object *obj = object_new(type);
++
++    object_property_add_child(OBJECT(s), name, obj);
++    object_unref(obj);
++    object_property_set_int(obj, "num-lines", n, &error_abort);
++    qdev_realize(DEVICE(obj), NULL, &error_abort);
++    return DEVICE(obj);
++}
++
++/*
++ * Peripheral outputs to the pads (MchpDeviceInfo.signals): signal
++ * GROUP[n] of an instance on a pad with a PMUX function is the model's
++ * GPIO output "pad-group"[n], lower case, driving PORT "pmux-in" of that
++ * pad and function; its input "pad-group-active"[n], if the model has it,
++ * follows PORT "pmux-active". A signal on several pads fans out through a
++ * split-irq, and their "active" lines are OR-ed.
++ */
++static void pic32cm_connect_pads(Pic32cmSocState *s)
++{
++    DeviceState *port = pic32cm_periph(s, "PORT");
++    g_autoptr(GHashTable) seen = g_hash_table_new_full(g_str_hash,
++                                                       g_str_equal, g_free,
++                                                       NULL);
++
++    for (unsigned i = 0; i < s->dev->nsignals; i++) {
++        const MchpSignalInfo *sig = &s->dev->signals[i];
++        DeviceState *dev = pic32cm_soc_periph(s, sig->instance);
++        g_autofree char *grp = g_ascii_strdown(sig->group, -1);
++        g_autofree char *out = g_strdup_printf("pad-%s", grp);
++        g_autofree char *act = g_strdup_printf("pad-%s-active", grp);
++        g_autofree char *key = NULL;
++        unsigned pins[16], n = 0;
++        DeviceState *split = NULL, *or = NULL;
++
++        if (!dev || sig->pmux < 0 || sig->pin < 0 || sig->index < 0 ||
++            !pic32cm_has_gpio(dev, out, false, sig->index)) {
++            continue;
++        }
++        key = g_strdup_printf("%s.%s[%d]", sig->instance, grp, sig->index);
++        if (g_hash_table_contains(seen, key)) {
++            continue;
++        }
++        /* Every pad (and function) that carries this signal */
++        for (unsigned j = i; j < s->dev->nsignals && n < ARRAY_SIZE(pins);
++             j++) {
++            const MchpSignalInfo *o = &s->dev->signals[j];
++
++            if (!strcmp(o->instance, sig->instance) &&
++                !strcmp(o->group, sig->group) && o->index == sig->index &&
++                o->pmux >= 0 && o->pin >= 0) {
++                pins[n++] = o->pin * MCHP_PORT_FUNCS + o->pmux;
++            }
++        }
++        if (n > 1) {
++            g_autofree char *sname = g_strdup_printf("%s-split", key);
++
++            split = pic32cm_gate(s, TYPE_SPLIT_IRQ, sname, n);
++            qdev_connect_gpio_out_named(dev, out, sig->index,
++                                        qdev_get_gpio_in(split, 0));
++        }
++        if (n > 1 && pic32cm_has_gpio(dev, act, true, sig->index)) {
++            g_autofree char *oname = g_strdup_printf("%s-active-or", key);
++
++            or = pic32cm_gate(s, TYPE_OR_IRQ, oname, n);
++            qdev_connect_gpio_out(or, 0,
++                                  qdev_get_gpio_in_named(dev, act,
++                                                         sig->index));
++        }
++        for (unsigned k = 0; k < n; k++) {
++            qemu_irq in = qdev_get_gpio_in_named(port, MCHP_PORT_PMUX_IN,
++                                                 pins[k]);
++
++            if (split) {
++                qdev_connect_gpio_out(split, k, in);
++            } else {
++                qdev_connect_gpio_out_named(dev, out, sig->index, in);
++            }
++            if (or) {
++                qdev_connect_gpio_out_named(port, MCHP_PORT_PMUX_ACTIVE,
++                                            pins[k],
++                                            qdev_get_gpio_in(or, k));
++            } else if (pic32cm_has_gpio(dev, act, true, sig->index)) {
++                qdev_connect_gpio_out_named(port, MCHP_PORT_PMUX_ACTIVE,
++                                            pins[k],
++                                            qdev_get_gpio_in_named(dev, act,
++                                                sig->index));
++            }
++        }
++        g_hash_table_add(seen, g_steal_pointer(&key));
++    }
++}
++
+ /* Reset sources that RSTC records in RCAUSE */
+ static void pic32cm_connect_resets(Pic32cmSocState *s)
+ {
+@@ -646,6 +743,7 @@ static void pic32cm_soc_realize(DeviceState *dev, Error **errp)
+     pic32cm_connect_resets(s);
+     pic32cm_connect_eic(s);
+     pic32cm_connect_events(s);
++    pic32cm_connect_pads(s);
+ }
+ 
+ static const Property pic32cm_soc_properties[] = {
+diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
+index 0e0f2c6..0aeb026 100644
+--- a/hw/gpio/mchp_port.c
++++ b/hw/gpio/mchp_port.c
+@@ -9,14 +9,21 @@
+  * the generated tables give the SET/CLR/TGL aliases; this model derives
+  * the pads from them. Event inputs act on OUT as EVCTRL says, in every
+  * group; an OUT action with a pulse event leaves OUT as it was (PIC32CM
+- * MC00 silicon), a held level drives OUT. Not modelled: the input
+- * sampling mode (CTRL.SAMPLING), since IN always shows the current pads.
++ * MC00 silicon), a held level drives OUT. A pin muxed to a peripheral
++ * function (PINCFG.PMUXEN) is driven by that function's "pmux-in" line
++ * when the peripheral drives it; an output peripheral that holds the pad
++ * without driving it (a disabled TCC) leaves it floating with the pull
++ * resistor off, while input functions (EIC) keep the pull (silicon). Each
++ * pad's driven-high and driven-low time is accounted on QEMU_CLOCK_VIRTUAL
++ * ("pa-stats"), for duty cycles. Not modelled: the input sampling mode
++ * (CTRL.SAMPLING), since IN always shows the current pads.
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+ 
+ #include "qemu/osdep.h"
+ #include "qemu/timer.h"
++#include "qapi/error.h"
+ #include "qapi/visitor.h"
+ #include "hw/core/irq.h"
+ #include "hw/gpio/mchp_port.h"
+@@ -56,6 +63,19 @@ struct MchpPortState {
+     uint32_t ev_level;
+     int64_t ev_rise[MCHP_PORT_EVENTS];
+     uint32_t ev_saved[MCHP_PORT_EVENTS];        /* bit per group */
++    /* Peripheral drives per function ("pmux-in"): pins driven, levels */
++    uint32_t fn_mask[MCHP_PORT_GROUP_COUNT][MCHP_PORT_FUNCS];
++    uint32_t fn_level[MCHP_PORT_GROUP_COUNT][MCHP_PORT_FUNCS];
++    uint32_t fn_hiz[MCHP_PORT_GROUP_COUNT][MCHP_PORT_FUNCS];
++    qemu_irq pmux_active[MCHP_PORT_NUM_PINS * MCHP_PORT_FUNCS];
++    uint8_t sel[MCHP_PORT_NUM_PINS];            /* function + 1, 0: GPIO */
++    /* Driven pads as last signalled on "pad", and their accounting */
++    qemu_irq pad[MCHP_PORT_NUM_PINS];
++    uint32_t pad_mask[MCHP_PORT_GROUP_COUNT];
++    uint32_t pad_level[MCHP_PORT_GROUP_COUNT];
++    int64_t acc_time[MCHP_PORT_GROUP_COUNT];
++    uint64_t high_ns[MCHP_PORT_NUM_PINS];
++    uint64_t low_ns[MCHP_PORT_NUM_PINS];
+ };
+ 
+ static MchpRegFile *mchp_port_rf(MchpPortState *s)
+@@ -107,21 +127,92 @@ static uint32_t mchp_port_drive_mask(MchpPortState *s, unsigned g)
+            ~mchp_port_pincfg(s, g, R_MCHP_PORT_GROUP_PINCFG_PMUXEN_MASK);
+ }
+ 
++/* The peripheral function pin @pin of group @g is muxed to, or -1 */
++static int mchp_port_sel(MchpPortState *s, unsigned g, unsigned pin)
++{
++    hwaddr pincfg = mchp_port_offset(g, A_MCHP_PORT_GROUP_PINCFG + pin);
++    hwaddr pmux = mchp_port_offset(g, A_MCHP_PORT_GROUP_PMUX + pin / 2);
++
++    if (!(mchp_regfile_peek(mchp_port_rf(s), pincfg, 1) &
++          R_MCHP_PORT_GROUP_PINCFG_PMUXEN_MASK)) {
++        return -1;
++    }
++    return extract32(mchp_regfile_peek(mchp_port_rf(s), pmux, 1),
++                     (pin & 1) * 4, 4);
++}
++
++/* Pads of group @g an output peripheral holds floating, without pull */
++static uint32_t mchp_port_hiz(MchpPortState *s, unsigned g)
++{
++    uint32_t mask = 0;
++
++    for (unsigned pin = 0; pin < MCHP_PORT_GROUP_PINS; pin++) {
++        int f = mchp_port_sel(s, g, pin);
++
++        if (f >= 0 && extract32(s->fn_hiz[g][f], pin, 1)) {
++            mask |= BIT(pin);
++        }
++    }
++    return mask;
++}
++
++/* Pads of group @g a peripheral drives (*level: their levels) */
++static uint32_t mchp_port_periph(MchpPortState *s, unsigned g,
++                                 uint32_t *level)
++{
++    uint32_t mask = 0;
++
++    *level = 0;
++    for (unsigned pin = 0; pin < MCHP_PORT_GROUP_PINS; pin++) {
++        int f = mchp_port_sel(s, g, pin);
++
++        if (f >= 0 && extract32(s->fn_mask[g][f], pin, 1)) {
++            mask |= BIT(pin);
++            *level |= s->fn_level[g][f] & BIT(pin);
++        }
++    }
++    return mask;
++}
++
+ /*
+- * Level of every pad of group @g (DS 27.6.3.2): the PORT's output, else an
+- * external driver, else the pull resistor of an input (towards OUT), else
+- * 0 for a floating pad.
++ * Level of every pad of group @g (DS 27.6.3.2): the PORT's output, else
++ * the peripheral the pin is muxed to, else an external driver, else the
++ * pull resistor of an input (towards OUT), else 0 for a floating pad.
+  */
+ static uint32_t mchp_port_pads(MchpPortState *s, unsigned g)
+ {
+     uint32_t out = mchp_port_reg(s, g, A_MCHP_PORT_GROUP_OUT);
+     uint32_t drive = mchp_port_drive_mask(s, g);
+-    uint32_t ext = s->ext_mask[g] & ~drive;
++    uint32_t plevel, periph = mchp_port_periph(s, g, &plevel) & ~drive;
++    uint32_t ext = s->ext_mask[g] & ~drive & ~periph;
++    /* No pull where an output peripheral holds the pad, even floating */
+     uint32_t pull = mchp_port_pincfg(s, g,
+                                      R_MCHP_PORT_GROUP_PINCFG_PULLEN_MASK) &
+-                    ~mchp_port_reg(s, g, A_MCHP_PORT_GROUP_DIR) & ~ext;
++                    ~mchp_port_reg(s, g, A_MCHP_PORT_GROUP_DIR) & ~ext &
++                    ~periph & ~mchp_port_hiz(s, g);
++
++    return (out & drive) | (plevel & periph) | (s->ext_level[g] & ext) |
++           (out & pull);
++}
+ 
+-    return (out & drive) | (s->ext_level[g] & ext) | (out & pull);
++/* Add the time since the last call to the high/low time of driven pads */
++static void mchp_port_account(MchpPortState *s, unsigned g)
++{
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    int64_t dt = now - s->acc_time[g];
++
++    for (unsigned pin = 0; pin < MCHP_PORT_GROUP_PINS && dt > 0; pin++) {
++        unsigned n = g * MCHP_PORT_GROUP_PINS + pin;
++
++        if (extract32(s->pad_mask[g], pin, 1)) {
++            if (extract32(s->pad_level[g], pin, 1)) {
++                s->high_ns[n] += dt;
++            } else {
++                s->low_ns[n] += dt;
++            }
++        }
++    }
++    s->acc_time[g] = now;
+ }
+ 
+ /* IN shows the pads whose input buffer is enabled; the others read 0. */
+@@ -153,18 +244,50 @@ static uint32_t mchp_port_func_a(MchpPortState *s, unsigned g)
+ 
+ /*
+  * Signal "func-a": the pad level of each pin muxed to function A (EIC
+- * EXTINT/NMI), 0 for the other pins.
++ * EXTINT/NMI), 0 for the other pins; "pad": the level of each driven pad,
++ * -1 for the others; "pmux-active": the function each pin is muxed to.
+  */
+ static void mchp_port_update_func(MchpPortState *s, unsigned g)
+ {
+-    uint32_t level = mchp_port_pads(s, g) & mchp_port_func_a(s, g);
++    uint32_t pads = mchp_port_pads(s, g);
++    uint32_t level = pads & mchp_port_func_a(s, g);
+     uint32_t changed = level ^ s->func_level[g];
++    uint32_t plevel, driven = mchp_port_drive_mask(s, g) |
++                              mchp_port_periph(s, g, &plevel);
++    uint32_t pad_changed = (driven ^ s->pad_mask[g]) |
++                           ((pads ^ s->pad_level[g]) & driven);
+ 
+     s->func_level[g] = level;
+     for (unsigned pin = 0; pin < MCHP_PORT_GROUP_PINS; pin++) {
++        unsigned n = g * MCHP_PORT_GROUP_PINS + pin;
++        int f = mchp_port_sel(s, g, pin);
++
+         if (extract32(changed, pin, 1)) {
+-            qemu_set_irq(s->func_a[g * MCHP_PORT_GROUP_PINS + pin],
+-                         extract32(level, pin, 1));
++            qemu_set_irq(s->func_a[n], extract32(level, pin, 1));
++        }
++        if (f + 1 != s->sel[n]) {
++            /* Record first: the peripheral may drive the pad right away */
++            int old = s->sel[n] - 1;
++
++            s->sel[n] = f + 1;
++            if (old >= 0) {
++                qemu_set_irq(s->pmux_active[n * MCHP_PORT_FUNCS + old], 0);
++            }
++            if (f >= 0) {
++                qemu_set_irq(s->pmux_active[n * MCHP_PORT_FUNCS + f], 1);
++            }
++        }
++    }
++    if (pad_changed) {
++        mchp_port_account(s, g);
++        s->pad_mask[g] = driven;
++        s->pad_level[g] = pads & driven;
++        for (unsigned pin = 0; pin < MCHP_PORT_GROUP_PINS; pin++) {
++            if (extract32(pad_changed, pin, 1)) {
++                qemu_set_irq(s->pad[g * MCHP_PORT_GROUP_PINS + pin],
++                             extract32(driven, pin, 1) ?
++                             (int)extract32(pads, pin, 1) : -1);
++            }
+         }
+     }
+ }
+@@ -260,6 +383,26 @@ static void mchp_port_set_input(void *opaque, int n, int level)
+     mchp_port_update_func(s, g);
+ }
+ 
++/* "pmux-in": peripheral function @n % 16 drives pin @n / 16 (-1: does not) */
++static void mchp_port_set_pmux_in(void *opaque, int n, int level)
++{
++    MchpPortState *s = opaque;
++    unsigned pin = n / MCHP_PORT_FUNCS, f = n % MCHP_PORT_FUNCS;
++    unsigned g = pin / MCHP_PORT_GROUP_PINS, bit = pin % MCHP_PORT_GROUP_PINS;
++
++    if (g >= s->ngroups) {
++        return;
++    }
++    trace_mchp_port_pmux_in('A' + g, bit, f, level);
++    s->fn_mask[g][f] = deposit32(s->fn_mask[g][f], bit, 1, level >= 0);
++    s->fn_hiz[g][f] = deposit32(s->fn_hiz[g][f], bit, 1,
++                                level == MCHP_PORT_PAD_HIZ);
++    s->fn_level[g][f] = deposit32(s->fn_level[g][f], bit, 1, level > 0);
++    if (mchp_port_sel(s, g, bit) == (int)f) {
++        mchp_port_update_func(s, g);
++    }
++}
++
+ /* "ev-event-in": event input @n acts on the pin each group's EVCTRL names */
+ static void mchp_port_set_event(void *opaque, int n, int level)
+ {
+@@ -375,6 +518,31 @@ static void mchp_port_get_out_mask(Object *obj, Visitor *v, const char *name,
+ }
+ 
+ /* After a reset every pin is an input again: release the pads. */
++/*
++ * "pa-stats": "<ns> <high0> <low0> ... <high31> <low31>", the virtual time
++ * and each pad's total driven-high and driven-low time in ns; the duty
++ * cycle between two reads is the difference of the totals
++ */
++static void mchp_port_get_stats(Object *obj, Visitor *v, const char *name,
++                                void *opaque, Error **errp)
++{
++    MchpPortState *s = MCHP_PORT(obj);
++    unsigned g = GPOINTER_TO_UINT(opaque);
++    g_autoptr(GString) str = g_string_new(NULL);
++    g_autofree char *val = NULL;
++
++    mchp_port_account(s, g);
++    g_string_append_printf(str, "%" PRId64, s->acc_time[g]);
++    for (unsigned pin = 0; pin < MCHP_PORT_GROUP_PINS; pin++) {
++        unsigned n = g * MCHP_PORT_GROUP_PINS + pin;
++
++        g_string_append_printf(str, " %" PRIu64 " %" PRIu64, s->high_ns[n],
++                               s->low_ns[n]);
++    }
++    val = g_string_free(g_steal_pointer(&str), false);
++    visit_type_str(v, name, &val, errp);
++}
++
+ static void mchp_port_reset_exit(MchpRegBlock *rb)
+ {
+     for (unsigned g = 0; g < MCHP_PORT(rb)->ngroups; g++) {
+@@ -394,6 +562,15 @@ static void mchp_port_init(Object *obj)
+                              MCHP_PORT_NUM_PINS);
+     qdev_init_gpio_in_named(DEVICE(obj), mchp_port_set_event,
+                             MCHP_PORT_EVENT_IN, MCHP_PORT_EVENTS);
++    qdev_init_gpio_in_named(DEVICE(obj), mchp_port_set_pmux_in,
++                            MCHP_PORT_PMUX_IN,
++                            MCHP_PORT_NUM_PINS * MCHP_PORT_FUNCS);
++    qdev_init_gpio_out_named(DEVICE(obj), s->pmux_active,
++                             MCHP_PORT_PMUX_ACTIVE,
++                             MCHP_PORT_NUM_PINS * MCHP_PORT_FUNCS);
++    qdev_init_gpio_out_named(DEVICE(obj), s->pad, MCHP_PORT_PAD,
++                             MCHP_PORT_NUM_PINS);
++    /* Pads start undriven: the first update signals the driven ones */
+ }
+ 
+ /* The groups of this device, and a QOM property set per group */
+@@ -411,6 +588,7 @@ static bool mchp_port_realize(MchpRegBlock *rb, Error **errp)
+         g_autofree char *in_mask = g_strdup_printf("p%c-in-mask", p);
+         g_autofree char *out = g_strdup_printf("p%c-out", p);
+         g_autofree char *out_mask = g_strdup_printf("p%c-out-mask", p);
++        g_autofree char *stats = g_strdup_printf("p%c-stats", p);
+ 
+         object_property_add(obj, in, "uint32", mchp_port_get_in,
+                             mchp_port_set_in, NULL, group);
+@@ -420,14 +598,16 @@ static bool mchp_port_realize(MchpRegBlock *rb, Error **errp)
+                             NULL, group);
+         object_property_add(obj, out_mask, "uint32", mchp_port_get_out_mask,
+                             NULL, NULL, group);
++        object_property_add(obj, stats, "str", mchp_port_get_stats,
++                            NULL, NULL, group);
+     }
+     return true;
+ }
+ 
+ static const VMStateDescription vmstate_mchp_port = {
+     .name = TYPE_MCHP_PORT,
+-    .version_id = 3,
+-    .minimum_version_id = 3,
++    .version_id = 4,
++    .minimum_version_id = 4,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpPortState, 1, vmstate_mchp_regblock,
+                        MchpRegBlock),
+@@ -441,6 +621,18 @@ static const VMStateDescription vmstate_mchp_port = {
+         VMSTATE_UINT32(ev_level, MchpPortState),
+         VMSTATE_INT64_ARRAY(ev_rise, MchpPortState, MCHP_PORT_EVENTS),
+         VMSTATE_UINT32_ARRAY(ev_saved, MchpPortState, MCHP_PORT_EVENTS),
++        VMSTATE_UINT32_2DARRAY(fn_mask, MchpPortState, MCHP_PORT_GROUP_COUNT,
++                               MCHP_PORT_FUNCS),
++        VMSTATE_UINT32_2DARRAY(fn_level, MchpPortState, MCHP_PORT_GROUP_COUNT,
++                               MCHP_PORT_FUNCS),
++        VMSTATE_UINT32_2DARRAY(fn_hiz, MchpPortState, MCHP_PORT_GROUP_COUNT,
++                               MCHP_PORT_FUNCS),
++        VMSTATE_BUFFER(sel, MchpPortState),
++        VMSTATE_UINT32_ARRAY(pad_mask, MchpPortState, MCHP_PORT_GROUP_COUNT),
++        VMSTATE_UINT32_ARRAY(pad_level, MchpPortState, MCHP_PORT_GROUP_COUNT),
++        VMSTATE_INT64_ARRAY(acc_time, MchpPortState, MCHP_PORT_GROUP_COUNT),
++        VMSTATE_UINT64_ARRAY(high_ns, MchpPortState, MCHP_PORT_NUM_PINS),
++        VMSTATE_UINT64_ARRAY(low_ns, MchpPortState, MCHP_PORT_NUM_PINS),
+         VMSTATE_END_OF_LIST()
+     },
+ };
+diff --git a/hw/gpio/trace-events b/hw/gpio/trace-events
+index c27fea5..61ecfa5 100644
+--- a/hw/gpio/trace-events
++++ b/hw/gpio/trace-events
+@@ -50,3 +50,4 @@ stm32l4x5_gpio_pins(char *gpio, uint16_t disconnected, uint16_t high) "GPIO%s di
+ # mchp_port.c
+ mchp_port_out(char group, unsigned pin, int level) "P%c%02u: out %d"
+ mchp_port_in(char group, unsigned pin, int level) "P%c%02u: in %d"
++mchp_port_pmux_in(char group, unsigned pin, unsigned func, int level) "P%c%u: function %u drives %d"
+diff --git a/hw/timer/mchp_tc.c b/hw/timer/mchp_tc.c
+index 0414b5c..b08dbf1 100644
+--- a/hw/timer/mchp_tc.c
++++ b/hw/timer/mchp_tc.c
+@@ -373,17 +373,19 @@ static void mchp_tc_advance(MchpTcState *s, int64_t now)
+ 
+         mchp_tc_next(s, &ovf, match);
+         if (mchp_tc_quiet(s, match) || steps >= MCHP_TC_MAX_STEPS) {
+-            /* Nothing to do on the way: jump to now */
++            /* Nothing to do on the way, or too far behind: jump to now */
+             uint64_t ticks = mchp_tc_ticks(s, now);
+ 
+             s->count = mchp_tc_value(s, ticks);
+             s->t_base = mchp_tc_tick_time(s, ticks);
+-            if (steps >= MCHP_TC_MAX_STEPS) {
+-                /* Flags that a long gap set at least once */
+-                mchp_tc_mod_reg(s, A_INTFLAG, 1, 0, F(INTFLAG, OVF));
++            if (steps < MCHP_TC_MAX_STEPS) {
++                timer_del(s->timer);
++                return;
+             }
+-            timer_del(s->timer);
+-            return;
++            /* Flags that a long gap set at least once; then go on */
++            mchp_tc_mod_reg(s, A_INTFLAG, 1, 0, F(INTFLAG, OVF));
++            steps = 0;
++            continue;
+         }
+         next = ovf;
+         for (unsigned ch = 0; ch < MCHP_TC_CHANNELS; ch++) {
+diff --git a/hw/timer/mchp_tcc.c b/hw/timer/mchp_tcc.c
+index c3b89e7..5459894 100644
+--- a/hw/timer/mchp_tcc.c
++++ b/hw/timer/mchp_tcc.c
+@@ -38,9 +38,14 @@
+  *    TOP wrap when CTRLB.DIR is set, except that from ZERO it loads TOP.
+  *    The EV1 STOP action sets STATUS.STOP. The start's CNT comes at
+  *    once in NFRQ, MFRQ and NPWM counting down.
+- * Not modelled: faults, dead-time insertion, pattern generation, output
+- * matrix, swap, dithering (CTRLA.RESOLUTION), circular buffers, capture,
+- * waveform pins, the DSCRITICAL waveform (counted as DSBOTTOM), sleep.
++ * The waveform outputs WO[x] follow channel x modulo the instance's
++ * channel count (WEXCTRL.OTMX 0), STATUS.CMPx timing, with
++ * DRVCTRL.INVENx; they drive the pads muxed to them, and the counter only
++ * stops coasting over output changes while a pad selects one.
++ * Not modelled: faults, dead-time insertion, pattern generation, the
++ * other output matrix settings, swap, dithering (CTRLA.RESOLUTION),
++ * circular buffers, capture, the DSCRITICAL waveform (counted as
++ * DSBOTTOM), sleep.
+  *
+  * Counting is event driven on QEMU_CLOCK_VIRTUAL: the timer fires at the
+  * next tick that can change something and jumps over the rest.
+@@ -53,6 +58,7 @@
+ #include "qemu/timer.h"
+ #include "hw/core/clock.h"
+ #include "hw/core/irq.h"
++#include "hw/gpio/mchp_port.h"
+ #include "hw/timer/mchp_tcc.h"
+ #include "hw/mchp/gen/tcc_u2213.h"
+ #include "migration/vmstate.h"
+@@ -80,6 +86,7 @@
+ #define F(reg, field)   R_MCHP_TCC_##reg##_##field##_MASK
+ 
+ #define MCHP_TCC_CHANNELS   4
++#define MCHP_TCC_OUTPUTS    8
+ #define MCHP_TCC_MAX_STEPS  64
+ #define NEVER               UINT64_MAX
+ 
+@@ -104,6 +111,11 @@ struct MchpTccState {
+     qemu_irq cnt_event;
+     qemu_irq mc_event[MCHP_TCC_CHANNELS];
+     qemu_irq ev_busy[2];
++    qemu_irq wo[MCHP_TCC_OUTPUTS];
++    uint8_t wo_active;          /* outputs a pad is muxed to */
++    uint8_t wo_level;           /* levels last driven */
++    bool wo_restart;            /* stopped by STOP: outputs at COUNT */
++    bool wo_driven;
+ 
+     bool running;               /* counting (started, not stopped) */
+     bool moved;                 /* ticked since the start */
+@@ -472,6 +484,7 @@ static uint32_t tcc_cnt_stop(MchpTccState *s)
+ }
+ 
+ static uint32_t tcc_cmp(MchpTccState *s, int64_t now);
++static void tcc_update_wo(MchpTccState *s);
+ 
+ /* Stop counting; the outputs keep their state, or clear for one-shot */
+ static void tcc_stop(MchpTccState *s, bool oneshot)
+@@ -557,11 +570,74 @@ static void tcc_tick(MchpTccState *s, int force_down)
+     if (ovf && (tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, ONESHOT))) {
+         tcc_stop(s, true);
+     }
++    if (s->wo_active) {
++        tcc_update_wo(s);
++    }
++}
++
++static void tcc_advance(MchpTccState *s, int64_t now);
++
++/*
++ * Drive the waveform outputs: WO[x] is channel x modulo the channels;
++ * a disabled TCC leaves its pads floating, pull off (silicon)
++ */
++static void tcc_update_wo(MchpTccState *s)
++{
++    unsigned nch = MCHP_REGBLOCK(s)->info->channels ?: MCHP_TCC_CHANNELS;
++    uint32_t inv = extract32(tcc_reg(s, A_DRVCTRL, 4), 16, 8);
++    bool on = tcc_enabled(s);
++    uint32_t cmp = on ? tcc_cmp(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL)) : 0;
++    uint8_t level = 0;
++
++    if (on && s->wo_restart && !s->running) {
++        /*
++         * After STOP the pins show the waveform at the cleared COUNT, the
++         * start of a cycle, while STATUS.CMPx keeps the old state (silicon)
++         */
++        uint32_t pol = extract32(tcc_reg(s, A_WAVE, 4),
++                                 R_MCHP_TCC_WAVE_POL0_SHIFT, 4);
++
++        cmp = 0;
++        for (unsigned ch = 0; ch < MCHP_TCC_CHANNELS; ch++) {
++            uint32_t c = s->cc[ch];
++            bool o = s->wavegen == NFRQ || s->wavegen == MFRQ ?
++                     extract32(s->toggle, ch, 1) :
++                     tcc_ds(s) ? c == 0 :
++                     s->dir ? s->top <= c : c > 0;
++
++            cmp |= (o ^ extract32(pol, ch, 1)) << ch;
++        }
++    }
++
++    for (unsigned x = 0; x < MCHP_TCC_OUTPUTS; x++) {
++        level |= (extract32(cmp, x % nch, 1) ^ extract32(inv, x, 1)) << x;
++    }
++    for (unsigned x = 0; x < MCHP_TCC_OUTPUTS; x++) {
++        if (on != s->wo_driven ||
++            (on && extract32(level ^ s->wo_level, x, 1))) {
++            qemu_set_irq(s->wo[x], on ? (int)extract32(level, x, 1)
++                                      : MCHP_PORT_PAD_HIZ);
++        }
++    }
++    s->wo_level = level;
++    s->wo_driven = on;
++}
++
++/* "pad-wo-active": a pad is muxed to output @x */
++static void tcc_set_wo_active(void *opaque, int x, int level)
++{
++    MchpTccState *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    s->wo_active = deposit32(s->wo_active, x, 1, level > 0);
++    tcc_advance(s, now);
++    tcc_update_wo(s);
+ }
+ 
+ /*
+  * Firing the timer changes nothing: every flag it would set is set, and
+- * there is no one-shot, pending buffer, toggling output or event output
++ * there is no one-shot, pending buffer, toggling output, event output or
++ * waveform output on a pad
+  */
+ static bool tcc_quiet(MchpTccState *s)
+ {
+@@ -573,7 +649,7 @@ static bool tcc_quiet(MchpTccState *s)
+             want |= F(INTFLAG, MC0) << ch;
+         }
+     }
+-    return (flags & want) == want && !s->cnt_pending &&
++    return (flags & want) == want && !s->cnt_pending && !s->wo_active &&
+            s->wavegen != NFRQ && s->wavegen != MFRQ &&
+            !(tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, ONESHOT)) &&
+            !(tcc_reg(s, A_STATUS, 4) & (F(STATUS, PERBUFV) | (0xF << 16))) &&
+@@ -588,11 +664,13 @@ static void tcc_advance(MchpTccState *s, int64_t now)
+ 
+         if (tcc_quiet(s) || steps >= MCHP_TCC_MAX_STEPS) {
+             tcc_jump(s, tcc_ticks(s, now));
+-            if (steps >= MCHP_TCC_MAX_STEPS) {
+-                /* Flags that a long gap set at least once */
+-                tcc_mod_reg(s, A_INTFLAG, 4, 0, F(INTFLAG, OVF));
++            if (steps < MCHP_TCC_MAX_STEPS) {
++                break;
+             }
+-            break;
++            /* Flags that a long gap set at least once; then go on */
++            tcc_mod_reg(s, A_INTFLAG, 4, 0, F(INTFLAG, OVF));
++            steps = 0;
++            continue;
+         }
+         n = tcc_next(s);
+         if (n == NEVER) {
+@@ -613,6 +691,9 @@ static void tcc_advance(MchpTccState *s, int64_t now)
+ static void tcc_sync(MchpTccState *s)
+ {
+     tcc_advance(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
++    if (s->wo_active) {
++        tcc_update_wo(s);
++    }
+     mchp_regblock_update_irq(MCHP_REGBLOCK(s));
+ }
+ 
+@@ -648,6 +729,7 @@ static void tcc_start(MchpTccState *s)
+         tcc_update_buffers(s);
+     }
+     s->running = true;
++    s->wo_restart = false;
+     s->moved = false;
+     s->down = s->dir;
+     s->t_base = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+@@ -694,6 +776,7 @@ static void tcc_command(MchpTccState *s, unsigned cmd)
+             tcc_jump(s, tcc_ticks(s, now));
+             tcc_stop(s, false);
+             s->count = tcc_start_value(s);  /* silicon: not kept */
++            s->wo_restart = true;
+         }
+         break;
+     case MCHP_TCC_CTRLBSET_CMD_UPDATE:
+@@ -836,6 +919,7 @@ static void tcc_set_event(void *opaque, int n, int level)
+     }
+     trace_mchp_tcc_event_in(MCHP_REGBLOCK(s)->name, n, level, s->count);
+     tcc_advance(s, now);
++    tcc_update_wo(s);
+     mchp_regblock_update_irq(MCHP_REGBLOCK(s));
+ }
+ 
+@@ -1022,6 +1106,7 @@ static void tcc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+         break;
+     }
+     tcc_advance(s, now);
++    tcc_update_wo(s);
+     mchp_regblock_update_irq(MCHP_REGBLOCK(s));
+ }
+ 
+@@ -1043,6 +1128,7 @@ static void tcc_reset_hold(MchpRegBlock *rb)
+     s->cnt_pending = false;
+     s->frozen_cmp = 0;
+     s->buf_busy = 0;
++    s->wo_restart = false;
+     s->down = false;
+     s->toggle = 0;
+     s->count = 0;
+@@ -1050,6 +1136,8 @@ static void tcc_reset_hold(MchpRegBlock *rb)
+     s->sync_pending = 0;
+     tcc_refresh(s);
+     tcc_update_busy(s);
++    s->wo_driven = true;        /* signal "undriven" again */
++    tcc_update_wo(s);
+ }
+ 
+ static bool tcc_realize(MchpRegBlock *rb, Error **errp)
+@@ -1072,6 +1160,9 @@ static void tcc_init(Object *obj)
+                              MCHP_TCC_CHANNELS);
+     qdev_init_gpio_in_named(dev, tcc_set_event, MCHP_TCC_EV_EVENT_IN, 2);
+     qdev_init_gpio_out_named(dev, s->ev_busy, MCHP_TCC_EV_BUSY, 2);
++    qdev_init_gpio_out_named(dev, s->wo, MCHP_TCC_PAD_WO, MCHP_TCC_OUTPUTS);
++    qdev_init_gpio_in_named(dev, tcc_set_wo_active, MCHP_TCC_PAD_WO_ACTIVE,
++                            MCHP_TCC_OUTPUTS);
+ }
+ 
+ static void tcc_finalize(Object *obj)
+@@ -1099,6 +1190,10 @@ static const VMStateDescription vmstate_mchp_tcc = {
+         VMSTATE_BOOL(cnt_pending, MchpTccState),
+         VMSTATE_UINT8(frozen_cmp, MchpTccState),
+         VMSTATE_UINT32(buf_busy, MchpTccState),
++        VMSTATE_UINT8(wo_active, MchpTccState),
++        VMSTATE_UINT8(wo_level, MchpTccState),
++        VMSTATE_BOOL(wo_driven, MchpTccState),
++        VMSTATE_BOOL(wo_restart, MchpTccState),
+         VMSTATE_BOOL(down, MchpTccState),
+         VMSTATE_BOOL_ARRAY(ev_level, MchpTccState, 2),
+         VMSTATE_UINT8(toggle, MchpTccState),
+diff --git a/include/hw/arm/pic32cm1216mc00048_gen.h b/include/hw/arm/pic32cm1216mc00048_gen.h
+index 7529eeb..3ece43c 100644
+--- a/include/hw/arm/pic32cm1216mc00048_gen.h
++++ b/include/hw/arm/pic32cm1216mc00048_gen.h
+@@ -448,7 +448,8 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .ip_version = "3.0.0", .base = 0x42002400, .slot_size = 0x400,
+         .irq = 13, .irq_input = 0, .pac_id = 73, .gclk_core = 23,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
+-        .counter_bits = 24, .regs_size = PIC32CM1216MC00048_TCC_REGS_SIZE,
++        .counter_bits = 24, .channels = 4,
++        .regs_size = PIC32CM1216MC00048_TCC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_tcc_regs,
+         .nregs = PIC32CM1216MC00048_TCC_NREGS,
+     },
+@@ -457,7 +458,8 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .ip_version = "3.0.0", .base = 0x42002800, .slot_size = 0x400,
+         .irq = 14, .irq_input = 0, .pac_id = 74, .gclk_core = 23,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
+-        .counter_bits = 24, .regs_size = PIC32CM1216MC00048_TCC_REGS_SIZE,
++        .counter_bits = 24, .channels = 2,
++        .regs_size = PIC32CM1216MC00048_TCC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_tcc_regs,
+         .nregs = PIC32CM1216MC00048_TCC_NREGS,
+     },
+@@ -466,7 +468,8 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .ip_version = "3.0.0", .base = 0x42002C00, .slot_size = 0x400,
+         .irq = 15, .irq_input = 0, .pac_id = 75, .gclk_core = 24,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
+-        .counter_bits = 16, .regs_size = PIC32CM1216MC00048_TCC_REGS_SIZE,
++        .counter_bits = 16, .channels = 2,
++        .regs_size = PIC32CM1216MC00048_TCC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_tcc_regs,
+         .nregs = PIC32CM1216MC00048_TCC_NREGS,
+     },
+diff --git a/include/hw/arm/pic32cm5164jh01100_gen.h b/include/hw/arm/pic32cm5164jh01100_gen.h
+index 1e6669b..2856861 100644
+--- a/include/hw/arm/pic32cm5164jh01100_gen.h
++++ b/include/hw/arm/pic32cm5164jh01100_gen.h
+@@ -525,7 +525,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .name = "TCC0", .module = "TCC", .ip_id = "U2213", .ip_version = "4a0",
+         .base = 0x42002400, .slot_size = 0x400, .irq = 17, .irq_input = 0,
+         .pac_id = 73, .gclk_core = 28, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .counter_bits = 24,
++        .dmac_tx = -1, .flags = 0, .counter_bits = 24, .channels = 4,
+         .regs_size = PIC32CM5164JH01100_TCC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tcc_regs,
+         .nregs = PIC32CM5164JH01100_TCC_NREGS,
+@@ -534,7 +534,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .name = "TCC1", .module = "TCC", .ip_id = "U2213", .ip_version = "4a0",
+         .base = 0x42002800, .slot_size = 0x400, .irq = 18, .irq_input = 0,
+         .pac_id = 74, .gclk_core = 28, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .counter_bits = 24,
++        .dmac_tx = -1, .flags = 0, .counter_bits = 24, .channels = 2,
+         .regs_size = PIC32CM5164JH01100_TCC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tcc_regs,
+         .nregs = PIC32CM5164JH01100_TCC_NREGS,
+@@ -543,7 +543,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .name = "TCC2", .module = "TCC", .ip_id = "U2213", .ip_version = "4a0",
+         .base = 0x42002C00, .slot_size = 0x400, .irq = 19, .irq_input = 0,
+         .pac_id = 75, .gclk_core = 29, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .counter_bits = 16,
++        .dmac_tx = -1, .flags = 0, .counter_bits = 16, .channels = 2,
+         .regs_size = PIC32CM5164JH01100_TCC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tcc_regs,
+         .nregs = PIC32CM5164JH01100_TCC_NREGS,
+diff --git a/include/hw/gpio/mchp_port.h b/include/hw/gpio/mchp_port.h
+index 0017124..efc8689 100644
+--- a/include/hw/gpio/mchp_port.h
++++ b/include/hw/gpio/mchp_port.h
+@@ -19,6 +19,13 @@
+  *                  function A (PINCFG.PMUXEN, PMUX = 0: EIC EXTINT/NMI),
+  *                  else 0; the SoC wires it to the EIC
+  *   "ev-event-in"[4] in: EVSYS event inputs (EVCTRL PORTEIn)
++ *   "pmux-in"[n * 16 + f]  in: peripheral function f (PMUX value) drives
++ *                  pad n: 0 or 1, -1 when it does not drive, or
++ *                  MCHP_PORT_PAD_HIZ when it holds the pad floating with
++ *                  the pull resistor off
++ *   "pmux-active"[n * 16 + f]  out: 1 while pad n is muxed to function f
++ *   "pad"[n]       out: the level of pad n while something drives it (the
++ *                  PORT or the peripheral it is muxed to), else -1
+  * IN reads the pad of each pin whose input buffer is on (PINCFG.INEN): the
+  * PORT's own drive, else the external driver, else the pull resistor
+  * (PINCFG.PULLEN, towards OUT), else 0 for a floating pad.
+@@ -30,6 +37,9 @@
+  *   "pa-out"       uint32, read-only: levels the PORT drives (0 where it
+  *                  does not drive)
+  *   "pa-out-mask"  uint32, read-only: pads the PORT drives
++ *   "pa-stats"     str, read-only: "<ns> <high0> <low0> ... <high31>
++ *                  <low31>", virtual time and each pad's total driven-high
++ *                  and driven-low time in ns (duty = difference of totals)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -46,6 +56,11 @@
+ #define MCHP_PORT_FUNC_A "func-a"
+ #define MCHP_PORT_EVENT_IN "ev-event-in"
+ #define MCHP_PORT_EVENTS 4
++#define MCHP_PORT_PMUX_IN "pmux-in"
++#define MCHP_PORT_PMUX_ACTIVE "pmux-active"
++#define MCHP_PORT_PAD "pad"
++#define MCHP_PORT_FUNCS 16
++#define MCHP_PORT_PAD_HIZ (-2)
+ 
+ /* GPIO line of pin P<group><pin>, for example MCHP_PORT_PIN('C', 5) */
+ #define MCHP_PORT_PIN(group, pin) (((group) - 'A') * 32 + (pin))
+diff --git a/include/hw/mchp/mchp_device.h b/include/hw/mchp/mchp_device.h
+index 29f46b0..4173391 100644
+--- a/include/hw/mchp/mchp_device.h
++++ b/include/hw/mchp/mchp_device.h
+@@ -69,6 +69,7 @@ typedef struct MchpInstanceInfo {
+     int16_t dmac_tx;                /* DMAC_ID_TX, -1: none */
+     uint32_t flags;                 /* MCHP_INST_* */
+     uint8_t counter_bits;           /* TCC SIZE: width of COUNT/PER/CC; 0 */
++    uint8_t channels;               /* TCC compare channels, 0: n/a */
+     uint32_t regs_size;             /* register file bytes (MCHP_<IP>_SIZE) */
+     const MchpRegInfo *regs;        /* view at reset; NULL: no table */
+     unsigned nregs;
+diff --git a/include/hw/timer/mchp_tcc.h b/include/hw/timer/mchp_tcc.h
+index 06fb9ec..c781e55 100644
+--- a/include/hw/timer/mchp_tcc.h
++++ b/include/hw/timer/mchp_tcc.h
+@@ -10,6 +10,8 @@
+  *                  event with its EVCTRL output enable set
+  *   "ev-event-in"[2]       in: the event inputs TCCx_EV0 and TCCx_EV1
+  *   "ev-event-busy"[2]     out: 1 while the TCC cannot take events
++ *   "pad-wo"[8]            out: waveform output WO[x] (0 or 1)
++ *   "pad-wo-active"[8]     in: 1 while a pad is muxed to WO[x]
+  * sysbus IRQ 0 is the TCC interrupt (INTFLAG & INTENSET).
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+@@ -28,5 +30,7 @@
+ #define MCHP_TCC_MC_EVENT "mc-event"
+ #define MCHP_TCC_EV_EVENT_IN "ev-event-in"
+ #define MCHP_TCC_EV_BUSY "ev-event-busy"
++#define MCHP_TCC_PAD_WO "pad-wo"
++#define MCHP_TCC_PAD_WO_ACTIVE "pad-wo-active"
+ 
+ #endif /* HW_TIMER_MCHP_TCC_H */
+diff --git a/tests/qtest/pic32cm-tcc-test.c b/tests/qtest/pic32cm-tcc-test.c
+index 420279c..ec0e210 100644
+--- a/tests/qtest/pic32cm-tcc-test.c
++++ b/tests/qtest/pic32cm-tcc-test.c
+@@ -15,12 +15,15 @@
+ #include "qemu/osdep.h"
+ #include "libqtest.h"
+ #include "qemu/bitops.h"
++#include "qobject/qdict.h"
+ 
+ #define MACHINE         "-M pic32cm-mc00-cpro "
+ 
+ #define GCLK_PCHCTRL    0x40001C80
+ #define TCC0            0x42002400
++#define TCC1            0x42002800
+ #define TCC2            0x42002C00
++#define PORT            0x41000000
+ #define NVIC_ISPR       0xE000E200
+ 
+ #define R_CTRLA         0x00
+@@ -275,6 +278,50 @@ static void test_counter_width(void)
+     qtest_quit(qts);
+ }
+ 
++/* "pa-stats" of PA24: driven-high and driven-low ns (pins 24 at 2n + 1) */
++static void pa24_stats(QTestState *qts, uint64_t *high, uint64_t *low)
++{
++    QDict *rsp = qtest_qmp(qts, "{ 'execute': 'qom-get', 'arguments':"
++                           " { 'path': '/machine/soc/port',"
++                           " 'property': 'pa-stats' } }");
++    g_auto(GStrv) f = g_strsplit(qdict_get_str(rsp, "return"), " ", -1);
++
++    *high = g_ascii_strtoull(f[1 + 2 * 24], NULL, 10);
++    *low = g_ascii_strtoull(f[2 + 2 * 24], NULL, 10);
++    qobject_unref(rsp);
++}
++
++/*
++ * TCC1 WO[2] on PA24 (function F): an NPWM waveform at 25 % duty drives
++ * the pad high a quarter of the time; with the pin back on GPIO it does
++ * not drive it at all
++ */
++static void test_pwm_pad(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++    uint64_t h0, l0, h1, l1;
++
++    qtest_writel(qts, GCLK_PCHCTRL + 4 * TCC0_GCLK_ID, 0x40);
++    qtest_writel(qts, TCC1 + R_WAVE, NPWM);
++    qtest_writel(qts, TCC1 + R_PER, 99);
++    qtest_writel(qts, TCC1 + R_CC(0), 25);
++    qtest_writeb(qts, PORT + 0x40 + 24, 0x01);        /* PINCFG24.PMUXEN */
++    qtest_writeb(qts, PORT + 0x30 + 12, 0x05);        /* PMUXE: F */
++    qtest_writel(qts, TCC1 + R_CTRLA, ENABLE);        /* /1: 25 us period */
++    qtest_clock_step(qts, 1000000);
++    pa24_stats(qts, &h0, &l0);
++    qtest_clock_step(qts, 10000000);
++    pa24_stats(qts, &h1, &l1);
++    g_assert_cmpuint((h1 - h0) * 100 / (h1 - h0 + l1 - l0), ==, 25);
++
++    qtest_writeb(qts, PORT + 0x40 + 24, 0x00);        /* back to GPIO */
++    pa24_stats(qts, &h0, &l0);
++    qtest_clock_step(qts, 1000000);
++    pa24_stats(qts, &h1, &l1);
++    g_assert_cmpuint(h1 - h0 + l1 - l0, ==, 0);       /* undriven */
++    qtest_quit(qts);
++}
++
+ static void test_irq(void)
+ {
+     QTestState *qts = tcc_init(NPWM, 0);
+@@ -301,6 +348,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-tcc/stop", test_stop);
+     qtest_add_func("pic32cm-tcc/counter-width", test_counter_width);
+     qtest_add_func("pic32cm-tcc/irq", test_irq);
++    qtest_add_func("pic32cm-tcc/pwm-pad", test_pwm_pad);
+ 
+     return g_test_run();
+ }
+-- 
+2.53.0.windows.2
+

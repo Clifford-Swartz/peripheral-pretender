@@ -35,8 +35,12 @@ Decisions so far:
 1. ~~First slice~~ (`tools/pp_web`, 2026-10-14). The EV15N46A rendered from its Gerbers.
    LED0 follows PA24 in real time; SW0 and RESET are clickable; the VCOM console works; ELF
    upload switches firmware.
-2. **PWM brightness.** The engine reports per-pin high time between polls, so LED0 dims
-   under a TCC waveform. TCC outputs route to the pads.
+2. ~~PWM brightness~~ (2026-10-14). Peripheral outputs reach the pads through the pin mux
+   (PORT `pmux-in`, wired from the signal table), starting with the TCC waveform outputs.
+   PORT accounts each pad's driven-high and driven-low time, and the page shows duty cycle as
+   brightness (`breathe` demo). The TCC1 WO[2] pin on PA24/PA08 was checked on silicon: duty
+   CC/(PER+1); floating with the pull off while the TCC is disabled; the start-of-cycle level
+   after STOP.
 3. **SERCOM SPI and I2C**, then the first Click boards: an LED/button Click, a potentiometer
    on the ADC, and a sensor over I2C.
 4. **3D board.** A glTF slab with top and bottom textures, components from the pick-and-place

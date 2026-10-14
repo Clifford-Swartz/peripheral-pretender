@@ -15,7 +15,7 @@
 #define T               TCC0_REGS
 #define TICK_MS         6U
 #ifndef PROBE_ROUNDS
-#define PROBE_ROUNDS    15U     /* all; -DPROBE_ROUNDS=n for a subset */
+#define PROBE_ROUNDS    31U     /* all; a subset: -DPROBE_ROUNDS=n */
 #endif
 
 static void sync(void)
@@ -273,6 +273,129 @@ int main(void)
     }
 
 round3:
+    if (PROBE_ROUNDS & 16U) {
+        /*
+         * Round 5: the waveform pin. TCC1 WO[2] on PA24 (function F, LED0)
+         * read back through the input buffer, next to COUNT and STATUS.CMP0
+         */
+        tcc_registers_t *t1 = TCC1_REGS;
+        uint32_t last = 0xFFFFFFFFU;
+
+        MCLK_REGS->MCLK_APBCMASK |= MCLK_APBCMASK_TCC1_Msk;
+        t1->TCC_CTRLA = TCC_CTRLA_SWRST_Msk;
+        while (t1->TCC_SYNCBUSY != 0U) {
+        }
+        t1->TCC_CTRLA = TCC_CTRLA_PRESCALER_DIV1024;
+        t1->TCC_WAVE = TCC_WAVE_WAVEGEN_NPWM;
+        t1->TCC_PER = 9;
+        t1->TCC_CC[0] = 3;
+        while (t1->TCC_SYNCBUSY != 0U) {
+        }
+        PORT_REGS->GROUP[0].PORT_PINCFG[24] = PORT_PINCFG_PMUXEN_Msk |
+                                              PORT_PINCFG_INEN_Msk;
+        PORT_REGS->GROUP[0].PORT_PMUX[12] =
+            (PORT_REGS->GROUP[0].PORT_PMUX[12] & 0xF0U) | 0x5U;
+        delay_ms(1);
+        console_puts("wo-pin:");
+        put_field("disabled", (PORT_REGS->GROUP[0].PORT_IN >> 24) & 1U, 1);
+        t1->TCC_CTRLA |= TCC_CTRLA_ENABLE_Msk;
+        while (t1->TCC_SYNCBUSY != 0U) {
+        }
+        for (uint32_t ms = 24U * TICK_MS; ms > 0U;) {
+            uint32_t c, st, pin, key;
+
+            t1->TCC_CTRLBSET = TCC_CTRLBSET_CMD_READSYNC;
+            while (t1->TCC_SYNCBUSY != 0U) {
+            }
+            while ((t1->TCC_CTRLBSET & TCC_CTRLBSET_CMD_Msk) != 0U) {
+            }
+            c = t1->TCC_COUNT;
+            st = (t1->TCC_STATUS >> TCC_STATUS_CMP0_Pos) & 1U;
+            pin = (PORT_REGS->GROUP[0].PORT_IN >> 24) & 1U;
+            key = c << 2 | st << 1 | pin;
+            if (key != last) {
+                console_puts(" ");
+                hex(c, 2);
+                console_puts(st ? "s" : "-");
+                console_puts(pin ? "P" : "_");
+                last = key;
+            }
+            if (systick_ms_elapsed()) {
+                ms--;
+            }
+        }
+        t1->TCC_CTRLBSET = TCC_CTRLBSET_CMD_STOP;
+        delay_ms(1);
+        put_field("stopped", (PORT_REGS->GROUP[0].PORT_IN >> 24) & 1U, 1);
+        t1->TCC_CTRLA = 0;
+        while (t1->TCC_SYNCBUSY != 0U) {
+        }
+        delay_ms(1);
+        put_field("disabled-after", (PORT_REGS->GROUP[0].PORT_IN >> 24) & 1U,
+                  1);
+        PORT_REGS->GROUP[0].PORT_PINCFG[24] = 0;
+        console_puts("\r\n");
+
+        /*
+         * PA08 (also TCC1 WO[2], function F, no board load) with the pull
+         * resistor: down then up, to tell a driven pad from an undriven
+         * one; and the duty cycle from 100000 samples of the pin
+         */
+        for (unsigned int up = 0; up < 2U; up++) {
+            static const uint8_t cases[][2] = { { 3, 1 }, { 3, 2 }, { 9, 3 },
+                                                { 3, 0 }, { 3, 4 } };
+
+            PORT_REGS->GROUP[0].PORT_DIRCLR = 1U << 8;
+            if (up) {
+                PORT_REGS->GROUP[0].PORT_OUTSET = 1U << 8;
+            } else {
+                PORT_REGS->GROUP[0].PORT_OUTCLR = 1U << 8;
+            }
+            PORT_REGS->GROUP[0].PORT_PINCFG[8] = PORT_PINCFG_PMUXEN_Msk |
+                                                 PORT_PINCFG_INEN_Msk |
+                                                 PORT_PINCFG_PULLEN_Msk;
+            PORT_REGS->GROUP[0].PORT_PMUX[4] =
+                (PORT_REGS->GROUP[0].PORT_PMUX[4] & 0xF0U) | 0x5U;
+            t1->TCC_CTRLA = TCC_CTRLA_SWRST_Msk;
+            while (t1->TCC_SYNCBUSY != 0U) {
+            }
+            delay_ms(1);
+            console_puts(up ? "pa08-pullup:" : "pa08-pulldown:");
+            put_field("reset", (PORT_REGS->GROUP[0].PORT_IN >> 8) & 1U, 1);
+            for (unsigned int i = 0; i < 5U; i++) {
+                uint32_t high = 0;
+
+                t1->TCC_CTRLA = TCC_CTRLA_SWRST_Msk;
+                while (t1->TCC_SYNCBUSY != 0U) {
+                }
+                t1->TCC_WAVE = TCC_WAVE_WAVEGEN_NPWM;
+                t1->TCC_PER = cases[i][0];
+                t1->TCC_CC[0] = cases[i][1];
+                t1->TCC_CTRLA = TCC_CTRLA_ENABLE_Msk;   /* GCLK1, /1 */
+                while (t1->TCC_SYNCBUSY != 0U) {
+                }
+                delay_ms(1);
+                for (uint32_t n = 0; n < 100000U; n++) {
+                    high += (PORT_REGS->GROUP[0].PORT_IN >> 8) & 1U;
+                }
+                console_puts(" per");
+                hex(cases[i][0], 1);
+                console_puts("cc");
+                hex(cases[i][1], 1);
+                put_field("", high / 1000U, 2);     /* percent */
+            }
+            t1->TCC_CTRLBSET = TCC_CTRLBSET_CMD_STOP;
+            delay_ms(1);
+            put_field("stopped", (PORT_REGS->GROUP[0].PORT_IN >> 8) & 1U, 1);
+            t1->TCC_CTRLA = 0;
+            while (t1->TCC_SYNCBUSY != 0U) {
+            }
+            delay_ms(1);
+            put_field("disabled", (PORT_REGS->GROUP[0].PORT_IN >> 8) & 1U, 1);
+            PORT_REGS->GROUP[0].PORT_PINCFG[8] = 0;
+            console_puts("\r\n");
+        }
+    }
     if (PROBE_ROUNDS & 8U) {
         /* Round 4: does an event action keep ENABLE from starting? */
         static const struct {

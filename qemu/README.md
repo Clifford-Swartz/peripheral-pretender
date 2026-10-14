@@ -22,6 +22,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0013 | EVSYS model (channels, users, software events, CHSTATUS/OVR/EVD as on silicon); generated event table (MchpDeviceInfo.events) wired by the SoC; event outputs of EIC (levels for level senses), TC and RTC; event inputs of TC (COUNT, RETRIGGER, START) and PORT (OUT/SET/CLR/TGL); EVSYS qtest |
 | 0014 | `cortex-m0plus` CPU type (M0+ r0p1 CPUID, 8-region ARMv6-M MPU in the PMSAv7 format, CONTROL.nPRIV); ARMv6-M MPU_RASR/RBAR masks as on silicon; fix for disabled MPU subregions caching a whole TLB page; PIC32CM SoC uses it; board docs brought up to date |
 | 0015 | TCC model (single/dual-slope waveform modes, flags, STATUS.CMPx, one-shot, commands, buffers with silicon SYNCBUSY behaviour, CNTSEL, event inputs/outputs), checked against MC00 silicon; TCC qtest; board docs |
+| 0016 | Peripheral outputs on pads: PORT `pmux-in`/`pmux-active`/`pad` lines and per-pad duty accounting (`pX-stats`); TCC waveform outputs WO[x] (pin level checked on silicon); SoC wiring from the signal table; LED pull-up on the boards; TC/TCC keep scheduling after a catch-up jump |
 
 ## Setting it up
 

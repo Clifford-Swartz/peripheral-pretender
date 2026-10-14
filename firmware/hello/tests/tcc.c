@@ -497,6 +497,87 @@ static void test_events(void)
     eol();
 }
 
+static void hex_digit(uint32_t v)
+{
+    char c[2] = { "0123456789ABCDEF"[v & 0xFU], 0 };
+
+    console_puts(c);
+}
+
+/* Percent of 100000 samples with PA08 high */
+static uint32_t pa08_duty(void)
+{
+    uint32_t high = 0;
+
+    for (uint32_t n = 0; n < 100000U; n++) {
+        high += (PORT_REGS->GROUP[0].PORT_IN >> 8) & 1U;
+    }
+    return high / 1000U;
+}
+
+/*
+ * The waveform on a pad: TCC1 WO[2] on PA08 (function F) and PA24 (LED0).
+ * The duty cycle is CCx / (PER + 1); a disabled TCC leaves the pad
+ * undriven (PA08 reads 0 even with the pull-up, PA24 reads 1 through the
+ * LED); after STOP the pad shows the start of a cycle.
+ */
+static void test_pins(void)
+{
+    static const uint8_t cases[][4] = {     /* PER, CC0, min %, max % */
+        { 3, 1, 22, 27 }, { 3, 2, 47, 52 }, { 9, 3, 27, 32 },
+        { 3, 0, 0, 0 }, { 3, 4, 98, 100 } };
+    tcc_registers_t *t1 = TCC1_REGS;
+    uint32_t d;
+
+    PORT_REGS->GROUP[0].PORT_DIRCLR = 1U << 8;
+    PORT_REGS->GROUP[0].PORT_OUTSET = 1U << 8;              /* pull-up */
+    PORT_REGS->GROUP[0].PORT_PINCFG[8] = PORT_PINCFG_PMUXEN_Msk |
+                                         PORT_PINCFG_INEN_Msk |
+                                         PORT_PINCFG_PULLEN_Msk;
+    PORT_REGS->GROUP[0].PORT_PMUX[4] =
+        (PORT_REGS->GROUP[0].PORT_PMUX[4] & 0xF0U) | 0x5U;
+    PORT_REGS->GROUP[0].PORT_PINCFG[24] = PORT_PINCFG_PMUXEN_Msk |
+                                          PORT_PINCFG_INEN_Msk;
+    PORT_REGS->GROUP[0].PORT_PMUX[12] =
+        (PORT_REGS->GROUP[0].PORT_PMUX[12] & 0xF0U) | 0x5U;
+    t1->TCC_CTRLA = TCC_CTRLA_SWRST_Msk;
+    while (t1->TCC_SYNCBUSY != 0U) {
+    }
+    delay_ms(1);
+    console_puts("pins:");
+    put_checked("off-pa08", (PORT_REGS->GROUP[0].PORT_IN >> 8) & 1U, 0, 1);
+    put_checked("off-pa24", (PORT_REGS->GROUP[0].PORT_IN >> 24) & 1U, 1, 1);
+    for (unsigned int i = 0; i < 5U; i++) {
+        t1->TCC_CTRLA = TCC_CTRLA_SWRST_Msk;
+        while (t1->TCC_SYNCBUSY != 0U) {
+        }
+        t1->TCC_WAVE = TCC_WAVE_WAVEGEN_NPWM;
+        t1->TCC_PER = cases[i][0];
+        t1->TCC_CC[0] = cases[i][1];
+        t1->TCC_CTRLA = TCC_CTRLA_ENABLE_Msk;       /* GCLK1, /1 */
+        while (t1->TCC_SYNCBUSY != 0U) {
+        }
+        delay_ms(1);
+        d = pa08_duty();
+        console_puts(" ");
+        hex_digit(cases[i][1]);
+        console_puts("/");
+        hex_digit(cases[i][0] + 1U);
+        put_checked("-ok", d >= cases[i][2] && d <= cases[i][3], 1, 1);
+    }
+    t1->TCC_CTRLBSET = TCC_CTRLBSET_CMD_STOP;
+    delay_ms(1);
+    put_checked("stopped", (PORT_REGS->GROUP[0].PORT_IN >> 8) & 1U, 1, 1);
+    t1->TCC_CTRLA = 0;
+    while (t1->TCC_SYNCBUSY != 0U) {
+    }
+    delay_ms(1);
+    put_checked("disabled", (PORT_REGS->GROUP[0].PORT_IN >> 8) & 1U, 0, 1);
+    PORT_REGS->GROUP[0].PORT_PINCFG[8] = 0;
+    PORT_REGS->GROUP[0].PORT_PINCFG[24] = 0;
+    eol();
+}
+
 /* TCC2 counts 16 bits: from 0xFFFE it overflows after two ticks */
 static void test_width(void)
 {
@@ -576,6 +657,7 @@ int main(void)
     systick_start();
     console_puts("PP tcc: " BOARD_BANNER "\r\n");
     MCLK_REGS->MCLK_APBCMASK |= MCLK_APBCMASK_TCC0_Msk |
+                                MCLK_APBCMASK_TCC1_Msk |
                                 MCLK_APBCMASK_TCC2_Msk |
                                 MCLK_APBCMASK_TC1_Msk |
                                 MCLK_APBCMASK_EVSYS_Msk;
@@ -601,6 +683,7 @@ int main(void)
     test_buffers();
     test_cntsel();
     test_events();
+    test_pins();
     test_width();
     test_irq();
     test_noclock();

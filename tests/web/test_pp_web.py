@@ -12,7 +12,9 @@ from tools.pp_web.server import BOARDS
 from tools.pp_web.session import Session
 
 ROOT = Path(__file__).resolve().parents[2]
-BLINKY = ROOT / "firmware" / "hello" / "build" / "pic32cm_mc00_cpro" / "blinky.elf"
+BUILD = ROOT / "firmware" / "hello" / "build" / "pic32cm_mc00_cpro"
+BLINKY = BUILD / "blinky.elf"
+BREATHE = BUILD / "breathe.elf"
 
 
 def test_board_description():
@@ -27,16 +29,19 @@ def test_board_description():
     assert (led["id"], led["ref"], led["pin"]) == ("LED0", "D700", "PA24")
 
 
+def _led0(pins: dict) -> float:
+    """LED0 (PA24, active low): the fraction of the frame driven low."""
+    return pins["a"][24][1]
+
+
 def _toggles(updates: list[tuple[float, dict]]) -> list[float]:
-    """Times at which PA24 (LED0) changed level while driven."""
+    """Times at which LED0 went on or off."""
     times, last = [], None
-    for t, pads in updates:
-        out, mask = pads["a"]
-        if mask >> 24 & 1:
-            level = out >> 24 & 1
-            if last is not None and level != last:
-                times.append(t)
-            last = level
+    for t, pins in updates:
+        on = _led0(pins) > 0.5
+        if last is not None and on != last:
+            times.append(t)
+        last = on
     return times
 
 
@@ -52,8 +57,8 @@ def test_session_blinks_and_reads_sw0(qemu_path, qemu_machines):
         updates, uart = [], []
 
         def emit(msg):
-            if msg["type"] == "pads":
-                updates.append((time.monotonic(), msg["pads"]))
+            if msg["type"] == "pins":
+                updates.append((time.monotonic(), msg["pins"]))
             elif msg["type"] == "uart":
                 uart.append(msg["data"])
 
@@ -77,3 +82,32 @@ def test_session_blinks_and_reads_sw0(qemu_path, qemu_machines):
     # 2 Hz: a toggle every 250 ms; 8 Hz while SW0 is held (sampled at 30 Hz)
     assert 5 <= len(slow) <= 10, slow
     assert len(fast) >= 7, fast
+
+
+@pytest.mark.qemu
+def test_session_pwm_brightness(qemu_path, qemu_machines):
+    """breathe.elf: LED0 dims through intermediate brightness (TCC1 PWM)."""
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not BREATHE.is_file():
+        pytest.skip("breathe.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=breathe)")
+
+    async def scenario():
+        levels = []
+
+        def emit(msg):
+            if msg["type"] == "pins":
+                levels.append(_led0(msg["pins"]))
+
+        s = Session("pic32cm-mc00-cpro", BREATHE, emit)
+        await s.start()
+        try:
+            await asyncio.sleep(4.0)    # two breaths
+        finally:
+            await s.stop()
+        return levels
+
+    levels = asyncio.run(scenario())
+    assert any(0.1 < f < 0.9 for f in levels), levels
+    assert max(levels) > 0.8 and min(levels) < 0.1, levels
