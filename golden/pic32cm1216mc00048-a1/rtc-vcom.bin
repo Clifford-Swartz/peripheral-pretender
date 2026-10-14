@@ -1,0 +1,10 @@
+PP rtc: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+after swrst: CTRLA=0x0000 SYNCBUSY=0x00 RTCSEL=0x00
+mode0: rate-100ms-ok=0x1
+periodic: per0-2=0x07 per7=0x0
+matchclr: cmp0=0x1 cmp0+ovf=0x8100 restarted=0x1
+mode1: ovf=0x1 cmp0=0x1 cmp1=0x0
+calendar: leap=0x00BA0000 plain=0x04C20000 alarm=0x1
+irq: three-cmp0=0x1
+no clock: enable-busy=0x1 after-clock=0x00
+PP:EXIT 0

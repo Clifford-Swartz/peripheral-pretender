@@ -1,0 +1,86 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for RTC U2250 (PIC32CM MC00). The mchp-rtc model counts
+# CLK_RTC_OSC (OSC32KCTRL.RTCCTRL) through the prescaler in the three
+# modes, with periodic, compare/alarm and overflow flags.
+ip: RTC
+id: U2250
+versions: ["1.1.1"]
+references:
+  - "DS60001638E 23 (PIC32CM MC00 RTC)"
+modes:
+  MODE0:
+    registers:
+      CTRLA: &ctrla
+        pac_protected: true
+        enable_protected: {all_except: [SWRST, ENABLE, COUNTSYNC]}
+        sync: {SWRST: SWRST, ENABLE: ENABLE, COUNTSYNC: COUNTSYNC}
+        self_clearing: [SWRST]
+        hooks: [post_write]
+      EVCTRL: &evctrl {pac_protected: true, enable_protected: all}
+      INTENCLR: &intenclr {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+      INTENSET: &intenset {pac_protected: true, alias: {storage: INTENSET, op: set}}
+      INTFLAG: &intflag
+        w1c: all
+        irq_source: {enable: INTENSET}
+        hooks: [post_write]           # cleared flags re-arm the timer
+      DBGCTRL: &dbgctrl {pac_protected: true}
+      SYNCBUSY: &syncbusy {dynamic: true}
+      FREQCORR: &freqcorr {pac_protected: true, sync: FREQCORR}
+      COUNT:
+        pac_protected: true
+        sync: COUNT
+        hooks: [pre_read, post_write]   # valid with COUNTSYNC; reload
+      COMP:
+        pac_protected: true
+        sync: COMP0
+        hooks: [post_write]
+  MODE1:
+    registers:
+      CTRLA: *ctrla
+      EVCTRL: *evctrl
+      INTENCLR: *intenclr
+      INTENSET: *intenset
+      INTFLAG: *intflag
+      DBGCTRL: *dbgctrl
+      SYNCBUSY: *syncbusy
+      FREQCORR: *freqcorr
+      COUNT:
+        pac_protected: true
+        sync: COUNT
+        hooks: [pre_read, post_write]
+      PER:
+        pac_protected: true
+        sync: PER
+        hooks: [post_write]
+      COMP:
+        pac_protected: true
+        sync: "COMP{n}"
+        hooks: [post_write]
+  MODE2:
+    registers:
+      CTRLA:
+        pac_protected: true
+        enable_protected: {all_except: [SWRST, ENABLE, CLOCKSYNC]}
+        sync: {SWRST: SWRST, ENABLE: ENABLE, CLOCKSYNC: CLOCKSYNC}
+        self_clearing: [SWRST]
+        hooks: [post_write]
+      EVCTRL: *evctrl
+      INTENCLR: *intenclr
+      INTENSET: *intenset
+      INTFLAG: *intflag
+      DBGCTRL: *dbgctrl
+      SYNCBUSY: *syncbusy
+      FREQCORR: *freqcorr
+      CLOCK:
+        pac_protected: true
+        sync: CLOCK
+        hooks: [pre_read, post_write]   # valid with CLOCKSYNC; reload
+      ALARM:
+        pac_protected: true
+        sync: ALARM0
+        hooks: [post_write]
+      MASK:
+        pac_protected: true
+        sync: MASK0
+        hooks: [post_write]

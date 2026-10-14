@@ -1,0 +1,1335 @@
+From fa5293af7b982e3b739757256637c86b4f6b555a Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Tue, 13 Oct 2026 18:24:43 -0700
+Subject: [PATCH] hw/rtc: RTC model (PIC32CM MC00), power-on-only reset for the
+ 32 kHz domain
+
+mchp-rtc (U2250): the three modes (32-bit counter with COMP0 and
+MATCHCLR, 16-bit counter with PER and COMP0/1, clock/calendar with
+leap years, ALARM0 and MASK0.SEL), the prescaler with PER0-7 from its
+taps, compare/alarm flags on the tick after the match, COUNT/CLOCK
+reads valid with COUNTSYNC/CLOCKSYNC, synchronization stalling without
+CLK_RTC_OSC. Event driven on the virtual clock. The SoC picks dedicated
+models by module and IP id (the JH01 RTC 03608 stays generic) and wires
+the new OSC32KCTRL "rtc" output (CLK_RTC_OSC per RTCCTRL.RTCSEL) to it.
+
+PIC32CM MC00 silicon keeps the RTC running across system resets, and
+OSC32KCTRL settings too: mchp-regblock gains a por_only class flag (reset
+at power-on and by SWRST only), set for the RTC and OSC32KCTRL. The rtc
+test image's transcript is byte-identical between silicon and twin.
+
+New qtest pic32cm-rtc-test.
+
+Peripheral Pretender downstream patch; not for upstream submission.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/arm/pic32cm_soc.c                          |  17 +-
+ hw/misc/mchp_clock.c                          |  50 ++
+ hw/misc/mchp_regblock.c                       |  10 +-
+ hw/rtc/mchp_rtc.c                             | 566 ++++++++++++++++++
+ hw/rtc/meson.build                            |   1 +
+ hw/rtc/trace-events                           |   3 +
+ .../mchp/gen/pic32cm1216mc00048/rtc_u2250.h   |  75 ++-
+ include/hw/mchp/gen/rtc_u2250.h               |   2 +-
+ include/hw/misc/mchp_regblock.h               |   6 +
+ include/hw/rtc/mchp_rtc.h                     |  21 +
+ tests/qtest/meson.build                       |   2 +-
+ tests/qtest/pic32cm-rtc-test.c                | 207 +++++++
+ 12 files changed, 923 insertions(+), 37 deletions(-)
+ create mode 100644 hw/rtc/mchp_rtc.c
+ create mode 100644 include/hw/rtc/mchp_rtc.h
+ create mode 100644 tests/qtest/pic32cm-rtc-test.c
+
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index d7edd41..adc0272 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -24,6 +24,7 @@
+ #include "hw/core/qdev-properties-system.h"
+ #include "hw/gpio/mchp_port.h"
+ #include "hw/misc/mchp_eic.h"
++#include "hw/rtc/mchp_rtc.h"
+ #include "hw/timer/mchp_tc.h"
+ #include "hw/mchp/gen/rstc_u2239.h"
+ #include "hw/misc/mchp_sysctrl.h"
+@@ -32,12 +33,14 @@
+ #include "target/arm/cpu-qom.h"
+ 
+ /*
+- * The QOM type modelling each ATDF module. Every other instance is a
+- * generic mchp-regblock; a dedicated model only needs a line here.
++ * The QOM type modelling each ATDF module (and IP id, where devices carry
++ * different IPs under one module name). Every other instance is a generic
++ * mchp-regblock; a dedicated model only needs a line here.
+  */
+ static const struct {
+     const char *module;
+     const char *type;
++    const char *ip_id;          /* NULL: any */
+ } pic32cm_models[] = {
+     { "DIVAS", TYPE_MCHP_DIVAS },
+     { "DSU", TYPE_MCHP_DSU },
+@@ -51,6 +54,7 @@ static const struct {
+     { "PM", TYPE_MCHP_PM },
+     { "PORT", TYPE_MCHP_PORT },
+     { "RSTC", TYPE_MCHP_RSTC },
++    { "RTC", TYPE_MCHP_RTC, "U2250" },
+     { "SERCOM", TYPE_MCHP_SERCOM },
+     { "SUPC", TYPE_MCHP_SUPC },
+     { "TC", TYPE_MCHP_TC },
+@@ -73,7 +77,9 @@ static const struct {
+ static const char *pic32cm_model_type(const MchpInstanceInfo *info)
+ {
+     for (unsigned i = 0; i < ARRAY_SIZE(pic32cm_models); i++) {
+-        if (!strcmp(pic32cm_models[i].module, info->module)) {
++        if (!strcmp(pic32cm_models[i].module, info->module) &&
++            (!pic32cm_models[i].ip_id ||
++             !strcmp(pic32cm_models[i].ip_id, info->ip_id))) {
+             return pic32cm_models[i].type;
+         }
+     }
+@@ -311,6 +317,11 @@ static void pic32cm_connect_clocks(Pic32cmSocState *s)
+                           pic32cm_gclk_channel(s, "OSCCTRL", "GCLK_ID_FDPLL"));
+     qdev_connect_clock_in(mclk, "gclk-main",
+                           qdev_get_clock_out(gclk, "gen[0]"));
++    /* The RTC counts CLK_RTC_OSC (OSC32KCTRL.RTCCTRL), not a GCLK channel */
++    if (pic32cm_soc_periph(s, "RTC")) {
++        qdev_connect_clock_in(pic32cm_soc_periph(s, "RTC"), "gclk",
++                              qdev_get_clock_out(osc32k, "rtc"));
++    }
+ 
+     for (unsigned i = 0; i < s->dev->ninstances; i++) {
+         const MchpInstanceInfo *info = &s->dev->instances[i];
+diff --git a/hw/misc/mchp_clock.c b/hw/misc/mchp_clock.c
+index 5d4ae7c..1444317 100644
+--- a/hw/misc/mchp_clock.c
++++ b/hw/misc/mchp_clock.c
+@@ -325,6 +325,7 @@ struct MchpOsc32kctrlState {
+     Clock *xosc32k;
+     Clock *osc32k;
+     Clock *osculp32k;
++    Clock *rtc;                 /* CLK_RTC_OSC, selected by RTCCTRL.RTCSEL */
+ 
+     uint32_t status;            /* STATUS when last updated, for flag edges */
+ };
+@@ -350,6 +351,51 @@ static uint32_t mchp_osc32kctrl_status(MchpOsc32kctrlState *s)
+     return status;
+ }
+ 
++/*
++ * CLK_RTC_OSC (DS 16.6.6): the 1.024 kHz or 32.768 kHz output RTCCTRL
++ * selects, each needing its oscillator ready and its EN1K/EN32K bit
++ * (the JH01 OSCULP32K has no enable bits: its outputs always run).
++ */
++static uint64_t mchp_osc32kctrl_rtc_hz(MchpOsc32kctrlState *s,
++                                       uint32_t status)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint32_t ulp = mchp_clk_reg(rb, A_MCHP_OSC32KCTRL_OSCULP32K, 4);
++    uint32_t osc = mchp_clk_reg(rb, A_MCHP_OSC32KCTRL_OSC32K, 4);
++    uint32_t xosc = mchp_clk_reg(rb, A_MCHP_OSC32KCTRL_XOSC32K, 2);
++    bool ulp_gated = (ulp & (R_MCHP_OSC32KCTRL_OSCULP32K_EN1K_MASK |
++                             R_MCHP_OSC32KCTRL_OSCULP32K_EN32K_MASK)) != 0;
++    bool osc_on = status & R_MCHP_OSC32KCTRL_STATUS_OSC32KRDY_MASK;
++    bool xosc_on = status & R_MCHP_OSC32KCTRL_STATUS_XOSC32KRDY_MASK;
++    uint64_t xhz = clock_get_hz(s->xtal32k);
++
++    switch (FIELD_EX32(mchp_clk_reg(rb, A_MCHP_OSC32KCTRL_RTCCTRL, 4),
++                       MCHP_OSC32KCTRL_RTCCTRL, RTCSEL)) {
++    case MCHP_OSC32KCTRL_RTCCTRL_RTCSEL_ULP1K:
++        return !ulp_gated ||
++               FIELD_EX32(ulp, MCHP_OSC32KCTRL_OSCULP32K, EN1K) ?
++               MCHP_OSC32K_HZ / 32 : 0;
++    case MCHP_OSC32KCTRL_RTCCTRL_RTCSEL_ULP32K:
++        return !ulp_gated ||
++               FIELD_EX32(ulp, MCHP_OSC32KCTRL_OSCULP32K, EN32K) ?
++               MCHP_OSC32K_HZ : 0;
++    case MCHP_OSC32KCTRL_RTCCTRL_RTCSEL_OSC1K:
++        return osc_on && FIELD_EX32(osc, MCHP_OSC32KCTRL_OSC32K, EN1K) ?
++               MCHP_OSC32K_HZ / 32 : 0;
++    case MCHP_OSC32KCTRL_RTCCTRL_RTCSEL_OSC32K:
++        return osc_on && FIELD_EX32(osc, MCHP_OSC32KCTRL_OSC32K, EN32K) ?
++               MCHP_OSC32K_HZ : 0;
++    case MCHP_OSC32KCTRL_RTCCTRL_RTCSEL_XOSC1K:
++        return xosc_on && FIELD_EX32(xosc, MCHP_OSC32KCTRL_XOSC32K, EN1K) ?
++               xhz / 32 : 0;
++    case MCHP_OSC32KCTRL_RTCCTRL_RTCSEL_XOSC32K:
++        return xosc_on && FIELD_EX32(xosc, MCHP_OSC32KCTRL_XOSC32K, EN32K) ?
++               xhz : 0;
++    default:
++        return 0;               /* reserved */
++    }
++}
++
+ /* The 32.768 kHz outputs also need EN32K (DS 16.6.2, 16.6.4). */
+ static void mchp_osc32kctrl_update(MchpOsc32kctrlState *s)
+ {
+@@ -370,6 +416,7 @@ static void mchp_osc32kctrl_update(MchpOsc32kctrlState *s)
+         FIELD_EX32(osc32k, MCHP_OSC32KCTRL_OSC32K, EN32K) ?
+         MCHP_OSC32K_HZ : 0);
+     mchp_regblock_set_clock(rb, s->osculp32k, MCHP_OSC32K_HZ);
++    mchp_regblock_set_clock(rb, s->rtc, mchp_osc32kctrl_rtc_hz(s, status));
+     mchp_regblock_update_irq(rb);
+ }
+ 
+@@ -429,6 +476,7 @@ static void mchp_osc32kctrl_init(Object *obj)
+     s->xosc32k = qdev_init_clock_out(dev, "xosc32k");
+     s->osc32k = qdev_init_clock_out(dev, "osc32k");
+     s->osculp32k = qdev_init_clock_out(dev, "osculp32k");
++    s->rtc = qdev_init_clock_out(dev, "rtc");
+ }
+ 
+ static const VMStateDescription vmstate_mchp_osc32kctrl = {
+@@ -442,6 +490,7 @@ static const VMStateDescription vmstate_mchp_osc32kctrl = {
+         VMSTATE_CLOCK(xosc32k, MchpOsc32kctrlState),
+         VMSTATE_CLOCK(osc32k, MchpOsc32kctrlState),
+         VMSTATE_CLOCK(osculp32k, MchpOsc32kctrlState),
++        VMSTATE_CLOCK(rtc, MchpOsc32kctrlState),
+         VMSTATE_UINT32(status, MchpOsc32kctrlState),
+         VMSTATE_END_OF_LIST()
+     },
+@@ -456,6 +505,7 @@ static void mchp_osc32kctrl_class_init(ObjectClass *klass, const void *data)
+     c->post_write = mchp_osc32kctrl_post_write;
+     c->reset_hold = mchp_osc32kctrl_reset_hold;
+     c->reset_exit = mchp_osc32kctrl_reset_exit;
++    c->por_only = true;         /* the 32 kHz domain survives system resets */
+     c->log_writes = false;
+ }
+ 
+diff --git a/hw/misc/mchp_regblock.c b/hw/misc/mchp_regblock.c
+index 9bc367a..ddff619 100644
+--- a/hw/misc/mchp_regblock.c
++++ b/hw/misc/mchp_regblock.c
+@@ -320,6 +320,11 @@ static void mchp_regblock_reset_hold(Object *obj, ResetType type)
+     MchpRegBlock *s = MCHP_REGBLOCK(obj);
+     MchpRegBlockClass *c = MCHP_REGBLOCK_GET_CLASS(s);
+ 
++    /* Blocks reset only by power-on keep their state on later resets */
++    if (c->por_only && s->powered) {
++        return;
++    }
++    s->powered = true;
+     mchp_regblock_reset_registers(s);
+     if (c->reset_hold) {
+         c->reset_hold(s);
+@@ -422,12 +427,13 @@ static int mchp_regblock_post_load(void *opaque, int version_id)
+ 
+ const VMStateDescription vmstate_mchp_regblock = {
+     .name = TYPE_MCHP_REGBLOCK,
+-    .version_id = 1,
+-    .minimum_version_id = 1,
++    .version_id = 2,
++    .minimum_version_id = 2,
+     .post_load = mchp_regblock_post_load,
+     .fields = (const VMStateField[]) {
+         VMSTATE_MCHP_REGFILE(rf, MchpRegBlock),
+         VMSTATE_CLOCK(gclk, MchpRegBlock),
++        VMSTATE_BOOL(powered, MchpRegBlock),
+         VMSTATE_END_OF_LIST()
+     },
+ };
+diff --git a/hw/rtc/mchp_rtc.c b/hw/rtc/mchp_rtc.c
+new file mode 100644
+index 0000000..f08bede
+--- /dev/null
++++ b/hw/rtc/mchp_rtc.c
+@@ -0,0 +1,566 @@
++/*
++ * Microchip SAM/PIC32CM Real-Time Counter (RTC U2250, PIC32CM MC00)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Follows DS60001638E chapter 23. The "gclk" input carries CLK_RTC_OSC
++ * (OSC32KCTRL.RTCCTRL). A 10-bit prescaler divides it by 2^(PRESCALER-1)
++ * into the counter (PRESCALER 0: off); its bits 2-9 rising set PER0-7.
++ *   MODE0  32-bit COUNT, COMP0, MATCHCLR
++ *   MODE1  16-bit COUNT wrapping at PER, COMP0/1
++ *   MODE2  CLOCK (seconds .. year 0-63, leap years every 4) with ALARM0,
++ *          MASK0.SEL and MATCHCLR; 24-hour format only
++ * Compare and alarm flags are set on the counter tick after the match, as
++ * is the clearing by MATCHCLR (which also sets OVF). COUNT/CLOCK reads are
++ * current only with CTRLA.COUNTSYNC/CLOCKSYNC; otherwise they show the
++ * last synchronized value. Only power-on resets the RTC: it keeps counting
++ * across system resets (silicon). Synchronized writes without CLK_RTC_OSC keep
++ * their SYNCBUSY bits until it runs. Not modelled: FREQCORR, CLKREP (12-hour
++ * format), event outputs to the event system, tamper.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/core/clock.h"
++#include "hw/core/irq.h"
++#include "hw/rtc/mchp_rtc.h"
++#include "hw/mchp/gen/rtc_u2250.h"
++#include "migration/vmstate.h"
++#include "trace.h"
++
++/* Offsets and the shared fields are the same in the three modes */
++#define A_CTRLA         A_MCHP_RTC_MODE0_CTRLA
++#define A_EVCTRL        A_MCHP_RTC_MODE0_EVCTRL
++#define A_INTFLAG       A_MCHP_RTC_MODE0_INTFLAG
++#define A_SYNCBUSY      A_MCHP_RTC_MODE0_SYNCBUSY
++#define A_COUNT         A_MCHP_RTC_MODE0_COUNT      /* CLOCK in MODE2 */
++#define A_PER           A_MCHP_RTC_MODE1_PER
++#define A_COMP          A_MCHP_RTC_MODE0_COMP       /* ALARM in MODE2 */
++#define A_MASK          A_MCHP_RTC_MODE2_MASK
++#define A_FREQCORR      A_MCHP_RTC_MODE0_FREQCORR
++
++#define MODE0           0
++#define MODE1           1
++#define MODE2           2
++
++#define FLAG_CMP0       R_MCHP_RTC_MODE1_INTFLAG_CMP0_MASK  /* ALARM0 */
++#define FLAG_OVF        R_MCHP_RTC_MODE0_INTFLAG_OVF_MASK
++#define CTRLA_ENABLE    R_MCHP_RTC_MODE0_CTRLA_ENABLE_MASK
++#define CTRLA_SWRST     R_MCHP_RTC_MODE0_CTRLA_SWRST_MASK
++#define CTRLA_MATCHCLR  R_MCHP_RTC_MODE0_CTRLA_MATCHCLR_MASK
++#define CTRLA_COUNTSYNC R_MCHP_RTC_MODE0_CTRLA_COUNTSYNC_MASK
++
++/* MODE2: year values 0-63 of a leap-year reference */
++#define RTC_YEARS       64
++#define SECS_PER_DAY    86400ULL
++
++#define MCHP_RTC_MAX_STEPS 64
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpRtcState, MCHP_RTC)
++
++struct MchpRtcState {
++    MchpRegBlock parent_obj;
++
++    QEMUTimer *timer;
++    bool running;
++    uint64_t value;             /* counter (MODE0/1) or seconds (MODE2) */
++    uint64_t osc;               /* CLK_RTC_OSC ticks since enable at t_base */
++    int64_t t_base;
++    uint32_t sync_pending;
++};
++
++static uint32_t rtc_reg(MchpRtcState *s, hwaddr offset, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, offset, size);
++}
++
++static void rtc_set_reg(MchpRtcState *s, hwaddr offset, unsigned size,
++                        uint32_t val)
++{
++    mchp_regfile_poke(&MCHP_REGBLOCK(s)->rf, offset, size, val);
++}
++
++static unsigned rtc_mode(MchpRtcState *s)
++{
++    return FIELD_EX32(rtc_reg(s, A_CTRLA, 2), MCHP_RTC_MODE0_CTRLA, MODE);
++}
++
++static unsigned rtc_prescaler(MchpRtcState *s)
++{
++    return FIELD_EX32(rtc_reg(s, A_CTRLA, 2), MCHP_RTC_MODE0_CTRLA, PRESCALER);
++}
++
++static Clock *rtc_clk(MchpRtcState *s)
++{
++    return MCHP_REGBLOCK(s)->gclk;
++}
++
++/* -- MODE2 calendar ------------------------------------------------------ */
++
++static unsigned rtc_days_in_month(unsigned year, unsigned month)
++{
++    static const uint8_t days[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31,
++                                    30, 31 };
++
++    return month == 2 && year % 4 == 0 ? 29 : days[month - 1];
++}
++
++/* CLOCK -> seconds since year 0, January 1st, 00:00:00 */
++static uint64_t rtc_clock_to_secs(uint32_t clock)
++{
++    unsigned year = FIELD_EX32(clock, MCHP_RTC_MODE2_CLOCK, YEAR);
++    unsigned month = MAX(1, MIN(12, FIELD_EX32(clock, MCHP_RTC_MODE2_CLOCK,
++                                               MONTH)));
++    unsigned day = MAX(1, FIELD_EX32(clock, MCHP_RTC_MODE2_CLOCK, DAY));
++    uint64_t days = 0;
++
++    for (unsigned y = 0; y < year; y++) {
++        days += y % 4 == 0 ? 366 : 365;
++    }
++    for (unsigned m = 1; m < month; m++) {
++        days += rtc_days_in_month(year, m);
++    }
++    days += day - 1;
++    return days * SECS_PER_DAY +
++           FIELD_EX32(clock, MCHP_RTC_MODE2_CLOCK, HOUR) * 3600 +
++           FIELD_EX32(clock, MCHP_RTC_MODE2_CLOCK, MINUTE) * 60 +
++           FIELD_EX32(clock, MCHP_RTC_MODE2_CLOCK, SECOND);
++}
++
++static uint32_t rtc_secs_to_clock(uint64_t secs)
++{
++    uint64_t days = secs / SECS_PER_DAY, sod = secs % SECS_PER_DAY;
++    unsigned year = 0, month = 1;
++    uint32_t clock = 0;
++
++    while (days >= (year % 4 == 0 ? 366U : 365U)) {
++        days -= year % 4 == 0 ? 366 : 365;
++        year++;
++    }
++    while (days >= rtc_days_in_month(year, month)) {
++        days -= rtc_days_in_month(year, month);
++        month++;
++    }
++    clock = FIELD_DP32(clock, MCHP_RTC_MODE2_CLOCK, YEAR, year);
++    clock = FIELD_DP32(clock, MCHP_RTC_MODE2_CLOCK, MONTH, month);
++    clock = FIELD_DP32(clock, MCHP_RTC_MODE2_CLOCK, DAY, days + 1);
++    clock = FIELD_DP32(clock, MCHP_RTC_MODE2_CLOCK, HOUR, sod / 3600);
++    clock = FIELD_DP32(clock, MCHP_RTC_MODE2_CLOCK, MINUTE, sod / 60 % 60);
++    return FIELD_DP32(clock, MCHP_RTC_MODE2_CLOCK, SECOND, sod % 60);
++}
++
++/* Seconds from year 0 up to and including 23:59:59 December 31st, 63 */
++static uint64_t rtc_secs_span(void)
++{
++    uint32_t last = 0;
++
++    last = FIELD_DP32(last, MCHP_RTC_MODE2_CLOCK, YEAR, RTC_YEARS - 1);
++    last = FIELD_DP32(last, MCHP_RTC_MODE2_CLOCK, MONTH, 12);
++    last = FIELD_DP32(last, MCHP_RTC_MODE2_CLOCK, DAY, 31);
++    return rtc_clock_to_secs(last) + SECS_PER_DAY;
++}
++
++static bool rtc_alarm_match(MchpRtcState *s, uint64_t secs);
++
++/* Seconds from @v to the next second (>= v) matching the alarm, or -1 */
++static int64_t rtc_alarm_distance(MchpRtcState *s, uint64_t v)
++{
++    static const uint64_t period[] = { 0, 60, 3600, SECS_PER_DAY };
++    unsigned sel = FIELD_EX32(rtc_reg(s, A_MASK, 1), MCHP_RTC_MODE2_MASK, SEL);
++    uint32_t alarm = rtc_reg(s, A_COMP, 4);
++    uint64_t tod = FIELD_EX32(alarm, MCHP_RTC_MODE2_CLOCK, HOUR) * 3600 +
++                   FIELD_EX32(alarm, MCHP_RTC_MODE2_CLOCK, MINUTE) * 60 +
++                   FIELD_EX32(alarm, MCHP_RTC_MODE2_CLOCK, SECOND);
++
++    if (sel == 0 || sel > 6) {
++        return -1;
++    }
++    if (sel <= 3) {
++        /* Seconds, minutes:seconds or the time of day: periodic */
++        uint64_t p = period[sel], want = tod % p;
++
++        return (want + p - v % p) % p;
++    }
++    /* A date part too: the alarm's time of day on a matching day */
++    for (uint64_t day = v / SECS_PER_DAY, k = 0; k <= 4 * 366; k++) {
++        uint64_t t = (day + k) * SECS_PER_DAY + tod;
++
++        if (t >= v && rtc_alarm_match(s, t)) {
++            return t - v;
++        }
++    }
++    return -1;
++}
++
++/* Does second @secs match ALARM0 under MASK0.SEL? */
++static bool rtc_alarm_match(MchpRtcState *s, uint64_t secs)
++{
++    static const uint32_t sel_mask[] = {
++        0, 0x0000003F, 0x00000FFF, 0x0001FFFF, 0x003FFFFF, 0x03FFFFFF,
++        0xFFFFFFFF,
++    };
++    unsigned sel = FIELD_EX32(rtc_reg(s, A_MASK, 1), MCHP_RTC_MODE2_MASK, SEL);
++    uint32_t m = sel < ARRAY_SIZE(sel_mask) ? sel_mask[sel] : 0;
++
++    return m && ((rtc_secs_to_clock(secs) ^ rtc_reg(s, A_COMP, 4)) & m) == 0;
++}
++
++/* -- counting ------------------------------------------------------------- */
++
++static uint64_t rtc_top(MchpRtcState *s)
++{
++    switch (rtc_mode(s)) {
++    case MODE1:
++        return s->value > rtc_reg(s, A_PER, 2) ? 0xFFFF : rtc_reg(s, A_PER, 2);
++    case MODE2:
++        return rtc_secs_span() - 1;
++    default:
++        return 0xFFFFFFFFULL;
++    }
++}
++
++/*
++ * Counter ticks until the next flagging tick (the tick after a match, or
++ * a wrap), and which flags it sets; 0 when no tick flags anything soon.
++ */
++static uint64_t rtc_next_count_event(MchpRtcState *s, uint32_t *flags)
++{
++    uint64_t top = rtc_top(s), v = s->value, best = top - v + 1;
++    unsigned mode = rtc_mode(s);
++
++    *flags = FLAG_OVF;
++    if (mode == MODE2) {
++        int64_t d = rtc_alarm_distance(s, v);
++
++        if (d >= 0 && (uint64_t)d + 1 <= best) {
++            *flags = (uint64_t)d + 1 == best ? FLAG_CMP0 | FLAG_OVF : FLAG_CMP0;
++            best = d + 1;
++        }
++        return best;
++    }
++    for (unsigned ch = 0; ch < (mode == MODE1 ? 2U : 1U); ch++) {
++        unsigned size = mode == MODE1 ? 2 : 4;
++        uint64_t cmp = rtc_reg(s, A_COMP + ch * size, size), n;
++
++        if (cmp < v || cmp > top) {
++            continue;           /* reached only after a wrap: skip */
++        }
++        n = cmp - v + 1;
++        if (n < best) {
++            best = n;
++            *flags = FLAG_CMP0 << ch;
++        } else if (n == best) {
++            *flags |= FLAG_CMP0 << ch;
++        }
++    }
++    return best;
++}
++
++/* The flagging counter tick: apply @flags and move the counter */
++static void rtc_count_event(MchpRtcState *s, uint32_t flags)
++{
++    bool matchclr = rtc_mode(s) != MODE1 &&
++                    (rtc_reg(s, A_CTRLA, 2) & CTRLA_MATCHCLR);
++
++    if ((flags & FLAG_CMP0) && matchclr) {
++        flags |= FLAG_OVF;
++        s->value = 0;
++    } else if (flags & FLAG_OVF) {
++        s->value = 0;
++    } else {
++        s->value++;
++    }
++    trace_mchp_rtc_event(s->value, flags);
++    rtc_set_reg(s, A_INTFLAG, 2, rtc_reg(s, A_INTFLAG, 2) | flags);
++}
++
++/* The counter after @n plain ticks (no flagging tick among them) */
++static uint64_t rtc_plain(MchpRtcState *s, uint64_t n)
++{
++    uint64_t top = rtc_top(s);
++
++    /* Quiet jumps may wrap: the counter is periodic over 0..TOP, or over
++     * 0..COMP0 when MODE0 clears on match */
++    if (rtc_mode(s) == MODE0 && (rtc_reg(s, A_CTRLA, 2) & CTRLA_MATCHCLR) &&
++        s->value <= rtc_reg(s, A_COMP, 4)) {
++        top = rtc_reg(s, A_COMP, 4);
++    }
++    if (s->value + n <= top) {
++        return s->value + n;
++    }
++    return (s->value + n - top - 1) % (top + 1);
++}
++
++/* OSC tick of the next rising edge of prescaler bit @bit after @osc */
++static uint64_t rtc_next_edge(uint64_t osc, unsigned bit)
++{
++    uint64_t period = 2ULL << bit, phase = 1ULL << bit;
++    uint64_t base = osc - osc % period + phase;
++
++    return base > osc ? base : base + period;
++}
++
++/*
++ * Earliest OSC tick of a PER edge whose flag is clear or whose event is
++ * enabled (*per: the flags it sets), or UINT64_MAX.
++ */
++static uint64_t rtc_next_per(MchpRtcState *s, uint64_t osc, uint32_t *per)
++{
++    uint32_t flags = rtc_reg(s, A_INTFLAG, 2), ev = rtc_reg(s, A_EVCTRL, 4);
++    uint64_t best = UINT64_MAX;
++
++    *per = 0;
++    if (!rtc_prescaler(s)) {
++        return best;            /* no periodic events (DS 23.5.8.1) */
++    }
++    for (unsigned n = 0; n < 8; n++) {
++        uint64_t e;
++
++        if ((flags & BIT(n)) && !(ev & BIT(n))) {
++            continue;
++        }
++        e = rtc_next_edge(osc, n + 2);
++        if (e < best) {
++            best = e;
++        }
++    }
++    for (unsigned n = 0; n < 8 && best != UINT64_MAX; n++) {
++        if (best % (2ULL << (n + 2)) == (1ULL << (n + 2))) {
++            *per |= BIT(n);
++        }
++    }
++    return best;
++}
++
++static uint64_t rtc_osc_at(MchpRtcState *s, int64_t now)
++{
++    return s->osc + clock_ns_to_ticks(rtc_clk(s), MAX(0, now - s->t_base));
++}
++
++static int64_t rtc_time_of(MchpRtcState *s, uint64_t osc)
++{
++    return s->t_base + clock_ticks_to_ns(rtc_clk(s), osc - s->osc) + 1;
++}
++
++/* Bring the RTC up to @now and schedule the next event that matters */
++static void rtc_advance(MchpRtcState *s, int64_t now)
++{
++    unsigned presc = rtc_prescaler(s);
++
++    for (unsigned steps = 0;; steps++) {
++        uint64_t osc, div, cnt_e = UINT64_MAX, per_e, e, ticks;
++        uint32_t cflags = 0, pflags;
++        bool flagging;
++
++        if (!s->running || !clock_get_hz(rtc_clk(s))) {
++            s->t_base = now;
++            break;
++        }
++        osc = rtc_osc_at(s, now);
++        div = presc ? 1ULL << (presc - 1) : 0;
++        if (div) {
++            uint64_t n = rtc_next_count_event(s, &cflags);
++
++            cnt_e = (s->osc / div + n) * div;
++        }
++        per_e = rtc_next_per(s, s->osc, &pflags);
++        /* A counter event changes something unless its flags are set */
++        flagging = (cflags & ~rtc_reg(s, A_INTFLAG, 2)) ||
++                   (rtc_reg(s, A_EVCTRL, 4) & 0x8300) ||
++                   ((cflags & FLAG_CMP0) &&
++                    (rtc_reg(s, A_CTRLA, 2) & CTRLA_MATCHCLR) &&
++                    rtc_mode(s) == MODE2);
++        e = MIN(flagging ? cnt_e : UINT64_MAX, per_e);
++        if (e == UINT64_MAX || steps >= MCHP_RTC_MAX_STEPS) {
++            ticks = div ? osc / div - s->osc / div : 0;
++            s->value = rtc_plain(s, ticks);
++            s->t_base += clock_ticks_to_ns(rtc_clk(s), osc - s->osc);
++            s->osc = osc;
++            timer_del(s->timer);
++            break;
++        }
++        if (e > osc) {
++            /* Bring the counter up to now (no event on the way), then wait */
++            ticks = div ? osc / div - s->osc / div : 0;
++            s->value = rtc_plain(s, ticks);
++            s->t_base += clock_ticks_to_ns(rtc_clk(s), osc - s->osc);
++            s->osc = osc;
++            timer_mod(s->timer, rtc_time_of(s, e));
++            break;
++        }
++        /* Plain counter ticks before e, then the event itself */
++        ticks = div ? e / div - s->osc / div : 0;
++        if (flagging && e == cnt_e) {
++            s->value = rtc_plain(s, ticks - 1);
++            rtc_count_event(s, cflags);
++        } else {
++            s->value = rtc_plain(s, ticks);
++        }
++        if (e == per_e) {
++            rtc_set_reg(s, A_INTFLAG, 2, rtc_reg(s, A_INTFLAG, 2) | pflags);
++        }
++        s->t_base = rtc_time_of(s, e) - 1;
++        s->osc = e;
++    }
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++static void rtc_tick(void *opaque)
++{
++    MchpRtcState *s = opaque;
++
++    rtc_advance(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
++}
++
++/* COUNT/CLOCK register image of the current value */
++static uint32_t rtc_image(MchpRtcState *s)
++{
++    return rtc_mode(s) == MODE2 ? rtc_secs_to_clock(s->value) : s->value;
++}
++
++static uint32_t rtc_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                             unsigned idx, uint32_t stored, bool side_effects)
++{
++    MchpRtcState *s = MCHP_RTC(rf->opaque);
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    if (side_effects) {
++        rtc_advance(s, now);
++    }
++    switch (ri->offset) {
++    case A_COUNT:
++        /* Valid only with read synchronization on (DS 23.5.2.3) */
++        if (rtc_reg(s, A_CTRLA, 2) & CTRLA_COUNTSYNC) {
++            rtc_set_reg(s, A_COUNT, ri->size, rtc_image(s));
++        }
++        return rtc_reg(s, A_COUNT, ri->size);
++    case A_SYNCBUSY:
++        if (clock_get_hz(rtc_clk(s))) {
++            s->sync_pending = 0;
++        }
++        return s->sync_pending;
++    default:
++        return stored;
++    }
++}
++
++static void rtc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                           unsigned idx, uint32_t old, uint32_t written,
++                           uint32_t we)
++{
++    MchpRtcState *s = MCHP_RTC(rf->opaque);
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    uint32_t val = mchp_regfile_get(rf, ri, idx);
++
++    if (ri->syncbusy && !clock_get_hz(rtc_clk(s))) {
++        s->sync_pending |= ri->offset == A_CTRLA ?
++                           written & we & ri->syncbusy :
++                           ri->syncbusy << (ri->count > 1 ? idx : 0);
++    }
++    switch (ri->offset) {
++    case A_CTRLA:
++        if (written & we & CTRLA_SWRST) {
++            return;             /* mchp-regblock resets the RTC next */
++        }
++        if (val & ~old & CTRLA_ENABLE) {
++            if (rtc_reg(s, A_CTRLA, 2) & 0x0040) {
++                qemu_log_mask(LOG_UNIMP, "%s.CTRLA: 12-hour clock not "
++                              "modelled\n", MCHP_REGBLOCK(s)->name);
++            }
++            s->running = true;
++            s->osc = 0;         /* the prescaler starts with the RTC */
++            s->t_base = now;
++        } else if (old & ~val & CTRLA_ENABLE) {
++            rtc_advance(s, now);
++            s->running = false;
++        }
++        break;
++    case A_COUNT:
++        rtc_advance(s, now);
++        s->value = rtc_mode(s) == MODE2 ? rtc_clock_to_secs(val) : val;
++        break;
++    case A_FREQCORR:
++        if (val) {
++            qemu_log_mask(LOG_UNIMP, "%s.FREQCORR: correction not "
++                          "modelled\n", MCHP_REGBLOCK(s)->name);
++        }
++        break;
++    }
++    rtc_advance(s, now);
++}
++
++static void rtc_gclk_update(MchpRegBlock *rb, ClockEvent event)
++{
++    rtc_advance(MCHP_RTC(rb), qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
++}
++
++static void rtc_reset_hold(MchpRegBlock *rb)
++{
++    MchpRtcState *s = MCHP_RTC(rb);
++
++    timer_del(s->timer);
++    s->running = false;
++    s->value = 0;
++    s->osc = 0;
++    s->sync_pending = 0;
++}
++
++static bool rtc_realize(MchpRegBlock *rb, Error **errp)
++{
++    MchpRtcState *s = MCHP_RTC(rb);
++
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, rtc_tick, s);
++    return true;
++}
++
++static void rtc_finalize(Object *obj)
++{
++    timer_free(MCHP_RTC(obj)->timer);
++}
++
++static const VMStateDescription vmstate_mchp_rtc = {
++    .name = TYPE_MCHP_RTC,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpRtcState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_TIMER_PTR(timer, MchpRtcState),
++        VMSTATE_BOOL(running, MchpRtcState),
++        VMSTATE_UINT64(value, MchpRtcState),
++        VMSTATE_UINT64(osc, MchpRtcState),
++        VMSTATE_INT64(t_base, MchpRtcState),
++        VMSTATE_UINT32(sync_pending, MchpRtcState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void rtc_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_rtc;
++    c->realize = rtc_realize;
++    c->pre_read = rtc_pre_read;
++    c->post_write = rtc_post_write;
++    c->reset_hold = rtc_reset_hold;
++    c->gclk_update = rtc_gclk_update;
++    c->por_only = true;         /* keeps running across system resets */
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_rtc_types[] = {
++    {
++        .name = TYPE_MCHP_RTC,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpRtcState),
++        .instance_finalize = rtc_finalize,
++        .class_init = rtc_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_rtc_types)
+diff --git a/hw/rtc/meson.build b/hw/rtc/meson.build
+index 6c87864..d3807cd 100644
+--- a/hw/rtc/meson.build
++++ b/hw/rtc/meson.build
+@@ -2,6 +2,7 @@
+ system_ss.add(when: 'CONFIG_DS1338', if_true: files('ds1338.c'))
+ system_ss.add(when: 'CONFIG_M41T80', if_true: files('m41t80.c'))
+ system_ss.add(when: 'CONFIG_M48T59', if_true: files('m48t59.c'))
++system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_rtc.c'))
+ system_ss.add(when: 'CONFIG_PL031', if_true: files('pl031.c'))
+ system_ss.add(when: ['CONFIG_ISA_BUS', 'CONFIG_M48T59'], if_true: files('m48t59-isa.c'))
+ system_ss.add(when: 'CONFIG_XLNX_ZYNQMP', if_true: files('xlnx-zynqmp-rtc.c'))
+diff --git a/hw/rtc/trace-events b/hw/rtc/trace-events
+index d2f3621..0cadbaf 100644
+--- a/hw/rtc/trace-events
++++ b/hw/rtc/trace-events
+@@ -43,3 +43,6 @@ goldfish_rtc_write(uint64_t addr, uint64_t value) "addr 0x%02" PRIx64 " value 0x
+ # rs5c372.c
+ rs5c372_recv(uint32_t addr, uint8_t value) "[0x%" PRIx32 "] -> 0x%02" PRIx8
+ rs5c372_send(uint32_t addr, uint8_t value) "[0x%" PRIx32 "] <- 0x%02" PRIx8
++
++# mchp_rtc.c
++mchp_rtc_event(uint64_t value, uint32_t flags) "value 0x%" PRIx64 ", flags 0x%x"
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h b/include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h
+index 1a5df76..aaa59af 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/rtc_u2250.yaml (sha1 d6e910321f28)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -25,31 +25,33 @@ static const MchpRegInfo pic32cm1216mc00048_rtc_mode0_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x8F8F, .wmask = 0x8F8F,
+-        .rdz = 0x0001, .syncbusy = 0x00008003 /* SYNCBUSY */, .flags = 0,
++        .rdz = 0x0001, .enprot = 0x0F8C, .syncbusy = 0x00008003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x04, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x000081FF,
+-        .wmask = 0x000081FF, .flags = 0,
++        .wmask = 0x000081FF, .enprot = 0x000081FF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x08, .size = 2, .count = 1, .stride = 2,
+         .alias_of = 3 /* INTENSET */, .reset = 0x0000, .impl = 0x81FF,
+-        .wmask = 0x81FF, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x81FF, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x0A, .size = 2, .count = 1, .stride = 2,
+         .alias_of = 3 /* INTENSET */, .reset = 0x0000, .impl = 0x81FF,
+-        .wmask = 0x81FF, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x81FF, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x0C, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x81FF, .wmask = 0x0000,
+-        .w1c = 0x81FF, .flags = 0,
++        .w1c = 0x81FF, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x0E, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+@@ -59,17 +61,19 @@ static const MchpRegInfo pic32cm1216mc00048_rtc_mode0_regs[] = {
+     {
+         .name = "FREQCORR", .offset = 0x14, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
+-        .syncbusy = 0x00000004 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000004 /* SYNCBUSY */, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "COUNT", .offset = 0x18, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .syncbusy = 0x00000008 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "COMP", .offset = 0x20, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .syncbusy = 0x00000020 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+ };
+ #define PIC32CM1216MC00048_RTC_MODE0_NREGS 10
+@@ -79,31 +83,33 @@ static const MchpRegInfo pic32cm1216mc00048_rtc_mode1_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x8F0F, .wmask = 0x8F0F,
+-        .rdz = 0x0001, .syncbusy = 0x00008003 /* SYNCBUSY */, .flags = 0,
++        .rdz = 0x0001, .enprot = 0x0F0C, .syncbusy = 0x00008003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x04, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x000083FF,
+-        .wmask = 0x000083FF, .flags = 0,
++        .wmask = 0x000083FF, .enprot = 0x000083FF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x08, .size = 2, .count = 1, .stride = 2,
+         .alias_of = 3 /* INTENSET */, .reset = 0x0000, .impl = 0x83FF,
+-        .wmask = 0x83FF, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x83FF, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x0A, .size = 2, .count = 1, .stride = 2,
+         .alias_of = 3 /* INTENSET */, .reset = 0x0000, .impl = 0x83FF,
+-        .wmask = 0x83FF, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x83FF, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x0C, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x83FF, .wmask = 0x0000,
+-        .w1c = 0x83FF, .flags = 0,
++        .w1c = 0x83FF, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x0E, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+@@ -113,22 +119,25 @@ static const MchpRegInfo pic32cm1216mc00048_rtc_mode1_regs[] = {
+     {
+         .name = "FREQCORR", .offset = 0x14, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
+-        .syncbusy = 0x00000004 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000004 /* SYNCBUSY */, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "COUNT", .offset = 0x18, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFFFF, .wmask = 0xFFFF,
+-        .flags = 0,
++        .syncbusy = 0x00000008 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "PER", .offset = 0x1C, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFFFF, .wmask = 0xFFFF,
+-        .syncbusy = 0x00000010 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000010 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "COMP", .offset = 0x20, .size = 2, .count = 2, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFFFF, .wmask = 0xFFFF,
+-        .syncbusy = 0x00000020 /* SYNCBUSY, << element */, .flags = 0,
++        .syncbusy = 0x00000020 /* SYNCBUSY, << element */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+ };
+ #define PIC32CM1216MC00048_RTC_MODE1_NREGS 11
+@@ -138,31 +147,33 @@ static const MchpRegInfo pic32cm1216mc00048_rtc_mode2_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x8FCF, .wmask = 0x8FCF,
+-        .rdz = 0x0001, .syncbusy = 0x00008003 /* SYNCBUSY */, .flags = 0,
++        .rdz = 0x0001, .enprot = 0x0FCC, .syncbusy = 0x00008003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x04, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x000081FF,
+-        .wmask = 0x000081FF, .flags = 0,
++        .wmask = 0x000081FF, .enprot = 0x000081FF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x08, .size = 2, .count = 1, .stride = 2,
+         .alias_of = 3 /* INTENSET */, .reset = 0x0000, .impl = 0x81FF,
+-        .wmask = 0x81FF, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x81FF, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x0A, .size = 2, .count = 1, .stride = 2,
+         .alias_of = 3 /* INTENSET */, .reset = 0x0000, .impl = 0x81FF,
+-        .wmask = 0x81FF, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x81FF, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x0C, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x81FF, .wmask = 0x0000,
+-        .w1c = 0x81FF, .flags = 0,
++        .w1c = 0x81FF, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x0E, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+@@ -172,21 +183,25 @@ static const MchpRegInfo pic32cm1216mc00048_rtc_mode2_regs[] = {
+     {
+         .name = "FREQCORR", .offset = 0x14, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
+-        .syncbusy = 0x00000004 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000004 /* SYNCBUSY */, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "CLOCK", .offset = 0x18, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .syncbusy = 0x00000008 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "ALARM", .offset = 0x20, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .syncbusy = 0x00000020 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "MASK", .offset = 0x24, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .syncbusy = 0x00000800 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+ };
+ #define PIC32CM1216MC00048_RTC_MODE2_NREGS 11
+diff --git a/include/hw/mchp/gen/rtc_u2250.h b/include/hw/mchp/gen/rtc_u2250.h
+index 7577947..7211d42 100644
+--- a/include/hw/mchp/gen/rtc_u2250.h
++++ b/include/hw/mchp/gen/rtc_u2250.h
+@@ -8,7 +8,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM1216MC00048
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/rtc_u2250.yaml (sha1 d6e910321f28)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/misc/mchp_regblock.h b/include/hw/misc/mchp_regblock.h
+index 0678eb9..4cbb501 100644
+--- a/include/hw/misc/mchp_regblock.h
++++ b/include/hw/misc/mchp_regblock.h
+@@ -55,6 +55,7 @@ struct MchpRegBlock {
+     const MchpRegInfo *intflag;
+     const MchpRegInfo *intenset;
+     uint32_t view_sel;                  /* mode selector of the active view */
++    bool powered;                       /* past the power-on reset */
+     GHashTable *unimp_writes;           /* writes logged per register offset */
+ };
+ 
+@@ -76,6 +77,11 @@ struct MchpRegBlockClass {
+     void (*reset_exit)(MchpRegBlock *s);
+     /* The "gclk" input is about to change (ClockPreUpdate) or changed */
+     void (*gclk_update)(MchpRegBlock *s, ClockEvent event);
++    /*
++     * Reset only by power-on (the first reset) and CTRLA.SWRST: later
++     * system resets keep the registers (RTC, OSC32KCTRL)
++     */
++    bool por_only;
+     /* Report each write with LOG_UNIMP: true for the generic block */
+     bool log_writes;
+ };
+diff --git a/include/hw/rtc/mchp_rtc.h b/include/hw/rtc/mchp_rtc.h
+new file mode 100644
+index 0000000..ab063f3
+--- /dev/null
++++ b/include/hw/rtc/mchp_rtc.h
+@@ -0,0 +1,21 @@
++/*
++ * Microchip SAM/PIC32CM Real-Time Counter (RTC U2250, PIC32CM MC00)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * A TYPE_MCHP_REGBLOCK subclass configured with mchp_regblock_set_info();
++ * CTRLA.MODE selects the MODE0/1/2 register view. Its "gclk" clock input
++ * carries CLK_RTC_OSC, wired by the SoC to the OSC32KCTRL "rtc" output.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_RTC_MCHP_RTC_H
++#define HW_RTC_MCHP_RTC_H
++
++#include "hw/misc/mchp_regblock.h"
++
++#define TYPE_MCHP_RTC "mchp-rtc"
++
++#endif /* HW_RTC_MCHP_RTC_H */
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index a0bc644..df42336 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -252,7 +252,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-eic-test', 'pic32cm-tc-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-rtc-test.c b/tests/qtest/pic32cm-rtc-test.c
+new file mode 100644
+index 0000000..fe03fea
+--- /dev/null
++++ b/tests/qtest/pic32cm-rtc-test.c
+@@ -0,0 +1,207 @@
++/*
++ * QTest for the RTC of the PIC32CM MC00 (pic32cm-mc00-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * CLK_RTC_OSC is ULP1K (1024 Hz) out of reset; virtual time is stepped
++ * explicitly. Expected behaviour from DS60001638E chapter 23 and from
++ * PIC32CM MC00 silicon (power-on-only reset, the clock rule of
++ * synchronization).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++#include "qobject/qdict.h"
++
++#define MACHINE         "-M pic32cm-mc00-cpro "
++
++#define OSC32KCTRL      0x40001400
++#define RTC             0x40002400
++#define NVIC_ISPR       0xE000E200
++
++#define R_CTRLA         0x00
++#define R_INTENSET      0x0A
++#define R_INTFLAG       0x0C
++#define R_SYNCBUSY      0x10
++#define R_COUNT         0x18
++#define R_PER           0x1C
++#define R_COMP          0x20
++#define R_MASK          0x24
++
++#define ENABLE          0x0002
++#define MODE1           (1 << 2)
++#define MODE2           (2 << 2)
++#define MATCHCLR        0x0080
++#define DIV(n)          ((n) << 8)      /* 1: /1 ... 11: /1024 */
++#define COUNTSYNC       0x8000
++
++#define F_CMP0          0x0100
++#define F_CMP1          0x0200
++#define F_OVF           0x8000
++
++#define SEC_NS          1000000000LL
++#define TICK_NS         (SEC_NS / 1024)
++#define RTC_IRQ         2
++
++static uint32_t clock_value(unsigned y, unsigned mo, unsigned d, unsigned h,
++                            unsigned mi, unsigned s)
++{
++    return y << 26 | mo << 22 | d << 17 | h << 12 | mi << 6 | s;
++}
++
++static void test_mode0_rate(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writew(qts, RTC + R_CTRLA, DIV(1) | COUNTSYNC);
++    qtest_writew(qts, RTC + R_CTRLA, DIV(1) | COUNTSYNC | ENABLE);
++    qtest_clock_step(qts, SEC_NS);
++    g_assert_cmpuint(qtest_readl(qts, RTC + R_COUNT), ==, 1024);
++    qtest_clock_step(qts, SEC_NS / 2);
++    g_assert_cmpuint(qtest_readl(qts, RTC + R_COUNT), ==, 1536);
++    qtest_quit(qts);
++
++    /* DIV1024: one count per second */
++    qts = qtest_init(MACHINE);
++    qtest_writew(qts, RTC + R_CTRLA, DIV(11) | COUNTSYNC | ENABLE);
++    qtest_clock_step(qts, 5 * SEC_NS + SEC_NS / 2);
++    g_assert_cmpuint(qtest_readl(qts, RTC + R_COUNT), ==, 5);
++    qtest_quit(qts);
++}
++
++/* PERn every 2^(n+3) cycles: PER0 at 128 Hz, PER7 at 1 Hz */
++static void test_periodic(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writew(qts, RTC + R_CTRLA, DIV(1) | ENABLE);
++    qtest_clock_step(qts, 5 * TICK_NS);
++    g_assert_cmphex(qtest_readw(qts, RTC + R_INTFLAG) & 0xFF, ==, 0x01);  /* @4 */
++    qtest_clock_step(qts, 4 * TICK_NS);
++    g_assert_cmphex(qtest_readw(qts, RTC + R_INTFLAG) & 0xFF, ==, 0x03);  /* @8 */
++    qtest_clock_step(qts, SEC_NS);
++    g_assert_cmphex(qtest_readw(qts, RTC + R_INTFLAG) & 0xFF, ==, 0xFF);
++    qtest_quit(qts);
++}
++
++/* Flags on the tick after the match; MATCHCLR also sets OVF */
++static void test_compare(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, RTC + R_COMP, 10);
++    qtest_writew(qts, RTC + R_CTRLA, DIV(1) | MATCHCLR | COUNTSYNC | ENABLE);
++    qtest_clock_step(qts, 10 * TICK_NS + TICK_NS / 2);
++    g_assert_cmphex(qtest_readw(qts, RTC + R_INTFLAG) & F_CMP0, ==, 0);
++    qtest_clock_step(qts, TICK_NS);
++    g_assert_cmphex(qtest_readw(qts, RTC + R_INTFLAG) & (F_CMP0 | F_OVF), ==,
++                    F_CMP0 | F_OVF);
++    g_assert_cmpuint(qtest_readl(qts, RTC + R_COUNT), ==, 0);
++    qtest_quit(qts);
++}
++
++static void test_mode1(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writew(qts, RTC + R_CTRLA, MODE1 | DIV(1));
++    qtest_writew(qts, RTC + R_PER, 50);
++    qtest_writew(qts, RTC + R_COMP, 10);
++    qtest_writew(qts, RTC + R_COMP + 2, 60);              /* above PER */
++    qtest_writew(qts, RTC + R_CTRLA, MODE1 | DIV(1) | ENABLE);
++    qtest_clock_step(qts, 51 * TICK_NS + TICK_NS / 2);
++    g_assert_cmphex(qtest_readw(qts, RTC + R_INTFLAG) & 0xFF00, ==,
++                    F_CMP0 | F_OVF);
++    qtest_quit(qts);
++}
++
++static void test_calendar(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writew(qts, RTC + R_CTRLA, MODE2 | DIV(11) | COUNTSYNC);
++    qtest_writel(qts, RTC + R_COUNT, clock_value(0, 2, 28, 23, 59, 58));
++    qtest_writel(qts, RTC + R_COMP, clock_value(0, 0, 0, 0, 0, 3));
++    qtest_writeb(qts, RTC + R_MASK, 3);                   /* HH:MM:SS */
++    qtest_writew(qts, RTC + R_CTRLA, MODE2 | DIV(11) | COUNTSYNC | ENABLE);
++    qtest_clock_step(qts, 2 * SEC_NS + SEC_NS / 2);
++    g_assert_cmphex(qtest_readl(qts, RTC + R_COUNT), ==,
++                    clock_value(0, 2, 29, 0, 0, 0));      /* leap year */
++    qtest_clock_step(qts, 3 * SEC_NS);
++    g_assert_cmphex(qtest_readw(qts, RTC + R_INTFLAG) & F_CMP0, ==, 0);
++    qtest_clock_step(qts, SEC_NS);                        /* tick after */
++    g_assert_cmphex(qtest_readw(qts, RTC + R_INTFLAG) & F_CMP0, ==, F_CMP0);
++    qtest_quit(qts);
++
++    qts = qtest_init(MACHINE);
++    qtest_writew(qts, RTC + R_CTRLA, MODE2 | DIV(11) | COUNTSYNC);
++    qtest_writel(qts, RTC + R_COUNT, clock_value(1, 2, 28, 23, 59, 59));
++    qtest_writew(qts, RTC + R_CTRLA, MODE2 | DIV(11) | COUNTSYNC | ENABLE);
++    qtest_clock_step(qts, SEC_NS + SEC_NS / 2);
++    g_assert_cmphex(qtest_readl(qts, RTC + R_COUNT), ==,
++                    clock_value(1, 3, 1, 0, 0, 0));
++    qtest_quit(qts);
++}
++
++static void test_irq(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, RTC + R_COMP, 4);
++    qtest_writew(qts, RTC + R_INTENSET, F_CMP0);
++    qtest_writew(qts, RTC + R_CTRLA, DIV(1) | ENABLE);
++    g_assert_false(qtest_readl(qts, NVIC_ISPR) & BIT(RTC_IRQ));
++    qtest_clock_step(qts, 6 * TICK_NS);
++    g_assert_true(qtest_readl(qts, NVIC_ISPR) & BIT(RTC_IRQ));
++    qtest_quit(qts);
++}
++
++/* Only power-on resets the RTC; it keeps counting across system resets */
++static void test_reset(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++    QDict *rsp;
++
++    qtest_writew(qts, RTC + R_CTRLA, DIV(1) | COUNTSYNC | ENABLE);
++    qtest_clock_step(qts, SEC_NS);
++    rsp = qtest_qmp(qts, "{ 'execute': 'system_reset' }");
++    qobject_unref(rsp);
++    qtest_clock_step(qts, SEC_NS);
++    g_assert_cmphex(qtest_readw(qts, RTC + R_CTRLA), ==,
++                    DIV(1) | COUNTSYNC | ENABLE);
++    g_assert_cmpuint(qtest_readl(qts, RTC + R_COUNT), >=, 2048);
++    qtest_quit(qts);
++}
++
++/* CLK_RTC_OSC off (OSC1K, OSC32K disabled): ENABLE stays in SYNCBUSY */
++static void test_noclock(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, OSC32KCTRL + 0x10, 2);                /* OSC1K */
++    qtest_writew(qts, RTC + R_CTRLA, DIV(1) | ENABLE);
++    g_assert_cmphex(qtest_readl(qts, RTC + R_SYNCBUSY), ==, 0x2);
++    qtest_writel(qts, OSC32KCTRL + 0x10, 0);                /* ULP1K */
++    g_assert_cmphex(qtest_readl(qts, RTC + R_SYNCBUSY), ==, 0);
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++
++    qtest_add_func("pic32cm-rtc/mode0-rate", test_mode0_rate);
++    qtest_add_func("pic32cm-rtc/periodic", test_periodic);
++    qtest_add_func("pic32cm-rtc/compare", test_compare);
++    qtest_add_func("pic32cm-rtc/mode1", test_mode1);
++    qtest_add_func("pic32cm-rtc/calendar", test_calendar);
++    qtest_add_func("pic32cm-rtc/irq", test_irq);
++    qtest_add_func("pic32cm-rtc/reset", test_reset);
++    qtest_add_func("pic32cm-rtc/noclock", test_noclock);
++
++    return g_test_run();
++}
+-- 
+2.53.0.windows.2
+

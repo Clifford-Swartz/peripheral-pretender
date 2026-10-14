@@ -16,6 +16,7 @@ BOARD=<board>` builds `tests/<test>.c` into `build/<board>/<test>.elf`.
 | `eic` | EIC edges, levels, flag clearing, interrupt, and the clock needed by synchronous edges and their CTRLA synchronization; stimulus: the free test pin's pull resistor (`TEST_PIN` in `board.h`) |
 | `tc` | TC counting, READSYNC, commands, one-shot, down counting, PER/CC buffering, compare match, MFRQ, counting rate, COUNT32 pairing, overflow interrupt, synchronization without the clock |
 | `tcprobe` | raw TC observations for behaviour the data sheet leaves open (prints, checks nothing) |
+| `rtc` | RTC (MC00) counting rate, periodic flags, compare with clear-on-match, MODE1, calendar across a leap day, alarm, interrupt, synchronization without the RTC clock |
 
 Their transcripts are deterministic (timing checks have tolerances; run the
 twin with `--icount 5`); silicon captures live in `golden/`.

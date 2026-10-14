@@ -26373,7 +26373,14 @@
    "version": "1.1.1",
    "caption": "Real-Time Counter",
    "core": false,
-   "overlay": null,
+   "overlay": {
+    "file": "overlays/rtc_u2250.yaml",
+    "sha1": "d6e910321f289f414d0b9eb85be9dc7e7a5ce6bb",
+    "status": "applied",
+    "versions": [
+     "1.1.1"
+    ]
+   },
    "size": 40,
    "selector": {
     "register": "CTRLA",
@@ -26392,7 +26399,7 @@
      "irq": {
       "flag": "INTFLAG",
       "enable": "INTENSET",
-      "source": "heuristic"
+      "source": "overlay"
      },
      "registers": [
       {
@@ -26409,11 +26416,14 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 1,
-       "enprot": 0,
+       "enprot": 3980,
        "syncbusy": 32771,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "MODE0 Control A",
@@ -26548,13 +26558,23 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
+         "enprot",
+         "overlay",
+         "all except SWRST, ENABLE, COUNTSYNC = 0xF8C"
         ],
         [
          "sync",
-         "heuristic",
-         "access=WSYNC; SYNCBUSY bits matched by name: 0x8003"
+         "overlay",
+         "SWRST->SWRST, ENABLE->ENABLE, COUNTSYNC->COUNTSYNC: SYNCBUSY 0x8003"
         ]
        ]
       },
@@ -26572,11 +26592,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 33279,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "MODE0 Event Control",
@@ -26663,7 +26685,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0x81FF"
+        ]
+       ]
       },
       {
        "name": "INTENCLR",
@@ -26684,6 +26712,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_CLEAR"
        ],
        "alias_of": "INTENSET",
@@ -26775,8 +26804,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "clear -> INTENSET"
         ]
        ]
       },
@@ -26799,6 +26828,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_SET"
        ],
        "alias_of": "INTENSET",
@@ -26890,8 +26920,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "set -> INTENSET"
         ]
        ]
       },
@@ -26913,7 +26943,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "MODE0 Interrupt Flag Status and Clear",
@@ -27003,8 +27035,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:INTFLAG: all fields W1C (0x81FF)"
+         "overlay",
+         "all = 0x81FF"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -27026,7 +27063,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Debug Control",
@@ -27127,8 +27166,8 @@
         ],
         [
          "dynamic",
-         "heuristic",
-         "register named *SYNCBUSY: dynamic, reads 0"
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -27150,7 +27189,9 @@
        "syncbusy": 4,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Frequency Correction",
@@ -27176,8 +27217,8 @@
        "provenance": [
         [
          "sync",
-         "heuristic",
-         "access=WSYNC; SYNCBUSY bits matched by name: 0x4"
+         "overlay",
+         "FREQCORR: SYNCBUSY 0x4"
         ]
        ]
       },
@@ -27196,12 +27237,16 @@
        "ro": 0,
        "rdz": 0,
        "enprot": 0,
-       "syncbusy": 0,
-       "sync_register": null,
+       "syncbusy": 8,
+       "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "MODE0 Counter Value",
        "note": "",
        "fields": [
@@ -27214,7 +27259,23 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
+         "sync",
+         "overlay",
+         "COUNT: SYNCBUSY 0x8"
+        ]
+       ]
       },
       {
        "name": "COMP",
@@ -27231,10 +27292,13 @@
        "ro": 0,
        "rdz": 0,
        "enprot": 0,
-       "syncbusy": 0,
-       "sync_register": null,
+       "syncbusy": 32,
+       "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "MODE0 Compare n Value",
@@ -27249,7 +27313,18 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
+         "sync",
+         "overlay",
+         "COMP0: SYNCBUSY 0x20"
+        ]
+       ]
       }
      ],
      "reset_overrides": [],
@@ -27262,7 +27337,7 @@
      "irq": {
       "flag": "INTFLAG",
       "enable": "INTENSET",
-      "source": "heuristic"
+      "source": "overlay"
      },
      "registers": [
       {
@@ -27279,11 +27354,14 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 1,
-       "enprot": 0,
+       "enprot": 3852,
        "syncbusy": 32771,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "MODE1 Control A",
@@ -27410,13 +27488,23 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
+         "enprot",
+         "overlay",
+         "all except SWRST, ENABLE, COUNTSYNC = 0xF0C"
         ],
         [
          "sync",
-         "heuristic",
-         "access=WSYNC; SYNCBUSY bits matched by name: 0x8003"
+         "overlay",
+         "SWRST->SWRST, ENABLE->ENABLE, COUNTSYNC->COUNTSYNC: SYNCBUSY 0x8003"
         ]
        ]
       },
@@ -27434,11 +27522,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 33791,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "MODE1 Event Control",
@@ -27533,7 +27623,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0x83FF"
+        ]
+       ]
       },
       {
        "name": "INTENCLR",
@@ -27554,6 +27650,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_CLEAR"
        ],
        "alias_of": "INTENSET",
@@ -27653,8 +27750,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "clear -> INTENSET"
         ]
        ]
       },
@@ -27677,6 +27774,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_SET"
        ],
        "alias_of": "INTENSET",
@@ -27776,8 +27874,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "set -> INTENSET"
         ]
        ]
       },
@@ -27799,7 +27897,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "MODE1 Interrupt Flag Status and Clear",
@@ -27897,8 +27997,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:INTFLAG: all fields W1C (0x83FF)"
+         "overlay",
+         "all = 0x83FF"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -27920,7 +28025,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Debug Control",
@@ -28037,8 +28144,8 @@
         ],
         [
          "dynamic",
-         "heuristic",
-         "register named *SYNCBUSY: dynamic, reads 0"
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -28060,7 +28167,9 @@
        "syncbusy": 4,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Frequency Correction",
@@ -28086,8 +28195,8 @@
        "provenance": [
         [
          "sync",
-         "heuristic",
-         "access=WSYNC; SYNCBUSY bits matched by name: 0x4"
+         "overlay",
+         "FREQCORR: SYNCBUSY 0x4"
         ]
        ]
       },
@@ -28106,12 +28215,16 @@
        "ro": 0,
        "rdz": 0,
        "enprot": 0,
-       "syncbusy": 0,
-       "sync_register": null,
+       "syncbusy": 8,
+       "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "MODE1 Counter Value",
        "note": "",
        "fields": [
@@ -28124,7 +28237,23 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
+         "sync",
+         "overlay",
+         "COUNT: SYNCBUSY 0x8"
+        ]
+       ]
       },
       {
        "name": "PER",
@@ -28144,7 +28273,10 @@
        "syncbusy": 16,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "MODE1 Counter Period",
@@ -28161,9 +28293,14 @@
        ],
        "provenance": [
         [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
          "sync",
-         "heuristic",
-         "access=WSYNC; SYNCBUSY bits matched by name: 0x10"
+         "overlay",
+         "PER: SYNCBUSY 0x10"
         ]
        ]
       },
@@ -28185,7 +28322,10 @@
        "syncbusy": 32,
        "sync_register": "SYNCBUSY",
        "sync_per_element": true,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "MODE1 Compare n Value",
@@ -28202,9 +28342,14 @@
        ],
        "provenance": [
         [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
          "sync",
-         "heuristic",
-         "access=WSYNC; SYNCBUSY bits matched by name: 0x20 << element"
+         "overlay",
+         "COMP{n}: SYNCBUSY 0x20 << element"
         ]
        ]
       }
@@ -28219,7 +28364,7 @@
      "irq": {
       "flag": "INTFLAG",
       "enable": "INTENSET",
-      "source": "heuristic"
+      "source": "overlay"
      },
      "registers": [
       {
@@ -28236,11 +28381,14 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 1,
-       "enprot": 0,
+       "enprot": 4044,
        "syncbusy": 32771,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "MODE2 Control A",
@@ -28383,13 +28531,23 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
+         "enprot",
+         "overlay",
+         "all except SWRST, ENABLE, CLOCKSYNC = 0xFCC"
         ],
         [
          "sync",
-         "heuristic",
-         "access=WSYNC; SYNCBUSY bits matched by name: 0x8003"
+         "overlay",
+         "SWRST->SWRST, ENABLE->ENABLE, CLOCKSYNC->CLOCKSYNC: SYNCBUSY 0x8003"
         ]
        ]
       },
@@ -28407,11 +28565,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 33279,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "MODE2 Event Control",
@@ -28498,7 +28658,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0x81FF"
+        ]
+       ]
       },
       {
        "name": "INTENCLR",
@@ -28519,6 +28685,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_CLEAR"
        ],
        "alias_of": "INTENSET",
@@ -28610,8 +28777,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "clear -> INTENSET"
         ]
        ]
       },
@@ -28634,6 +28801,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_SET"
        ],
        "alias_of": "INTENSET",
@@ -28725,8 +28893,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "set -> INTENSET"
         ]
        ]
       },
@@ -28748,7 +28916,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "MODE2 Interrupt Flag Status and Clear",
@@ -28838,8 +29008,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:INTFLAG: all fields W1C (0x81FF)"
+         "overlay",
+         "all = 0x81FF"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -28861,7 +29036,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Debug Control",
@@ -28970,8 +29147,8 @@
         ],
         [
          "dynamic",
-         "heuristic",
-         "register named *SYNCBUSY: dynamic, reads 0"
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -28993,7 +29170,9 @@
        "syncbusy": 4,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Frequency Correction",
@@ -29019,8 +29198,8 @@
        "provenance": [
         [
          "sync",
-         "heuristic",
-         "access=WSYNC; SYNCBUSY bits matched by name: 0x4"
+         "overlay",
+         "FREQCORR: SYNCBUSY 0x4"
         ]
        ]
       },
@@ -29039,12 +29218,16 @@
        "ro": 0,
        "rdz": 0,
        "enprot": 0,
-       "syncbusy": 0,
-       "sync_register": null,
+       "syncbusy": 8,
+       "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "MODE2 Clock Value",
        "note": "",
        "fields": [
@@ -29108,7 +29291,23 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
+         "sync",
+         "overlay",
+         "CLOCK: SYNCBUSY 0x8"
+        ]
+       ]
       },
       {
        "name": "ALARM",
@@ -29125,10 +29324,13 @@
        "ro": 0,
        "rdz": 0,
        "enprot": 0,
-       "syncbusy": 0,
-       "sync_register": null,
+       "syncbusy": 32,
+       "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "MODE2_ALARM Alarm n Value",
@@ -29194,7 +29396,18 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
+         "sync",
+         "overlay",
+         "ALARM0: SYNCBUSY 0x20"
+        ]
+       ]
       },
       {
        "name": "MASK",
@@ -29211,10 +29424,13 @@
        "ro": 0,
        "rdz": 0,
        "enprot": 0,
-       "syncbusy": 0,
-       "sync_register": null,
+       "syncbusy": 2048,
+       "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "MODE2_ALARM Alarm n Mask",
@@ -29265,7 +29481,18 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
+         "sync",
+         "overlay",
+         "MASK0: SYNCBUSY 0x800"
+        ]
+       ]
       }
      ],
      "reset_overrides": [],
