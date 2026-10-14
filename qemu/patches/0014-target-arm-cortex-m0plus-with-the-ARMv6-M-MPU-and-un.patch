@@ -1,0 +1,438 @@
+From d99de69ba7e0f6284dc72aadb321f8b5b1b42c53 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Tue, 13 Oct 2026 21:35:32 -0700
+Subject: [PATCH] target/arm: cortex-m0plus with the ARMv6-M MPU and
+ unprivileged mode
+
+A cortex-m0plus CPU type: the Cortex-M0 ISA with the Cortex-M0+ r0p1
+CPUID, an 8-region MPU and the Unprivileged/Privileged extension, as
+PIC32CM silicon has them (MPU_TYPE 0x800, CONTROL.nPRIV writable).
+
+The ARMv6-M MPU uses the PMSAv7 register format and lookup
+(arm_pmsav7_format()); on ARMv6-M, MPU_RASR has no TEX field and
+MPU_RBAR.ADDR is [31:8], as read back on silicon. Plain cortex-m0 keeps
+no MPU and its migration stream.
+
+Fix in the PMSAv7 lookup: an access to a disabled subregion fell
+through to a lower region or the background map with a whole-page TLB
+entry, so later accesses to enabled subregions of the same page did not
+fault.
+
+The PIC32CM SoC and boards use cortex-m0plus instead of cortex-m0 with
+a "midr" global. Board docs updated (CPU, EIC, TC, RTC, EVSYS, PORT
+events).
+
+Checked against PIC32CM MC00 silicon with firmware/hello/tests/mpu.c
+(transcripts identical).
+
+Peripheral Pretender: a personal project; not for upstream.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst | 32 +++++++++++++++++++--------
+ docs/system/arm/pic32cm-mc00-cpro.rst |  6 ++---
+ hw/arm/pic32cm_jh01_cpro.c            |  9 +-------
+ hw/arm/pic32cm_mc00_cpro.c            |  9 +-------
+ hw/arm/pic32cm_soc.c                  |  9 +++-----
+ hw/intc/armv7m_nvic.c                 |  8 +++++--
+ include/hw/arm/pic32cm_soc.h          |  5 +----
+ target/arm/cpu.c                      |  8 ++++---
+ target/arm/cpu.h                      |  6 +++++
+ target/arm/internals.h                | 12 ++++++++++
+ target/arm/machine.c                  |  6 ++---
+ target/arm/ptw.c                      | 13 +++++++++--
+ target/arm/tcg/cpu-v7m.c              | 21 ++++++++++++++++++
+ target/arm/tcg/m_helper.c             |  3 ++-
+ tests/qtest/pic32cm-mc00-test.c       |  2 ++
+ 15 files changed, 100 insertions(+), 49 deletions(-)
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index 5dd67e8..65cfee4 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -23,9 +23,11 @@ channel of each peripheral. Peripherals are QOM children of
+ Supported devices
+ """""""""""""""""
+ 
+-- Cortex-M0 core (QEMU has no Cortex-M0+) reporting the Cortex-M0+ r0p1
+-  CPUID 0x410CC601, NVIC with 32 interrupts and 2 priority bits, SysTick
+-  clocked from the CPU clock
++- ``cortex-m0plus`` core (a fork addition): the Cortex-M0 ISA with the
++  Cortex-M0+ r0p1 CPUID 0x410CC601, the 8-region ARMv6-M MPU (MPU_TYPE
++  0x800; no TEX field, regions of 256 bytes and up, faults are HardFaults)
++  and unprivileged Thread mode (CONTROL.nPRIV), as on silicon. NVIC with 32
++  interrupts and 2 priority bits, SysTick clocked from the CPU clock
+ - Flash, data flash (both read as erased, 0xFF, where no image is
+   loaded), SRAM, and the NVM rows at 0x00800000-0x0080FFFF (calibration,
+   user row with the production fuse values, OTP rows, serial number)
+@@ -63,7 +65,21 @@ Supported devices
+   pull resistor. GPIO outputs ``port-out[n]`` and inputs ``port-in[n]``,
+   n = group * 32 + pin, use -1 for an undriven pad. The QOM properties
+   ``pa-in``, ``pa-in-mask``, ``pa-out`` and ``pa-out-mask`` (and ``pb-``,
+-  ``pc-``) of ``/machine/soc/port`` show and drive the pads.
++  ``pc-``) of ``/machine/soc/port`` show and drive the pads. Event inputs
++  (EVCTRL) set, clear, toggle or drive OUT.
++- EIC: edge and level detection on the EXTINT inputs that PORT routes to
++  it (pins muxed to function A) and NMI, synchronous edges only with the
++  EIC clock, event outputs.
++- TC: 8, 16 and 32-bit counting from the GCLK channel through the
++  prescaler, up or down, TOP from PER/MAX/CC0, overflow and match flags,
++  one-shot, commands, double buffering, COUNT32 pairs, event outputs and
++  the COUNT, RETRIGGER and START event actions. COUNT reads need
++  READSYNC, as on silicon.
++- RTC (U2250, PIC32CM MC00 only): the three modes, periodic flags,
++  calendar with alarm, event outputs; reset only at power-on.
++- EVSYS: channels on the three paths, software events, the users that
++  select them, CHSTATUS and the OVR/EVD flags as on silicon. Generators
++  and users are wired from the device's event table.
+ - LED0 (PC05, active low) is a QEMU LED device; its state changes show
+   in the ``led_set_intensity`` trace event. SW0 (PB19, to ground) is the
+   machine property ``sw0-pressed``.
+@@ -80,13 +96,11 @@ Missing devices
+ 
+ - SERCOM: SPI and I2C transfers, the external clock (XCK), synchronous
+   mode, LIN and auto-baud frames, IrDA, 9-bit characters and receive
+-  errors. PORT: event inputs (EVCTRL) and the sampling mode (CTRL).
+-- The MPU: QEMU only gives Armv7-M cores MPU regions, so the
+-  ``mpu-ns-regions`` setting of 8 has no effect and MPU_TYPE reads 0.
+-  CONTROL.nPRIV is not implemented on the Cortex-M0 either.
++  errors. PORT: the sampling mode (CTRL).
++- TC capture, waveform outputs on pins; the JH01 RTC (03608).
+ - Watchdog time-out, PAC write protection, flash programming through
+   NVMCTRL, DSU CRC32 and chip erase, sleep modes and every other
+-  peripheral behaviour (DMAC, EIC, TC, TCC, RTC, ADC, DAC, AC, CAN, ...).
++  peripheral behaviour (DMAC, TCC, ADC, DAC, AC, CAN, ...).
+ 
+ Board and SoC properties
+ """"""""""""""""""""""""
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 59868ef..2c4e6ed 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -21,9 +21,9 @@ instance (``/machine/soc/sercom0``, ``/machine/soc/port``, ...).
+ Differences from the PIC32CM JH01
+ """""""""""""""""""""""""""""""""
+ 
+-- SERCOM0 to SERCOM3 only; no CAN, ICM, SMBIST, PTC. The MC00 adds SDADC,
+-  TSENS and a second RTC version (U2250), which are generic register
+-  blocks.
++- SERCOM0 to SERCOM3 only; no CAN, ICM, SMBIST, PTC. The MC00 adds SDADC
++  and TSENS, which are generic register blocks, and a second RTC version
++  (U2250), which is modelled.
+ - PORT has groups A and B (QOM properties ``pa-*`` and ``pb-*``). GCLK has
+   35 peripheral channels.
+ - NVMCTRL has no ECC (no FLASHERR, FLTCAP, SERR or DERR flags).
+diff --git a/hw/arm/pic32cm_jh01_cpro.c b/hw/arm/pic32cm_jh01_cpro.c
+index 2528db8..d1b201d 100644
+--- a/hw/arm/pic32cm_jh01_cpro.c
++++ b/hw/arm/pic32cm_jh01_cpro.c
+@@ -106,16 +106,11 @@ static void pic32cm_jh01_cpro_init(MachineState *machine)
+                        s->soc.dev->flash_base, s->soc.dev->flash_size);
+ }
+ 
+-/* QEMU has no cortex-m0plus; give its cortex-m0 the M0+ CPUID */
+-static GlobalProperty pic32cm_jh01_cpro_compat[] = {
+-    { ARM_CPU_TYPE_NAME("cortex-m0"), "midr", stringify(PIC32CM_CPUID) },
+-};
+-
+ static void pic32cm_jh01_cpro_class_init(ObjectClass *oc, const void *data)
+ {
+     MachineClass *mc = MACHINE_CLASS(oc);
+     static const char *const valid_cpu_types[] = {
+-        ARM_CPU_TYPE_NAME("cortex-m0"),
++        ARM_CPU_TYPE_NAME("cortex-m0plus"),
+         NULL
+     };
+ 
+@@ -125,8 +120,6 @@ static void pic32cm_jh01_cpro_class_init(ObjectClass *oc, const void *data)
+     mc->valid_cpu_types = valid_cpu_types;
+     /* SRAM is part of the SoC */
+     mc->default_ram_size = 0;
+-    compat_props_add(mc->compat_props, pic32cm_jh01_cpro_compat,
+-                     G_N_ELEMENTS(pic32cm_jh01_cpro_compat));
+     object_class_property_add_bool(oc, "sw0-pressed",
+                                    pic32cm_jh01_cpro_get_sw0,
+                                    pic32cm_jh01_cpro_set_sw0);
+diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
+index 0d5a057..a9e74d3 100644
+--- a/hw/arm/pic32cm_mc00_cpro.c
++++ b/hw/arm/pic32cm_mc00_cpro.c
+@@ -104,16 +104,11 @@ static void pic32cm_mc00_cpro_init(MachineState *machine)
+                        s->soc.dev->flash_base, s->soc.dev->flash_size);
+ }
+ 
+-/* QEMU has no cortex-m0plus; give its cortex-m0 the M0+ CPUID */
+-static GlobalProperty pic32cm_mc00_cpro_compat[] = {
+-    { ARM_CPU_TYPE_NAME("cortex-m0"), "midr", stringify(PIC32CM_CPUID) },
+-};
+-
+ static void pic32cm_mc00_cpro_class_init(ObjectClass *oc, const void *data)
+ {
+     MachineClass *mc = MACHINE_CLASS(oc);
+     static const char *const valid_cpu_types[] = {
+-        ARM_CPU_TYPE_NAME("cortex-m0"),
++        ARM_CPU_TYPE_NAME("cortex-m0plus"),
+         NULL
+     };
+ 
+@@ -123,8 +118,6 @@ static void pic32cm_mc00_cpro_class_init(ObjectClass *oc, const void *data)
+     mc->valid_cpu_types = valid_cpu_types;
+     /* SRAM is part of the SoC */
+     mc->default_ram_size = 0;
+-    compat_props_add(mc->compat_props, pic32cm_mc00_cpro_compat,
+-                     G_N_ELEMENTS(pic32cm_mc00_cpro_compat));
+     object_class_property_add_bool(oc, "sw0-pressed",
+                                    pic32cm_mc00_cpro_get_sw0,
+                                    pic32cm_mc00_cpro_set_sw0);
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index 5c3fc97..c0a52c5 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -364,14 +364,11 @@ static bool pic32cm_realize_cpu(Pic32cmSocState *s, Error **errp)
+     DeviceState *armv7m = DEVICE(&s->armv7m);
+     DeviceState *mclk = pic32cm_periph(s, "MCLK");
+ 
+-    qdev_prop_set_string(armv7m, "cpu-type", ARM_CPU_TYPE_NAME("cortex-m0"));
++    qdev_prop_set_string(armv7m, "cpu-type",
++                         ARM_CPU_TYPE_NAME("cortex-m0plus"));
+     qdev_prop_set_uint32(armv7m, "num-irq", s->dev->num_irq);
+     qdev_prop_set_uint32(armv7m, "num-prio-bits", s->dev->nvic_prio_bits);
+-    /*
+-     * The Cortex-M0+ MPU has 8 regions. QEMU's cortex-m0 has no
+-     * pmsav7-dregion property (it is Armv7-M only), so armv7m drops this
+-     * and MPU_TYPE reads 0; see docs/system/arm/pic32cm-jh01-cpro.rst.
+-     */
++    /* The Cortex-M0+ MPU has 8 regions (MPU_TYPE 0x800 on silicon) */
+     qdev_prop_set_uint32(armv7m, "mpu-ns-regions", 8);
+     /* No Security Extension: the reset VTOR is the non-secure one */
+     qdev_prop_set_uint32(armv7m, "init-nsvtor", 0);
+diff --git a/hw/intc/armv7m_nvic.c b/hw/intc/armv7m_nvic.c
+index 82183a5..3a99714 100644
+--- a/hw/intc/armv7m_nvic.c
++++ b/hw/intc/armv7m_nvic.c
+@@ -1942,7 +1942,9 @@ static void nvic_writel(NVICState *s, uint32_t offset, uint32_t value,
+             return;
+         }
+ 
+-        cpu->env.pmsav7.drbar[region] = value & ~0x1f;
++        /* ARMv6-M regions are at least 256 bytes: ADDR is [31:8] */
++        cpu->env.pmsav7.drbar[region] = value &
++            (arm_feature(&cpu->env, ARM_FEATURE_V7) ? ~0x1f : ~0xff);
+         tlb_flush(CPU(cpu));
+         break;
+     }
+@@ -1977,7 +1979,9 @@ static void nvic_writel(NVICState *s, uint32_t offset, uint32_t value,
+         }
+ 
+         cpu->env.pmsav7.drsr[region] = value & 0xff3f;
+-        cpu->env.pmsav7.dracr[region] = (value >> 16) & 0x173f;
++        /* ARMv6-M has no TEX field (Cortex-M0+ silicon: RAZ/WI) */
++        cpu->env.pmsav7.dracr[region] = (value >> 16) &
++            (arm_feature(&cpu->env, ARM_FEATURE_V7) ? 0x173f : 0x1707);
+         tlb_flush(CPU(cpu));
+         break;
+     }
+diff --git a/include/hw/arm/pic32cm_soc.h b/include/hw/arm/pic32cm_soc.h
+index d88edf3..77b7b38 100644
+--- a/include/hw/arm/pic32cm_soc.h
++++ b/include/hw/arm/pic32cm_soc.h
+@@ -41,10 +41,7 @@ extern const MchpDeviceInfo *const pic32cm1216mc00048_info;
+ #define PIC32CM_MAX_IRQ_LINES   32      /* Cortex-M0+ NVIC */
+ #define PIC32CM_MAX_SERCOM      8
+ 
+-/*
+- * SCB->CPUID of the Cortex-M0+ r0p1 core of every supported device; boards
+- * apply it to QEMU's cortex-m0 as a "midr" global property.
+- */
++/* SCB->CPUID of the Cortex-M0+ r0p1 core of every supported device */
+ #define PIC32CM_CPUID           0x410CC601
+ 
+ struct Pic32cmSocClass {
+diff --git a/target/arm/cpu.c b/target/arm/cpu.c
+index 787e4dc..fa3a01c 100644
+--- a/target/arm/cpu.c
++++ b/target/arm/cpu.c
+@@ -617,7 +617,7 @@ static void arm_cpu_reset_hold(Object *obj, ResetType type)
+                            sizeof(*env->pmsav8.rlar[M_REG_S])
+                            * cpu->pmsav7_dregion);
+                 }
+-            } else if (arm_feature(env, ARM_FEATURE_V7)) {
++            } else if (arm_pmsav7_format(env)) {
+                 memset(env->pmsav7.drbar, 0,
+                        sizeof(*env->pmsav7.drbar) * cpu->pmsav7_dregion);
+                 memset(env->pmsav7.drsr, 0,
+@@ -1656,7 +1656,8 @@ static void arm_cpu_post_init(Object *obj)
+ #ifndef CONFIG_USER_ONLY
+     if (arm_feature(&cpu->env, ARM_FEATURE_PMSA)) {
+         qdev_property_add_static(DEVICE(obj), &arm_cpu_has_mpu_property);
+-        if (arm_feature(&cpu->env, ARM_FEATURE_V7)) {
++        if (arm_feature(&cpu->env, ARM_FEATURE_V7) ||
++            arm_feature(&cpu->env, ARM_FEATURE_M)) {
+             qdev_property_add_static(DEVICE(obj),
+                                      &arm_cpu_pmsav7_dregion_property);
+         }
+@@ -2332,7 +2333,8 @@ static void arm_cpu_realizefn(DeviceState *dev, Error **errp)
+     }
+ 
+     if (arm_feature(env, ARM_FEATURE_PMSA) &&
+-        arm_feature(env, ARM_FEATURE_V7)) {
++        (arm_feature(env, ARM_FEATURE_V7) ||
++         arm_feature(env, ARM_FEATURE_M))) {
+         uint32_t nr = cpu->pmsav7_dregion;
+ 
+         if (nr > 0xff) {
+diff --git a/target/arm/cpu.h b/target/arm/cpu.h
+index c0492c8..750cb86 100644
+--- a/target/arm/cpu.h
++++ b/target/arm/cpu.h
+@@ -1017,6 +1017,12 @@ struct ArchCPU {
+ 
+     /* CPU has memory protection unit */
+     bool has_mpu;
++    /*
++     * ARMv6-M with the Unprivileged/Privileged extension: CONTROL.nPRIV
++     * is writable (always so with the Main Extension). Peripheral
++     * Pretender addition, not for upstream.
++     */
++    bool m_unpriv_ext;
+     /* CPU has MTE enabled in KVM mode */
+     bool kvm_mte;
+     /* PMSAv7 MPU number of supported regions */
+diff --git a/target/arm/internals.h b/target/arm/internals.h
+index 4026f67..7b5ae31 100644
+--- a/target/arm/internals.h
++++ b/target/arm/internals.h
+@@ -2088,4 +2088,16 @@ static inline void arm_set_cpu_power_state(ARMCPU *cpu, ARMPSCIState state)
+     env->halt_reason = state == PSCI_OFF ? HALT_PSCI : NOT_HALTED;
+ }
+ 
++/*
++ * The MPU uses the PMSAv7 format: v7 PMSA CPUs, and the ARMv6-M MPU
++ * (Peripheral Pretender addition, not for upstream).
++ */
++static inline bool arm_pmsav7_format(CPUARMState *env)
++{
++    return arm_feature(env, ARM_FEATURE_PMSA) &&
++           !arm_feature(env, ARM_FEATURE_V8) &&
++           (arm_feature(env, ARM_FEATURE_V7) ||
++            arm_feature(env, ARM_FEATURE_M));
++}
++
+ #endif
+diff --git a/target/arm/machine.c b/target/arm/machine.c
+index 89127e5..eaf8db1 100644
+--- a/target/arm/machine.c
++++ b/target/arm/machine.c
+@@ -584,9 +584,9 @@ static bool pmsav7_needed(void *opaque)
+     ARMCPU *cpu = opaque;
+     CPUARMState *env = &cpu->env;
+ 
+-    return arm_feature(env, ARM_FEATURE_PMSA) &&
+-           arm_feature(env, ARM_FEATURE_V7) &&
+-           !arm_feature(env, ARM_FEATURE_V8);
++    /* ARMv6-M only with an MPU: older streams have no section for it */
++    return arm_pmsav7_format(env) &&
++           (arm_feature(env, ARM_FEATURE_V7) || cpu->pmsav7_dregion);
+ }
+ 
+ static bool pmsav7_rgnr_vmstate_validate(void *opaque, int version_id)
+diff --git a/target/arm/ptw.c b/target/arm/ptw.c
+index a29de03..e2d80ee 100644
+--- a/target/arm/ptw.c
++++ b/target/arm/ptw.c
+@@ -2812,6 +2812,15 @@ static bool get_phys_addr_pmsav7(CPUARMState *env,
+                 }
+             }
+             if (srdis) {
++                /*
++                 * The rest of the page may be in enabled subregions:
++                 * do not let a lower region or the background map cache
++                 * the whole page (Peripheral Pretender fix, not for
++                 * upstream)
++                 */
++                if (rsize < TARGET_PAGE_BITS) {
++                    result->f.lg_page_size = 0;
++                }
+                 continue;
+             }
+             if (rsize < TARGET_PAGE_BITS) {
+@@ -3901,8 +3910,8 @@ static bool get_phys_addr_nogpc(CPUARMState *env, S1Translate *ptw,
+             /* PMSAv8 */
+             ret = get_phys_addr_pmsav8(env, ptw, address, access_type,
+                                        result, fi);
+-        } else if (arm_feature(env, ARM_FEATURE_V7)) {
+-            /* PMSAv7 */
++        } else if (arm_pmsav7_format(env)) {
++            /* PMSAv7, or the ARMv6-M MPU */
+             ret = get_phys_addr_pmsav7(env, ptw, address, access_type,
+                                        result, fi);
+         } else {
+diff --git a/target/arm/tcg/cpu-v7m.c b/target/arm/tcg/cpu-v7m.c
+index dc249ce..0571264 100644
+--- a/target/arm/tcg/cpu-v7m.c
++++ b/target/arm/tcg/cpu-v7m.c
+@@ -76,6 +76,25 @@ static void cortex_m0_initfn(Object *obj)
+     SET_IDREG(isar, ID_ISAR6, 0x00000000);
+ }
+ 
++/*
++ * Peripheral Pretender: a personal project, AI-assisted; not for
++ * submission to upstream QEMU. Cortex-M0+ r0p1: the Cortex-M0 ISA
++ * (ARMv6-M) with the optional ARMv6-M MPU, 8 regions in the PMSAv7
++ * register format, and unprivileged Thread mode (CONTROL.nPRIV), as the
++ * PIC32CM silicon has them (Cortex-M0+ TRM, DDI 0484C). Configure the MPU
++ * out with has-mpu=false. Not modelled: the single-cycle I/O port, the
++ * MTB.
++ */
++static void cortex_m0plus_initfn(Object *obj)
++{
++    ARMCPU *cpu = ARM_CPU(obj);
++
++    cortex_m0_initfn(obj);
++    cpu->midr = 0x410cc601;
++    cpu->pmsav7_dregion = 8;
++    cpu->m_unpriv_ext = true;
++}
++
+ static void cortex_m3_initfn(Object *obj)
+ {
+     ARMCPU *cpu = ARM_CPU(obj);
+@@ -280,6 +299,8 @@ static void arm_v7m_class_init(ObjectClass *oc, const void *data)
+ static const ARMCPUInfo arm_v7m_cpus[] = {
+     { .name = "cortex-m0",   .initfn = cortex_m0_initfn,
+                              .class_init = arm_v7m_class_init },
++    { .name = "cortex-m0plus", .initfn = cortex_m0plus_initfn,
++                             .class_init = arm_v7m_class_init },
+     { .name = "cortex-m3",   .initfn = cortex_m3_initfn,
+                              .class_init = arm_v7m_class_init },
+     { .name = "cortex-m4",   .initfn = cortex_m4_initfn,
+diff --git a/target/arm/tcg/m_helper.c b/target/arm/tcg/m_helper.c
+index 33c9e7c..39fe468 100644
+--- a/target/arm/tcg/m_helper.c
++++ b/target/arm/tcg/m_helper.c
+@@ -2775,7 +2775,8 @@ void HELPER(v7m_msr)(CPUARMState *env, uint32_t maskreg, uint32_t val)
+                            !arm_v7m_is_handler_mode(env))) {
+             write_v7m_control_spsel(env, (val & R_V7M_CONTROL_SPSEL_MASK) != 0);
+         }
+-        if (cur_el > 0 && arm_feature(env, ARM_FEATURE_M_MAIN)) {
++        if (cur_el > 0 && (arm_feature(env, ARM_FEATURE_M_MAIN) ||
++                           env_archcpu(env)->m_unpriv_ext)) {
+             env->v7m.control[env->v7m.secure] &= ~R_V7M_CONTROL_NPRIV_MASK;
+             env->v7m.control[env->v7m.secure] |= val & R_V7M_CONTROL_NPRIV_MASK;
+         }
+diff --git a/tests/qtest/pic32cm-mc00-test.c b/tests/qtest/pic32cm-mc00-test.c
+index ebf94dd..02ef769 100644
+--- a/tests/qtest/pic32cm-mc00-test.c
++++ b/tests/qtest/pic32cm-mc00-test.c
+@@ -75,6 +75,8 @@ static void test_identity(void)
+     /* Rev A2 by default (SERIES 7, DEVSEL 0x06), Cortex-M0+ r0p1 */
+     g_assert_cmphex(qtest_readl(qts, DSU + 0x18), ==, 0x11070106);
+     g_assert_cmphex(qtest_readl(qts, SCB_CPUID), ==, 0x410CC601);
++    /* 8-region MPU (silicon: MPU_TYPE 0x800) */
++    g_assert_cmphex(qtest_readl(qts, 0xE000ED90), ==, 0x800);
+     qtest_quit(qts);
+ 
+     qts = qtest_init(MACHINE
+-- 
+2.53.0.windows.2
+

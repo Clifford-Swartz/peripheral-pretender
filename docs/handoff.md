@@ -159,8 +159,11 @@ Open MC00 items:
    - Read DSU.DID and CPUID with pyOCD in attach mode, which is read-only.
    - Decide on the first programming. It erases BOOTPROT and the factory bootloader.
    - Dump golden reset values, run `hello.elf` on both targets, and diff.
-4. ~~Tier 1 models (EIC, TC, RTC, EVSYS)~~ **done 2026-10-13**, checked on silicon. Still to do:
-   a `cortex-m0plus` CPU type in target/arm so the M0+ MPU works (Zephyr needs it).
+4. ~~Tier 1 models (EIC, TC, RTC, EVSYS)~~ **done 2026-10-13**, checked on silicon.
+   ~~`cortex-m0plus` CPU type~~ **done 2026-10-13** (patch 0014): 8-region ARMv6-M MPU and
+   unprivileged mode, checked on silicon with the `mpu` app (MPU_TYPE 0x800; no TEX field;
+   RBAR.ADDR [31:8]). Also fixes a QEMU PMSAv7 bug where a disabled subregion cached a whole
+   TLB page.
 
 ## Known issues
 

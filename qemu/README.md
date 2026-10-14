@@ -20,6 +20,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0011 | RTC model for the MC00 (three modes, PER flags, calendar, alarm); OSC32KCTRL CLK_RTC_OSC output; power-on-only reset for RTC and OSC32KCTRL (as on silicon); RTC qtest |
 | 0012 | Per-instance counter width for TCC registers (TCC0/1 24-bit, TCC2 16-bit; ATDF SIZE), matching silicon reset values |
 | 0013 | EVSYS model (channels, users, software events, CHSTATUS/OVR/EVD as on silicon); generated event table (MchpDeviceInfo.events) wired by the SoC; event outputs of EIC (levels for level senses), TC and RTC; event inputs of TC (COUNT, RETRIGGER, START) and PORT (OUT/SET/CLR/TGL); EVSYS qtest |
+| 0014 | `cortex-m0plus` CPU type (M0+ r0p1 CPUID, 8-region ARMv6-M MPU in the PMSAv7 format, CONTROL.nPRIV); ARMv6-M MPU_RASR/RBAR masks as on silicon; fix for disabled MPU subregions caching a whole TLB page; PIC32CM SoC uses it; board docs brought up to date |
 
 ## Setting it up
 
