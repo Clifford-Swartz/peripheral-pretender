@@ -53,9 +53,11 @@ or halting them. Approvals so far:
 | Kit | Approved | Scope |
 |---|---|---|
 | EV15N46A (PIC32CM MC00 Curiosity Pro) | 2026-10-13 | everything |
-| EV81X90A (PIC32CM JH01 Curiosity Pro) | 2026-10-14 | everything, including the first chip erase |
+| PIC32CM JH01 Curiosity Nano | 2026-10-14 | everything, including the first chip erase |
+| EV66E56A (AVR64EA48 Curiosity Nano), on an AC164162 Curiosity Nano Base | 2026-10-14 | everything; never lock the device |
 
-For any other kit, ask the owner first and add a row here. Even with approval, never set the
+The PIC32CM JH01 Curiosity Pro (EV81X90A) is modelled but not on the desk: it has no silicon
+checks. For any other kit, ask the owner first and add a row here. Even with approval, never set the
 security bit or anything else that cannot be undone.
 
 ## Tools the playbook uses

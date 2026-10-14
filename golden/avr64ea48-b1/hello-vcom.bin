@@ -1,0 +1,5 @@
+
+PP avr-hello: AVR64EA48 on AVR64EA48 Curiosity Nano
+id: sig0=0x1E sig1=0x96 sig2=0x1E rev=0x21
+clock: mclkctrla=0x00 mclkctrlb=0x11
+PP:EXIT 0
