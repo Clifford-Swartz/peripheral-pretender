@@ -41,8 +41,10 @@ Decisions so far:
    brightness (`breathe` demo). The TCC1 WO[2] pin on PA24/PA08 was checked on silicon: duty
    CC/(PER+1); floating with the pull off while the TCC is disabled; the start-of-cycle level
    after STOP.
-3. **SERCOM SPI and I2C**, then the first Click boards: an LED/button Click, a potentiometer
-   on the ADC, and a sensor over I2C.
+3. ~~SERCOM SPI and I2C~~ (2026-10-14). Host modes on QEMU's SSI and I2C buses, checked on
+   silicon. On the board that means the EDBG data gateway at 0x28 (the ATECC608A footprint is
+   not fitted) and an SPI loopback through the MOSI pad. **Next: the first Click boards**: an
+   I2C sensor on EXT1, an LED/button Click, a potentiometer on the ADC.
 4. **3D board.** A glTF slab with top and bottom textures, components from the pick-and-place
    heights, and later models from the Altium design.
 5. **Hosted demo.** A containerized twin per session, a firmware build service, and the

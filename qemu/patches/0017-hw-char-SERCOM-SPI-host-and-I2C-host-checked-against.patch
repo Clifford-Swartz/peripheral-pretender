@@ -1,0 +1,768 @@
+From 07e01a9dced709967ad70af289bb04b627a4e19b Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 14 Oct 2026 00:50:29 -0700
+Subject: [PATCH] hw/char: SERCOM SPI host and I2C host, checked against
+ PIC32CM MC00
+
+SPI host (MODE 3): each DATA write shifts out on the SERCOM's SSI bus
+and the reply goes into the two-character receive buffer; an input pad
+on the output pad loops back, an unconnected input reads 0xFF; a lost
+character shows as STATUS.BUFOVF/INTFLAG.ERROR and a 0 in its place when
+the buffer runs empty (silicon).
+
+I2C host (MODE 5): ADDR starts a transfer on the SERCOM's I2C bus (MB,
+or SB with the first byte), DATA writes and smart-mode reads, CTRLB.CMD
+repeated start, byte read and stop; STATUS.BUSSTATE UNKNOWN after
+enable, IDLE when forced, OWNER during a transfer and briefly after the
+stop; CLKHOLD and RXNACK as seen on silicon.
+
+MC00 board: the EDBG data gateway, the only device on the board's I2C
+bus (the ATECC608A footprint is not fitted), acknowledges at 0x28, reads
+0x00 and ignores the general call. New qtests for both modes.
+
+Peripheral Pretender: a personal project; not for upstream.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst |  14 +-
+ hw/arm/pic32cm_mc00_cpro.c            |   8 +
+ hw/char/mchp_sercom.c                 | 351 +++++++++++++++++++++++++-
+ hw/char/trace-events                  |   3 +
+ hw/misc/mchp_edbg_dgi.c               |  63 +++++
+ hw/misc/meson.build                   |   1 +
+ include/hw/misc/mchp_edbg_dgi.h       |  17 ++
+ tests/qtest/pic32cm-mc00-test.c       |  56 ++++
+ 8 files changed, 499 insertions(+), 14 deletions(-)
+ create mode 100644 hw/misc/mchp_edbg_dgi.c
+ create mode 100644 include/hw/misc/mchp_edbg_dgi.h
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index 3b00c76..2e21703 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -57,8 +57,11 @@ Supported devices
+   backend. Characters leave at once unless the SERCOM property
+   ``pace-tx`` is on, which holds each one for a frame time at the rate
+   set by BAUD and the SERCOM's GCLK channel. Debugger reads of DATA do not
+-  pop the receive buffer. The SPI and I2C modes only store their
+-  registers.
++  pop the receive buffer. The SPI host and I2C host modes transfer on the
++  SERCOM's QEMU SSI and I2C buses (``/machine/soc/sercomN/sercomN.spi``,
++  ``.i2c``) at once, with the flags and bus states seen on silicon; an
++  SPI input on the output pad loops back, an unconnected one reads 0xFF.
++  On the MC00 board the EDBG data gateway answers at I2C address 0x28.
+ - PORT: DIR, OUT and their SET/CLR/TGL registers, PINCFG, PMUX, WRCONFIG
+   and the IOBUS view at 0x60000000. IN shows each pad with its input
+   buffer on: the PORT's own output, else an external driver, else the
+@@ -103,9 +106,10 @@ Supported devices
+ Missing devices
+ """""""""""""""
+ 
+-- SERCOM: SPI and I2C transfers, the external clock (XCK), synchronous
+-  mode, LIN and auto-baud frames, IrDA, 9-bit characters and receive
+-  errors. PORT: the sampling mode (CTRL).
++- SERCOM: SPI and I2C client modes, SPI/I2C bus timing, arbitration,
++  timeouts and 10-bit/high-speed I2C addressing, the USART external clock
++  (XCK), synchronous mode, LIN and auto-baud frames, IrDA, 9-bit characters
++  and receive errors. PORT: the sampling mode (CTRL).
+ - TC capture, waveform outputs on pins; the JH01 RTC (03608). TCC faults,
+   dead time, pattern generation, dithering, capture, circular buffers and
+   the DSCRITICAL waveform.
+diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
+index c3bde49..86c4177 100644
+--- a/hw/arm/pic32cm_mc00_cpro.c
++++ b/hw/arm/pic32cm_mc00_cpro.c
+@@ -20,7 +20,9 @@
+ #include "hw/core/irq.h"
+ #include "hw/core/qdev-clock.h"
+ #include "hw/gpio/mchp_port.h"
++#include "hw/i2c/i2c.h"
+ #include "hw/misc/led.h"
++#include "hw/misc/mchp_edbg_dgi.h"
+ #include "system/system.h"
+ 
+ #define CPRO_XOSC_HZ        12000000
+@@ -29,6 +31,7 @@
+ /* User LED0 (yellow, active low) and switch SW0 (to ground, no pull-up) */
+ #define CPRO_LED0_PIN       MCHP_PORT_PIN('A', 24)
+ #define CPRO_SW0_PIN        MCHP_PORT_PIN('A', 25)
++#define CPRO_EDBG_DGI_ADDR  0x28    /* on the I2C bus, SERCOM2 */
+ 
+ /* serial_hd(i) is wired to SERCOM pic32cm_mc00_cpro_serial[i] */
+ static const unsigned pic32cm_mc00_cpro_serial[] = {
+@@ -100,6 +103,11 @@ static void pic32cm_mc00_cpro_init(MachineState *machine)
+     /* The LED from VCC pulls its pad high while nothing drives it */
+     qemu_set_irq(qdev_get_gpio_in_named(port, MCHP_PORT_IN, CPRO_LED0_PIN), 1);
+     s->sw0 = qdev_get_gpio_in_named(port, MCHP_PORT_IN, CPRO_SW0_PIN);
++    /* The EDBG data gateway on the I2C bus (SERCOM2, PA12/PA13) */
++    i2c_slave_create_simple(
++        I2C_BUS(qdev_get_child_bus(pic32cm_soc_periph(&s->soc, "SERCOM2"),
++                                   "sercom2.i2c")),
++        TYPE_MCHP_EDBG_DGI, CPRO_EDBG_DGI_ADDR);
+     pic32cm_mc00_cpro_update_sw0(s);
+ 
+     armv7m_load_kernel(s->soc.armv7m.cpu, machine->kernel_filename,
+diff --git a/hw/char/mchp_sercom.c b/hw/char/mchp_sercom.c
+index 32bc20c..d46ac94 100644
+--- a/hw/char/mchp_sercom.c
++++ b/hw/char/mchp_sercom.c
+@@ -8,6 +8,24 @@
+  * front of the transmit shift register, a two-character receive buffer,
+  * and the INTFLAG rules: DRE is cleared only by writing DATA, TXC by W1C or
+  * by writing DATA, RXC only by reading DATA or disabling the receiver.
++ *
++ * The SPI host (MODE 3) shifts each DATA write out on the instance's SSI
++ * bus at once and takes the reply into a two-character receive buffer
++ * (CTRLB.RXEN). With DIPO on the pad DOPO drives, the input is the output
++ * (a loopback through the pad); with no device on the bus the line reads
++ * 0xFF. A character arriving with the buffer full is lost; when the buffer
++ * runs empty STATUS.BUFOVF and INTFLAG.ERROR are set and a 0 takes the lost
++ * character's place (PIC32CM MC00 silicon).
++ *
++ * The I2C host (MODE 5) runs transfers on the instance's I2C bus: ADDR
++ * starts one (write: MB; read: the first byte and SB, or MB on a NACK),
++ * DATA writes send a byte (MB, STATUS.RXNACK), DATA reads in smart mode
++ * acknowledge and fetch the next byte, CTRLB.CMD gives repeated start,
++ * byte read and stop. STATUS.BUSSTATE is UNKNOWN after enable until
++ * software forces IDLE, OWNER during a transfer and for a moment after
++ * the stop (silicon). Transfers complete at once; bus timing, arbitration,
++ * timeouts, 10-bit and high-speed addressing are not modelled.
++ *
+  * Register semantics (W1C, set/clear aliases, enable protection, views,
+  * SWRST) come from the generated tables through mchp-regblock.
+  *
+@@ -41,6 +59,21 @@
+ 
+ #define MCHP_SERCOM_RX_DEPTH    2
+ 
++#define MCHP_SERCOM_MODE_SPIM   3
++#define MCHP_SERCOM_MODE_I2CM   5
++
++/* I2C STATUS.BUSSTATE */
++enum {
++    I2C_BUS_UNKNOWN,
++    I2C_BUS_IDLE,
++    I2C_BUS_OWNER,
++    I2C_BUS_BUSY,
++};
++
++#define I2C_STOP_NS             10000       /* stop, then IDLE (silicon) */
++#define I2CM(reg, f)            R_MCHP_SERCOM_I2CM_##reg##_##f##_MASK
++#define SPIM(reg, f)            R_MCHP_SERCOM_SPIM_##reg##_##f##_MASK
++
+ /* Receive errors that disabling the receiver clears (DS 30.7.2) */
+ #define MCHP_SERCOM_RX_ERRORS \
+     (R_MCHP_SERCOM_USART_INT_STATUS_PERR_MASK | \
+@@ -69,6 +102,14 @@ struct MchpSercomState {
+     /* Receiver */
+     uint16_t rx_buf[MCHP_SERCOM_RX_DEPTH];
+     uint8_t rx_count;
++    bool rx_overflow;           /* SPI: a character lost, not yet flagged */
++
++    /* I2C host */
++    uint8_t i2c_bus;            /* STATUS.BUSSTATE */
++    bool i2c_active;            /* a transfer since the last stop */
++    bool i2c_read;
++    uint8_t i2c_rx;             /* the byte DATA reads */
++    QEMUTimer *i2c_stop_timer;
+ };
+ 
+ static uint32_t mchp_sercom_reg(MchpSercomState *s, hwaddr offset,
+@@ -141,12 +182,45 @@ static bool mchp_sercom_has_parity(uint32_t ctrla)
+     }
+ }
+ 
++static unsigned mchp_sercom_mode(MchpSercomState *s)
++{
++    return FIELD_EX32(mchp_sercom_reg(s, A_CTRLA, 4),
++                      MCHP_SERCOM_USART_INT_CTRLA, MODE);
++}
++
++static bool mchp_sercom_enabled(MchpSercomState *s)
++{
++    return FIELD_EX32(mchp_sercom_reg(s, A_CTRLA, 4),
++                      MCHP_SERCOM_USART_INT_CTRLA, ENABLE);
++}
++
++/* I2C: STATUS.BUSSTATE, CLKHOLD and RXNACK (@nack < 0: unchanged) */
++static void mchp_sercom_i2c_status(MchpSercomState *s, unsigned bus,
++                                   bool clkhold, int nack)
++{
++    uint32_t st = mchp_sercom_reg(s, A_STATUS, 2);
++
++    s->i2c_bus = bus;
++    st = FIELD_DP32(st, MCHP_SERCOM_I2CM_STATUS, BUSSTATE, bus);
++    st = FIELD_DP32(st, MCHP_SERCOM_I2CM_STATUS, CLKHOLD, clkhold);
++    if (nack >= 0) {
++        st = FIELD_DP32(st, MCHP_SERCOM_I2CM_STATUS, RXNACK, nack);
++    }
++    mchp_sercom_set_reg(s, A_STATUS, 2, st);
++}
++
+ /* INTFLAG.DRE and RXC mirror the buffers; the IRQ follows INTFLAG. */
+ static void mchp_sercom_update(MchpSercomState *s)
+ {
+     uint32_t flags = mchp_sercom_reg(s, A_INTFLAG, 1);
+ 
+-    if (mchp_sercom_is_usart(mchp_sercom_reg(s, A_CTRLA, 4))) {
++    if (mchp_sercom_mode(s) == MCHP_SERCOM_MODE_SPIM) {
++        flags = FIELD_DP32(flags, MCHP_SERCOM_SPIM_INTFLAG, DRE,
++                           mchp_sercom_enabled(s));
++        flags = FIELD_DP32(flags, MCHP_SERCOM_SPIM_INTFLAG, RXC,
++                           s->rx_count != 0);
++        mchp_sercom_set_reg(s, A_INTFLAG, 1, flags);
++    } else if (mchp_sercom_is_usart(mchp_sercom_reg(s, A_CTRLA, 4))) {
+         flags = FIELD_DP32(flags, MCHP_SERCOM_USART_INT_INTFLAG, DRE,
+                            mchp_sercom_tx_enabled(s) && !s->tx_buf_full);
+         flags = FIELD_DP32(flags, MCHP_SERCOM_USART_INT_INTFLAG, RXC,
+@@ -335,15 +409,214 @@ static uint32_t mchp_sercom_data_read(MchpSercomState *s, bool side_effects)
+     return data;
+ }
+ 
++/* -- SPI host ------------------------------------------------------------ */
++
++/* The pad CTRLA.DOPO puts the data output on (DS 32.8.1) */
++static unsigned mchp_sercom_spi_do_pad(uint32_t ctrla)
++{
++    static const uint8_t pad[] = { 0, 2, 3, 0 };
++
++    return pad[FIELD_EX32(ctrla, MCHP_SERCOM_SPIM_CTRLA, DOPO)];
++}
++
++/* One character out on DATA's write, the reply into the buffer */
++static void mchp_sercom_spi_write(MchpSercomState *s, uint32_t data)
++{
++    uint32_t ctrla = mchp_sercom_reg(s, A_CTRLA, 4);
++    uint32_t ctrlb = mchp_sercom_reg(s, A_CTRLB, 4);
++    unsigned bits = FIELD_EX32(ctrlb, MCHP_SERCOM_SPIM_CTRLB, CHSIZE) ? 9 : 8;
++    uint32_t tx = data & MAKE_64BIT_MASK(0, bits), rx;
++
++    if (!mchp_sercom_enabled(s)) {
++        return;
++    }
++    if (FIELD_EX32(ctrla, MCHP_SERCOM_SPIM_CTRLA, DIPO) ==
++        mchp_sercom_spi_do_pad(ctrla)) {
++        rx = tx;                /* the input pad is the output pad */
++    } else if (QTAILQ_EMPTY(&BUS(s->spi)->children)) {
++        rx = MAKE_64BIT_MASK(0, bits);  /* nothing drives MISO */
++    } else {
++        rx = ssi_transfer(s->spi, tx) & MAKE_64BIT_MASK(0, bits);
++    }
++    trace_mchp_sercom_spi(MCHP_REGBLOCK(s)->name, tx, rx);
++    if (FIELD_EX32(ctrlb, MCHP_SERCOM_SPIM_CTRLB, RXEN)) {
++        if (s->rx_count < MCHP_SERCOM_RX_DEPTH) {
++            s->rx_buf[s->rx_count++] = rx;
++        } else {
++            s->rx_overflow = true;
++        }
++    }
++    mchp_sercom_set_reg(s, A_INTFLAG, 1,
++                        mchp_sercom_reg(s, A_INTFLAG, 1) |
++                        SPIM(INTFLAG, TXC));
++}
++
++/* DATA read: the oldest character; a lost one is flagged when emptied */
++static uint32_t mchp_sercom_spi_read(MchpSercomState *s, bool side_effects)
++{
++    uint32_t data;
++
++    if (!s->rx_count) {
++        return 0;
++    }
++    data = s->rx_buf[0];
++    if (side_effects) {
++        s->rx_buf[0] = s->rx_buf[1];
++        if (!--s->rx_count && s->rx_overflow) {
++            /* The lost character leaves a 0 behind, with RXC (silicon) */
++            s->rx_overflow = false;
++            s->rx_buf[s->rx_count++] = 0;
++            mchp_sercom_set_reg(s, A_STATUS, 2,
++                                mchp_sercom_reg(s, A_STATUS, 2) |
++                                SPIM(STATUS, BUFOVF));
++            mchp_sercom_set_reg(s, A_INTFLAG, 1,
++                                mchp_sercom_reg(s, A_INTFLAG, 1) |
++                                SPIM(INTFLAG, ERROR));
++        }
++        mchp_sercom_update(s);
++    }
++    return data;
++}
++
++/* -- I2C host ------------------------------------------------------------ */
++
++static void mchp_sercom_i2c_flag(MchpSercomState *s, uint32_t flag)
++{
++    uint32_t f = mchp_sercom_reg(s, A_INTFLAG, 1);
++
++    f &= ~(I2CM(INTFLAG, MB) | I2CM(INTFLAG, SB));
++    mchp_sercom_set_reg(s, A_INTFLAG, 1, f | flag);
++}
++
++/* ADDR: start (or repeat) a transfer to the address in ADDR */
++static void mchp_sercom_i2c_start(MchpSercomState *s)
++{
++    uint32_t addr = mchp_sercom_reg(s, A_MCHP_SERCOM_I2CM_ADDR, 4);
++    uint8_t dev = extract32(addr, 1, 7);
++    int nack;
++
++    if (!mchp_sercom_enabled(s)) {
++        return;
++    }
++    timer_del(s->i2c_stop_timer);
++    s->i2c_read = addr & 1;
++    s->i2c_active = true;
++    if (s->i2c_read) {
++        nack = i2c_start_recv(s->i2c, dev) != 0;
++        if (!nack) {
++            s->i2c_rx = i2c_recv(s->i2c);
++        }
++        mchp_sercom_i2c_flag(s, nack ? I2CM(INTFLAG, MB) : I2CM(INTFLAG, SB));
++    } else {
++        nack = i2c_start_send(s->i2c, dev) != 0;
++        mchp_sercom_i2c_flag(s, I2CM(INTFLAG, MB));
++    }
++    trace_mchp_sercom_i2c_start(MCHP_REGBLOCK(s)->name, dev, s->i2c_read,
++                                nack);
++    mchp_sercom_i2c_status(s, I2C_BUS_OWNER, true, nack);
++}
++
++static void mchp_sercom_i2c_write(MchpSercomState *s, uint8_t data)
++{
++    int nack;
++
++    if (!s->i2c_active || s->i2c_read) {
++        return;
++    }
++    nack = i2c_send(s->i2c, data) != 0;
++    trace_mchp_sercom_i2c_byte(MCHP_REGBLOCK(s)->name, data, nack);
++    mchp_sercom_i2c_flag(s, I2CM(INTFLAG, MB));
++    mchp_sercom_i2c_status(s, I2C_BUS_OWNER, true, nack);
++}
++
++/* Receive the next byte (after the ACK of the last one) */
++static void mchp_sercom_i2c_next(MchpSercomState *s)
++{
++    s->i2c_rx = i2c_recv(s->i2c);
++    trace_mchp_sercom_i2c_byte(MCHP_REGBLOCK(s)->name, s->i2c_rx, 0);
++    mchp_sercom_i2c_flag(s, I2CM(INTFLAG, SB));
++    mchp_sercom_i2c_status(s, I2C_BUS_OWNER, true, -1);
++}
++
++static void mchp_sercom_i2c_stop_done(void *opaque)
++{
++    MchpSercomState *s = opaque;
++
++    if (!s->i2c_active && s->i2c_bus == I2C_BUS_OWNER) {
++        mchp_sercom_i2c_status(s, I2C_BUS_IDLE, false, -1);
++    }
++}
++
++/* CTRLB.CMD: the acknowledge action, then repeated start/read/stop */
++static void mchp_sercom_i2c_command(MchpSercomState *s, unsigned cmd)
++{
++    bool nack = FIELD_EX32(mchp_sercom_reg(s, A_CTRLB, 4),
++                           MCHP_SERCOM_I2CM_CTRLB, ACKACT);
++
++    if (!s->i2c_active) {
++        return;
++    }
++    if (s->i2c_read && nack && cmd != 2) {
++        i2c_nack(s->i2c);
++    }
++    switch (cmd) {
++    case 1:
++        mchp_sercom_i2c_start(s);
++        break;
++    case 2:
++        if (s->i2c_read) {
++            mchp_sercom_i2c_next(s);
++        }
++        break;
++    case 3:
++        i2c_end_transfer(s->i2c);
++        s->i2c_active = false;
++        mchp_sercom_i2c_flag(s, 0);
++        mchp_sercom_i2c_status(s, I2C_BUS_OWNER, false, -1);
++        timer_mod(s->i2c_stop_timer,
++                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + I2C_STOP_NS);
++        break;
++    }
++}
++
++/* DATA read: the received byte; smart mode acknowledges and goes on */
++static uint32_t mchp_sercom_i2c_read(MchpSercomState *s, bool side_effects)
++{
++    uint32_t data = s->i2c_rx;
++
++    if (side_effects && s->i2c_active && s->i2c_read) {
++        mchp_sercom_i2c_flag(s, 0);
++        if (FIELD_EX32(mchp_sercom_reg(s, A_CTRLB, 4),
++                       MCHP_SERCOM_I2CM_CTRLB, SMEN)) {
++            if (FIELD_EX32(mchp_sercom_reg(s, A_CTRLB, 4),
++                           MCHP_SERCOM_I2CM_CTRLB, ACKACT)) {
++                i2c_nack(s->i2c);
++            } else {
++                mchp_sercom_i2c_next(s);
++            }
++        }
++        mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++    }
++    return data;
++}
++
+ static uint32_t mchp_sercom_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
+                                      unsigned idx, uint32_t stored,
+                                      bool side_effects)
+ {
+     MchpSercomState *s = MCHP_SERCOM(rf->opaque);
+ 
+-    if (ri->offset == A_DATA &&
+-        mchp_sercom_is_usart(mchp_sercom_reg(s, A_CTRLA, 4))) {
+-        return mchp_sercom_data_read(s, side_effects);
++    if (ri->offset == A_DATA) {
++        switch (mchp_sercom_mode(s)) {
++        case MCHP_SERCOM_MODE_SPIM:
++            return mchp_sercom_spi_read(s, side_effects);
++        case MCHP_SERCOM_MODE_I2CM:
++            return mchp_sercom_i2c_read(s, side_effects);
++        default:
++            if (mchp_sercom_is_usart(mchp_sercom_reg(s, A_CTRLA, 4))) {
++                return mchp_sercom_data_read(s, side_effects);
++            }
++        }
+     }
+     return stored;      /* SYNCBUSY: synchronization is instant */
+ }
+@@ -381,6 +654,9 @@ static void mchp_sercom_report_unimp(MchpSercomState *s, uint32_t ctrla,
+     unsigned mode = FIELD_EX32(ctrla, MCHP_SERCOM_USART_INT_CTRLA, MODE);
+     unsigned form = FIELD_EX32(ctrla, MCHP_SERCOM_USART_INT_CTRLA, FORM);
+ 
++    if (mode == MCHP_SERCOM_MODE_SPIM || mode == MCHP_SERCOM_MODE_I2CM) {
++        return;
++    }
+     if (!mchp_sercom_is_usart(ctrla)) {
+         qemu_log_mask(LOG_UNIMP, "%s.CTRLA: %s mode not modelled; the"
+                       " registers only store\n", rb->name,
+@@ -427,13 +703,53 @@ static void mchp_sercom_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+         if (ctrla & ~old & R_MCHP_SERCOM_USART_INT_CTRLA_ENABLE_MASK) {
+             mchp_sercom_report_unimp(s, ctrla, ctrlb);
+         }
++        if ((ctrla ^ old) & R_MCHP_SERCOM_USART_INT_CTRLA_ENABLE_MASK &&
++            mode == MCHP_SERCOM_MODE_I2CM) {
++            /* Enabled: the bus state is unknown until software says */
++            if (s->i2c_active) {
++                i2c_end_transfer(s->i2c);
++                s->i2c_active = false;
++            }
++            mchp_sercom_i2c_status(s, I2C_BUS_UNKNOWN, false, 0);
++        }
+         mchp_sercom_rx_switched(s, mchp_sercom_rx_on(old, ctrlb));
+         break;
+     case A_CTRLB:
++        if (mode == MCHP_SERCOM_MODE_I2CM) {
++            unsigned cmd = FIELD_EX32(written & we, MCHP_SERCOM_I2CM_CTRLB,
++                                      CMD);
++
++            mchp_sercom_set_reg(s, A_CTRLB, 4, ctrlb & ~I2CM(CTRLB, CMD));
++            if (cmd) {
++                mchp_sercom_i2c_command(s, cmd);
++            }
++            break;
++        }
+         mchp_sercom_rx_switched(s, mchp_sercom_rx_on(ctrla, old));
+         break;
++    case A_MCHP_SERCOM_I2CM_STATUS:
++        if (mode == MCHP_SERCOM_MODE_I2CM) {
++            /* Writing BUSSTATE = IDLE forces it (only from UNKNOWN/IDLE) */
++            unsigned bus = s->i2c_bus;
++
++            if (FIELD_EX32(written & we, MCHP_SERCOM_I2CM_STATUS, BUSSTATE) ==
++                I2C_BUS_IDLE && mchp_sercom_enabled(s) &&
++                bus != I2C_BUS_OWNER) {
++                bus = I2C_BUS_IDLE;
++            }
++            mchp_sercom_i2c_status(s, bus, FIELD_EX32(old,
++                                   MCHP_SERCOM_I2CM_STATUS, CLKHOLD), -1);
++        }
++        break;
+     case A_DATA:
+-        if (mchp_sercom_is_usart(ctrla)) {
++        if (mode == MCHP_SERCOM_MODE_SPIM) {
++            mchp_sercom_set_reg(s, A_INTFLAG, 1,
++                                mchp_sercom_reg(s, A_INTFLAG, 1) &
++                                ~SPIM(INTFLAG, TXC));
++            mchp_sercom_spi_write(s, mchp_regfile_get(rf, ri, idx));
++        } else if (mode == MCHP_SERCOM_MODE_I2CM) {
++            mchp_sercom_i2c_write(s, mchp_regfile_get(rf, ri, idx));
++        } else if (mchp_sercom_is_usart(ctrla)) {
+             mchp_sercom_data_write(s, mchp_regfile_get(rf, ri, idx));
+         } else {
+             qemu_log_mask(LOG_UNIMP, "%s.DATA: %s transfer not modelled\n",
+@@ -441,8 +757,9 @@ static void mchp_sercom_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+         }
+         break;
+     case A_MCHP_SERCOM_I2CM_ADDR:
+-        qemu_log_mask(LOG_UNIMP, "%s.ADDR: I2C transfer not modelled\n",
+-                      rb->name);
++        if (mode == MCHP_SERCOM_MODE_I2CM) {
++            mchp_sercom_i2c_start(s);
++        }
+         break;
+     }
+     mchp_sercom_update(s);
+@@ -456,9 +773,16 @@ static void mchp_sercom_reset_hold(MchpRegBlock *rb)
+     g_clear_handle_id(&s->watch_tag, g_source_remove);
+     timer_del(s->frame_timer);
+     timer_del(s->resume_timer);
++    timer_del(s->i2c_stop_timer);
+     s->tx_buf_full = false;
+     s->tx_busy = false;
+     s->rx_count = 0;
++    s->rx_overflow = false;
++    if (s->i2c_active) {
++        i2c_end_transfer(s->i2c);
++    }
++    s->i2c_active = false;
++    s->i2c_bus = I2C_BUS_UNKNOWN;
+ }
+ 
+ static bool mchp_sercom_realize(MchpRegBlock *rb, Error **errp)
+@@ -472,6 +796,8 @@ static bool mchp_sercom_realize(MchpRegBlock *rb, Error **errp)
+     s->frame_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mchp_sercom_frame_end,
+                                   s);
+     s->resume_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mchp_sercom_resume, s);
++    s->i2c_stop_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
++                                     mchp_sercom_i2c_stop_done, s);
+     qemu_chr_fe_set_handlers(&s->chr, mchp_sercom_can_receive,
+                              mchp_sercom_receive, NULL, NULL, s, NULL, true);
+     return true;
+@@ -484,6 +810,7 @@ static void mchp_sercom_finalize(Object *obj)
+     g_clear_handle_id(&s->watch_tag, g_source_remove);
+     timer_free(s->frame_timer);
+     timer_free(s->resume_timer);
++    timer_free(s->i2c_stop_timer);
+ }
+ 
+ /* A watch of this process refers to state that loadvm replaces. */
+@@ -513,8 +840,8 @@ static int mchp_sercom_post_load(void *opaque, int version_id)
+ 
+ static const VMStateDescription vmstate_mchp_sercom = {
+     .name = TYPE_MCHP_SERCOM,
+-    .version_id = 1,
+-    .minimum_version_id = 1,
++    .version_id = 2,
++    .minimum_version_id = 2,
+     .pre_load = mchp_sercom_pre_load,
+     .post_load = mchp_sercom_post_load,
+     .fields = (const VMStateField[]) {
+@@ -527,6 +854,12 @@ static const VMStateDescription vmstate_mchp_sercom = {
+         VMSTATE_TIMER_PTR(frame_timer, MchpSercomState),
+         VMSTATE_UINT16_ARRAY(rx_buf, MchpSercomState, MCHP_SERCOM_RX_DEPTH),
+         VMSTATE_UINT8(rx_count, MchpSercomState),
++        VMSTATE_BOOL(rx_overflow, MchpSercomState),
++        VMSTATE_UINT8(i2c_bus, MchpSercomState),
++        VMSTATE_BOOL(i2c_active, MchpSercomState),
++        VMSTATE_BOOL(i2c_read, MchpSercomState),
++        VMSTATE_UINT8(i2c_rx, MchpSercomState),
++        VMSTATE_TIMER_PTR(i2c_stop_timer, MchpSercomState),
+         VMSTATE_END_OF_LIST()
+     },
+ };
+diff --git a/hw/char/trace-events b/hw/char/trace-events
+index 9cf0257..78c8295 100644
+--- a/hw/char/trace-events
++++ b/hw/char/trace-events
+@@ -144,5 +144,8 @@ htif_uart_unknown_device_command(uint8_t device, uint8_t cmd, uint64_t payload)
+ 
+ # mchp_sercom.c
+ mchp_sercom_tx(const char *name, uint8_t ch) "%s: tx 0x%02x"
++mchp_sercom_spi(const char *name, uint32_t tx, uint32_t rx) "%s: SPI out 0x%x, in 0x%x"
++mchp_sercom_i2c_start(const char *name, unsigned addr, int read, int nack) "%s: I2C start 0x%02x read %d nack %d"
++mchp_sercom_i2c_byte(const char *name, unsigned data, int nack) "%s: I2C byte 0x%02x nack %d"
+ mchp_sercom_tx_blocked(const char *name) "%s: chardev busy, tx waits"
+ mchp_sercom_rx(const char *name, uint8_t ch) "%s: rx 0x%02x"
+diff --git a/hw/misc/mchp_edbg_dgi.c b/hw/misc/mchp_edbg_dgi.c
+new file mode 100644
+index 0000000..cac8bf4
+--- /dev/null
++++ b/hw/misc/mchp_edbg_dgi.c
+@@ -0,0 +1,63 @@
++/*
++ * Microchip EDBG data gateway (DGI) as seen on a Curiosity Pro I2C bus
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The board's debugger listens on the target's I2C bus (address 0x28 on
++ * the PIC32CM MC00 Curiosity Pro). As the target sees it on silicon, it
++ * acknowledges its address and every byte written, reads return 0x00, and
++ * it does not answer the general call (address 0). The gateway protocol
++ * itself is not modelled.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "hw/i2c/i2c.h"
++#include "hw/misc/mchp_edbg_dgi.h"
++
++/* Its own address only: the general call goes unanswered (silicon) */
++static bool mchp_edbg_dgi_match(I2CSlave *candidate, uint8_t address,
++                                bool broadcast, I2CNodeList *current_devs)
++{
++    I2CNode *node;
++
++    if (broadcast || candidate->address != address) {
++        return false;
++    }
++    node = g_new(struct I2CNode, 1);
++    node->elt = candidate;
++    QLIST_INSERT_HEAD(current_devs, node, next);
++    return true;
++}
++
++static uint8_t mchp_edbg_dgi_recv(I2CSlave *i2c)
++{
++    return 0x00;
++}
++
++static int mchp_edbg_dgi_send(I2CSlave *i2c, uint8_t data)
++{
++    return 0;                   /* ACK */
++}
++
++static void mchp_edbg_dgi_class_init(ObjectClass *klass, const void *data)
++{
++    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
++
++    k->match_and_add = mchp_edbg_dgi_match;
++    k->recv = mchp_edbg_dgi_recv;
++    k->send = mchp_edbg_dgi_send;
++}
++
++static const TypeInfo mchp_edbg_dgi_types[] = {
++    {
++        .name = TYPE_MCHP_EDBG_DGI,
++        .parent = TYPE_I2C_SLAVE,
++        .instance_size = sizeof(I2CSlave),
++        .class_init = mchp_edbg_dgi_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_edbg_dgi_types)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 11f7b08..e26e45a 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -23,6 +23,7 @@ system_ss.add(when: 'CONFIG_MCHP_REGFILE', if_true: files(
+ ))
+ system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files(
+   'mchp_clock.c',
++  'mchp_edbg_dgi.c',
+   'mchp_eic.c',
+   'mchp_evsys.c',
+   'mchp_sysctrl.c',
+diff --git a/include/hw/misc/mchp_edbg_dgi.h b/include/hw/misc/mchp_edbg_dgi.h
+new file mode 100644
+index 0000000..19fbdac
+--- /dev/null
++++ b/include/hw/misc/mchp_edbg_dgi.h
+@@ -0,0 +1,17 @@
++/*
++ * Microchip EDBG data gateway (DGI) as seen on a Curiosity Pro I2C bus
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * An I2C target that acknowledges everything and reads 0x00.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_MCHP_EDBG_DGI_H
++#define HW_MISC_MCHP_EDBG_DGI_H
++
++#define TYPE_MCHP_EDBG_DGI "mchp-edbg-dgi"
++
++#endif /* HW_MISC_MCHP_EDBG_DGI_H */
+diff --git a/tests/qtest/pic32cm-mc00-test.c b/tests/qtest/pic32cm-mc00-test.c
+index 02ef769..d2235ca 100644
+--- a/tests/qtest/pic32cm-mc00-test.c
++++ b/tests/qtest/pic32cm-mc00-test.c
+@@ -29,6 +29,8 @@
+ #define DSU             0x41002000
+ #define NVMCTRL         0x41004000
+ #define SERCOM0         0x42000400
++#define SERCOM1         0x42000800
++#define SERCOM2         0x42000C00
+ #define USER_ROW        0x00804000
+ #define SCB_CPUID       0xE000ED00
+ 
+@@ -176,10 +178,64 @@ static void test_led0_sw0(void)
+     qtest_quit(qts);
+ }
+ 
++/* SERCOM2 I2C host: the EDBG data gateway at 0x28 is the only device */
++static void test_i2c_dgi(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, SERCOM2 + 0x00, 5 << 2);             /* I2C host */
++    qtest_writel(qts, SERCOM2 + 0x04, BIT(8));             /* SMEN */
++    qtest_writel(qts, SERCOM2 + 0x00, 5 << 2 | 0x02);      /* ENABLE */
++    g_assert_cmphex(qtest_readw(qts, SERCOM2 + 0x1A), ==, 0x00);
++    qtest_writew(qts, SERCOM2 + 0x1A, 0x10);               /* force IDLE */
++    g_assert_cmphex(qtest_readw(qts, SERCOM2 + 0x1A), ==, 0x10);
++
++    qtest_writel(qts, SERCOM2 + 0x24, 0x10 << 1);          /* no device */
++    g_assert_cmphex(qtest_readb(qts, SERCOM2 + 0x18), ==, 0x01);    /* MB */
++    g_assert_cmphex(qtest_readw(qts, SERCOM2 + 0x1A), ==, 0xA4);
++    qtest_writel(qts, SERCOM2 + 0x04, BIT(8) | 3 << 16);   /* stop */
++    g_assert_cmphex(qtest_readw(qts, SERCOM2 + 0x1A), ==, 0x24);
++    qtest_clock_step(qts, 20000);
++    g_assert_cmphex(qtest_readw(qts, SERCOM2 + 0x1A), ==, 0x14);
++
++    qtest_writel(qts, SERCOM2 + 0x24, 0x28 << 1 | 1);      /* read DGI */
++    g_assert_cmphex(qtest_readb(qts, SERCOM2 + 0x18), ==, 0x02);    /* SB */
++    g_assert_cmphex(qtest_readw(qts, SERCOM2 + 0x1A), ==, 0xA0);
++    g_assert_cmphex(qtest_readb(qts, SERCOM2 + 0x28), ==, 0x00);
++    g_assert_cmphex(qtest_readb(qts, SERCOM2 + 0x18), ==, 0x02);    /* next */
++    qtest_writel(qts, SERCOM2 + 0x04, BIT(8) | BIT(18) | 3 << 16);
++    qtest_quit(qts);
++}
++
++/* SERCOM1 SPI host: MISO on the MOSI pad loops back; elsewhere reads 0xFF */
++static void test_spi_loopback(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    /* DOPO 1 (DO on PAD2), DIPO 2, RXEN */
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16 | 2 << 20);
++    qtest_writel(qts, SERCOM1 + 0x04, BIT(17));
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16 | 2 << 20 | 0x02);
++    g_assert_cmphex(qtest_readb(qts, SERCOM1 + 0x18), ==, 0x01);    /* DRE */
++    qtest_writel(qts, SERCOM1 + 0x28, 0x5A);
++    g_assert_cmphex(qtest_readb(qts, SERCOM1 + 0x18), ==, 0x07);
++    g_assert_cmphex(qtest_readl(qts, SERCOM1 + 0x28), ==, 0x5A);
++
++    qtest_writel(qts, SERCOM1 + 0x00, 0x01);               /* SWRST */
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16);   /* DIPO 0 */
++    qtest_writel(qts, SERCOM1 + 0x04, BIT(17));
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16 | 0x02);
++    qtest_writel(qts, SERCOM1 + 0x28, 0x5A);
++    g_assert_cmphex(qtest_readl(qts, SERCOM1 + 0x28), ==, 0xFF);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+ 
++    qtest_add_func("pic32cm-mc00/i2c-dgi", test_i2c_dgi);
++    qtest_add_func("pic32cm-mc00/spi-loopback", test_spi_loopback);
+     qtest_add_func("pic32cm-mc00/identity", test_identity);
+     qtest_add_func("pic32cm-mc00/reset-values", test_reset_values);
+     qtest_add_func("pic32cm-mc00/port-groups", test_port_groups);
+-- 
+2.53.0.windows.2
+

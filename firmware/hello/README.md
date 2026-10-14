@@ -20,6 +20,8 @@ BOARD=<board>` builds `tests/<test>.c` into `build/<board>/<test>.elf`.
 | `evsys` | EVSYS (MC00) paths with software events and generators (TC0, EIC, RTC), edge selection, the channel clock rule, CHSTATUS and OVR/EVD with and without ready users, the interrupt, register masks, TC1 event actions (COUNT, RETRIGGER, START, TCINV) and PORT event actions |
 | `tcc` | TCC (MC00): output state and flags in NPWM, NFRQ and dual slope, one-shot, STOP/RETRIGGER, buffers and LUPD, CNTSEL, events in and out through EVSYS, counter width, interrupt, synchronization without the clock |
 | `tccprobe` | raw TCC observations, in rounds (`-DPROBE_ROUNDS=`): waveform modes, CNTSEL/STOP/buffers, register writes, event actions, the waveform pin (duty and drive) |
+| `sercom` | SERCOM I2C host (bus states, ACK/NACK flags, stop, scan, general call, the EDBG data gateway at 0x28) and SPI host (pad loopback, open MISO, overflow, receiver off) |
+| `sercomprobe` | raw SERCOM I2C/SPI observations (prints, checks nothing) |
 | `breathe` | demo for the web board view: LED0 dimmed by a TCC1 PWM on PA24 (function F), duty rising and falling every 2 s; SW0 held for full brightness |
 | `blinky` | demo for the web board view (`tools/pp_web`): LED0 at 2 Hz, 8 Hz while SW0 is held, presses logged on VCOM; runs forever |
 | `mpu` | Cortex-M0+ MPU: MPU_TYPE, register read-back, read-only, XN, subregion and background faults (HardFault on ARMv6-M), unprivileged mode against a privileged-only region |
