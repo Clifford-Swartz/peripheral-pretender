@@ -3,6 +3,33 @@
 
 const $ = (id) => document.getElementById(id);
 let ws, board, catalog = {}, adapters = {}, leds = [], clicks = {}, levels = {};
+let pinsNow = {}, clickState = {};
+
+// The mikroBUS pin behind a Click signal name ("int", "pwm", ...) on header h
+function clickPin(h, role) {
+  return (h.mikrobus && h.mikrobus[role]) || (role === "int" ? h.int_pin : role);
+}
+
+// Fraction of the last frame a pad was high: driven time from the duty
+// figures, the rest at its resolved level (a pull, an external driver)
+function pinHigh(pin) {
+  const { group, bit } = pinRef(pin);
+  const level = group in levels ? (levels[group] >>> bit) & 1 : 0;
+  const g = pinsNow[group];
+  if (!g) return level;
+  const [hi, lo] = g[bit];
+  return hi + Math.max(0, 1 - hi - lo) * level;
+}
+
+// Seven segments in a 10.6 x 16 box: a b c d e f g as polygons, dp a dot
+function segPolys() {
+  const h = (cy) => [[2.3, cy], [2.85, cy - .55], [7.15, cy - .55], [7.7, cy],
+                     [7.15, cy + .55], [2.85, cy + .55]];
+  const v = (cx, y0, y1) => [[cx, y0], [cx + .55, y0 + .55], [cx + .55, y1 - .55],
+                             [cx, y1], [cx - .55, y1 - .55], [cx - .55, y0 + .55]];
+  return { a: h(1.6), b: v(8.4, 2.1, 7.9), c: v(8.4, 8.1, 13.9), d: h(14.4),
+           e: v(1.6, 8.1, 13.9), f: v(1.6, 2.1, 7.9), g: h(8) };
+}
 
 function connect() {
   ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
@@ -143,8 +170,15 @@ function drawClick(stack, h, id, def) {
     place(img, [ad.origin_mm[0] + ad.size_mm[0] / 2 + dx,
                 ad.origin_mm[1] - ad.size_mm[1] / 2 + dy], ad.size_mm);
     stack.appendChild(img);
-    at = [ad.socket.at_mm[0] + dx, ad.socket.at_mm[1] + dy];
     rot = ad.socket.rotation;
+    // The socket holds the Click's header centre; the image centre is
+    // off it by the Click's own geometry, turned with the Click
+    const hc = def.header_center_mm || [11.43, 8.89];
+    const ox = def.origin_mm[0] + def.size_mm[0] / 2 - hc[0];
+    const oy = def.origin_mm[1] - def.size_mm[1] / 2 - hc[1];
+    const r = (rot * Math.PI) / 180;
+    at = [ad.socket.at_mm[0] + dx + ox * Math.cos(r) + oy * Math.sin(r),
+          ad.socket.at_mm[1] + dy - ox * Math.sin(r) + oy * Math.cos(r)];
   }
   const art = document.createElement("div");
   art.className = "click-board";
@@ -157,24 +191,75 @@ function drawClick(stack, h, id, def) {
   img.src = `/clicks/${def.image}`;
   img.alt = def.name;
   art.appendChild(img);
-  const put = (el, mm, d) => {
+  art.dataset.slot = h.slot;
+  const put = (el, mm, d, dh) => {
     el.style.left = `${((mm[0] - ox) / w) * 100}%`;
     el.style.top = `${((oy - mm[1]) / hh) * 100}%`;
     el.style.width = `${(d / w) * 100}%`;
+    if (dh) el.style.height = `${(dh / hh) * 100}%`;
     art.appendChild(el);
   };
   for (const led of def.leds || []) {
     const el = document.createElement("div");
-    el.className = "click-led";
+    el.className = led.pin ? "click-led pinned" : "click-led";
     el.style.background = `radial-gradient(circle, #fff 0 12%, ${led.color} 25%, ${led.color}55 48%, transparent 70%)`;
     el.title = led.id;
-    put(el, led.at_mm, 3.2);
+    if (led.pin) {
+      el.dataset.pin = clickPin(h, led.pin);
+      el.dataset.activeLow = led.active_low ? "1" : "";
+    }
+    put(el, led.at_mm, led.size_mm || 3.2);
   }
+  // Buttons on the Click: held while the pointer is down
+  for (const btn of def.buttons || []) {
+    const el = document.createElement("div");
+    el.className = "click-btn";
+    el.title = `${btn.id} (hold to keep it pressed)`;
+    const press = (down) => {
+      el.classList.toggle("down", down);
+      send({ type: "control", slot: h.slot, id: btn.id, value: down ? 1 : 0 });
+    };
+    el.addEventListener("pointerdown", (e) => {
+      try { el.setPointerCapture(e.pointerId); } catch (_) { /* synthetic */ }
+      press(true);
+    });
+    el.addEventListener("pointerup", () => press(false));
+    el.addEventListener("pointercancel", () => press(false));
+    put(el, btn.at_mm, btn.size_mm[0], btn.size_mm[1]);
+  }
+  // Relays: their state follows the driving pin
+  for (const rel of def.relays || []) {
+    const el = document.createElement("div");
+    el.className = "click-relay";
+    el.dataset.pin = clickPin(h, rel.pin);
+    el.innerHTML = `<span>${rel.id}</span><b>ON</b>`;
+    el.title = `${rel.id} (${el.dataset.pin})`;
+    put(el, rel.at_mm, rel.size_mm[0], rel.size_mm[1]);
+  }
+  // A seven-segment display: digits from a register of the Click's device
+  if (def.display && def.display.type === "7seg") {
+    const polys = segPolys();
+    for (const d of def.display.digits) {
+      const el = document.createElement("div");
+      el.className = "click-7seg";
+      el.dataset.shift = d.shift;
+      el.dataset.prop = `${h.slot}.${def.display.property}`;
+      el.dataset.enable = clickPin(h, def.display.enable_pin);
+      el.style.setProperty("--seg", def.display.color);
+      const segs = Object.entries(def.display.segments).map(([name, bit]) =>
+        name === "dp"
+          ? `<circle data-bit="${bit}" cx="9.6" cy="14.6" r=".65"/>`
+          : `<polygon data-bit="${bit}" points="${polys[name].map((p) => p.join(",")).join(" ")}"/>`);
+      el.innerHTML = `<svg viewBox="0 0 10.6 16" preserveAspectRatio="none">${segs.join("")}</svg>`;
+      put(el, d.at_mm, d.size_mm[0], d.size_mm[1]);
+    }
+  }
+  updateClickParts();
   for (const sig of def.signals) {
     if (!sig.at_mm) continue;
     const el = document.createElement("div");
     el.className = "click-pin";
-    el.dataset.pin = sig.pin === "int" ? h.int_pin : sig.pin;
+    el.dataset.pin = clickPin(h, sig.pin);
     el.dataset.activeLow = sig.active_low ? "1" : "";
     el.title = `${sig.id} (${el.dataset.pin})`;
     put(el, sig.at_mm, 2.6);
@@ -211,7 +296,7 @@ function showClicks(state) {
       for (const sig of def.signals) {
         const s = document.createElement("div");
         s.className = "signal";
-        s.dataset.pin = sig.pin === "int" ? h.int_pin : sig.pin;
+        s.dataset.pin = clickPin(h, sig.pin);
         s.dataset.activeLow = sig.active_low ? "1" : "";
         s.innerHTML = `<i></i>${sig.id} <small>(${s.dataset.pin})</small>`;
         body.appendChild(s);
@@ -228,8 +313,47 @@ function showClicks(state) {
 }
 
 // A Click output is "active" while its pad sits at the active level
+// Pin-driven parts on the Clicks: LEDs, relays, seven-segment digits
+function updateClickParts() {
+  for (const el of document.querySelectorAll(".click-led.pinned")) {
+    const f = pinHigh(el.dataset.pin);
+    el.style.opacity = Math.min(1, el.dataset.activeLow ? 1 - f : f);
+  }
+  for (const el of document.querySelectorAll(".click-relay")) {
+    const on = pinHigh(el.dataset.pin) > 0.5;
+    if (on !== el.classList.contains("on") && el.dataset.seen) tick();
+    el.dataset.seen = "1";
+    el.classList.toggle("on", on);
+  }
+  for (const el of document.querySelectorAll(".click-7seg")) {
+    const value = Number(clickState[el.dataset.prop] || 0);
+    const bright = Math.min(1, pinHigh(el.dataset.enable));
+    for (const seg of el.querySelectorAll("[data-bit]")) {
+      const lit = (value >>> (Number(el.dataset.shift) + Number(seg.dataset.bit))) & 1;
+      seg.style.opacity = lit ? Math.max(0.08, bright) : 0.07;
+    }
+  }
+}
+
+// A relay's click, from a short burst of noise
+let audio;
+function tick() {
+  try {
+    audio = audio || new AudioContext();
+    const n = Math.floor(audio.sampleRate * 0.012);
+    const buf = audio.createBuffer(1, n, audio.sampleRate), data = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    const src = audio.createBufferSource(), gain = audio.createGain();
+    gain.gain.value = 0.25;
+    src.buffer = buf;
+    src.connect(gain).connect(audio.destination);
+    src.start();
+  } catch (_) { /* no audio */ }
+}
+
 function showSignals(lv) {
   levels = lv;
+  updateClickParts();
   for (const s of document.querySelectorAll(".signal, .click-pin")) {
     const { group, bit } = pinRef(s.dataset.pin);
     if (!(group in lv)) { s.classList.remove("active"); continue; }
@@ -241,6 +365,8 @@ function showSignals(lv) {
 // Brightness: the fraction of the last frame the LED's pad was driven to
 // its "on" level, so a PWM-dimmed LED glows at its duty cycle
 function showPins(pins) {
+  pinsNow = pins;
+  updateClickParts();
   for (const led of leds) {
     const g = pins[led.group];
     const f = g ? g[led.bit][led.active_low ? 1 : 0] : 0;
@@ -264,6 +390,7 @@ function handle(msg) {
   case "board": buildBoard(msg.board, msg.catalog, msg.adapters); break;
   case "clicks": showClicks(msg.clicks); break;
   case "levels": showSignals(msg.levels); break;
+  case "clickstate": clickState = msg.state; updateClickParts(); break;
   case "pins": showPins(msg.pins); break;
   case "uart": appendUart(msg.data); break;
   case "reset": $("console").textContent = ""; showPins({}); showSignals({}); break;

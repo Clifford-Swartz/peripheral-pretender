@@ -26,6 +26,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0017 | SERCOM SPI host and I2C host (on the QEMU SSI and I2C buses), checked against MC00 silicon; EDBG data gateway I2C target (0x28) on the MC00 board; qtests |
 | 0018 | Click boards on the MC00 board (`ext1=`/`ext2=` machine options); the Thermo 8 Click (`mchp-mcp9808` I2C temperature sensor with a live `temperature` property and an open-drain ALERT on INT); PORT `pX-levels`; qtests |
 | 0019 | Thermo 8 Click: its 4.7 kOhm pull-up (R3) on INT, so an inactive ALERT reads high without the pad's pull-up |
+| 0020 | Click table per mikroBUS signal (RST/PWM/INT/CS, I2C or SPI, the Clicks' pull resistors); Button G (`click-button`), 7seg (`74hc595` chain on SPI) and Relay Clicks; qtests |
 
 ## Setting it up
 

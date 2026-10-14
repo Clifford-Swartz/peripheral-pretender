@@ -138,7 +138,9 @@ py tools/pp_web/boards/recolor_board.py <tracespace top.svg> out.svg --mask "#1d
 
 `adapters.json` gives each adapter's image (`origin_mm`, `size_mm` in its pick-and-place
 coordinates), the centre of the socket that goes on the board's header (`header_at_mm`), and
-where and how it holds the Click (`socket`). A header in `board.json` names its `adapter`;
+where and how it holds the Click (`socket`: where the Click's mikroBUS header centre goes, and
+the rotation). A Click's header centre is (11.43, 8.89) in its own coordinates unless
+`header_center_mm` says otherwise. A header in `board.json` names its `adapter`;
 the page lines the socket up with the header (`at_mm`) and draws the Click on top. A header
 without an adapter takes the Click at `click_at_mm`. `view_mm` widens the stage beyond the
 board so the stack fits. Its PWR LED glows while the

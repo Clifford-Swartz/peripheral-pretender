@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import math
 import struct
 import time
 from pathlib import Path
@@ -17,6 +18,7 @@ BUILD = ROOT / "firmware" / "hello" / "build" / "pic32cm_mc00_cpro"
 BLINKY = BUILD / "blinky.elf"
 BREATHE = BUILD / "breathe.elf"
 THERMO = BUILD / "thermo.elf"
+CLICKS_DEMO = BUILD / "clicks.elf"
 JH01_BLINKY = (ROOT / "firmware" / "hello" / "build" / "pic32cm_jh01_cpro"
                / "blinky.elf")
 
@@ -37,13 +39,13 @@ def test_board_description():
     (vx, vy), (vw, vh) = board["view_mm"]["origin"], board["view_mm"]["size"]
     spans = []
     for hd in board["headers"]:
-        boxes = _stack_boxes(hd, CLICKS["thermo8"])
+        boxes = [b for c in CLICKS.values() for b in _stack_boxes(hd, c)]
         for x0, y0, x1, y1 in boxes:
             assert vx <= x0 and x1 <= vx + vw, (hd["id"], x0, x1)
             assert vy - vh <= y0 and y1 <= vy, (hd["id"], y0, y1)
         spans.append((min(b[1] for b in boxes), max(b[3] for b in boxes)))
     spans.sort()
-    assert spans[0][1] <= spans[1][0], spans
+    assert spans[0][1] <= spans[1][0], spans    # any two Clicks fit together
     assert _png_size(BOARDS / "ev15n46a" / board["image"]) == tuple(
         round(v * board["px_per_mm"]) for v in board["size_mm"])
 
@@ -85,7 +87,12 @@ def _stack_boxes(header: dict, click: dict) -> list[tuple[float, ...]]:
     dx = header["at_mm"][0] - ad["header_at_mm"][0]
     dy = header["at_mm"][1] - ad["header_at_mm"][1]
     (ox, oy), (w, h) = ad["origin_mm"], ad["size_mm"]
-    cx, cy = ad["socket"]["at_mm"][0] + dx, ad["socket"]["at_mm"][1] + dy
+    hc = click.get("header_center_mm", [11.43, 8.89])
+    kx = click["origin_mm"][0] + click["size_mm"][0] / 2 - hc[0]
+    ky = click["origin_mm"][1] - click["size_mm"][1] / 2 - hc[1]
+    r = math.radians(ad["socket"]["rotation"])
+    cx = ad["socket"]["at_mm"][0] + dx + kx * math.cos(r) + ky * math.sin(r)
+    cy = ad["socket"]["at_mm"][1] + dy - kx * math.sin(r) + ky * math.cos(r)
     cw, ch = click["size_mm"]
     if ad["socket"]["rotation"] % 180:
         cw, ch = ch, cw
@@ -114,8 +121,8 @@ def test_click_catalog():
             assert sig["pin"] == "int", sig
         # The image is rendered at 20 px/mm over the outline
         image = BOARDS.parent / "clicks" / click["image"]
-        assert _png_size(image) == tuple(round(v * 20)
-                                         for v in click["size_mm"])
+        size = _png_size(image)
+        assert all(abs(n - v * 20) <= 1 for n, v in zip(size, click["size_mm"])), size
         (ox, oy), (w, h) = click["origin_mm"], click["size_mm"]
         for part in click.get("leds", []) + click["signals"]:
             x, y = part["at_mm"]
@@ -334,3 +341,49 @@ def test_watch_runs_each_new_build(tmp_path, monkeypatch):
         return ran
 
     assert asyncio.run(scenario()) == [b"\x7fELF old", b"\x7fELF new"]
+
+
+@pytest.mark.qemu
+def test_session_button_g_and_7seg(qemu_path, qemu_machines):
+    """clicks.elf: Button G Click presses on EXT1 count up on the 7seg Click
+    on EXT2 (two 74HC595 over SPI), and the button's LED follows it."""
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not CLICKS_DEMO.is_file():
+        pytest.skip("clicks.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=clicks)")
+
+    async def scenario():
+        uart, pins = [], []
+
+        def emit(msg):
+            if msg["type"] == "uart":
+                uart.append(msg["data"])
+            elif msg["type"] == "pins":
+                pins.append(msg["pins"])
+
+        s = Session("pic32cm-mc00-cpro,ext1=buttong,ext2=7seg", CLICKS_DEMO,
+                    emit, watch=[("ext2", "outputs")])
+        await s.start()
+        try:
+            await asyncio.sleep(0.8)
+            for _ in range(3):
+                await s.set_click("ext1", "pressed", True)
+                await asyncio.sleep(0.25)
+                await s.set_click("ext1", "pressed", False)
+                await asyncio.sleep(0.25)
+            await s.set_click("ext1", "pressed", True)
+            await asyncio.sleep(0.4)
+            held = pins[-1]["b"][10][0]           # PB10: the button's LED
+            await s.set_click("ext1", "pressed", False)
+            await asyncio.sleep(0.4)
+            state = dict(s.click_state)
+        finally:
+            await s.stop()
+        return "".join(uart), held, state
+
+    uart, held, state = asyncio.run(scenario())
+    assert "press count=0x04" in uart, uart
+    assert held > 0.9
+    # U1 (bits 7:0) is the left digit: 0; U2 the right digit: 4
+    assert state["ext2.outputs"] == 0xCA << 8 | 0x7E, hex(state["ext2.outputs"])

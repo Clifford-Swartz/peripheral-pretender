@@ -89,6 +89,8 @@ class Session:
     emit: Callable[[dict], None]
     groups: tuple[str, ...] = ("a", "b")
     extra_args: tuple[str, ...] = ()        # more QEMU arguments (-d, -D)
+    watch: list[tuple[str, str]] = field(default_factory=list)  # Click props
+    click_state: dict[str, object] = field(default_factory=dict)
     proc: asyncio.subprocess.Process | None = None
     qmp: Qmp | None = None
     uart_writer: asyncio.StreamWriter | None = None
@@ -158,6 +160,13 @@ class Session:
             if levels != self.levels:
                 self.levels = levels
                 self.emit({"type": "levels", "levels": levels})
+            state = {}
+            for slot, prop in self.watch:
+                state[f"{slot}.{prop}"] = await self.qmp.execute(
+                    "qom-get", path=f"/machine/{slot}-click", property=prop)
+            if state != self.click_state:
+                self.click_state = state
+                self.emit({"type": "clickstate", "state": state})
             await asyncio.sleep(POLL_S)
 
     async def _watch(self) -> None:
@@ -173,7 +182,7 @@ class Session:
         elif button == "reset" and pressed:
             await self.qmp.execute("system_reset")
 
-    async def set_click(self, slot: str, prop: str, value: int) -> None:
+    async def set_click(self, slot: str, prop: str, value: int | bool) -> None:
         """Set a QOM property of the Click board in @slot ("ext1")."""
         await self.qmp.execute("qom-set", path=f"/machine/{slot}-click",
                                property=prop, value=value)

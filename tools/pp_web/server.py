@@ -12,7 +12,8 @@ itself), the twin restarts with it.
 Messages to the page: {"type": "status"|"pins"|"uart"|"board"|"clicks",
 ...}; "pins" maps a PORT group ("a", "b") to 32 [driven-high, driven-low]
 fractions of the last frame, "levels" each group's pad levels as a
-32-bit mask (whoever drives them); "board" carries the board, the Click
+32-bit mask (whoever drives them); "clickstate" maps "<slot>.<property>" to
+the value of each plugged Click's display property; "board" carries the board, the Click
 catalog and the adapters; "clicks" maps each header slot ("ext1") to its Click and control
 values, or null.
 Messages from the page: {"type": "button", "id": "sw0"|"reset",
@@ -61,6 +62,7 @@ def pin_groups(board: dict) -> tuple[str, ...]:
     LEDs and header INT pins, and always A and B."""
     pins = [p["pin"] for p in board["leds"]]
     pins += [h["int_pin"] for h in board["headers"] if "int_pin" in h]
+    pins += [p for h in board["headers"] for p in h.get("mikrobus", {}).values()]
     return tuple(sorted({"a", "b"} | {p[1].lower() for p in pins}))
 
 
@@ -84,6 +86,12 @@ class App:
         opts = [f"{slot}={c['id']}" for slot, c in self.clicks.items() if c]
         return ",".join([self.board["machine"], *opts])
 
+    def click_watch(self) -> list[tuple[str, str]]:
+        """(slot, property) of each plugged Click's display, polled live."""
+        return [(slot, CLICKS[c["id"]]["display"]["property"])
+                for slot, c in self.clicks.items()
+                if c and "display" in CLICKS[c["id"]]]
+
     async def plug(self, slot: str, click: str | None) -> None:
         if slot not in self.clicks or (click and click not in CLICKS):
             return
@@ -98,6 +106,14 @@ class App:
         c = self.clicks.get(slot)
         ctl = c and next((x for x in CLICKS[c["id"]]["controls"]
                           if x["id"] == cid), None)
+        btn = c and next((x for x in CLICKS[c["id"]].get("buttons", [])
+                          if x["id"] == cid), None)
+        if btn and self.session and self.session.qmp:
+            try:                        # a button on the Click: held or not
+                await self.session.set_click(slot, btn["property"], bool(value))
+            except (RuntimeError, ConnectionError):
+                pass
+            return
         if not ctl:
             return
         value = min(max(float(value), ctl["min"]), ctl["max"])
@@ -131,7 +147,8 @@ class App:
             self.emit({"type": "reset"})
             self.elf = elf
             self.session = Session(self.machine(), elf, self.emit,
-                                   groups=pin_groups(self.board))
+                                   groups=pin_groups(self.board),
+                                   watch=self.click_watch())
             try:
                 await self.session.start()
                 for slot, c in self.clicks.items():
@@ -179,6 +196,8 @@ class App:
                                           "pins": self.session.pins}))
             await ws.send_str(json.dumps({"type": "levels",
                                           "levels": self.session.levels}))
+            await ws.send_str(json.dumps({"type": "clickstate",
+                                          "state": self.session.click_state}))
         async for msg in ws:
             if msg.type != WSMsgType.TEXT:
                 continue

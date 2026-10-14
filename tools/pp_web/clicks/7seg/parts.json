@@ -1,0 +1,160 @@
+{
+ "source": "MikroElektronika 7seg Click v100 schematic; the page's 2D files are for the 7SEG RGB Click, so the outline is the standard M-size Click and the parts are placed by hand",
+ "outline_mm": [
+  [
+   -1.27,
+   -3.81
+  ],
+  [
+   21.59,
+   -3.81
+  ],
+  [
+   24.13,
+   -1.27
+  ],
+  [
+   24.13,
+   36.83
+  ],
+  [
+   21.844,
+   39.116
+  ],
+  [
+   1.016,
+   39.116
+  ],
+  [
+   -1.27,
+   36.83
+  ]
+ ],
+ "header": true,
+ "texts": [
+  {
+   "text": "7seg click",
+   "at_mm": [
+    11.43,
+    -1.9
+   ],
+   "size": 2.6
+  },
+  {
+   "text": "DIS1",
+   "at_mm": [
+    5.9,
+    34.2
+   ],
+   "size": 1.1
+  },
+  {
+   "text": "DIS2",
+   "at_mm": [
+    16.96,
+    34.2
+   ],
+   "size": 1.1
+  },
+  {
+   "text": "U1",
+   "at_mm": [
+    3.2,
+    12.2
+   ],
+   "size": 1.0
+  },
+  {
+   "text": "U2",
+   "at_mm": [
+    3.2,
+    7.0
+   ],
+   "size": 1.0
+  },
+  {
+   "text": "PWR",
+   "at_mm": [
+    17.4,
+    2.2
+   ],
+   "size": 1.0
+  }
+ ],
+ "parts": [
+  {
+   "ref": "DIS1",
+   "kind": "digit",
+   "at_mm": [
+    5.9,
+    24.0
+   ],
+   "size_mm": [
+    10.4,
+    15.6
+   ]
+  },
+  {
+   "ref": "DIS2",
+   "kind": "digit",
+   "at_mm": [
+    16.96,
+    24.0
+   ],
+   "size_mm": [
+    10.4,
+    15.6
+   ]
+  },
+  {
+   "ref": "U1",
+   "kind": "ic",
+   "value": "74HC595",
+   "at_mm": [
+    11.43,
+    12.2
+   ],
+   "size_mm": [
+    10.0,
+    4.0
+   ]
+  },
+  {
+   "ref": "U2",
+   "kind": "ic",
+   "value": "74HC595",
+   "at_mm": [
+    11.43,
+    7.0
+   ],
+   "size_mm": [
+    10.0,
+    4.0
+   ]
+  },
+  {
+   "ref": "LD1",
+   "kind": "led",
+   "at_mm": [
+    14.6,
+    2.2
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "R10",
+   "kind": "resistor",
+   "at_mm": [
+    8.2,
+    2.2
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  }
+ ]
+}

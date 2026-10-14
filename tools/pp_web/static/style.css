@@ -106,6 +106,26 @@ h2 small { color: var(--muted); font-weight: normal; }
 .click-pin { opacity: 0; transition: opacity 60ms;
   background: radial-gradient(circle, #ffd0d0 0 18%, #ff3b3b 35%, #ff3b3b55 55%, transparent 72%); }
 .click-pin.active { opacity: 1; }
+.click-led.pinned { opacity: 0; transition: opacity 40ms linear; mix-blend-mode: normal; }
+.click-btn {
+  position: absolute; transform: translate(-50%, -50%); border-radius: 18%;
+  cursor: pointer; pointer-events: auto; border: 2px solid transparent;
+}
+.click-btn:hover { border-color: rgba(255,255,255,.6); }
+.click-btn.down { background: rgba(0,0,0,.25); border-color: #fff; }
+.click-relay {
+  position: absolute; transform: translate(-50%, -50%); pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+  padding-bottom: 6%; font: 700 9px/1.1 system-ui, sans-serif; color: #9aa0a6;
+}
+.click-relay b { margin-top: 3px; padding: 1px 5px; border-radius: 3px; opacity: .25;
+  background: #3a3d42; color: #888; transition: all 60ms; }
+.click-relay.on b { opacity: 1; background: #ff3b30; color: #fff; box-shadow: 0 0 8px #ff3b30; }
+.click-7seg { position: absolute; transform: translate(-50%, -50%); pointer-events: none;
+  padding: 6% 8%; box-sizing: border-box; }
+.click-7seg svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.click-7seg [data-bit] { fill: var(--seg); opacity: .07;
+  filter: drop-shadow(0 0 .35px var(--seg)); }
 @media (max-width: 800px) {
   main { flex-direction: column; }
   #side { width: auto; max-width: none; border-left: 0; }

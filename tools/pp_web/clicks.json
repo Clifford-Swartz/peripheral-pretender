@@ -48,5 +48,199 @@
         "color": "#5dff7a"
       }
     ]
+  },
+  "buttong": {
+    "name": "Button G Click",
+    "vendor": "MikroElektronika",
+    "chip": "illuminated pushbutton",
+    "bus": "GPIO",
+    "description": "Pushbutton on INT (high while pressed); its green LED on PWM",
+    "image": "buttong/top.png",
+    "origin_mm": [
+      -1.2725,
+      19.9161
+    ],
+    "size_mm": [
+      25.4051,
+      23.7261
+    ],
+    "controls": [],
+    "buttons": [
+      {
+        "id": "T1",
+        "property": "pressed",
+        "at_mm": [
+          11.48,
+          12.54
+        ],
+        "size_mm": [
+          10.0,
+          9.2
+        ]
+      }
+    ],
+    "leds": [
+      {
+        "id": "T1 LED",
+        "at_mm": [
+          11.48,
+          12.54
+        ],
+        "color": "#4cd964",
+        "pin": "pwm",
+        "size_mm": 9.0
+      }
+    ],
+    "signals": [
+      {
+        "id": "BUTTON",
+        "pin": "int",
+        "active_low": false,
+        "at_mm": [
+          22.86,
+          15.24
+        ]
+      }
+    ]
+  },
+  "7seg": {
+    "name": "7seg Click",
+    "vendor": "MikroElektronika",
+    "chip": "2 x 74HC595",
+    "bus": "SPI",
+    "description": "Two digits; LATCH on CS, MR# on RST, digits on while PWM is high",
+    "image": "7seg/top.png",
+    "origin_mm": [
+      -1.27,
+      39.116
+    ],
+    "size_mm": [
+      25.4,
+      42.926
+    ],
+    "controls": [],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          14.6,
+          2.2
+        ],
+        "color": "#5dff7a"
+      }
+    ],
+    "display": {
+      "type": "7seg",
+      "property": "outputs",
+      "enable_pin": "pwm",
+      "color": "#ff3b30",
+      "segments": {
+        "dp": 0,
+        "b": 1,
+        "a": 2,
+        "c": 3,
+        "d": 4,
+        "e": 5,
+        "f": 6,
+        "g": 7
+      },
+      "digits": [
+        {
+          "at_mm": [
+            5.9,
+            24.0
+          ],
+          "size_mm": [
+            10.4,
+            15.6
+          ],
+          "shift": 0
+        },
+        {
+          "at_mm": [
+            16.96,
+            24.0
+          ],
+          "size_mm": [
+            10.4,
+            15.6
+          ],
+          "shift": 8
+        }
+      ]
+    },
+    "signals": []
+  },
+  "relay": {
+    "name": "Relay Click",
+    "vendor": "MikroElektronika",
+    "chip": "2 x G6D relay",
+    "bus": "GPIO",
+    "description": "Relay 1 on PWM (red LED), relay 2 on CS (yellow LED)",
+    "image": "relay/top.png",
+    "origin_mm": [
+      -1.27,
+      51.6255
+    ],
+    "size_mm": [
+      25.4,
+      55.4355
+    ],
+    "controls": [],
+    "leds": [
+      {
+        "id": "LD1",
+        "at_mm": [
+          16.42,
+          7.53
+        ],
+        "color": "#ff3b30",
+        "pin": "pwm"
+      },
+      {
+        "id": "LD2",
+        "at_mm": [
+          6.44,
+          7.53
+        ],
+        "color": "#ffd60a",
+        "pin": "cs"
+      },
+      {
+        "id": "PWR",
+        "at_mm": [
+          15.38,
+          2.08
+        ],
+        "color": "#5dff7a"
+      }
+    ],
+    "relays": [
+      {
+        "id": "REL1",
+        "pin": "pwm",
+        "at_mm": [
+          15.23,
+          25.13
+        ],
+        "size_mm": [
+          6.8,
+          18.0
+        ]
+      },
+      {
+        "id": "REL2",
+        "pin": "cs",
+        "at_mm": [
+          7.6,
+          25.13
+        ],
+        "size_mm": [
+          6.8,
+          18.0
+        ]
+      }
+    ],
+    "signals": []
   }
 }

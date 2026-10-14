@@ -1,0 +1,813 @@
+From 19d42d669cfd405072d65101ad8e6b70f2df2fb4 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 14 Oct 2026 04:04:22 -0700
+Subject: [PATCH] hw/arm, hw/ssi, hw/misc: Button G, 7seg and Relay Clicks on
+ the MC00 board
+
+The MC00 board's Click table now describes a Click by mikroBUS signal
+(RST, PWM, INT, CS on the header's pins 5/7/9/15 through a mikroBUS
+Xplained Pro adapter): its device and bus (I2C on SERCOM2 or SPI on
+SERCOM1), device outputs onto those pins, pins into device inputs, and
+every pull resistor on the Click, from MikroElektronika's schematics.
+
+New Clicks: buttong (a click-button driving INT, LED on PWM), 7seg (two
+chained 74HC595 on SPI, LATCH on CS, MR# on RST, digits enabled by PWM)
+and relay (relays on PWM and CS; no device). New parts: click-button
+(pressed property) and 74hc595 (SSI shift register chain with latch and
+master reset inputs, latched outputs as a QOM property).
+
+Peripheral Pretender: AI-assisted, not for upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  29 +++-
+ hw/arm/pic32cm_mc00_cpro.c            | 193 +++++++++++++++++++-------
+ hw/misc/click_button.c                |  99 +++++++++++++
+ hw/misc/meson.build                   |   1 +
+ hw/ssi/meson.build                    |   1 +
+ hw/ssi/ti_74hc595.c                   | 165 ++++++++++++++++++++++
+ hw/ssi/trace-events                   |   4 +
+ include/hw/misc/click_button.h        |  19 +++
+ include/hw/ssi/ti_74hc595.h           |  20 +++
+ tests/qtest/pic32cm-click-test.c      |  77 ++++++++++
+ 10 files changed, 557 insertions(+), 51 deletions(-)
+ create mode 100644 hw/misc/click_button.c
+ create mode 100644 hw/ssi/ti_74hc595.c
+ create mode 100644 include/hw/misc/click_button.h
+ create mode 100644 include/hw/ssi/ti_74hc595.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 512f1ce..8004e3b 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -45,10 +45,13 @@ Click boards
+ """"""""""""
+ 
+ The machine options ``ext1=<click>`` and ``ext2=<click>`` plug a
+-MikroElektronika Click board into the EXT1 or EXT2 header (as through a
+-Curiosity Pro to mikroBUS adapter): I2C on SERCOM2 (PA12 SDA, PA13 SCL),
+-INT on the header's pin 9 (PB02 on EXT1, PA28 on EXT2). The Click's device
+-is ``/machine/ext1-click`` or ``/machine/ext2-click``.
++MikroElektronika Click board into the EXT1 or EXT2 header through a mikroBUS
++Xplained Pro adapter (DS50002671A): I2C on SERCOM2 (PA12 SDA, PA13 SCL), SPI
++on SERCOM1 (PA16 MISO, PA18 MOSI, PA19 SCK), and the mikroBUS RST, PWM, INT
++and CS signals on the header's pins 5, 7, 9 and 15 (EXT1: PA20, PB10, PB02,
++PA17; EXT2: PA10, PB22, PA28, PA15). A Click's device, if it has one, is
++``/machine/ext1-click`` or ``/machine/ext2-click``. The Clicks' pull
++resistors are modelled (from their schematics, v100).
+ 
+ ``thermo8``
+   Thermo 8 Click: an MCP9808 temperature sensor (``mchp-mcp9808``) at I2C
+@@ -59,6 +62,24 @@ is ``/machine/ext1-click`` or ``/machine/ext2-click``.
+   25000) sets the temperature, also at run time:
+   ``qom-set /machine/ext1-click temperature 31500``.
+ 
++``buttong``
++  Button G Click: a pushbutton (``click-button``) driving INT high while
++  pressed, pulled low otherwise (R2/R3 10 kOhm); its LED is on PWM (on while
++  high). The QOM property ``pressed`` holds it down.
++
++``7seg``
++  7seg Click: two chained 74HC595 shift registers (``74hc595``, length 2) on
++  the SPI bus. LATCH (STCP) is CS, MR# is RST (4.7 kOhm pull-up), and PWM
++  switches both digits on (4.7 kOhm pull-ups: on while undriven). The first
++  byte of a transfer ends in the second register (the right digit); outputs
++  Q0..Q7 drive segments dp, b, a, c, d, e, f, g. The QOM property
++  ``outputs`` reads the latched outputs (left digit in bits 7:0).
++
++``relay``
++  Relay Click: relay 1 on PWM, relay 2 on CS, on while high; both pins are
++  pulled low by the driver transistors' base resistors. There is no device:
++  the relays follow the pads.
++
+ .. code-block:: bash
+ 
+   $ qemu-system-arm -M pic32cm-mc00-cpro,ext1=thermo8 -kernel thermo.elf       -display none -serial stdio
+diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
+index 44cfebe..0192fea 100644
+--- a/hw/arm/pic32cm_mc00_cpro.c
++++ b/hw/arm/pic32cm_mc00_cpro.c
+@@ -9,10 +9,10 @@
+  * user guide DS70005440A). VDD defaults to 3.3 V.
+  *
+  * Machine options ext1=<click> and ext2=<click> plug a MikroElektronika
+- * Click board into the EXT1/EXT2 mikroBUS headers (through a Curiosity Pro
+- * to mikroBUS adapter: I2C on SERCOM2 PA12/PA13, INT on the header's
+- * pin 9, PB02 on EXT1 and PA28 on EXT2). The Click's device is
+- * /machine/extN-click.
++ * Click board into EXT1/EXT2 through a mikroBUS Xplained Pro adapter
++ * (DS50002671A): I2C on SERCOM2 (PA12/PA13), SPI on SERCOM1 (PA16 MISO,
++ * PA18 MOSI, PA19 SCK), RST/PWM/INT/CS on the header's pins 5/7/9/15.
++ * The Click's device, if it has one, is /machine/extN-click.
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -26,11 +26,15 @@
+ #include "hw/core/boards.h"
+ #include "hw/core/irq.h"
+ #include "hw/core/qdev-clock.h"
++#include "hw/core/qdev-properties.h"
+ #include "hw/gpio/mchp_port.h"
+ #include "hw/i2c/i2c.h"
+ #include "hw/misc/led.h"
+ #include "hw/misc/mchp_edbg_dgi.h"
++#include "hw/misc/click_button.h"
+ #include "hw/sensor/mchp_mcp9808.h"
++#include "hw/ssi/ssi.h"
++#include "hw/ssi/ti_74hc595.h"
+ #include "system/system.h"
+ 
+ #define CPRO_XOSC_HZ        12000000
+@@ -41,26 +45,66 @@
+ #define CPRO_SW0_PIN        MCHP_PORT_PIN('A', 25)
+ #define CPRO_EDBG_DGI_ADDR  0x28    /* on the I2C bus, SERCOM2 */
+ #define CPRO_EXT_I2C        "SERCOM2"
++#define CPRO_EXT_SPI        "SERCOM1"
+ #define CPRO_EXT_NUM        2
+ 
+-/* The INT pin (header pin 9) of each extension header */
+-static const unsigned pic32cm_mc00_cpro_ext_int[CPRO_EXT_NUM] = {
+-    MCHP_PORT_PIN('B', 2),
+-    MCHP_PORT_PIN('A', 28),
++/* mikroBUS signals on each header (pins 5, 7, 9 and 15 of the header) */
++enum { EXT_RST, EXT_PWM, EXT_INT, EXT_CS, EXT_ROLES };
++
++static const unsigned pic32cm_mc00_cpro_ext_pins[CPRO_EXT_NUM][EXT_ROLES] = {
++    { MCHP_PORT_PIN('A', 20), MCHP_PORT_PIN('B', 10),
++      MCHP_PORT_PIN('B', 2), MCHP_PORT_PIN('A', 17) },
++    { MCHP_PORT_PIN('A', 10), MCHP_PORT_PIN('B', 22),
++      MCHP_PORT_PIN('A', 28), MCHP_PORT_PIN('A', 15) },
+ };
+ 
++typedef enum { CLICK_GPIO, CLICK_I2C, CLICK_SPI } CproClickBus;
++
++/* A GPIO line between the Click's device and a header pin */
++typedef struct CproClickLine {
++    const char *gpio;           /* NULL: unused */
++    unsigned role;
++} CproClickLine;
++
++/* A resistor on the Click pulling a header pin up (1) or down (0) */
++typedef struct CproClickPull {
++    bool used;
++    unsigned role;
++    int level;
++} CproClickPull;
++
+ typedef struct CproClick {
+     const char *name;
+     const char *desc;
+-    const char *type;           /* an I2C target */
+-    uint8_t addr;
+-    const char *int_out;        /* its GPIO output on the INT pin */
+-    bool int_pullup;            /* a pull-up resistor on INT on the Click */
++    const char *type;           /* its device, NULL for none */
++    CproClickBus bus;
++    uint8_t addr;               /* on the I2C bus */
++    uint32_t length;            /* "length" property, 0 for none */
++    CproClickLine outs[2];      /* device output onto a header pin */
++    CproClickLine ins[2];       /* header pin into a device input */
++    CproClickPull pulls[3];
+ } CproClick;
+ 
++/* From the MikroElektronika schematics of each Click (v100) */
+ static const CproClick pic32cm_mc00_cpro_clicks[] = {
+-    { "thermo8", "Thermo 8 Click (MCP9808 temperature sensor, ALERT on INT)",
+-      TYPE_MCHP_MCP9808, 0x18, MCHP_MCP9808_ALERT, true },     /* R3 4.7k */
++    { "thermo8", "Thermo 8 Click: MCP9808 temperature sensor, ALERT on INT",
++      TYPE_MCHP_MCP9808, CLICK_I2C, 0x18, 0,
++      .outs = { { MCHP_MCP9808_ALERT, EXT_INT } },
++      .pulls = { { true, EXT_INT, 1 } } },                /* R3 4.7k */
++    { "buttong", "Button G Click: pushbutton on INT, its LED on PWM",
++      TYPE_CLICK_BUTTON, CLICK_GPIO, 0, 0,
++      .outs = { { CLICK_BUTTON_OUT, EXT_INT } },
++      .pulls = { { true, EXT_INT, 0 } } },                /* R2/R3 10k */
++    { "7seg", "7seg Click: two digits on two 74HC595, LATCH on CS, "
++      "MR# on RST, digits enabled by PWM",
++      TYPE_TI_74HC595, CLICK_SPI, 0, 2,
++      .ins = { { TI_74HC595_LATCH, EXT_CS }, { TI_74HC595_MR, EXT_RST } },
++      .pulls = { { true, EXT_RST, 1 },                    /* R19 4.7k */
++                 { true, EXT_PWM, 1 } } },                /* R22/R23 4.7k */
++    { "relay", "Relay Click: relay 1 on PWM, relay 2 on CS",
++      NULL, CLICK_GPIO, 0, 0,
++      .pulls = { { true, EXT_PWM, 0 },                    /* Q1/Q2 base */
++                 { true, EXT_CS, 0 } } },                 /* resistors */
+ };
+ 
+ /* serial_hd(i) is wired to SERCOM pic32cm_mc00_cpro_serial[i] */
+@@ -142,61 +186,116 @@ static void pic32cm_mc00_cpro_set_ext2(Object *obj, const char *value,
+ }
+ 
+ /*
+- * A pull-up on the Click: an open-drain output that lets go (-1) leaves the
+- * INT pad high instead of floating.
++ * A pull resistor on the Click, behind an output that can let go: a
++ * released output (-1) leaves the pad at the resistor's level.
+  */
+-static void pic32cm_mc00_cpro_int_pullup(void *opaque, int n, int level)
++static void pic32cm_mc00_cpro_pull_up(void *opaque, int n, int level)
+ {
+     qemu_set_irq(opaque, level < 0 ? 1 : level);
+ }
+ 
++static void pic32cm_mc00_cpro_pull_down(void *opaque, int n, int level)
++{
++    qemu_set_irq(opaque, level < 0 ? 0 : level);
++}
++
++static const CproClick *pic32cm_mc00_cpro_find_click(unsigned n,
++                                                     const char *name)
++{
++    g_autoptr(GString) known = g_string_new(NULL);
++
++    for (unsigned i = 0; i < ARRAY_SIZE(pic32cm_mc00_cpro_clicks); i++) {
++        if (!strcmp(name, pic32cm_mc00_cpro_clicks[i].name)) {
++            return &pic32cm_mc00_cpro_clicks[i];
++        }
++        g_string_append_printf(known, "%s%s", i ? ", " : "",
++                               pic32cm_mc00_cpro_clicks[i].name);
++    }
++    error_report("ext%u: unknown Click board '%s' (known: %s)", n + 1, name,
++                 known->str);
++    exit(1);
++}
++
+ /* Plug the Click boards named by ext1= and ext2= into their headers. */
+ static void pic32cm_mc00_cpro_add_clicks(Pic32cmMc00CproState *s)
+ {
+     DeviceState *port = pic32cm_soc_periph(&s->soc, "PORT");
+     I2CBus *i2c = I2C_BUS(qdev_get_child_bus(
+         pic32cm_soc_periph(&s->soc, CPRO_EXT_I2C), "sercom2.i2c"));
++    SSIBus *spi = (SSIBus *)qdev_get_child_bus(
++        pic32cm_soc_periph(&s->soc, CPRO_EXT_SPI), "sercom1.spi");
+     uint8_t used[CPRO_EXT_NUM] = { 0 };
+ 
+     for (unsigned n = 0; n < CPRO_EXT_NUM; n++) {
+-        const CproClick *c = NULL;
+-        g_autofree char *child = NULL;
+-        I2CSlave *dev;
++        const unsigned *pin = pic32cm_mc00_cpro_ext_pins[n];
++        const CproClick *c;
++        DeviceState *dev = NULL;
+ 
+         if (!s->ext[n] || !*s->ext[n] || !strcmp(s->ext[n], "none")) {
+             continue;
+         }
+-        for (unsigned i = 0; i < ARRAY_SIZE(pic32cm_mc00_cpro_clicks); i++) {
+-            if (!strcmp(s->ext[n], pic32cm_mc00_cpro_clicks[i].name)) {
+-                c = &pic32cm_mc00_cpro_clicks[i];
++        c = pic32cm_mc00_cpro_find_click(n, s->ext[n]);
++        if (c->bus == CLICK_I2C) {
++            for (unsigned m = 0; m < n; m++) {
++                if (used[m] == c->addr) {
++                    error_report("ext%u: I2C address 0x%02x is taken by "
++                                 "ext%u", n + 1, c->addr, m + 1);
++                    exit(1);
++                }
+             }
++            used[n] = c->addr;
+         }
+-        if (!c) {
+-            error_report("ext%u: unknown Click board '%s' (known: thermo8)",
+-                         n + 1, s->ext[n]);
+-            exit(1);
+-        }
+-        for (unsigned m = 0; m < n; m++) {
+-            if (used[m] == c->addr) {
+-                error_report("ext%u: I2C address 0x%02x is taken by ext%u",
+-                             n + 1, c->addr, m + 1);
+-                exit(1);
++        if (c->type) {
++            g_autofree char *child = g_strdup_printf("ext%u-click", n + 1);
++
++            dev = qdev_new(c->type);
++            if (c->bus == CLICK_I2C) {
++                qdev_prop_set_uint8(dev, "address", c->addr);
+             }
++            if (c->length) {
++                qdev_prop_set_uint32(dev, "length", c->length);
++            }
++            object_property_add_child(OBJECT(s), child, OBJECT(dev));
++            switch (c->bus) {
++            case CLICK_I2C:
++                i2c_slave_realize_and_unref(I2C_SLAVE(dev), i2c,
++                                            &error_fatal);
++                break;
++            case CLICK_SPI:
++                ssi_realize_and_unref(dev, spi, &error_fatal);
++                break;
++            default:
++                qdev_realize_and_unref(dev, NULL, &error_fatal);
++            }
++        }
++        /* Resistors first: an output behind one goes through it */
++        for (unsigned i = 0; i < ARRAY_SIZE(c->pulls) && c->pulls[i].used;
++             i++) {
++            qemu_set_irq(qdev_get_gpio_in_named(port, MCHP_PORT_IN,
++                                                pin[c->pulls[i].role]),
++                         c->pulls[i].level);
+         }
+-        used[n] = c->addr;
+-        dev = i2c_slave_new(c->type, c->addr);
+-        child = g_strdup_printf("ext%u-click", n + 1);
+-        object_property_add_child(OBJECT(s), child, OBJECT(dev));
+-        i2c_slave_realize_and_unref(dev, i2c, &error_fatal);
+-        if (c->int_out) {
++        for (unsigned i = 0; i < ARRAY_SIZE(c->outs) && c->outs[i].gpio;
++             i++) {
++            unsigned role = c->outs[i].role;
+             qemu_irq pad = qdev_get_gpio_in_named(port, MCHP_PORT_IN,
+-                                                  pic32cm_mc00_cpro_ext_int[n]);
+-
+-            if (c->int_pullup) {
+-                qemu_set_irq(pad, 1);
+-                pad = qemu_allocate_irq(pic32cm_mc00_cpro_int_pullup, pad, 0);
++                                                  pin[role]);
++
++            for (unsigned j = 0; j < ARRAY_SIZE(c->pulls); j++) {
++                if (c->pulls[j].used && c->pulls[j].role == role) {
++                    pad = qemu_allocate_irq(c->pulls[j].level
++                                            ? pic32cm_mc00_cpro_pull_up
++                                            : pic32cm_mc00_cpro_pull_down,
++                                            pad, 0);
++                }
+             }
+-            qdev_connect_gpio_out_named(DEVICE(dev), c->int_out, 0, pad);
++            qdev_connect_gpio_out_named(dev, c->outs[i].gpio, 0, pad);
++        }
++        for (unsigned i = 0; i < ARRAY_SIZE(c->ins) && c->ins[i].gpio; i++) {
++            qdev_connect_gpio_out_named(port, MCHP_PORT_PAD,
++                                        pin[c->ins[i].role],
++                                        qdev_get_gpio_in_named(dev,
++                                            c->ins[i].gpio, 0));
+         }
+     }
+ }
+@@ -264,11 +363,11 @@ static void pic32cm_mc00_cpro_class_init(ObjectClass *oc, const void *data)
+     object_class_property_add_str(oc, "ext1", pic32cm_mc00_cpro_get_ext1,
+                                   pic32cm_mc00_cpro_set_ext1);
+     object_class_property_set_description(oc, "ext1",
+-        "Click board on EXT1 (thermo8 or none)");
++        "Click board on EXT1 (thermo8, buttong, 7seg, relay, none)");
+     object_class_property_add_str(oc, "ext2", pic32cm_mc00_cpro_get_ext2,
+                                   pic32cm_mc00_cpro_set_ext2);
+     object_class_property_set_description(oc, "ext2",
+-        "Click board on EXT2 (thermo8 or none)");
++        "Click board on EXT2 (thermo8, buttong, 7seg, relay, none)");
+ }
+ 
+ static const TypeInfo pic32cm_mc00_cpro_types[] = {
+diff --git a/hw/misc/click_button.c b/hw/misc/click_button.c
+new file mode 100644
+index 0000000..de69347
+--- /dev/null
++++ b/hw/misc/click_button.c
+@@ -0,0 +1,99 @@
++/*
++ * A pushbutton on a Click board, driving one header pin
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * QOM property "pressed" (bool, settable while running). GPIO output
++ * "out": "pressed-level" (default 1) while pressed, "released-level"
++ * (default -1: let go, so the Click's pull resistor sets the pin) while
++ * released.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/misc/click_button.h"
++#include "migration/vmstate.h"
++
++OBJECT_DECLARE_SIMPLE_TYPE(ClickButtonState, CLICK_BUTTON)
++
++struct ClickButtonState {
++    DeviceState parent_obj;
++
++    qemu_irq out;
++    bool pressed;
++    int32_t pressed_level;
++    int32_t released_level;
++};
++
++static void click_button_update(ClickButtonState *s)
++{
++    qemu_set_irq(s->out, s->pressed ? s->pressed_level : s->released_level);
++}
++
++static bool click_button_get_pressed(Object *obj, Error **errp)
++{
++    return CLICK_BUTTON(obj)->pressed;
++}
++
++static void click_button_set_pressed(Object *obj, bool value, Error **errp)
++{
++    ClickButtonState *s = CLICK_BUTTON(obj);
++
++    s->pressed = value;
++    click_button_update(s);
++}
++
++static void click_button_reset(DeviceState *dev)
++{
++    click_button_update(CLICK_BUTTON(dev));     /* held across resets */
++}
++
++static void click_button_init(Object *obj)
++{
++    ClickButtonState *s = CLICK_BUTTON(obj);
++
++    qdev_init_gpio_out_named(DEVICE(obj), &s->out, CLICK_BUTTON_OUT, 1);
++    object_property_add_bool(obj, "pressed", click_button_get_pressed,
++                             click_button_set_pressed);
++}
++
++static const Property click_button_properties[] = {
++    DEFINE_PROP_INT32("pressed-level", ClickButtonState, pressed_level, 1),
++    DEFINE_PROP_INT32("released-level", ClickButtonState, released_level, -1),
++};
++
++static const VMStateDescription vmstate_click_button = {
++    .name = TYPE_CLICK_BUTTON,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_BOOL(pressed, ClickButtonState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void click_button_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->desc = "Click board pushbutton";
++    dc->vmsd = &vmstate_click_button;
++    device_class_set_props(dc, click_button_properties);
++    device_class_set_legacy_reset(dc, click_button_reset);
++}
++
++static const TypeInfo click_button_types[] = {
++    {
++        .name = TYPE_CLICK_BUTTON,
++        .parent = TYPE_DEVICE,
++        .instance_size = sizeof(ClickButtonState),
++        .instance_init = click_button_init,
++        .class_init = click_button_class_init,
++    },
++};
++
++DEFINE_TYPES(click_button_types)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index e26e45a..ee90075 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -24,6 +24,7 @@ system_ss.add(when: 'CONFIG_MCHP_REGFILE', if_true: files(
+ system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files(
+   'mchp_clock.c',
+   'mchp_edbg_dgi.c',
++  'click_button.c',
+   'mchp_eic.c',
+   'mchp_evsys.c',
+   'mchp_sysctrl.c',
+diff --git a/hw/ssi/meson.build b/hw/ssi/meson.build
+index 6afb1ea..879cc93 100644
+--- a/hw/ssi/meson.build
++++ b/hw/ssi/meson.build
+@@ -13,3 +13,4 @@ system_ss.add(when: 'CONFIG_IMX', if_true: files('imx_spi.c'))
+ system_ss.add(when: 'CONFIG_IBEX', if_true: files('ibex_spi_host.c'))
+ system_ss.add(when: 'CONFIG_BCM2835_SPI', if_true: files('bcm2835_spi.c'))
+ system_ss.add(when: 'CONFIG_PNV_SPI', if_true: files('pnv_spi.c'))
++system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('ti_74hc595.c'))
+diff --git a/hw/ssi/ti_74hc595.c b/hw/ssi/ti_74hc595.c
+new file mode 100644
+index 0000000..d70c086
+--- /dev/null
++++ b/hw/ssi/ti_74hc595.c
+@@ -0,0 +1,165 @@
++/*
++ * 74HC595 8-bit shift register with output latch, in a daisy chain
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * TI SN74HC595 data sheet: data (DS) shifts in on each rising SHCP edge,
++ * Q7S shifts out to the next register, a rising STCP edge copies the shift
++ * register to the outputs, MR# low clears the shift register (not the
++ * outputs), OE# low drives the outputs. Here a chain of "length" registers
++ * sits on a QEMU SSI bus: each transfer clocks 8 bits MSB first (SPI mode
++ * 0, the data sheet's timing), so the first byte of a 2-byte transfer ends
++ * in the last register; the byte returned is what came out of the last
++ * Q7S. GPIO inputs "latch" (STCP) and "mr" (MR#) take 0/1, or -1 for an
++ * undriven pin: MR# then reads high (the usual pull-up), STCP keeps its
++ * level. QOM property "outputs" (read-only): the latched outputs, register
++ * 0 (the first after DS) in bits 7:0. OE# is assumed tied low.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/ssi/ssi.h"
++#include "hw/ssi/ti_74hc595.h"
++#include "migration/vmstate.h"
++#include "trace.h"
++
++#define HC595_MAX_CHAIN 4
++
++OBJECT_DECLARE_SIMPLE_TYPE(Ti74hc595State, TI_74HC595)
++
++struct Ti74hc595State {
++    SSIPeripheral parent_obj;
++
++    uint32_t length;            /* registers in the chain */
++    uint32_t shift;             /* register 0 in bits 7:0 */
++    uint32_t outputs;
++    bool latch;
++    bool mr;
++};
++
++static uint32_t hc595_mask(Ti74hc595State *s)
++{
++    return s->length >= 4 ? UINT32_MAX : (1u << (8 * s->length)) - 1;
++}
++
++/* Clock 8 bits in: the chain moves one register up, the byte enters at 0 */
++static uint32_t hc595_transfer(SSIPeripheral *dev, uint32_t val)
++{
++    Ti74hc595State *s = TI_74HC595(dev);
++    uint32_t out = (s->shift >> (8 * (s->length - 1))) & 0xFF;
++
++    if (s->mr) {
++        s->shift = ((s->shift << 8) | (val & 0xFF)) & hc595_mask(s);
++    }
++    trace_ti_74hc595_shift(val & 0xFF, s->shift);
++    return out;
++}
++
++static void hc595_set_latch(void *opaque, int n, int level)
++{
++    Ti74hc595State *s = opaque;
++    bool high = level > 0 || (level < 0 && s->latch);
++
++    if (high && !s->latch) {
++        s->outputs = s->shift;
++        trace_ti_74hc595_latch(s->outputs);
++    }
++    s->latch = high;
++}
++
++static void hc595_set_mr(void *opaque, int n, int level)
++{
++    Ti74hc595State *s = opaque;
++
++    s->mr = level != 0;             /* -1: undriven, pulled up */
++    if (!s->mr) {
++        s->shift = 0;
++    }
++}
++
++static void hc595_get_outputs(Object *obj, Visitor *v, const char *name,
++                              void *opaque, Error **errp)
++{
++    uint32_t value = TI_74HC595(obj)->outputs;
++
++    visit_type_uint32(v, name, &value, errp);
++}
++
++static void hc595_realize(SSIPeripheral *dev, Error **errp)
++{
++    Ti74hc595State *s = TI_74HC595(dev);
++
++    if (s->length < 1 || s->length > HC595_MAX_CHAIN) {
++        error_setg(errp, "length must be 1 to %d", HC595_MAX_CHAIN);
++        return;
++    }
++    qdev_init_gpio_in_named(DEVICE(dev), hc595_set_latch,
++                            TI_74HC595_LATCH, 1);
++    qdev_init_gpio_in_named(DEVICE(dev), hc595_set_mr, TI_74HC595_MR, 1);
++}
++
++static void hc595_reset(DeviceState *dev)
++{
++    Ti74hc595State *s = TI_74HC595(dev);
++
++    s->shift = 0;
++    s->outputs = 0;
++    s->latch = false;
++    s->mr = true;
++}
++
++static void hc595_init(Object *obj)
++{
++    object_property_add(obj, "outputs", "uint32", hc595_get_outputs,
++                        NULL, NULL, NULL);
++}
++
++static const Property hc595_properties[] = {
++    DEFINE_PROP_UINT32("length", Ti74hc595State, length, 1),
++};
++
++static const VMStateDescription vmstate_hc595 = {
++    .name = TYPE_TI_74HC595,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_SSI_PERIPHERAL(parent_obj, Ti74hc595State),
++        VMSTATE_UINT32(shift, Ti74hc595State),
++        VMSTATE_UINT32(outputs, Ti74hc595State),
++        VMSTATE_BOOL(latch, Ti74hc595State),
++        VMSTATE_BOOL(mr, Ti74hc595State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void hc595_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    SSIPeripheralClass *k = SSI_PERIPHERAL_CLASS(klass);
++
++    dc->desc = "74HC595 shift register chain";
++    dc->vmsd = &vmstate_hc595;
++    device_class_set_props(dc, hc595_properties);
++    device_class_set_legacy_reset(dc, hc595_reset);
++    k->realize = hc595_realize;
++    k->transfer = hc595_transfer;
++    k->cs_polarity = SSI_CS_NONE;   /* shifts on every clock; STCP latches */
++}
++
++static const TypeInfo hc595_types[] = {
++    {
++        .name = TYPE_TI_74HC595,
++        .parent = TYPE_SSI_PERIPHERAL,
++        .instance_size = sizeof(Ti74hc595State),
++        .instance_init = hc595_init,
++        .class_init = hc595_class_init,
++    },
++};
++
++DEFINE_TYPES(hc595_types)
+diff --git a/hw/ssi/trace-events b/hw/ssi/trace-events
+index b9d8648..7a78dfc 100644
+--- a/hw/ssi/trace-events
++++ b/hw/ssi/trace-events
+@@ -62,3 +62,7 @@ allwinner_a10_spi_tx(uint8_t byte) "write 0x%02x"
+ allwinner_a10_spi_rx(uint8_t byte) "read 0x%02x"
+ allwinner_a10_spi_read(const char* regname, uint32_t value) "reg[%s] => 0x%08x"
+ allwinner_a10_spi_write(const char* regname, uint32_t value) "reg[%s] <= 0x%08x"
++
++# ti_74hc595.c
++ti_74hc595_shift(uint32_t byte, uint32_t shift) "in 0x%02x shift 0x%08x"
++ti_74hc595_latch(uint32_t outputs) "outputs 0x%08x"
+diff --git a/include/hw/misc/click_button.h b/include/hw/misc/click_button.h
+new file mode 100644
+index 0000000..99e36b3
+--- /dev/null
++++ b/include/hw/misc/click_button.h
+@@ -0,0 +1,19 @@
++/*
++ * A pushbutton on a Click board, driving one header pin
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * QOM property "pressed"; GPIO output "out"; properties "pressed-level"
++ * (default 1) and "released-level" (default -1, let go).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_CLICK_BUTTON_H
++#define HW_MISC_CLICK_BUTTON_H
++
++#define TYPE_CLICK_BUTTON "click-button"
++#define CLICK_BUTTON_OUT "out"
++
++#endif /* HW_MISC_CLICK_BUTTON_H */
+diff --git a/include/hw/ssi/ti_74hc595.h b/include/hw/ssi/ti_74hc595.h
+new file mode 100644
+index 0000000..454856e
+--- /dev/null
++++ b/include/hw/ssi/ti_74hc595.h
+@@ -0,0 +1,20 @@
++/*
++ * 74HC595 8-bit shift register with output latch, in a daisy chain
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * An SSI peripheral. Property "length": registers in the chain (1-4).
++ * GPIO inputs "latch" (STCP) and "mr" (MR#); QOM property "outputs".
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_SSI_TI_74HC595_H
++#define HW_SSI_TI_74HC595_H
++
++#define TYPE_TI_74HC595 "74hc595"
++#define TI_74HC595_LATCH "latch"
++#define TI_74HC595_MR "mr"
++
++#endif /* HW_SSI_TI_74HC595_H */
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index 19526f0..6d722b9 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -263,9 +263,86 @@ static void test_shutdown_lock(void)
+     qtest_quit(qts);
+ }
+ 
++#define PA              (PORT + 0x00)
++#define P_DIRSET        0x08
++#define P_OUTCLR        0x14
++#define P_OUTSET        0x18
++#define SERCOM1         0x42000800
++#define CLICK2          "/machine/ext2-click"
++
++static bool pin_high(QTestState *qts, uint32_t group, unsigned pin)
++{
++    qtest_writeb(qts, group + P_PINCFG + pin, 0x02);       /* INEN, no pull */
++    return qtest_readl(qts, group + P_IN) & BIT(pin);
++}
++
++/* Button G Click: INT (PB02) pulled low by R2/R3, high while pressed */
++static void test_button_g(void)
++{
++    QTestState *qts = qtest_init("-M pic32cm-mc00-cpro,ext1=buttong ");
++
++    g_assert_false(pin_high(qts, PB, INT1_PIN));
++    qtest_qom_set_bool(qts, CLICK1, "pressed", true);
++    g_assert_true(pin_high(qts, PB, INT1_PIN));
++    qtest_qom_set_bool(qts, CLICK1, "pressed", false);
++    g_assert_false(pin_high(qts, PB, INT1_PIN));
++    qtest_quit(qts);
++}
++
++static void spi_byte(QTestState *qts, uint8_t v)
++{
++    qtest_writel(qts, SERCOM1 + 0x28, v);
++}
++
++/*
++ * 7seg Click on EXT2: two 74HC595 on SERCOM1 (MOSI on PAD2: DOPO 1),
++ * LATCH on CS (PA15), MR# on RST (PA10, pulled up), PWM (PB22) pulled up
++ */
++static void test_7seg(void)
++{
++    QTestState *qts = qtest_init("-M pic32cm-mc00-cpro,ext2=7seg ");
++
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16);   /* host, DOPO 1 */
++    qtest_writel(qts, SERCOM1 + 0x04, BIT(17));            /* RXEN */
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16 | 0x02);
++    qtest_writel(qts, PA + P_OUTCLR, BIT(15));
++    qtest_writel(qts, PA + P_DIRSET, BIT(15));
++    spi_byte(qts, 0x12);                    /* ends in U2: the right digit */
++    spi_byte(qts, 0x34);                    /* U1: the left digit */
++    g_assert_cmphex(qom_int(qts, CLICK2, "outputs"), ==, 0);   /* unlatched */
++    qtest_writel(qts, PA + P_OUTSET, BIT(15));
++    g_assert_cmphex(qom_int(qts, CLICK2, "outputs"), ==, 0x1234);
++    /* What falls out of the last Q7S comes back on MISO */
++    qtest_readl(qts, SERCOM1 + 0x28);
++    qtest_readl(qts, SERCOM1 + 0x28);
++    spi_byte(qts, 0x56);
++    g_assert_cmphex(qtest_readl(qts, SERCOM1 + 0x28) & 0xFF, ==, 0x12);
++    /* MR# low clears the shift register, not the outputs */
++    qtest_writel(qts, PA + P_OUTCLR, BIT(10) | BIT(15));
++    qtest_writel(qts, PA + P_DIRSET, BIT(10));
++    g_assert_cmphex(qom_int(qts, CLICK2, "outputs"), ==, 0x1234);
++    qtest_writel(qts, PA + P_OUTSET, BIT(10) | BIT(15));
++    g_assert_cmphex(qom_int(qts, CLICK2, "outputs"), ==, 0);
++    g_assert_true(pin_high(qts, PB, 22));   /* PWM pulled up: digits on */
++    qtest_quit(qts);
++}
++
++/* Relay Click on EXT1: PWM (PB10) and CS (PA17) pulled low */
++static void test_relay(void)
++{
++    QTestState *qts = qtest_init("-M pic32cm-mc00-cpro,ext1=relay ");
++
++    g_assert_false(pin_high(qts, PB, 10));
++    g_assert_false(pin_high(qts, PA, 17));
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
++    qtest_add_func("pic32cm-click/button-g", test_button_g);
++    qtest_add_func("pic32cm-click/7seg", test_7seg);
++    qtest_add_func("pic32cm-click/relay", test_relay);
+     qtest_add_func("pic32cm-click/thermo8-identity", test_identity);
+     qtest_add_func("pic32cm-click/not-fitted", test_not_fitted);
+     qtest_add_func("pic32cm-click/thermo8-int-pullup", test_int_pullup);
+-- 
+2.53.0.windows.2
+
