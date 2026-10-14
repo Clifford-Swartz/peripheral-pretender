@@ -1,0 +1,2446 @@
+From ff51188e028f3f4681a0b23e4cdf5ccbc1e1a837 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Tue, 13 Oct 2026 18:54:02 -0700
+Subject: [PATCH] hw/misc: EVSYS model, event routing between PIC32CM
+ peripherals
+
+EVSYS U2256: channels route a generator or a software event to the
+users that select them, on the synchronous, resynchronized and
+asynchronous paths; CHSTATUS, OVR and EVD follow PIC32CM MC00 silicon
+(firmware/hello/tests/evprobe.c): the clocked paths need the channel's
+generic clock, an event with a user not ready is lost with OVR, one
+with no user sets OVR and CHBUSY, a pulse seen on both edges sets OVR,
+USER.CHANNEL keeps 4 bits.
+
+The generated device descriptor gains the ATDF event table, and the SoC
+wires event SIG[n] of an instance to its "sig-event" output or
+"sig-event-in" input. Event outputs: EIC (level senses as levels, as
+on silicon), TC, RTC (PERn, CMPn, OVF). Event inputs: TC (COUNT,
+RETRIGGER, START, TCINV; ready while enabled) and PORT (OUT, SET, CLR,
+TGL; an OUT action with a pulse leaves OUT unchanged). New qtest
+pic32cm-evsys-test.
+
+Peripheral Pretender: a personal project; not for upstream.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/arm/pic32cm1216mc00048_device.h            |   2 +
+ hw/arm/pic32cm5164jh01100_device.h            |   2 +
+ hw/arm/pic32cm_soc.c                          |  89 ++++
+ hw/gpio/mchp_port.c                           |  69 ++-
+ hw/misc/mchp_eic.c                            |  38 +-
+ hw/misc/mchp_evsys.c                          | 408 ++++++++++++++++++
+ hw/misc/meson.build                           |   1 +
+ hw/misc/trace-events                          |   3 +
+ hw/rtc/mchp_rtc.c                             |  41 +-
+ hw/timer/mchp_tc.c                            | 114 ++++-
+ hw/timer/trace-events                         |   1 +
+ include/hw/arm/pic32cm1216mc00048_gen.h       | 327 ++++++++++++++
+ include/hw/arm/pic32cm5164jh01100_gen.h       | 351 +++++++++++++++
+ include/hw/gpio/mchp_port.h                   |   3 +
+ include/hw/mchp/gen/evsys_u2256.h             |   2 +-
+ .../mchp/gen/pic32cm1216mc00048/evsys_u2256.h |   9 +-
+ .../mchp/gen/pic32cm5164jh01100/evsys_u2256.h |   9 +-
+ include/hw/mchp/mchp_device.h                 |  15 +
+ include/hw/misc/mchp_eic.h                    |   5 +-
+ include/hw/misc/mchp_evsys.h                  |  37 ++
+ include/hw/rtc/mchp_rtc.h                     |   6 +
+ include/hw/timer/mchp_tc.h                    |   6 +-
+ tests/qtest/meson.build                       |   2 +-
+ tests/qtest/pic32cm-evsys-test.c              | 289 +++++++++++++
+ 24 files changed, 1794 insertions(+), 35 deletions(-)
+ create mode 100644 hw/misc/mchp_evsys.c
+ create mode 100644 include/hw/misc/mchp_evsys.h
+ create mode 100644 tests/qtest/pic32cm-evsys-test.c
+
+diff --git a/hw/arm/pic32cm1216mc00048_device.h b/hw/arm/pic32cm1216mc00048_device.h
+index 52b8b85..f04dbb4 100644
+--- a/hw/arm/pic32cm1216mc00048_device.h
++++ b/hw/arm/pic32cm1216mc00048_device.h
+@@ -51,6 +51,8 @@ static const MchpDeviceInfo pic32cm1216mc00048_device = {
+     .ngclk_channels = PIC32CM1216MC00048_NUM_GCLK_CHANNEL_USERS,
+     .signals = pic32cm1216mc00048_signals,
+     .nsignals = PIC32CM1216MC00048_NUM_SIGNALS,
++    .events = pic32cm1216mc00048_events,
++    .nevents = PIC32CM1216MC00048_NUM_EVENTS,
+     .revisions = pic32cm1216mc00048_revisions,
+     .nrevisions = ARRAY_SIZE(pic32cm1216mc00048_revisions),
+ };
+diff --git a/hw/arm/pic32cm5164jh01100_device.h b/hw/arm/pic32cm5164jh01100_device.h
+index 39a4c3e..2733567 100644
+--- a/hw/arm/pic32cm5164jh01100_device.h
++++ b/hw/arm/pic32cm5164jh01100_device.h
+@@ -51,6 +51,8 @@ static const MchpDeviceInfo pic32cm5164jh01100_device = {
+     .ngclk_channels = PIC32CM5164JH01100_NUM_GCLK_CHANNEL_USERS,
+     .signals = pic32cm5164jh01100_signals,
+     .nsignals = PIC32CM5164JH01100_NUM_SIGNALS,
++    .events = pic32cm5164jh01100_events,
++    .nevents = PIC32CM5164JH01100_NUM_EVENTS,
+     .revisions = pic32cm5164jh01100_revisions,
+     .nrevisions = ARRAY_SIZE(pic32cm5164jh01100_revisions),
+ };
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index adc0272..5c3fc97 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -24,6 +24,7 @@
+ #include "hw/core/qdev-properties-system.h"
+ #include "hw/gpio/mchp_port.h"
+ #include "hw/misc/mchp_eic.h"
++#include "hw/misc/mchp_evsys.h"
+ #include "hw/rtc/mchp_rtc.h"
+ #include "hw/timer/mchp_tc.h"
+ #include "hw/mchp/gen/rstc_u2239.h"
+@@ -45,6 +46,7 @@ static const struct {
+     { "DIVAS", TYPE_MCHP_DIVAS },
+     { "DSU", TYPE_MCHP_DSU },
+     { "EIC", TYPE_MCHP_EIC },
++    { "EVSYS", TYPE_MCHP_EVSYS, "U2256" },
+     { "GCLK", TYPE_MCHP_GCLK },
+     { "MCLK", TYPE_MCHP_MCLK },
+     { "NVMCTRL", TYPE_MCHP_NVMCTRL },
+@@ -323,6 +325,27 @@ static void pic32cm_connect_clocks(Pic32cmSocState *s)
+                               qdev_get_clock_out(osc32k, "rtc"));
+     }
+ 
++    /* EVSYS channel n runs on GCLK_EVSYS_CHANNEL_n (GCLK_ID_n) */
++    if (pic32cm_soc_periph(s, "EVSYS") &&
++        object_dynamic_cast(OBJECT(pic32cm_soc_periph(s, "EVSYS")),
++                            TYPE_MCHP_EVSYS)) {
++        for (unsigned i = 0; i < s->dev->ngclk_channels; i++) {
++            const MchpPeriphRef *ref = &s->dev->gclk_channels[i];
++            unsigned ch;
++            g_autofree char *pch = NULL;
++            g_autofree char *in = NULL;
++
++            if (strcmp(ref->instance, "EVSYS") ||
++                sscanf(ref->param, "GCLK_ID_%u", &ch) != 1) {
++                continue;
++            }
++            pch = g_strdup_printf("pch[%u]", ref->id);
++            in = g_strdup_printf("channel-clock[%u]", ch);
++            qdev_connect_clock_in(pic32cm_soc_periph(s, "EVSYS"), in,
++                                  qdev_get_clock_out(gclk, pch));
++        }
++    }
++
+     for (unsigned i = 0; i < s->dev->ninstances; i++) {
+         const MchpInstanceInfo *info = &s->dev->instances[i];
+         g_autofree char *pch = NULL;
+@@ -523,6 +546,71 @@ static void pic32cm_connect_eic(Pic32cmSocState *s)
+                                                        "NMI", 0));
+ }
+ 
++/* Whether @dev has named GPIO line @n of @name, as an input or an output */
++static bool pic32cm_has_gpio(DeviceState *dev, const char *name, bool in,
++                             int n)
++{
++    NamedGPIOList *list;
++
++    QLIST_FOREACH(list, &dev->gpios, node) {
++        if (!g_strcmp0(list->name, name)) {
++            return n < (in ? list->num_in : list->num_out);
++        }
++    }
++    return false;
++}
++
++/*
++ * EVSYS generators and users (MchpDeviceInfo.events) to the models that
++ * have them: event SIG[n] of an instance is its GPIO output "sig-event"[n]
++ * (generators) or input "sig-event-in"[n] (users), lower case; a user that
++ * can be unready also has the output "sig-event-busy"[n]. Events of
++ * instances without a model, or of models without the line, stay open.
++ */
++static void pic32cm_connect_events(Pic32cmSocState *s)
++{
++    DeviceState *evsys = pic32cm_soc_periph(s, "EVSYS");
++
++    if (!evsys || !object_dynamic_cast(OBJECT(evsys), TYPE_MCHP_EVSYS)) {
++        return;
++    }
++    for (unsigned i = 0; i < s->dev->nevents; i++) {
++        const MchpEventInfo *ev = &s->dev->events[i];
++        DeviceState *dev = pic32cm_soc_periph(s, ev->instance);
++        g_autofree char *sig = g_ascii_strdown(ev->signal, -1);
++        g_autofree char *name = NULL;
++        int n = MAX(ev->index, 0);
++
++        if (!dev) {
++            continue;
++        }
++        if (!ev->user) {
++            name = g_strdup_printf("%s-event", sig);
++            if (pic32cm_has_gpio(dev, name, false, n) &&
++                ev->id < MCHP_EVSYS_MAX_GENERATORS) {
++                qdev_connect_gpio_out_named(dev, name, n,
++                    qdev_get_gpio_in_named(evsys, MCHP_EVSYS_GENERATOR,
++                                           ev->id));
++            }
++            continue;
++        }
++        if (ev->id >= MCHP_EVSYS_MAX_USERS) {
++            continue;
++        }
++        name = g_strdup_printf("%s-event-in", sig);
++        if (pic32cm_has_gpio(dev, name, true, n)) {
++            qdev_connect_gpio_out_named(evsys, MCHP_EVSYS_USER, ev->id,
++                                        qdev_get_gpio_in_named(dev, name, n));
++        }
++        g_free(name);
++        name = g_strdup_printf("%s-event-busy", sig);
++        if (pic32cm_has_gpio(dev, name, false, n)) {
++            qdev_connect_gpio_out_named(dev, name, n,
++                qdev_get_gpio_in_named(evsys, MCHP_EVSYS_USER_BUSY, ev->id));
++        }
++    }
++}
++
+ /* Reset sources that RSTC records in RCAUSE */
+ static void pic32cm_connect_resets(Pic32cmSocState *s)
+ {
+@@ -558,6 +646,7 @@ static void pic32cm_soc_realize(DeviceState *dev, Error **errp)
+     }
+     pic32cm_connect_resets(s);
+     pic32cm_connect_eic(s);
++    pic32cm_connect_events(s);
+ }
+ 
+ static const Property pic32cm_soc_properties[] = {
+diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
+index 378bf3f..0e0f2c6 100644
+--- a/hw/gpio/mchp_port.c
++++ b/hw/gpio/mchp_port.c
+@@ -7,13 +7,16 @@
+  * Pin configuration follows DS60001632H chapter 27 ("I/O Pin
+  * Configuration"). The register file stores DIR, OUT, PINCFG and PMUX, and
+  * the generated tables give the SET/CLR/TGL aliases; this model derives
+- * the pads from them. Not modelled: event inputs (EVCTRL) and the input
++ * the pads from them. Event inputs act on OUT as EVCTRL says, in every
++ * group; an OUT action with a pulse event leaves OUT as it was (PIC32CM
++ * MC00 silicon), a held level drives OUT. Not modelled: the input
+  * sampling mode (CTRL.SAMPLING), since IN always shows the current pads.
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+ 
+ #include "qemu/osdep.h"
++#include "qemu/timer.h"
+ #include "qapi/visitor.h"
+ #include "hw/core/irq.h"
+ #include "hw/gpio/mchp_port.h"
+@@ -49,6 +52,10 @@ struct MchpPortState {
+     uint32_t func_level[MCHP_PORT_GROUP_COUNT];
+     /* Groups this device has (MCHP_PORT_GROUP_COUNT is the largest) */
+     unsigned ngroups;
++    /* Event inputs: levels, time of the last rise, OUT bits it replaced */
++    uint32_t ev_level;
++    int64_t ev_rise[MCHP_PORT_EVENTS];
++    uint32_t ev_saved[MCHP_PORT_EVENTS];        /* bit per group */
+ };
+ 
+ static MchpRegFile *mchp_port_rf(MchpPortState *s)
+@@ -253,6 +260,57 @@ static void mchp_port_set_input(void *opaque, int n, int level)
+     mchp_port_update_func(s, g);
+ }
+ 
++/* "ev-event-in": event input @n acts on the pin each group's EVCTRL names */
++static void mchp_port_set_event(void *opaque, int n, int level)
++{
++    MchpPortState *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    bool rising = level > 0;
++
++    if (extract32(s->ev_level, n, 1) == rising) {
++        return;
++    }
++    s->ev_level = deposit32(s->ev_level, n, 1, rising);
++    for (unsigned g = 0; g < s->ngroups; g++) {
++        uint32_t ev = extract32(mchp_port_reg(s, g, A_MCHP_PORT_GROUP_EVCTRL),
++                                8 * n, 8);
++        uint32_t out = mchp_port_reg(s, g, A_MCHP_PORT_GROUP_OUT);
++        unsigned pin = FIELD_EX32(ev, MCHP_PORT_GROUP_EVCTRL, PID0);
++        bool bit = extract32(out, pin, 1);
++
++        if (!FIELD_EX32(ev, MCHP_PORT_GROUP_EVCTRL, PORTEI0)) {
++            continue;
++        }
++        switch (FIELD_EX32(ev, MCHP_PORT_GROUP_EVCTRL, EVACT0)) {
++        case MCHP_PORT_GROUP_EVCTRL_EVACT0_OUT:
++            if (rising) {
++                s->ev_saved[n] = deposit32(s->ev_saved[n], g, 1, bit);
++                bit = true;
++            } else {
++                /* A pulse leaves OUT unchanged (silicon) */
++                bit = s->ev_rise[n] == now && extract32(s->ev_saved[n], g, 1);
++            }
++            break;
++        case MCHP_PORT_GROUP_EVCTRL_EVACT0_SET:
++            bit |= rising;
++            break;
++        case MCHP_PORT_GROUP_EVCTRL_EVACT0_CLR:
++            bit &= !rising;
++            break;
++        case MCHP_PORT_GROUP_EVCTRL_EVACT0_TGL:
++            bit ^= rising;
++            break;
++        }
++        mchp_regfile_poke(mchp_port_rf(s),
++                          mchp_port_offset(g, A_MCHP_PORT_GROUP_OUT), 4,
++                          deposit32(out, pin, 1, bit));
++        mchp_port_update(s, g);
++    }
++    if (rising) {
++        s->ev_rise[n] = now;
++    }
++}
++
+ static void mchp_port_get_in(Object *obj, Visitor *v, const char *name,
+                              void *opaque, Error **errp)
+ {
+@@ -334,6 +392,8 @@ static void mchp_port_init(Object *obj)
+                             MCHP_PORT_NUM_PINS);
+     qdev_init_gpio_out_named(DEVICE(obj), s->func_a, MCHP_PORT_FUNC_A,
+                              MCHP_PORT_NUM_PINS);
++    qdev_init_gpio_in_named(DEVICE(obj), mchp_port_set_event,
++                            MCHP_PORT_EVENT_IN, MCHP_PORT_EVENTS);
+ }
+ 
+ /* The groups of this device, and a QOM property set per group */
+@@ -366,8 +426,8 @@ static bool mchp_port_realize(MchpRegBlock *rb, Error **errp)
+ 
+ static const VMStateDescription vmstate_mchp_port = {
+     .name = TYPE_MCHP_PORT,
+-    .version_id = 2,
+-    .minimum_version_id = 2,
++    .version_id = 3,
++    .minimum_version_id = 3,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpPortState, 1, vmstate_mchp_regblock,
+                        MchpRegBlock),
+@@ -378,6 +438,9 @@ static const VMStateDescription vmstate_mchp_port = {
+                              MCHP_PORT_GROUP_COUNT),
+         VMSTATE_UINT32_ARRAY(func_level, MchpPortState,
+                              MCHP_PORT_GROUP_COUNT),
++        VMSTATE_UINT32(ev_level, MchpPortState),
++        VMSTATE_INT64_ARRAY(ev_rise, MchpPortState, MCHP_PORT_EVENTS),
++        VMSTATE_UINT32_ARRAY(ev_saved, MchpPortState, MCHP_PORT_EVENTS),
+         VMSTATE_END_OF_LIST()
+     },
+ };
+diff --git a/hw/misc/mchp_eic.c b/hw/misc/mchp_eic.c
+index 2c65161..ad87532 100644
+--- a/hw/misc/mchp_eic.c
++++ b/hw/misc/mchp_eic.c
+@@ -11,9 +11,13 @@
+  * asynchronous; level detection does not. A change of CTRLA.ENABLE made
+  * while the configuration needs the EIC clock (synchronous edges,
+  * filtering) and the clock is off keeps SYNCBUSY.ENABLE set until the
+- * clock runs (PIC32CM MC00 silicon).
+- * Filtering and debouncing take effect at once. Register semantics (W1C, aliases, enable protection,
+- * SWRST) come from the generated tables through mchp-regblock.
++ * clock runs (PIC32CM MC00 silicon). With EVCTRL.EXTINTEOn the event output
++ * pulses per detected edge, and follows the detector for the level senses
++ * (high while a HIGH line is high): an EVSYS channel sees both edges of a
++ * level, as on silicon.
++ * Filtering and debouncing take effect at once. Register semantics (W1C,
++ * aliases, enable protection, SWRST) come from the generated tables through
++ * mchp-regblock.
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -48,6 +52,7 @@ struct MchpEicState {
+     qemu_irq nmi;
+     qemu_irq event[MCHP_EIC_LINES];
+     uint32_t level;             /* EXTINT input levels */
++    uint32_t ev_level;          /* level-sense event outputs */
+     bool nmi_level;
+     uint32_t sync_pending;      /* SYNCBUSY bits waiting for the EIC clock */
+ };
+@@ -136,6 +141,24 @@ static bool mchp_eic_match(unsigned sense, bool old, bool new)
+     }
+ }
+ 
++/* Event outputs of the level-sensitive lines follow their detectors */
++static void mchp_eic_update_events(MchpEicState *s)
++{
++    uint32_t evctrl = mchp_eic_reg(s, A_MCHP_EIC_EVCTRL, 4);
++
++    for (unsigned line = 0; line < MCHP_EIC_LINES; line++) {
++        unsigned sense = mchp_eic_sense(s, line);
++        bool on = mchp_eic_enabled(s) && extract32(evctrl, line, 1) &&
++                  mchp_eic_is_level(sense) &&
++                  mchp_eic_match(sense, false, extract32(s->level, line, 1));
++
++        if (extract32(s->ev_level, line, 1) != on) {
++            s->ev_level = deposit32(s->ev_level, line, 1, on);
++            qemu_set_irq(s->event[line], on);
++        }
++    }
++}
++
+ /*
+  * Evaluate the EXTINT lines in @lines after their inputs changed from
+  * @old (edges), or re-evaluate the level-sensitive ones (@old == level).
+@@ -147,6 +170,7 @@ static void mchp_eic_detect(MchpEicState *s, uint32_t old, uint32_t lines)
+     uint32_t evctrl = mchp_eic_reg(s, A_MCHP_EIC_EVCTRL, 4);
+     bool clocked = mchp_eic_clocked(s);
+ 
++    mchp_eic_update_events(s);
+     if (!mchp_eic_enabled(s)) {
+         return;
+     }
+@@ -163,7 +187,7 @@ static void mchp_eic_detect(MchpEicState *s, uint32_t old, uint32_t lines)
+         }
+         if (!extract32(flags, line, 1) || !mchp_eic_is_level(sense)) {
+             trace_mchp_eic_detect(line, sense, now);
+-            if (extract32(evctrl, line, 1)) {
++            if (extract32(evctrl, line, 1) && !mchp_eic_is_level(sense)) {
+                 qemu_irq_pulse(s->event[line]);
+             }
+         }
+@@ -274,6 +298,7 @@ static void mchp_eic_reset_exit(MchpRegBlock *rb)
+ 
+     s->sync_pending = 0;
+     qemu_set_irq(s->nmi, 0);
++    mchp_eic_update_events(s);
+ }
+ 
+ static void mchp_eic_init(Object *obj)
+@@ -290,12 +315,13 @@ static void mchp_eic_init(Object *obj)
+ 
+ static const VMStateDescription vmstate_mchp_eic = {
+     .name = TYPE_MCHP_EIC,
+-    .version_id = 1,
+-    .minimum_version_id = 1,
++    .version_id = 2,
++    .minimum_version_id = 2,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpEicState, 1, vmstate_mchp_regblock,
+                        MchpRegBlock),
+         VMSTATE_UINT32(level, MchpEicState),
++        VMSTATE_UINT32(ev_level, MchpEicState),
+         VMSTATE_BOOL(nmi_level, MchpEicState),
+         VMSTATE_UINT32(sync_pending, MchpEicState),
+         VMSTATE_END_OF_LIST()
+diff --git a/hw/misc/mchp_evsys.c b/hw/misc/mchp_evsys.c
+new file mode 100644
+index 0000000..5424111
+--- /dev/null
++++ b/hw/misc/mchp_evsys.c
+@@ -0,0 +1,408 @@
++/*
++ * Microchip SAM/PIC32CM Event System (EVSYS U2256)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Follows DS60001638E chapter 27 (PIC32CM MC00) and DS60001632H chapter 28
++ * (PIC32CM JH01): channels route a generator (CHANNEL.EVGEN) or a
++ * software event (SWEVT) to the users that select them (USER.CHANNEL).
++ *
++ * Behaviour the data sheet leaves open follows PIC32CM MC00 silicon
++ * (firmware/hello/tests/evprobe.c):
++ *  - The synchronous and resynchronized paths need the channel's generic
++ *    clock (CHANNEL.ONDEMAND does not request it); without it events are
++ *    lost without a flag. Channels without a generic clock (9-11 on the
++ *    MC00) only work asynchronously.
++ *  - On those paths an event selected by EDGSEL sets EVD. It reaches the
++ *    users when all are ready; with a user not ready it sets OVR and is
++ *    lost; with no user at all it sets OVR and keeps CHBUSY set until a
++ *    user selects the channel or the channel is written. CHBUSY also
++ *    reads 1 while a configured channel (EVGEN or EDGSEL not 0) has no
++ *    user. On silicon CHSTATUS shows a CHANNEL write a few clock cycles
++ *    late; the model shows it at once.
++ *  - A software event is a generator pulse: it goes through EDGSEL.
++ *  - A pulse seen with EDGSEL BOTH_EDGES makes one event and sets OVR
++ *    (its second edge finds the channel busy). Silicon loses some pulses
++ *    with FALLING_EDGE; the model delivers every one.
++ *  - The asynchronous path (PATH 2, and the reserved 3) passes the
++ *    generator level to the users whatever EDGSEL says, sets no flags and
++ *    reads USRRDY 0.
++ *  - USER.CHANNEL keeps 4 bits, not the 5 of the ATDF.
++ * Not modelled: RUNSTDBY and sleep, event latency.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "qapi/error.h"
++#include "hw/core/clock.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-clock.h"
++#include "hw/misc/mchp_evsys.h"
++#include "hw/mchp/gen/evsys_u2256.h"
++#include "migration/vmstate.h"
++#include "trace.h"
++
++/* CHANNEL.PATH and CHANNEL.EDGSEL */
++enum {
++    MCHP_EVSYS_PATH_SYNC,
++    MCHP_EVSYS_PATH_RESYNC,
++    MCHP_EVSYS_PATH_ASYNC,
++};
++
++enum {
++    MCHP_EVSYS_EDGE_NONE,
++    MCHP_EVSYS_EDGE_RISING,
++    MCHP_EVSYS_EDGE_FALLING,
++    MCHP_EVSYS_EDGE_BOTH,
++};
++
++#define MCHP_EVSYS_USER_CHANNEL_MASK    0xF     /* silicon: 4 bits */
++#define F_OVR(ch)       BIT(ch)
++#define F_EVD(ch)       BIT((ch) + 16)
++/* A channel without users reads CHBUSY once one of these is set */
++#define F_CONFIG        (R_MCHP_EVSYS_CHANNEL_EVGEN_MASK | \
++                         R_MCHP_EVSYS_CHANNEL_EDGSEL_MASK)
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpEvsysState, MCHP_EVSYS)
++
++struct MchpEvsysState {
++    MchpRegBlock parent_obj;
++
++    Clock *chclk[MCHP_EVSYS_MAX_CHANNELS];
++    qemu_irq user[MCHP_EVSYS_MAX_USERS];
++    unsigned nchannels;
++    unsigned nusers;
++
++    uint64_t gen_level[MCHP_EVSYS_MAX_GENERATORS / 64];
++    uint64_t user_busy;         /* "user-busy" inputs */
++    uint64_t user_level;        /* "user" outputs */
++    uint32_t pending;           /* an event no user took yet */
++    int64_t last_event[MCHP_EVSYS_MAX_CHANNELS];
++};
++
++static uint32_t mchp_evsys_reg(MchpEvsysState *s, hwaddr offset)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, offset, 4);
++}
++
++static uint32_t mchp_evsys_channel(MchpEvsysState *s, unsigned ch)
++{
++    return mchp_evsys_reg(s, A_MCHP_EVSYS_CHANNEL + 4 * ch);
++}
++
++static unsigned mchp_evsys_evgen(MchpEvsysState *s, unsigned ch)
++{
++    return FIELD_EX32(mchp_evsys_channel(s, ch), MCHP_EVSYS_CHANNEL, EVGEN);
++}
++
++static bool mchp_evsys_async(MchpEvsysState *s, unsigned ch)
++{
++    return FIELD_EX32(mchp_evsys_channel(s, ch), MCHP_EVSYS_CHANNEL, PATH) >=
++           MCHP_EVSYS_PATH_ASYNC;
++}
++
++static bool mchp_evsys_clocked(MchpEvsysState *s, unsigned ch)
++{
++    return clock_get_hz(s->chclk[ch]) != 0;
++}
++
++static bool mchp_evsys_gen_level(MchpEvsysState *s, unsigned gen)
++{
++    return gen && extract64(s->gen_level[gen / 64], gen % 64, 1);
++}
++
++/* The users selecting channel @ch */
++static uint64_t mchp_evsys_users(MchpEvsysState *s, unsigned ch)
++{
++    uint64_t users = 0;
++
++    for (unsigned u = 0; u < s->nusers; u++) {
++        if (mchp_evsys_reg(s, A_MCHP_EVSYS_USER + 4 * u) == ch + 1) {
++            users |= BIT_ULL(u);
++        }
++    }
++    return users;
++}
++
++static void mchp_evsys_set_user(MchpEvsysState *s, unsigned u, bool level)
++{
++    if (extract64(s->user_level, u, 1) != level) {
++        s->user_level = deposit64(s->user_level, u, 1, level);
++        qemu_set_irq(s->user[u], level);
++    }
++}
++
++/* Users of asynchronous channels follow the generator; others idle at 0 */
++static void mchp_evsys_update_users(MchpEvsysState *s)
++{
++    for (unsigned u = 0; u < s->nusers; u++) {
++        uint32_t sel = mchp_evsys_reg(s, A_MCHP_EVSYS_USER + 4 * u);
++        unsigned ch = sel - 1;
++
++        mchp_evsys_set_user(s, u, sel && ch < s->nchannels &&
++                            mchp_evsys_async(s, ch) &&
++                            mchp_evsys_gen_level(s, mchp_evsys_evgen(s, ch)));
++    }
++}
++
++static void mchp_evsys_flag(MchpEvsysState *s, uint32_t flags)
++{
++    mchp_regfile_poke(&MCHP_REGBLOCK(s)->rf, A_MCHP_EVSYS_INTFLAG, 4,
++                      mchp_evsys_reg(s, A_MCHP_EVSYS_INTFLAG) | flags);
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++/* An event detected on synchronous/resynchronized channel @ch */
++static void mchp_evsys_event(MchpEvsysState *s, unsigned ch)
++{
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    uint64_t users = mchp_evsys_users(s, ch);
++    uint32_t flags = F_EVD(ch);
++
++    if (s->last_event[ch] == now) {
++        flags |= F_OVR(ch);     /* the channel is still busy */
++    } else if (!users) {
++        flags |= F_OVR(ch);
++        s->pending |= BIT(ch);
++    } else if (users & s->user_busy) {
++        flags |= F_OVR(ch);
++    } else {
++        for (unsigned u = 0; u < s->nusers; u++) {
++            if (users & BIT_ULL(u)) {
++                qemu_irq_pulse(s->user[u]);
++            }
++        }
++    }
++    s->last_event[ch] = now;
++    trace_mchp_evsys_event(ch, flags);
++    mchp_evsys_flag(s, flags);
++}
++
++/* The input of channel @ch rose (@rising) or fell */
++static void mchp_evsys_edge(MchpEvsysState *s, unsigned ch, bool rising)
++{
++    unsigned edge = FIELD_EX32(mchp_evsys_channel(s, ch), MCHP_EVSYS_CHANNEL,
++                               EDGSEL);
++
++    if (mchp_evsys_async(s, ch) || !mchp_evsys_clocked(s, ch)) {
++        return;
++    }
++    if (edge == MCHP_EVSYS_EDGE_BOTH ||
++        edge == (rising ? MCHP_EVSYS_EDGE_RISING : MCHP_EVSYS_EDGE_FALLING)) {
++        mchp_evsys_event(s, ch);
++    }
++}
++
++static void mchp_evsys_set_generator(void *opaque, int gen, int level)
++{
++    MchpEvsysState *s = opaque;
++    bool old = mchp_evsys_gen_level(s, gen);
++
++    if (!gen || old == (level > 0)) {
++        return;
++    }
++    s->gen_level[gen / 64] = deposit64(s->gen_level[gen / 64], gen % 64, 1,
++                                       level > 0);
++    for (unsigned ch = 0; ch < s->nchannels; ch++) {
++        if (mchp_evsys_evgen(s, ch) == gen) {
++            mchp_evsys_edge(s, ch, level > 0);
++        }
++    }
++    mchp_evsys_update_users(s);
++}
++
++static void mchp_evsys_set_user_busy(void *opaque, int u, int level)
++{
++    MchpEvsysState *s = opaque;
++
++    s->user_busy = deposit64(s->user_busy, u, 1, level > 0);
++}
++
++static void mchp_evsys_swevt(MchpEvsysState *s, uint32_t channels)
++{
++    for (unsigned ch = 0; ch < s->nchannels; ch++) {
++        if (!(channels & BIT(ch))) {
++            continue;
++        }
++        if (mchp_evsys_async(s, ch)) {
++            uint64_t users = mchp_evsys_users(s, ch);
++
++            for (unsigned u = 0; u < s->nusers; u++) {
++                if (users & BIT_ULL(u)) {
++                    qemu_irq_pulse(s->user[u]);
++                }
++            }
++            continue;
++        }
++        mchp_evsys_edge(s, ch, true);
++        mchp_evsys_edge(s, ch, false);
++    }
++}
++
++static uint32_t mchp_evsys_chstatus(MchpEvsysState *s)
++{
++    uint32_t val = 0;
++
++    for (unsigned ch = 0; ch < s->nchannels; ch++) {
++        uint64_t users = mchp_evsys_users(s, ch);
++
++        if (mchp_evsys_async(s, ch)) {
++            continue;
++        }
++        if (!(users & s->user_busy)) {
++            val |= R_MCHP_EVSYS_CHSTATUS_USRRDY0_MASK << ch;
++        }
++        if (!users && mchp_evsys_clocked(s, ch) &&
++            ((s->pending & BIT(ch)) ||
++             (mchp_evsys_channel(s, ch) & F_CONFIG))) {
++            val |= R_MCHP_EVSYS_CHSTATUS_CHBUSY0_MASK << ch;
++        }
++    }
++    return val;
++}
++
++static uint32_t mchp_evsys_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                                    unsigned idx, uint32_t stored,
++                                    bool side_effects)
++{
++    MchpEvsysState *s = MCHP_EVSYS(rf->opaque);
++
++    if (ri->offset == A_MCHP_EVSYS_CHSTATUS) {
++        return mchp_evsys_chstatus(s);
++    }
++    return stored;
++}
++
++static void mchp_evsys_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                  unsigned idx, uint32_t old, uint32_t written,
++                                  uint32_t we)
++{
++    MchpEvsysState *s = MCHP_EVSYS(rf->opaque);
++    uint32_t val = mchp_regfile_get(rf, ri, idx);
++
++    switch (ri->offset) {
++    case A_MCHP_EVSYS_SWEVT:
++        mchp_evsys_swevt(s, written & we);
++        mchp_regfile_set(rf, ri, idx, 0);
++        break;
++    case A_MCHP_EVSYS_CHANNEL:
++        s->pending &= ~BIT(idx);
++        mchp_evsys_update_users(s);
++        break;
++    case A_MCHP_EVSYS_USER:
++        val &= MCHP_EVSYS_USER_CHANNEL_MASK;
++        mchp_regfile_set(rf, ri, idx, val);
++        if (val && val - 1 < MCHP_EVSYS_MAX_CHANNELS) {
++            s->pending &= ~BIT(val - 1);
++        }
++        mchp_evsys_update_users(s);
++        break;
++    }
++}
++
++static void mchp_evsys_reset_hold(MchpRegBlock *rb)
++{
++    MchpEvsysState *s = MCHP_EVSYS(rb);
++
++    s->pending = 0;
++    for (unsigned ch = 0; ch < MCHP_EVSYS_MAX_CHANNELS; ch++) {
++        s->last_event[ch] = INT64_MIN;
++    }
++}
++
++static void mchp_evsys_reset_exit(MchpRegBlock *rb)
++{
++    mchp_evsys_update_users(MCHP_EVSYS(rb));
++}
++
++/* Number of elements of register array @name in the instance table */
++static unsigned mchp_evsys_count(MchpRegBlock *rb, const char *name)
++{
++    for (unsigned i = 0; i < rb->info->nregs; i++) {
++        if (!strcmp(rb->info->regs[i].name, name)) {
++            return rb->info->regs[i].count;
++        }
++    }
++    return 0;
++}
++
++static bool mchp_evsys_realize(MchpRegBlock *rb, Error **errp)
++{
++    MchpEvsysState *s = MCHP_EVSYS(rb);
++
++    s->nchannels = mchp_evsys_count(rb, "CHANNEL");
++    s->nusers = mchp_evsys_count(rb, "USER");
++    if (s->nchannels > MCHP_EVSYS_MAX_CHANNELS ||
++        s->nusers > MCHP_EVSYS_MAX_USERS) {
++        error_setg(errp, "%s: %u channels, %u users: too many", rb->name,
++                   s->nchannels, s->nusers);
++        return false;
++    }
++    return true;
++}
++
++static void mchp_evsys_init(Object *obj)
++{
++    MchpEvsysState *s = MCHP_EVSYS(obj);
++    DeviceState *dev = DEVICE(obj);
++
++    qdev_init_gpio_in_named(dev, mchp_evsys_set_generator,
++                            MCHP_EVSYS_GENERATOR, MCHP_EVSYS_MAX_GENERATORS);
++    qdev_init_gpio_in_named(dev, mchp_evsys_set_user_busy,
++                            MCHP_EVSYS_USER_BUSY, MCHP_EVSYS_MAX_USERS);
++    qdev_init_gpio_out_named(dev, s->user, MCHP_EVSYS_USER,
++                             MCHP_EVSYS_MAX_USERS);
++    for (unsigned ch = 0; ch < MCHP_EVSYS_MAX_CHANNELS; ch++) {
++        g_autofree char *name = g_strdup_printf("channel-clock[%u]", ch);
++
++        s->chclk[ch] = qdev_init_clock_in(dev, name, NULL, NULL, 0);
++    }
++}
++
++static const VMStateDescription vmstate_mchp_evsys = {
++    .name = TYPE_MCHP_EVSYS,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpEvsysState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_UINT64_ARRAY(gen_level, MchpEvsysState,
++                             MCHP_EVSYS_MAX_GENERATORS / 64),
++        VMSTATE_UINT64(user_busy, MchpEvsysState),
++        VMSTATE_UINT64(user_level, MchpEvsysState),
++        VMSTATE_UINT32(pending, MchpEvsysState),
++        VMSTATE_INT64_ARRAY(last_event, MchpEvsysState,
++                            MCHP_EVSYS_MAX_CHANNELS),
++        VMSTATE_ARRAY_CLOCK(chclk, MchpEvsysState, MCHP_EVSYS_MAX_CHANNELS),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void mchp_evsys_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_evsys;
++    c->realize = mchp_evsys_realize;
++    c->pre_read = mchp_evsys_pre_read;
++    c->post_write = mchp_evsys_post_write;
++    c->reset_hold = mchp_evsys_reset_hold;
++    c->reset_exit = mchp_evsys_reset_exit;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_evsys_types[] = {
++    {
++        .name = TYPE_MCHP_EVSYS,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpEvsysState),
++        .instance_init = mchp_evsys_init,
++        .class_init = mchp_evsys_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_evsys_types)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index ebb2985..11f7b08 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -24,6 +24,7 @@ system_ss.add(when: 'CONFIG_MCHP_REGFILE', if_true: files(
+ system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files(
+   'mchp_clock.c',
+   'mchp_eic.c',
++  'mchp_evsys.c',
+   'mchp_sysctrl.c',
+ ))
+ 
+diff --git a/hw/misc/trace-events b/hw/misc/trace-events
+index 591ce20..d40da2f 100644
+--- a/hw/misc/trace-events
++++ b/hw/misc/trace-events
+@@ -456,3 +456,6 @@ mchp_rstc_reset_request(const char *inst, uint8_t rcause) "%s: reset requested,
+ 
+ # mchp_eic.c
+ mchp_eic_detect(unsigned line, unsigned sense, int level) "EXTINT%u (16 = NMI): sense %u, level %d"
++
++# mchp_evsys.c
++mchp_evsys_event(unsigned channel, uint32_t flags) "channel %u: flags 0x%x"
+diff --git a/hw/rtc/mchp_rtc.c b/hw/rtc/mchp_rtc.c
+index f08bede..549131e 100644
+--- a/hw/rtc/mchp_rtc.c
++++ b/hw/rtc/mchp_rtc.c
+@@ -17,7 +17,7 @@
+  * last synchronized value. Only power-on resets the RTC: it keeps counting
+  * across system resets (silicon). Synchronized writes without CLK_RTC_OSC keep
+  * their SYNCBUSY bits until it runs. Not modelled: FREQCORR, CLKREP (12-hour
+- * format), event outputs to the event system, tamper.
++ * format), tamper.
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -66,6 +66,9 @@ struct MchpRtcState {
+     MchpRegBlock parent_obj;
+ 
+     QEMUTimer *timer;
++    qemu_irq per_event[8];
++    qemu_irq cmp_event[2];
++    qemu_irq ovf_event;
+     bool running;
+     uint64_t value;             /* counter (MODE0/1) or seconds (MODE2) */
+     uint64_t osc;               /* CLK_RTC_OSC ticks since enable at t_base */
+@@ -260,6 +263,29 @@ static uint64_t rtc_next_count_event(MchpRtcState *s, uint32_t *flags)
+     return best;
+ }
+ 
++/*
++ * Event outputs for the INTFLAG bits @flags set: PERn, CMPn (ALARM0 in
++ * MODE2) and OVF sit at the same bits in INTFLAG and EVCTRL
++ */
++static void rtc_events(MchpRtcState *s, uint32_t flags)
++{
++    uint32_t ev = flags & rtc_reg(s, A_EVCTRL, 4);
++
++    for (unsigned n = 0; n < 8; n++) {
++        if (ev & BIT(n)) {
++            qemu_irq_pulse(s->per_event[n]);
++        }
++    }
++    for (unsigned n = 0; n < 2; n++) {
++        if (ev & (FLAG_CMP0 << n)) {
++            qemu_irq_pulse(s->cmp_event[n]);
++        }
++    }
++    if (ev & FLAG_OVF) {
++        qemu_irq_pulse(s->ovf_event);
++    }
++}
++
+ /* The flagging counter tick: apply @flags and move the counter */
+ static void rtc_count_event(MchpRtcState *s, uint32_t flags)
+ {
+@@ -276,6 +302,7 @@ static void rtc_count_event(MchpRtcState *s, uint32_t flags)
+     }
+     trace_mchp_rtc_event(s->value, flags);
+     rtc_set_reg(s, A_INTFLAG, 2, rtc_reg(s, A_INTFLAG, 2) | flags);
++    rtc_events(s, flags);
+ }
+ 
+ /* The counter after @n plain ticks (no flagging tick among them) */
+@@ -402,6 +429,7 @@ static void rtc_advance(MchpRtcState *s, int64_t now)
+         }
+         if (e == per_e) {
+             rtc_set_reg(s, A_INTFLAG, 2, rtc_reg(s, A_INTFLAG, 2) | pflags);
++            rtc_events(s, pflags);
+         }
+         s->t_base = rtc_time_of(s, e) - 1;
+         s->osc = e;
+@@ -517,6 +545,16 @@ static bool rtc_realize(MchpRegBlock *rb, Error **errp)
+     return true;
+ }
+ 
++static void rtc_init(Object *obj)
++{
++    MchpRtcState *s = MCHP_RTC(obj);
++    DeviceState *dev = DEVICE(obj);
++
++    qdev_init_gpio_out_named(dev, s->per_event, MCHP_RTC_PER_EVENT, 8);
++    qdev_init_gpio_out_named(dev, s->cmp_event, MCHP_RTC_CMP_EVENT, 2);
++    qdev_init_gpio_out_named(dev, &s->ovf_event, MCHP_RTC_OVF_EVENT, 1);
++}
++
+ static void rtc_finalize(Object *obj)
+ {
+     timer_free(MCHP_RTC(obj)->timer);
+@@ -558,6 +596,7 @@ static const TypeInfo mchp_rtc_types[] = {
+         .name = TYPE_MCHP_RTC,
+         .parent = TYPE_MCHP_REGBLOCK,
+         .instance_size = sizeof(MchpRtcState),
++        .instance_init = rtc_init,
+         .instance_finalize = rtc_finalize,
+         .class_init = rtc_class_init,
+     },
+diff --git a/hw/timer/mchp_tc.c b/hw/timer/mchp_tc.c
+index 19d0a46..0414b5c 100644
+--- a/hw/timer/mchp_tc.c
++++ b/hw/timer/mchp_tc.c
+@@ -11,8 +11,10 @@
+  * RETRIGGER/STOP/UPDATE/READSYNC commands, double buffering of PER and CCx,
+  * and COUNT32 pairing (the odd TC of a pair reports STATUS.SLAVE).
+  * COUNT reads return the last synchronized value: firmware must issue
+- * READSYNC first, as on silicon. Not modelled: capture, event actions,
+- * waveform outputs on pins, prescaler synchronization, sleep.
++ * READSYNC first, as on silicon. The event input (TCEI, TCINV) counts
++ * (EVACT COUNT: events replace the prescaled clock), retriggers or
++ * starts the counter. Not modelled: capture and the capture event
++ * actions, waveform outputs on pins, prescaler synchronization, sleep.
+  *
+  * Behaviour the data sheet leaves open follows PIC32CM MC00 silicon
+  * (firmware/hello/tests/tcprobe.c): enabling counts on from COUNT in either
+@@ -20,7 +22,9 @@
+  * starting is an UPDATE condition for the buffers; a PER read while
+  * STATUS.PERBUFV is set returns PERBUF, though TOP stays the old PER (CCx
+  * and CCBUFVx alike); synchronized
+- * writes made without GCLK_TC keep their SYNCBUSY bits set until it runs.
++ * writes made without GCLK_TC keep their SYNCBUSY bits set until it runs;
++ * the event user is ready (EVSYS CHSTATUS.USRRDY) while the TC is enabled,
++ * whatever TCEI says.
+  *
+  * Counting is event driven on QEMU_CLOCK_VIRTUAL: the timer fires at the
+  * next overflow or compare match only while that changes something (a flag
+@@ -70,6 +74,8 @@ struct MchpTcState {
+     QEMUTimer *timer;
+     qemu_irq ovf_event;
+     qemu_irq mc_event[MCHP_TC_CHANNELS];
++    qemu_irq evu_busy;
++    bool ev_level;              /* the event input */
+     MchpTcState *client;        /* odd partner for COUNT32 (even TCs) */
+ 
+     bool running;               /* counting (enabled, not stopped) */
+@@ -158,6 +164,19 @@ static bool mchp_tc_capture(MchpTcState *s, unsigned ch)
+                      R_MCHP_TC_COUNT16_CTRLA_CAPTEN0_SHIFT + ch, 1);
+ }
+ 
++static unsigned mchp_tc_evact(MchpTcState *s)
++{
++    return FIELD_EX32(mchp_tc_reg(s, A_EVCTRL, 2), MCHP_TC_COUNT16_EVCTRL,
++                      EVACT);
++}
++
++/* Events, not the prescaled clock, move the counter */
++static bool mchp_tc_counts_events(MchpTcState *s)
++{
++    return (mchp_tc_reg(s, A_EVCTRL, 2) & F(EVCTRL, TCEI)) &&
++           mchp_tc_evact(s) == MCHP_TC_COUNT16_EVCTRL_EVACT_COUNT;
++}
++
+ /* Counter clock (GCLK_TC / prescaler) as ns per tick, numerator/hz */
+ static uint64_t mchp_tc_prescaler(MchpTcState *s)
+ {
+@@ -175,7 +194,8 @@ static uint64_t mchp_tc_ticks(MchpTcState *s, int64_t now)
+ {
+     Clock *clk = MCHP_REGBLOCK(s)->gclk;
+ 
+-    if (!s->running || !mchp_tc_hz(s) || now <= s->t_base) {
++    if (!s->running || !mchp_tc_hz(s) || mchp_tc_counts_events(s) ||
++        now <= s->t_base) {
+         return 0;
+     }
+     return clock_ns_to_ticks(clk, now - s->t_base) / mchp_tc_prescaler(s);
+@@ -346,7 +366,8 @@ static uint32_t mchp_tc_value(MchpTcState *s, uint64_t ticks)
+ /* Bring the counter up to @now and schedule the next event that matters */
+ static void mchp_tc_advance(MchpTcState *s, int64_t now)
+ {
+-    for (unsigned steps = 0; s->running && mchp_tc_hz(s); steps++) {
++    for (unsigned steps = 0;
++         s->running && mchp_tc_hz(s) && !mchp_tc_counts_events(s); steps++) {
+         uint64_t ovf, match[MCHP_TC_CHANNELS], next;
+         bool at[MCHP_TC_CHANNELS];
+ 
+@@ -428,14 +449,13 @@ static void mchp_tc_report_unimp(MchpTcState *s)
+ {
+     MchpRegBlock *rb = MCHP_REGBLOCK(s);
+     uint32_t ctrla = mchp_tc_reg(s, A_CTRLA, 4);
+-    unsigned evact = FIELD_EX32(mchp_tc_reg(s, A_EVCTRL, 2),
+-                                MCHP_TC_COUNT16_EVCTRL, EVACT);
++    unsigned evact = mchp_tc_evact(s);
+ 
+     if (ctrla & (F(CTRLA, CAPTEN0) | F(CTRLA, CAPTEN1))) {
+         qemu_log_mask(LOG_UNIMP, "%s.CTRLA: capture not modelled\n",
+                       rb->name);
+     }
+-    if (evact || (mchp_tc_reg(s, A_EVCTRL, 2) & F(EVCTRL, TCEI))) {
++    if (evact > MCHP_TC_COUNT16_EVCTRL_EVACT_START) {
+         qemu_log_mask(LOG_UNIMP, "%s.EVCTRL: event action %u not modelled\n",
+                       rb->name, evact);
+     }
+@@ -478,6 +498,71 @@ static void mchp_tc_command(MchpTcState *s, unsigned cmd)
+     }
+ }
+ 
++/* One event with EVACT COUNT: a counter tick */
++static void mchp_tc_count_event(MchpTcState *s, int64_t now)
++{
++    uint64_t ovf, match[MCHP_TC_CHANNELS];
++    bool at[MCHP_TC_CHANNELS];
++
++    mchp_tc_next(s, &ovf, match);
++    for (unsigned ch = 0; ch < MCHP_TC_CHANNELS; ch++) {
++        at[ch] = match[ch] == 1;
++    }
++    mchp_tc_step(s, 1, ovf == 1, at);
++    s->t_base = now;
++}
++
++/* "evu-event-in": the event input; the edge TCINV selects acts */
++static void mchp_tc_set_event(void *opaque, int n, int level)
++{
++    MchpTcState *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    uint32_t evctrl = mchp_tc_reg(s, A_EVCTRL, 2);
++    bool inv = evctrl & F(EVCTRL, TCINV);
++
++    if (s->ev_level == (level > 0)) {
++        return;
++    }
++    s->ev_level = level > 0;
++    if (!(evctrl & F(EVCTRL, TCEI)) || s->ev_level == inv ||
++        !FIELD_EX32(mchp_tc_reg(s, A_CTRLA, 4), MCHP_TC_COUNT16_CTRLA,
++                    ENABLE)) {
++        return;
++    }
++    mchp_tc_advance(s, now);
++    switch (mchp_tc_evact(s)) {
++    case MCHP_TC_COUNT16_EVCTRL_EVACT_COUNT:
++        if (s->running && mchp_tc_hz(s)) {
++            mchp_tc_count_event(s, now);
++        }
++        break;
++    case MCHP_TC_COUNT16_EVCTRL_EVACT_RETRIGGER:
++        if (s->running) {
++            mchp_tc_load(s, mchp_tc_start_value(s));
++        } else {
++            mchp_tc_start(s);
++        }
++        break;
++    case MCHP_TC_COUNT16_EVCTRL_EVACT_START:
++        if (!s->running) {
++            mchp_tc_start(s);
++        }
++        break;
++    }
++    trace_mchp_tc_event_in(MCHP_REGBLOCK(s)->name, mchp_tc_evact(s),
++                           s->count);
++    mchp_tc_advance(s, now);
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++/* An event user is ready while the TC is enabled (silicon) */
++static void mchp_tc_update_busy(MchpTcState *s)
++{
++    qemu_set_irq(s->evu_busy,
++                 !FIELD_EX32(mchp_tc_reg(s, A_CTRLA, 4),
++                             MCHP_TC_COUNT16_CTRLA, ENABLE));
++}
++
+ static uint32_t mchp_tc_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
+                                  unsigned idx, uint32_t stored,
+                                  bool side_effects)
+@@ -535,8 +620,7 @@ static void mchp_tc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+             return;             /* mchp-regblock resets the TC next */
+         }
+         if (val & ~old & F(CTRLA, ENABLE)) {
+-            unsigned evact = FIELD_EX32(mchp_tc_reg(s, A_EVCTRL, 2),
+-                                        MCHP_TC_COUNT16_EVCTRL, EVACT);
++            unsigned evact = mchp_tc_evact(s);
+ 
+             mchp_tc_report_unimp(s);
+             /* RETRIGGER/START event actions wait for an event */
+@@ -550,6 +634,7 @@ static void mchp_tc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+             timer_del(s->timer);
+         }
+         mchp_tc_update_client(s);
++        mchp_tc_update_busy(s);
+         break;
+     case A_CTRLBSET: {
+         unsigned cmd = FIELD_EX32(val, MCHP_TC_COUNT16_CTRLBSET, CMD);
+@@ -597,6 +682,7 @@ static void mchp_tc_reset_hold(MchpRegBlock *rb)
+     s->sync_pending = 0;
+     s->count = 0;
+     mchp_tc_update_client(s);
++    mchp_tc_update_busy(s);
+ }
+ 
+ static bool mchp_tc_realize(MchpRegBlock *rb, Error **errp)
+@@ -614,6 +700,9 @@ static void mchp_tc_init(Object *obj)
+     qdev_init_gpio_out_named(DEVICE(obj), &s->ovf_event, MCHP_TC_OVF_EVENT, 1);
+     qdev_init_gpio_out_named(DEVICE(obj), s->mc_event, MCHP_TC_MC_EVENT,
+                              MCHP_TC_CHANNELS);
++    qdev_init_gpio_in_named(DEVICE(obj), mchp_tc_set_event,
++                            MCHP_TC_EVU_EVENT_IN, 1);
++    qdev_init_gpio_out_named(DEVICE(obj), &s->evu_busy, MCHP_TC_EVU_BUSY, 1);
+     object_property_add_link(obj, "client", TYPE_MCHP_TC,
+                              (Object **)&s->client,
+                              object_property_allow_set_link,
+@@ -627,8 +716,8 @@ static void mchp_tc_finalize(Object *obj)
+ 
+ static const VMStateDescription vmstate_mchp_tc = {
+     .name = TYPE_MCHP_TC,
+-    .version_id = 1,
+-    .minimum_version_id = 1,
++    .version_id = 2,
++    .minimum_version_id = 2,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpTcState, 1, vmstate_mchp_regblock,
+                        MchpRegBlock),
+@@ -637,6 +726,7 @@ static const VMStateDescription vmstate_mchp_tc = {
+         VMSTATE_UINT32(count, MchpTcState),
+         VMSTATE_INT64(t_base, MchpTcState),
+         VMSTATE_UINT32(sync_pending, MchpTcState),
++        VMSTATE_BOOL(ev_level, MchpTcState),
+         VMSTATE_END_OF_LIST()
+     },
+ };
+diff --git a/hw/timer/trace-events b/hw/timer/trace-events
+index 736b214..8614bc7 100644
+--- a/hw/timer/trace-events
++++ b/hw/timer/trace-events
+@@ -131,3 +131,4 @@ imx_epit_cmp(uint32_t sr) "sr was %d"
+ 
+ # mchp_tc.c
+ mchp_tc_event(const char *name, uint32_t count, uint32_t flags) "%s: count 0x%x, flags 0x%x"
++mchp_tc_event_in(const char *name, unsigned evact, uint32_t count) "%s: event action %u, count 0x%x"
+diff --git a/include/hw/arm/pic32cm1216mc00048_gen.h b/include/hw/arm/pic32cm1216mc00048_gen.h
+index 69e3b2b..7529eeb 100644
+--- a/include/hw/arm/pic32cm1216mc00048_gen.h
++++ b/include/hw/arm/pic32cm1216mc00048_gen.h
+@@ -1907,4 +1907,331 @@ static const MchpSignalInfo pic32cm1216mc00048_signals[] = {
+ };
+ #define PIC32CM1216MC00048_NUM_SIGNALS 286
+ 
++/* EVSYS event generators, then users (ATDF <events>) */
++static const MchpEventInfo pic32cm1216mc00048_events[] = {
++    {
++        .id = 1, .user = false, .instance = "OSCCTRL", .signal = "XOSC_FAIL",
++        .index = -1,
++    },
++    {
++        .id = 2, .user = false, .instance = "OSC32KCTRL",
++        .signal = "XOSC32K_FAIL", .index = -1,
++    },
++    { .id = 3, .user = false, .instance = "RTC", .signal = "CMP", .index = 0 },
++    { .id = 4, .user = false, .instance = "RTC", .signal = "CMP", .index = 1 },
++    { .id = 5, .user = false, .instance = "RTC", .signal = "OVF", .index = -1 },
++    { .id = 6, .user = false, .instance = "RTC", .signal = "PER", .index = 0 },
++    { .id = 7, .user = false, .instance = "RTC", .signal = "PER", .index = 1 },
++    { .id = 8, .user = false, .instance = "RTC", .signal = "PER", .index = 2 },
++    { .id = 9, .user = false, .instance = "RTC", .signal = "PER", .index = 3 },
++    { .id = 10, .user = false, .instance = "RTC", .signal = "PER", .index = 4 },
++    { .id = 11, .user = false, .instance = "RTC", .signal = "PER", .index = 5 },
++    { .id = 12, .user = false, .instance = "RTC", .signal = "PER", .index = 6 },
++    { .id = 13, .user = false, .instance = "RTC", .signal = "PER", .index = 7 },
++    {
++        .id = 14, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 0,
++    },
++    {
++        .id = 15, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 1,
++    },
++    {
++        .id = 16, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 2,
++    },
++    {
++        .id = 17, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 3,
++    },
++    {
++        .id = 18, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 4,
++    },
++    {
++        .id = 19, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 5,
++    },
++    {
++        .id = 20, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 6,
++    },
++    {
++        .id = 21, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 7,
++    },
++    {
++        .id = 22, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 8,
++    },
++    {
++        .id = 23, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 9,
++    },
++    {
++        .id = 24, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 10,
++    },
++    {
++        .id = 25, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 11,
++    },
++    {
++        .id = 26, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 12,
++    },
++    {
++        .id = 27, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 13,
++    },
++    {
++        .id = 28, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 14,
++    },
++    {
++        .id = 29, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 15,
++    },
++    {
++        .id = 30, .user = false, .instance = "TSENS", .signal = "WINMON",
++        .index = -1,
++    },
++    { .id = 31, .user = false, .instance = "DMAC", .signal = "CH", .index = 0 },
++    { .id = 32, .user = false, .instance = "DMAC", .signal = "CH", .index = 1 },
++    { .id = 33, .user = false, .instance = "DMAC", .signal = "CH", .index = 2 },
++    { .id = 34, .user = false, .instance = "DMAC", .signal = "CH", .index = 3 },
++    {
++        .id = 35, .user = false, .instance = "TCC0", .signal = "OVF",
++        .index = -1,
++    },
++    {
++        .id = 36, .user = false, .instance = "TCC0", .signal = "TRG",
++        .index = -1,
++    },
++    {
++        .id = 37, .user = false, .instance = "TCC0", .signal = "CNT",
++        .index = -1,
++    },
++    { .id = 38, .user = false, .instance = "TCC0", .signal = "MC", .index = 0 },
++    { .id = 39, .user = false, .instance = "TCC0", .signal = "MC", .index = 1 },
++    { .id = 40, .user = false, .instance = "TCC0", .signal = "MC", .index = 2 },
++    { .id = 41, .user = false, .instance = "TCC0", .signal = "MC", .index = 3 },
++    {
++        .id = 42, .user = false, .instance = "TCC1", .signal = "OVF",
++        .index = -1,
++    },
++    {
++        .id = 43, .user = false, .instance = "TCC1", .signal = "TRG",
++        .index = -1,
++    },
++    {
++        .id = 44, .user = false, .instance = "TCC1", .signal = "CNT",
++        .index = -1,
++    },
++    { .id = 45, .user = false, .instance = "TCC1", .signal = "MC", .index = 0 },
++    { .id = 46, .user = false, .instance = "TCC1", .signal = "MC", .index = 1 },
++    {
++        .id = 47, .user = false, .instance = "TCC2", .signal = "OVF",
++        .index = -1,
++    },
++    {
++        .id = 48, .user = false, .instance = "TCC2", .signal = "TRG",
++        .index = -1,
++    },
++    {
++        .id = 49, .user = false, .instance = "TCC2", .signal = "CNT",
++        .index = -1,
++    },
++    { .id = 50, .user = false, .instance = "TCC2", .signal = "MC", .index = 0 },
++    { .id = 51, .user = false, .instance = "TCC2", .signal = "MC", .index = 1 },
++    {
++        .id = 52, .user = false, .instance = "TC0", .signal = "OVF",
++        .index = -1,
++    },
++    { .id = 53, .user = false, .instance = "TC0", .signal = "MC", .index = 0 },
++    { .id = 54, .user = false, .instance = "TC0", .signal = "MC", .index = 1 },
++    {
++        .id = 55, .user = false, .instance = "TC1", .signal = "OVF",
++        .index = -1,
++    },
++    { .id = 56, .user = false, .instance = "TC1", .signal = "MC", .index = 0 },
++    { .id = 57, .user = false, .instance = "TC1", .signal = "MC", .index = 1 },
++    {
++        .id = 58, .user = false, .instance = "TC2", .signal = "OVF",
++        .index = -1,
++    },
++    { .id = 59, .user = false, .instance = "TC2", .signal = "MC", .index = 0 },
++    { .id = 60, .user = false, .instance = "TC2", .signal = "MC", .index = 1 },
++    {
++        .id = 61, .user = false, .instance = "TC3", .signal = "OVF",
++        .index = -1,
++    },
++    { .id = 62, .user = false, .instance = "TC3", .signal = "MC", .index = 0 },
++    { .id = 63, .user = false, .instance = "TC3", .signal = "MC", .index = 1 },
++    {
++        .id = 64, .user = false, .instance = "TC4", .signal = "OVF",
++        .index = -1,
++    },
++    { .id = 65, .user = false, .instance = "TC4", .signal = "MC", .index = 0 },
++    { .id = 66, .user = false, .instance = "TC4", .signal = "MC", .index = 1 },
++    {
++        .id = 67, .user = false, .instance = "ADC0", .signal = "RESRDY",
++        .index = -1,
++    },
++    {
++        .id = 68, .user = false, .instance = "ADC0", .signal = "WINMON",
++        .index = -1,
++    },
++    {
++        .id = 69, .user = false, .instance = "ADC1", .signal = "RESRDY",
++        .index = -1,
++    },
++    {
++        .id = 70, .user = false, .instance = "ADC1", .signal = "WINMON",
++        .index = -1,
++    },
++    {
++        .id = 71, .user = false, .instance = "SDADC", .signal = "RESRDY",
++        .index = -1,
++    },
++    {
++        .id = 72, .user = false, .instance = "SDADC", .signal = "WINMON",
++        .index = -1,
++    },
++    { .id = 73, .user = false, .instance = "AC", .signal = "COMP", .index = 0 },
++    { .id = 74, .user = false, .instance = "AC", .signal = "COMP", .index = 1 },
++    { .id = 75, .user = false, .instance = "AC", .signal = "WIN", .index = 0 },
++    {
++        .id = 76, .user = false, .instance = "DAC", .signal = "EMPTY",
++        .index = -1,
++    },
++    {
++        .id = 77, .user = false, .instance = "CCL", .signal = "LUTOUT",
++        .index = 0,
++    },
++    {
++        .id = 78, .user = false, .instance = "CCL", .signal = "LUTOUT",
++        .index = 1,
++    },
++    {
++        .id = 79, .user = false, .instance = "CCL", .signal = "LUTOUT",
++        .index = 2,
++    },
++    {
++        .id = 80, .user = false, .instance = "CCL", .signal = "LUTOUT",
++        .index = 3,
++    },
++    {
++        .id = 81, .user = false, .instance = "PAC", .signal = "ACCERR",
++        .index = -1,
++    },
++    {
++        .id = 83, .user = false, .instance = "PDEC", .signal = "OVF",
++        .index = -1,
++    },
++    {
++        .id = 84, .user = false, .instance = "PDEC", .signal = "ERR",
++        .index = -1,
++    },
++    {
++        .id = 85, .user = false, .instance = "PDEC", .signal = "DIR",
++        .index = -1,
++    },
++    {
++        .id = 86, .user = false, .instance = "PDEC", .signal = "VLC",
++        .index = -1,
++    },
++    { .id = 87, .user = false, .instance = "PDEC", .signal = "MC", .index = 0 },
++    { .id = 88, .user = false, .instance = "PDEC", .signal = "MC", .index = 1 },
++    {
++        .id = 0, .user = true, .instance = "TSENS", .signal = "START",
++        .index = -1,
++    },
++    { .id = 1, .user = true, .instance = "PORT", .signal = "EV", .index = 0 },
++    { .id = 2, .user = true, .instance = "PORT", .signal = "EV", .index = 1 },
++    { .id = 3, .user = true, .instance = "PORT", .signal = "EV", .index = 2 },
++    { .id = 4, .user = true, .instance = "PORT", .signal = "EV", .index = 3 },
++    { .id = 5, .user = true, .instance = "DMAC", .signal = "CH", .index = 0 },
++    { .id = 6, .user = true, .instance = "DMAC", .signal = "CH", .index = 1 },
++    { .id = 7, .user = true, .instance = "DMAC", .signal = "CH", .index = 2 },
++    { .id = 8, .user = true, .instance = "DMAC", .signal = "CH", .index = 3 },
++    { .id = 9, .user = true, .instance = "TCC0", .signal = "EV", .index = 0 },
++    { .id = 10, .user = true, .instance = "TCC0", .signal = "EV", .index = 1 },
++    { .id = 11, .user = true, .instance = "TCC0", .signal = "MC", .index = 0 },
++    { .id = 12, .user = true, .instance = "TCC0", .signal = "MC", .index = 1 },
++    { .id = 13, .user = true, .instance = "TCC0", .signal = "MC", .index = 2 },
++    { .id = 14, .user = true, .instance = "TCC0", .signal = "MC", .index = 3 },
++    { .id = 15, .user = true, .instance = "TCC1", .signal = "EV", .index = 0 },
++    { .id = 16, .user = true, .instance = "TCC1", .signal = "EV", .index = 1 },
++    { .id = 17, .user = true, .instance = "TCC1", .signal = "MC", .index = 0 },
++    { .id = 18, .user = true, .instance = "TCC1", .signal = "MC", .index = 1 },
++    { .id = 19, .user = true, .instance = "TCC2", .signal = "EV", .index = 0 },
++    { .id = 20, .user = true, .instance = "TCC2", .signal = "EV", .index = 1 },
++    { .id = 21, .user = true, .instance = "TCC2", .signal = "MC", .index = 0 },
++    { .id = 22, .user = true, .instance = "TCC2", .signal = "MC", .index = 1 },
++    { .id = 23, .user = true, .instance = "TC0", .signal = "EVU", .index = -1 },
++    { .id = 24, .user = true, .instance = "TC1", .signal = "EVU", .index = -1 },
++    { .id = 25, .user = true, .instance = "TC2", .signal = "EVU", .index = -1 },
++    { .id = 26, .user = true, .instance = "TC3", .signal = "EVU", .index = -1 },
++    { .id = 27, .user = true, .instance = "TC4", .signal = "EVU", .index = -1 },
++    {
++        .id = 28, .user = true, .instance = "ADC0", .signal = "START",
++        .index = -1,
++    },
++    {
++        .id = 29, .user = true, .instance = "ADC0", .signal = "SYNC",
++        .index = -1,
++    },
++    {
++        .id = 30, .user = true, .instance = "ADC1", .signal = "START",
++        .index = -1,
++    },
++    {
++        .id = 31, .user = true, .instance = "ADC1", .signal = "SYNC",
++        .index = -1,
++    },
++    {
++        .id = 32, .user = true, .instance = "SDADC", .signal = "START",
++        .index = -1,
++    },
++    {
++        .id = 33, .user = true, .instance = "SDADC", .signal = "FLUSH",
++        .index = -1,
++    },
++    { .id = 34, .user = true, .instance = "AC", .signal = "SOC", .index = 0 },
++    { .id = 35, .user = true, .instance = "AC", .signal = "SOC", .index = 1 },
++    {
++        .id = 36, .user = true, .instance = "DAC", .signal = "START",
++        .index = -1,
++    },
++    {
++        .id = 37, .user = true, .instance = "CCL", .signal = "LUTIN",
++        .index = 0,
++    },
++    {
++        .id = 38, .user = true, .instance = "CCL", .signal = "LUTIN",
++        .index = 1,
++    },
++    {
++        .id = 39, .user = true, .instance = "CCL", .signal = "LUTIN",
++        .index = 2,
++    },
++    {
++        .id = 40, .user = true, .instance = "CCL", .signal = "LUTIN",
++        .index = 3,
++    },
++    {
++        .id = 42, .user = true, .instance = "MTB", .signal = "START",
++        .index = -1,
++    },
++    {
++        .id = 43, .user = true, .instance = "MTB", .signal = "STOP",
++        .index = -1,
++    },
++    { .id = 44, .user = true, .instance = "PDEC", .signal = "EVU", .index = 0 },
++    { .id = 45, .user = true, .instance = "PDEC", .signal = "EVU", .index = 1 },
++    { .id = 46, .user = true, .instance = "PDEC", .signal = "EVU", .index = 2 },
++};
++#define PIC32CM1216MC00048_NUM_EVENTS 133
++
+ #endif /* HW_ARM_PIC32CM1216MC00048_GEN_H */
+diff --git a/include/hw/arm/pic32cm5164jh01100_gen.h b/include/hw/arm/pic32cm5164jh01100_gen.h
+index df8ca81..1e6669b 100644
+--- a/include/hw/arm/pic32cm5164jh01100_gen.h
++++ b/include/hw/arm/pic32cm5164jh01100_gen.h
+@@ -3284,4 +3284,355 @@ static const MchpSignalInfo pic32cm5164jh01100_signals[] = {
+ };
+ #define PIC32CM5164JH01100_NUM_SIGNALS 578
+ 
++/* EVSYS event generators, then users (ATDF <events>) */
++static const MchpEventInfo pic32cm5164jh01100_events[] = {
++    {
++        .id = 1, .user = false, .instance = "RTC", .signal = "PERD",
++        .index = -1,
++    },
++    {
++        .id = 3, .user = false, .instance = "OSCCTRL", .signal = "XOSC_FAIL",
++        .index = -1,
++    },
++    {
++        .id = 4, .user = false, .instance = "OSC32KCTRL",
++        .signal = "XOSC32K_FAIL", .index = -1,
++    },
++    { .id = 5, .user = false, .instance = "RTC", .signal = "CMP", .index = 0 },
++    { .id = 6, .user = false, .instance = "RTC", .signal = "CMP", .index = 1 },
++    { .id = 7, .user = false, .instance = "RTC", .signal = "OVF", .index = -1 },
++    { .id = 8, .user = false, .instance = "RTC", .signal = "PER", .index = 0 },
++    { .id = 9, .user = false, .instance = "RTC", .signal = "PER", .index = 1 },
++    { .id = 10, .user = false, .instance = "RTC", .signal = "PER", .index = 2 },
++    { .id = 11, .user = false, .instance = "RTC", .signal = "PER", .index = 3 },
++    { .id = 12, .user = false, .instance = "RTC", .signal = "PER", .index = 4 },
++    { .id = 13, .user = false, .instance = "RTC", .signal = "PER", .index = 5 },
++    { .id = 14, .user = false, .instance = "RTC", .signal = "PER", .index = 6 },
++    { .id = 15, .user = false, .instance = "RTC", .signal = "PER", .index = 7 },
++    {
++        .id = 16, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 0,
++    },
++    {
++        .id = 17, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 1,
++    },
++    {
++        .id = 18, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 2,
++    },
++    {
++        .id = 19, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 3,
++    },
++    {
++        .id = 20, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 4,
++    },
++    {
++        .id = 21, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 5,
++    },
++    {
++        .id = 22, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 6,
++    },
++    {
++        .id = 23, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 7,
++    },
++    {
++        .id = 24, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 8,
++    },
++    {
++        .id = 25, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 9,
++    },
++    {
++        .id = 26, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 10,
++    },
++    {
++        .id = 27, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 11,
++    },
++    {
++        .id = 28, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 12,
++    },
++    {
++        .id = 29, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 13,
++    },
++    {
++        .id = 30, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 14,
++    },
++    {
++        .id = 31, .user = false, .instance = "EIC", .signal = "EXTINT",
++        .index = 15,
++    },
++    { .id = 32, .user = false, .instance = "DMAC", .signal = "CH", .index = 0 },
++    { .id = 33, .user = false, .instance = "DMAC", .signal = "CH", .index = 1 },
++    { .id = 34, .user = false, .instance = "DMAC", .signal = "CH", .index = 2 },
++    { .id = 35, .user = false, .instance = "DMAC", .signal = "CH", .index = 3 },
++    {
++        .id = 36, .user = false, .instance = "TCC0", .signal = "OVF",
++        .index = -1,
++    },
++    {
++        .id = 37, .user = false, .instance = "TCC0", .signal = "TRG",
++        .index = -1,
++    },
++    {
++        .id = 38, .user = false, .instance = "TCC0", .signal = "CNT",
++        .index = -1,
++    },
++    { .id = 39, .user = false, .instance = "TCC0", .signal = "MC", .index = 0 },
++    { .id = 40, .user = false, .instance = "TCC0", .signal = "MC", .index = 1 },
++    { .id = 41, .user = false, .instance = "TCC0", .signal = "MC", .index = 2 },
++    { .id = 42, .user = false, .instance = "TCC0", .signal = "MC", .index = 3 },
++    {
++        .id = 43, .user = false, .instance = "TCC1", .signal = "OVF",
++        .index = -1,
++    },
++    {
++        .id = 44, .user = false, .instance = "TCC1", .signal = "TRG",
++        .index = -1,
++    },
++    {
++        .id = 45, .user = false, .instance = "TCC1", .signal = "CNT",
++        .index = -1,
++    },
++    { .id = 46, .user = false, .instance = "TCC1", .signal = "MC", .index = 0 },
++    { .id = 47, .user = false, .instance = "TCC1", .signal = "MC", .index = 1 },
++    {
++        .id = 48, .user = false, .instance = "TCC2", .signal = "OVF",
++        .index = -1,
++    },
++    {
++        .id = 49, .user = false, .instance = "TCC2", .signal = "TRG",
++        .index = -1,
++    },
++    {
++        .id = 50, .user = false, .instance = "TCC2", .signal = "CNT",
++        .index = -1,
++    },
++    { .id = 51, .user = false, .instance = "TCC2", .signal = "MC", .index = 0 },
++    { .id = 52, .user = false, .instance = "TCC2", .signal = "MC", .index = 1 },
++    {
++        .id = 53, .user = false, .instance = "TC0", .signal = "OVF",
++        .index = -1,
++    },
++    { .id = 54, .user = false, .instance = "TC0", .signal = "MC", .index = 0 },
++    { .id = 55, .user = false, .instance = "TC0", .signal = "MC", .index = 1 },
++    {
++        .id = 56, .user = false, .instance = "TC1", .signal = "OVF",
++        .index = -1,
++    },
++    { .id = 57, .user = false, .instance = "TC1", .signal = "MC", .index = 0 },
++    { .id = 58, .user = false, .instance = "TC1", .signal = "MC", .index = 1 },
++    {
++        .id = 59, .user = false, .instance = "TC2", .signal = "OVF",
++        .index = -1,
++    },
++    { .id = 60, .user = false, .instance = "TC2", .signal = "MC", .index = 0 },
++    { .id = 61, .user = false, .instance = "TC2", .signal = "MC", .index = 1 },
++    {
++        .id = 62, .user = false, .instance = "TC3", .signal = "OVF",
++        .index = -1,
++    },
++    { .id = 63, .user = false, .instance = "TC3", .signal = "MC", .index = 0 },
++    { .id = 64, .user = false, .instance = "TC3", .signal = "MC", .index = 1 },
++    {
++        .id = 65, .user = false, .instance = "TC4", .signal = "OVF",
++        .index = -1,
++    },
++    { .id = 66, .user = false, .instance = "TC4", .signal = "MC", .index = 0 },
++    { .id = 67, .user = false, .instance = "TC4", .signal = "MC", .index = 1 },
++    {
++        .id = 68, .user = false, .instance = "ADC0", .signal = "RESRDY",
++        .index = -1,
++    },
++    {
++        .id = 69, .user = false, .instance = "ADC0", .signal = "WINMON",
++        .index = -1,
++    },
++    {
++        .id = 70, .user = false, .instance = "ADC1", .signal = "RESRDY",
++        .index = -1,
++    },
++    {
++        .id = 71, .user = false, .instance = "ADC1", .signal = "WINMON",
++        .index = -1,
++    },
++    { .id = 72, .user = false, .instance = "AC", .signal = "COMP", .index = 0 },
++    { .id = 73, .user = false, .instance = "AC", .signal = "COMP", .index = 1 },
++    { .id = 74, .user = false, .instance = "AC", .signal = "COMP", .index = 2 },
++    { .id = 75, .user = false, .instance = "AC", .signal = "COMP", .index = 3 },
++    { .id = 76, .user = false, .instance = "AC", .signal = "WIN", .index = 0 },
++    { .id = 77, .user = false, .instance = "AC", .signal = "WIN", .index = 1 },
++    {
++        .id = 78, .user = false, .instance = "DAC", .signal = "EMPTY",
++        .index = -1,
++    },
++    {
++        .id = 79, .user = false, .instance = "PTC", .signal = "EOC",
++        .index = -1,
++    },
++    {
++        .id = 80, .user = false, .instance = "PTC", .signal = "WCOMP",
++        .index = -1,
++    },
++    {
++        .id = 81, .user = false, .instance = "CCL", .signal = "LUTOUT",
++        .index = 0,
++    },
++    {
++        .id = 82, .user = false, .instance = "CCL", .signal = "LUTOUT",
++        .index = 1,
++    },
++    {
++        .id = 83, .user = false, .instance = "CCL", .signal = "LUTOUT",
++        .index = 2,
++    },
++    {
++        .id = 84, .user = false, .instance = "CCL", .signal = "LUTOUT",
++        .index = 3,
++    },
++    {
++        .id = 85, .user = false, .instance = "PAC", .signal = "ACCERR",
++        .index = -1,
++    },
++    {
++        .id = 87, .user = false, .instance = "TC5", .signal = "OVF",
++        .index = -1,
++    },
++    { .id = 88, .user = false, .instance = "TC5", .signal = "MC", .index = 0 },
++    { .id = 89, .user = false, .instance = "TC5", .signal = "MC", .index = 1 },
++    {
++        .id = 90, .user = false, .instance = "TC6", .signal = "OVF",
++        .index = -1,
++    },
++    { .id = 91, .user = false, .instance = "TC6", .signal = "MC", .index = 0 },
++    { .id = 92, .user = false, .instance = "TC6", .signal = "MC", .index = 1 },
++    {
++        .id = 93, .user = false, .instance = "TC7", .signal = "OVF",
++        .index = -1,
++    },
++    { .id = 94, .user = false, .instance = "TC7", .signal = "MC", .index = 0 },
++    { .id = 95, .user = false, .instance = "TC7", .signal = "MC", .index = 1 },
++    {
++        .id = 96, .user = false, .instance = "PDEC", .signal = "OVF",
++        .index = -1,
++    },
++    {
++        .id = 97, .user = false, .instance = "PDEC", .signal = "ERR",
++        .index = -1,
++    },
++    {
++        .id = 98, .user = false, .instance = "PDEC", .signal = "DIR",
++        .index = -1,
++    },
++    {
++        .id = 99, .user = false, .instance = "PDEC", .signal = "VLC",
++        .index = -1,
++    },
++    {
++        .id = 100, .user = false, .instance = "PDEC", .signal = "MC",
++        .index = 0,
++    },
++    {
++        .id = 101, .user = false, .instance = "PDEC", .signal = "MC",
++        .index = 1,
++    },
++    { .id = 1, .user = true, .instance = "PORT", .signal = "EV", .index = 0 },
++    { .id = 2, .user = true, .instance = "PORT", .signal = "EV", .index = 1 },
++    { .id = 3, .user = true, .instance = "PORT", .signal = "EV", .index = 2 },
++    { .id = 4, .user = true, .instance = "PORT", .signal = "EV", .index = 3 },
++    { .id = 5, .user = true, .instance = "DMAC", .signal = "CH", .index = 0 },
++    { .id = 6, .user = true, .instance = "DMAC", .signal = "CH", .index = 1 },
++    { .id = 7, .user = true, .instance = "DMAC", .signal = "CH", .index = 2 },
++    { .id = 8, .user = true, .instance = "DMAC", .signal = "CH", .index = 3 },
++    { .id = 9, .user = true, .instance = "TCC0", .signal = "EV", .index = 0 },
++    { .id = 10, .user = true, .instance = "TCC0", .signal = "EV", .index = 1 },
++    { .id = 11, .user = true, .instance = "TCC0", .signal = "MC", .index = 0 },
++    { .id = 12, .user = true, .instance = "TCC0", .signal = "MC", .index = 1 },
++    { .id = 13, .user = true, .instance = "TCC0", .signal = "MC", .index = 2 },
++    { .id = 14, .user = true, .instance = "TCC0", .signal = "MC", .index = 3 },
++    { .id = 15, .user = true, .instance = "TCC1", .signal = "EV", .index = 0 },
++    { .id = 16, .user = true, .instance = "TCC1", .signal = "EV", .index = 1 },
++    { .id = 17, .user = true, .instance = "TCC1", .signal = "MC", .index = 0 },
++    { .id = 18, .user = true, .instance = "TCC1", .signal = "MC", .index = 1 },
++    { .id = 19, .user = true, .instance = "TCC2", .signal = "EV", .index = 0 },
++    { .id = 20, .user = true, .instance = "TCC2", .signal = "EV", .index = 1 },
++    { .id = 21, .user = true, .instance = "TCC2", .signal = "MC", .index = 0 },
++    { .id = 22, .user = true, .instance = "TCC2", .signal = "MC", .index = 1 },
++    { .id = 23, .user = true, .instance = "TC0", .signal = "EVU", .index = -1 },
++    { .id = 24, .user = true, .instance = "TC1", .signal = "EVU", .index = -1 },
++    { .id = 25, .user = true, .instance = "TC2", .signal = "EVU", .index = -1 },
++    { .id = 26, .user = true, .instance = "TC3", .signal = "EVU", .index = -1 },
++    { .id = 27, .user = true, .instance = "TC4", .signal = "EVU", .index = -1 },
++    {
++        .id = 28, .user = true, .instance = "ADC0", .signal = "START",
++        .index = -1,
++    },
++    {
++        .id = 29, .user = true, .instance = "ADC0", .signal = "SYNC",
++        .index = -1,
++    },
++    {
++        .id = 30, .user = true, .instance = "ADC1", .signal = "START",
++        .index = -1,
++    },
++    {
++        .id = 31, .user = true, .instance = "ADC1", .signal = "SYNC",
++        .index = -1,
++    },
++    { .id = 32, .user = true, .instance = "AC", .signal = "SOC", .index = 0 },
++    { .id = 33, .user = true, .instance = "AC", .signal = "SOC", .index = 1 },
++    { .id = 34, .user = true, .instance = "AC", .signal = "SOC", .index = 2 },
++    { .id = 35, .user = true, .instance = "AC", .signal = "SOC", .index = 3 },
++    {
++        .id = 36, .user = true, .instance = "DAC", .signal = "START",
++        .index = -1,
++    },
++    {
++        .id = 37, .user = true, .instance = "DAC", .signal = "PTC_STCONV",
++        .index = -1,
++    },
++    {
++        .id = 38, .user = true, .instance = "CCL", .signal = "LUTIN",
++        .index = 0,
++    },
++    {
++        .id = 39, .user = true, .instance = "CCL", .signal = "LUTIN",
++        .index = 1,
++    },
++    {
++        .id = 40, .user = true, .instance = "CCL", .signal = "LUTIN",
++        .index = 2,
++    },
++    {
++        .id = 41, .user = true, .instance = "CCL", .signal = "LUTIN",
++        .index = 3,
++    },
++    {
++        .id = 43, .user = true, .instance = "MTB", .signal = "START",
++        .index = -1,
++    },
++    {
++        .id = 44, .user = true, .instance = "MTB", .signal = "STOP",
++        .index = -1,
++    },
++    { .id = 45, .user = true, .instance = "TC5", .signal = "EVU", .index = -1 },
++    { .id = 46, .user = true, .instance = "TC6", .signal = "EVU", .index = -1 },
++    { .id = 47, .user = true, .instance = "TC7", .signal = "EVU", .index = -1 },
++    { .id = 48, .user = true, .instance = "PDEC", .signal = "EVU", .index = 0 },
++    { .id = 49, .user = true, .instance = "PDEC", .signal = "EVU", .index = 1 },
++    { .id = 50, .user = true, .instance = "PDEC", .signal = "EVU", .index = 2 },
++};
++#define PIC32CM5164JH01100_NUM_EVENTS 148
++
+ #endif /* HW_ARM_PIC32CM5164JH01100_GEN_H */
+diff --git a/include/hw/gpio/mchp_port.h b/include/hw/gpio/mchp_port.h
+index 72e7459..0017124 100644
+--- a/include/hw/gpio/mchp_port.h
++++ b/include/hw/gpio/mchp_port.h
+@@ -18,6 +18,7 @@
+  *   "func-a"[n]    the level of pad n while the pin is muxed to peripheral
+  *                  function A (PINCFG.PMUXEN, PMUX = 0: EIC EXTINT/NMI),
+  *                  else 0; the SoC wires it to the EIC
++ *   "ev-event-in"[4] in: EVSYS event inputs (EVCTRL PORTEIn)
+  * IN reads the pad of each pin whose input buffer is on (PINCFG.INEN): the
+  * PORT's own drive, else the external driver, else the pull resistor
+  * (PINCFG.PULLEN, towards OUT), else 0 for a floating pad.
+@@ -43,6 +44,8 @@
+ #define MCHP_PORT_OUT "port-out"
+ #define MCHP_PORT_IN "port-in"
+ #define MCHP_PORT_FUNC_A "func-a"
++#define MCHP_PORT_EVENT_IN "ev-event-in"
++#define MCHP_PORT_EVENTS 4
+ 
+ /* GPIO line of pin P<group><pin>, for example MCHP_PORT_PIN('C', 5) */
+ #define MCHP_PORT_PIN(group, pin) (((group) - 'A') * 32 + (pin))
+diff --git a/include/hw/mchp/gen/evsys_u2256.h b/include/hw/mchp/gen/evsys_u2256.h
+index 6161882..eb9a9df 100644
+--- a/include/hw/mchp/gen/evsys_u2256.h
++++ b/include/hw/mchp/gen/evsys_u2256.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/evsys_u2256.yaml (sha1 2e9692ad06cc)
++ * Overlay: overlays/evsys_u2256.yaml (sha1 b3018b9c50f0)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h b/include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h
+index 53ec797..9c09707 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/evsys_u2256.yaml (sha1 2e9692ad06cc)
++ * Overlay: overlays/evsys_u2256.yaml (sha1 b3018b9c50f0)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -28,7 +28,8 @@ static const MchpRegInfo pic32cm1216mc00048_evsys_regs[] = {
+     {
+         .name = "CHSTATUS", .offset = 0x0C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000FFF, .impl = 0x0FFF0FFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_HOOK_PRE_READ | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+@@ -54,12 +55,12 @@ static const MchpRegInfo pic32cm1216mc00048_evsys_regs[] = {
+     {
+         .name = "CHANNEL", .offset = 0x20, .size = 4, .count = 12, .stride = 4,
+         .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "USER", .offset = 0x80, .size = 4, .count = 47, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000001F,
+-        .wmask = 0x0000001F, .flags = MCHP_F_PAC,
++        .wmask = 0x0000001F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+ };
+ #define PIC32CM1216MC00048_EVSYS_NREGS 8
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h b/include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h
+index fb6aeb4..7de5269 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/evsys_u2256.yaml (sha1 2e9692ad06cc)
++ * Overlay: overlays/evsys_u2256.yaml (sha1 b3018b9c50f0)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -28,7 +28,8 @@ static const MchpRegInfo pic32cm5164jh01100_evsys_regs[] = {
+     {
+         .name = "CHSTATUS", .offset = 0x0C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000FFF, .impl = 0x0FFF0FFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_HOOK_PRE_READ | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+@@ -54,12 +55,12 @@ static const MchpRegInfo pic32cm5164jh01100_evsys_regs[] = {
+     {
+         .name = "CHANNEL", .offset = 0x20, .size = 4, .count = 12, .stride = 4,
+         .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "USER", .offset = 0x80, .size = 4, .count = 51, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x000000FF,
+-        .wmask = 0x000000FF, .flags = MCHP_F_PAC,
++        .wmask = 0x000000FF, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+ };
+ #define PIC32CM5164JH01100_EVSYS_NREGS 8
+diff --git a/include/hw/mchp/mchp_device.h b/include/hw/mchp/mchp_device.h
+index e12b295..29f46b0 100644
+--- a/include/hw/mchp/mchp_device.h
++++ b/include/hw/mchp/mchp_device.h
+@@ -115,6 +115,19 @@ typedef struct MchpPeriphRef {
+     const char *param;              /* ATDF parameter, e.g. "GCLK_ID_CORE" */
+ } MchpPeriphRef;
+ 
++/*
++ * An EVSYS event generator or user (ATDF <events>): generator @id is
++ * EVSYS CHANNEL.EVGEN, user @id indexes EVSYS USER. The event is
++ * @signal[@index] of @instance, e.g. "TC0" "OVF" -1, "EIC" "EXTINT" 3.
++ */
++typedef struct MchpEventInfo {
++    uint8_t id;
++    bool user;
++    const char *instance;
++    const char *signal;
++    int8_t index;                   /* -1: none */
++} MchpEventInfo;
++
+ typedef struct MchpSiliconRev {
+     const char *name;               /* e.g. "B0" */
+     uint8_t revision;               /* DSU.DID.REVISION */
+@@ -151,6 +164,8 @@ typedef struct MchpDeviceInfo {
+     unsigned ngclk_channels;
+     const MchpSignalInfo *signals;  /* pad signals, by pin */
+     unsigned nsignals;
++    const MchpEventInfo *events;    /* generators, then users */
++    unsigned nevents;
+     const MchpSiliconRev *revisions; /* the first is the default */
+     unsigned nrevisions;
+ } MchpDeviceInfo;
+diff --git a/include/hw/misc/mchp_eic.h b/include/hw/misc/mchp_eic.h
+index b802414..7d176b2 100644
+--- a/include/hw/misc/mchp_eic.h
++++ b/include/hw/misc/mchp_eic.h
+@@ -9,7 +9,8 @@
+  *   "extint"[16]   in: level of the pad routed to EXTINTn (0 or 1)
+  *   "nmi-in"       in: level of the NMI pad
+  *   "nmi"          out: the CPU's NMI request (NMIFLAG.NMI)
+- *   "event"[16]    out: pulse per detection with EVCTRL.EXTINTEOn set
++ *   "extint-event"[16] out: with EVCTRL.EXTINTEOn set, a pulse per
++ *                  detected edge, or the detector level for HIGH/LOW
+  * sysbus IRQ 0 is the EIC interrupt (INTFLAG & INTENSET).
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+@@ -25,6 +26,6 @@
+ #define MCHP_EIC_EXTINT "extint"
+ #define MCHP_EIC_NMI_IN "nmi-in"
+ #define MCHP_EIC_NMI_OUT "nmi"
+-#define MCHP_EIC_EVENT "event"
++#define MCHP_EIC_EVENT "extint-event"
+ 
+ #endif /* HW_MISC_MCHP_EIC_H */
+diff --git a/include/hw/misc/mchp_evsys.h b/include/hw/misc/mchp_evsys.h
+new file mode 100644
+index 0000000..b5285de
+--- /dev/null
++++ b/include/hw/misc/mchp_evsys.h
+@@ -0,0 +1,37 @@
++/*
++ * Microchip SAM/PIC32CM Event System (EVSYS U2256)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * A TYPE_MCHP_REGBLOCK subclass configured with mchp_regblock_set_info().
++ * GPIO lines:
++ *   "generator"[128]   in: level of event generator n (CHANNEL.EVGEN n);
++ *                      generators that pulse raise and lower it at once
++ *   "user"[64]         out: event to user n (USER n): a pulse per event of
++ *                      a synchronous or resynchronized channel, the
++ *                      generator level through an asynchronous one
++ *   "user-busy"[64]    in: 1 while user n cannot take events (USRRDY)
++ * Clock inputs "channel-clock[n]": GCLK_EVSYS_CHANNEL_n; channels without
++ * one carry events only on the asynchronous path.
++ * sysbus IRQ 0 is the EVSYS interrupt (INTFLAG & INTENSET).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_MCHP_EVSYS_H
++#define HW_MISC_MCHP_EVSYS_H
++
++#include "hw/misc/mchp_regblock.h"
++
++#define TYPE_MCHP_EVSYS "mchp-evsys"
++
++#define MCHP_EVSYS_GENERATOR "generator"
++#define MCHP_EVSYS_USER "user"
++#define MCHP_EVSYS_USER_BUSY "user-busy"
++
++#define MCHP_EVSYS_MAX_CHANNELS 12
++#define MCHP_EVSYS_MAX_GENERATORS 128
++#define MCHP_EVSYS_MAX_USERS 64
++
++#endif /* HW_MISC_MCHP_EVSYS_H */
+diff --git a/include/hw/rtc/mchp_rtc.h b/include/hw/rtc/mchp_rtc.h
+index ab063f3..122f64c 100644
+--- a/include/hw/rtc/mchp_rtc.h
++++ b/include/hw/rtc/mchp_rtc.h
+@@ -7,6 +7,8 @@
+  * A TYPE_MCHP_REGBLOCK subclass configured with mchp_regblock_set_info();
+  * CTRLA.MODE selects the MODE0/1/2 register view. Its "gclk" clock input
+  * carries CLK_RTC_OSC, wired by the SoC to the OSC32KCTRL "rtc" output.
++ * GPIO outputs, a pulse per event with its EVCTRL bit set: "per-event"[8]
++ * (PERn), "cmp-event"[2] (CMPn, ALARM0 in MODE2), "ovf-event".
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -18,4 +20,8 @@
+ 
+ #define TYPE_MCHP_RTC "mchp-rtc"
+ 
++#define MCHP_RTC_PER_EVENT "per-event"
++#define MCHP_RTC_CMP_EVENT "cmp-event"
++#define MCHP_RTC_OVF_EVENT "ovf-event"
++
+ #endif /* HW_RTC_MCHP_RTC_H */
+diff --git a/include/hw/timer/mchp_tc.h b/include/hw/timer/mchp_tc.h
+index ad4411d..ccd86a2 100644
+--- a/include/hw/timer/mchp_tc.h
++++ b/include/hw/timer/mchp_tc.h
+@@ -9,7 +9,9 @@
+  * Link property "client": the odd TC of a COUNT32 pair (set on the even
+  * one); it reports STATUS.SLAVE while the pair counts 32 bits.
+  * GPIO outputs "ovf-event" and "mc-event"[2]: a pulse per overflow and
+- * compare match with EVCTRL.OVFEO/MCEOx set.
++ * compare match with EVCTRL.OVFEO/MCEOx set. GPIO input "evu-event-in":
++ * the event input (EVSYS user); output "evu-event-busy": 1 while the TC
++ * cannot take events (disabled).
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,5 +25,7 @@
+ 
+ #define MCHP_TC_OVF_EVENT "ovf-event"
+ #define MCHP_TC_MC_EVENT "mc-event"
++#define MCHP_TC_EVU_EVENT_IN "evu-event-in"
++#define MCHP_TC_EVU_BUSY "evu-event-busy"
+ 
+ #endif /* HW_TIMER_MCHP_TC_H */
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index df42336..c795495 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -252,7 +252,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-evsys-test.c b/tests/qtest/pic32cm-evsys-test.c
+new file mode 100644
+index 0000000..3502902
+--- /dev/null
++++ b/tests/qtest/pic32cm-evsys-test.c
+@@ -0,0 +1,289 @@
++/*
++ * QTest for the EVSYS of the PIC32CM MC00 (pic32cm-mc00-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Channel 0 runs on GCLK_EVSYS_CHANNEL_0 (GCLK channel 6) from GCLK0
++ * (4 MHz out of reset). The event user is TC1 counting events; TC0
++ * overflows are the generator. Expected behaviour from DS60001638E
++ * chapter 27 and PIC32CM MC00 silicon (firmware/hello/tests/evprobe.c).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++
++#define MACHINE         "-M pic32cm-mc00-cpro "
++
++#define GCLK_PCHCTRL    0x40001C80
++#define EVSYS           0x42000000
++#define TC0             0x42003000
++#define TC1             0x42003400
++#define PORT            0x41000000
++#define NVIC_ISPR       0xE000E200
++
++#define E_CHSTATUS      0x0C
++#define E_INTENSET      0x14
++#define E_INTFLAG       0x18
++#define E_SWEVT         0x1C
++#define E_CHANNEL(n)    (0x20 + 4 * (n))
++#define E_USER(n)       (0x80 + 4 * (n))
++
++#define SYNC            (0 << 8)
++#define RESYNC          (1 << 8)
++#define ASYNC           (2 << 8)
++#define RISING          (1 << 10)
++#define BOTH            (3 << 10)
++
++#define OVR0            BIT(0)
++#define EVD0            BIT(16)
++#define USRRDY0         BIT(0)
++#define CHBUSY0         BIT(16)
++
++#define GEN_TC0_OVF     52
++#define USER_PORT_EV0   1
++#define USER_TC1        24
++#define EVSYS_GCLK_ID0  6
++#define TC_GCLK_ID      25
++#define EVSYS_IRQ       8
++
++#define T_CTRLA         0x00
++#define T_CTRLBSET      0x05
++#define T_EVCTRL        0x06
++#define T_INTFLAG       0x0A
++#define T_COUNT         0x14
++#define T_PER           0x1B
++#define MODE_COUNT8     (1 << 2)
++#define CTRLA_ENABLE    0x02
++#define CMD_READSYNC    (4 << 5)
++#define EVACT_RETRIGGER 1
++#define EVACT_COUNT     2
++#define EVACT_START     3
++#define TCEI            BIT(5)
++#define OVFEO           BIT(8)
++
++#define P_DIRSET        0x08
++#define P_OUT           0x10
++#define P_OUTSET        0x18
++#define P_EVCTRL        0x2C
++#define LED_PIN         24
++#define EVACT_OUT       0
++#define EVACT_TGL       3
++
++#define US              1000
++
++static QTestState *ev_init(bool clock)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, GCLK_PCHCTRL + 4 * TC_GCLK_ID, 0x40);
++    if (clock) {
++        qtest_writel(qts, GCLK_PCHCTRL + 4 * EVSYS_GCLK_ID0, 0x40);
++    }
++    return qts;
++}
++
++/* TC1 (COUNT16) enabled with event action @evact */
++static void tc1_setup(QTestState *qts, unsigned evact)
++{
++    qtest_writew(qts, TC1 + T_EVCTRL, evact | TCEI);
++    qtest_writel(qts, TC1 + T_CTRLA, CTRLA_ENABLE);
++}
++
++static uint32_t tc1_count(QTestState *qts)
++{
++    qtest_writeb(qts, TC1 + T_CTRLBSET, CMD_READSYNC);
++    return qtest_readw(qts, TC1 + T_COUNT);
++}
++
++static void route(QTestState *qts, uint32_t channel)
++{
++    qtest_writel(qts, EVSYS + E_CHANNEL(0), channel);
++    qtest_writel(qts, EVSYS + E_USER(USER_TC1), 1);
++}
++
++static void swevt(QTestState *qts, unsigned times)
++{
++    for (unsigned i = 0; i < times; i++) {
++        qtest_writel(qts, EVSYS + E_SWEVT, BIT(0));
++        qtest_clock_step(qts, 20 * US);
++    }
++}
++
++static uint32_t flags(QTestState *qts)
++{
++    uint32_t f = qtest_readl(qts, EVSYS + E_INTFLAG);
++
++    qtest_writel(qts, EVSYS + E_INTFLAG, f);
++    return f;
++}
++
++static void test_reset(void)
++{
++    QTestState *qts = ev_init(false);
++
++    g_assert_cmphex(qtest_readl(qts, EVSYS + E_CHANNEL(0)), ==, 0x8000);
++    g_assert_cmphex(qtest_readl(qts, EVSYS + E_CHSTATUS), ==, 0xFFF);
++    g_assert_cmphex(qtest_readl(qts, EVSYS + E_INTFLAG), ==, 0);
++    /* USER.CHANNEL keeps 4 bits, CHANNEL its documented fields */
++    qtest_writel(qts, EVSYS + E_USER(0), 0xFFFFFFFF);
++    qtest_writel(qts, EVSYS + E_CHANNEL(1), 0xFFFFFFFF);
++    g_assert_cmphex(qtest_readl(qts, EVSYS + E_USER(0)), ==, 0xF);
++    g_assert_cmphex(qtest_readl(qts, EVSYS + E_CHANNEL(1)), ==, 0xCF7F);
++    qtest_quit(qts);
++}
++
++/* Software events: EVD on the clocked paths, none asynchronously */
++static void test_software(void)
++{
++    static const uint32_t paths[] = { SYNC, RESYNC, ASYNC };
++
++    for (unsigned i = 0; i < ARRAY_SIZE(paths); i++) {
++        QTestState *qts = ev_init(true);
++
++        tc1_setup(qts, EVACT_COUNT);
++        route(qts, paths[i] | RISING);
++        swevt(qts, 5);
++        g_assert_cmpuint(tc1_count(qts), ==, 5);
++        g_assert_cmphex(flags(qts), ==, paths[i] == ASYNC ? 0 : EVD0);
++        g_assert_cmphex(qtest_readl(qts, EVSYS + E_CHSTATUS) & USRRDY0, ==,
++                        paths[i] == ASYNC ? 0 : USRRDY0);
++        qtest_quit(qts);
++    }
++}
++
++/* Without the channel clock only the asynchronous path carries events */
++static void test_noclock(void)
++{
++    QTestState *qts = ev_init(false);
++
++    tc1_setup(qts, EVACT_COUNT);
++    route(qts, SYNC | RISING);
++    swevt(qts, 3);
++    g_assert_cmpuint(tc1_count(qts), ==, 0);
++    g_assert_cmphex(flags(qts), ==, 0);
++    route(qts, ASYNC | RISING);
++    swevt(qts, 3);
++    g_assert_cmpuint(tc1_count(qts), ==, 3);
++    qtest_quit(qts);
++}
++
++/* TC0 overflows (pulses): BOTH_EDGES gives one event each and OVR */
++static void test_generator(void)
++{
++    QTestState *qts = ev_init(true);
++
++    tc1_setup(qts, EVACT_COUNT);
++    route(qts, GEN_TC0_OVF | RESYNC | BOTH);
++    qtest_writel(qts, TC0 + T_CTRLA, MODE_COUNT8);
++    qtest_writew(qts, TC0 + T_EVCTRL, OVFEO);
++    qtest_writeb(qts, TC0 + T_PER, 9);
++    qtest_writel(qts, TC0 + T_CTRLA, MODE_COUNT8 | CTRLA_ENABLE);
++    qtest_clock_step(qts, 10 * 4 * 250 + 125);      /* 4 periods of 10 */
++    g_assert_cmpuint(tc1_count(qts), ==, 4);
++    g_assert_cmphex(flags(qts), ==, EVD0 | OVR0);
++    qtest_quit(qts);
++}
++
++/* CHBUSY/OVR without users, and with a user that is not ready */
++static void test_users(void)
++{
++    QTestState *qts = ev_init(true);
++
++    qtest_writel(qts, EVSYS + E_CHANNEL(0), SYNC | RISING);
++    g_assert_cmphex(qtest_readl(qts, EVSYS + E_CHSTATUS) & 0x10001, ==,
++                    CHBUSY0 | USRRDY0);
++    swevt(qts, 1);
++    g_assert_cmphex(flags(qts), ==, EVD0 | OVR0);
++
++    qtest_writel(qts, EVSYS + E_USER(USER_TC1), 1);  /* TC1 disabled */
++    g_assert_cmphex(qtest_readl(qts, EVSYS + E_CHSTATUS) & 0x10001, ==, 0);
++    swevt(qts, 1);
++    g_assert_cmphex(flags(qts), ==, EVD0 | OVR0);
++
++    qtest_writel(qts, TC1 + T_CTRLA, CTRLA_ENABLE);   /* ready, no TCEI */
++    g_assert_cmphex(qtest_readl(qts, EVSYS + E_CHSTATUS) & USRRDY0, ==,
++                    USRRDY0);
++    swevt(qts, 1);
++    g_assert_cmphex(flags(qts), ==, EVD0);
++    qtest_quit(qts);
++}
++
++/* RETRIGGER restarts a running TC1; START starts a waiting one */
++static void test_tc_actions(void)
++{
++    QTestState *qts = ev_init(true);
++
++    route(qts, SYNC | RISING);
++    tc1_setup(qts, EVACT_START);
++    qtest_clock_step(qts, 1000 * US);
++    g_assert_cmpuint(tc1_count(qts), ==, 0);
++    swevt(qts, 1);
++    qtest_clock_step(qts, 1000 * US);
++    g_assert_cmpuint(tc1_count(qts), >=, 3000);
++    qtest_quit(qts);
++
++    qts = ev_init(true);
++    route(qts, SYNC | RISING);
++    qtest_writew(qts, TC1 + T_EVCTRL, EVACT_RETRIGGER | TCEI);
++    qtest_writel(qts, TC1 + T_CTRLA, CTRLA_ENABLE);
++    swevt(qts, 1);                                  /* starts it */
++    qtest_clock_step(qts, 1000 * US);
++    g_assert_cmpuint(tc1_count(qts), >=, 3000);
++    swevt(qts, 1);
++    g_assert_cmpuint(tc1_count(qts), <, 200);
++    qtest_quit(qts);
++}
++
++/* PORT EV_0 on PA24: TGL toggles; OUT with a pulse leaves OUT alone */
++static void test_port(void)
++{
++    QTestState *qts = ev_init(true);
++
++    qtest_writel(qts, PORT + P_DIRSET, BIT(LED_PIN));
++    qtest_writel(qts, PORT + P_OUTSET, BIT(LED_PIN));
++    qtest_writel(qts, EVSYS + E_CHANNEL(0), SYNC | RISING);
++    qtest_writel(qts, EVSYS + E_USER(USER_PORT_EV0), 1);
++    qtest_writel(qts, PORT + P_EVCTRL, LED_PIN | EVACT_TGL << 5 | BIT(7));
++    swevt(qts, 1);
++    g_assert_cmphex(qtest_readl(qts, PORT + P_OUT) & BIT(LED_PIN), ==, 0);
++    swevt(qts, 1);
++    g_assert_cmphex(qtest_readl(qts, PORT + P_OUT) & BIT(LED_PIN), ==,
++                    BIT(LED_PIN));
++    qtest_writel(qts, PORT + P_EVCTRL, LED_PIN | EVACT_OUT << 5 | BIT(7));
++    swevt(qts, 1);
++    g_assert_cmphex(qtest_readl(qts, PORT + P_OUT) & BIT(LED_PIN), ==,
++                    BIT(LED_PIN));
++    qtest_quit(qts);
++}
++
++static void test_irq(void)
++{
++    QTestState *qts = ev_init(true);
++
++    qtest_writel(qts, EVSYS + E_CHANNEL(0), SYNC | RISING);
++    qtest_writel(qts, EVSYS + E_INTENSET, EVD0);
++    g_assert_false(qtest_readl(qts, NVIC_ISPR) & BIT(EVSYS_IRQ));
++    swevt(qts, 1);
++    g_assert_true(qtest_readl(qts, NVIC_ISPR) & BIT(EVSYS_IRQ));
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++
++    qtest_add_func("pic32cm-evsys/reset", test_reset);
++    qtest_add_func("pic32cm-evsys/software", test_software);
++    qtest_add_func("pic32cm-evsys/noclock", test_noclock);
++    qtest_add_func("pic32cm-evsys/generator", test_generator);
++    qtest_add_func("pic32cm-evsys/users", test_users);
++    qtest_add_func("pic32cm-evsys/tc-actions", test_tc_actions);
++    qtest_add_func("pic32cm-evsys/port", test_port);
++    qtest_add_func("pic32cm-evsys/irq", test_irq);
++
++    return g_test_run();
++}
+-- 
+2.53.0.windows.2
+

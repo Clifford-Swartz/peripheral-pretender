@@ -524,9 +524,32 @@ def soc_header(ds: DeviceSem) -> str:
                              f".group = {c_str(s.group)}", f".index = {s.index}",
                              f".function = {c_str(s.function)}", f".pmux = {s.pmux}",
                              f".pad = {c_str(s.pad)}", f".pin = {s.pin}"])
-    out += ["};", define(f"{SYM}_NUM_SIGNALS", str(len(ds.signals))), "",
+    out += ["};", define(f"{SYM}_NUM_SIGNALS", str(len(ds.signals))), ""]
+    out += ["/* EVSYS event generators, then users (ATDF <events>) */",
+            f"static const MchpEventInfo {sym}_events[] = {{"]
+    for user, e in _events(ds):
+        signal, index = _event_signal(e)
+        out += struct_entry([f".id = {e.index}", f".user = {str(user).lower()}",
+                             f".instance = {c_str(e.instance)}",
+                             f".signal = {c_str(signal)}", f".index = {index}"])
+    out += ["};", define(f"{SYM}_NUM_EVENTS", str(len(_events(ds)))), "",
             f"#endif /* {g} */"]
     return "\n".join(out) + "\n"
+
+
+def _events(ds: DeviceSem):
+    dev = ds.device
+    return ([(False, e) for e in sorted(dev.event_generators, key=lambda e: e.index)] +
+            [(True, e) for e in sorted(dev.event_users, key=lambda e: e.index)])
+
+
+def _event_signal(e) -> tuple[str, int]:
+    """"TC0_MC_1" of TC0 -> ("MC", 1); "RTC_OVF" of RTC -> ("OVF", -1)."""
+    name = e.name[len(e.instance) + 1:] if e.name.startswith(e.instance + "_")         else e.name
+    head, _, tail = name.rpartition("_")
+    if head and tail.isdigit():
+        return head, int(tail)
+    return name, -1
 
 
 def _refs_lines(table: str, title: str, refs, count: str) -> list[str]:
@@ -586,6 +609,7 @@ def device_header(ds: DeviceSem) -> str:
         f".gclk_channels = {sym}_gclk_channels",
         f".ngclk_channels = {SYM}_NUM_GCLK_CHANNEL_USERS",
         f".signals = {sym}_signals", f".nsignals = {SYM}_NUM_SIGNALS",
+        f".events = {sym}_events", f".nevents = {SYM}_NUM_EVENTS",
         f".revisions = {sym}_revisions",
         f".nrevisions = ARRAY_SIZE({sym}_revisions)",
     ]

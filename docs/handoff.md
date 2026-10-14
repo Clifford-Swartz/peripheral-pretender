@@ -121,16 +121,24 @@ Serial number of this part: F79A74AF 51524B59 39202020 FF190418 (pass it as the 
 - **Golden reset dump**: reset-and-halt, all 811 register elements read and compared with the twin
   paused at reset. 73 differences before, 19 after the fixes in patch 0008; the rest are capture
   artifacts (warm-reset RCAUSE, power-on-only XOSC32K, pad levels, DBGPRES, DCC/DCFG, MTB trace
-  state) or open (SUPC undocumented bits 3/5, TCC per-instance counter width).
+  state) or open (SUPC undocumented bits 3/5). The TCC per-instance counter width (TCC0/1 24
+  bits, TCC2 16 bits) is fixed in patch 0012.
 - **hello.elf on silicon** (`harness.hw_run --target pic32cm1216mc00048`): `PP:EXIT 0`, and the
   VCOM transcript is **byte-identical** to the twin's (rev A1, this part's serial number).
 - Both are kept in `golden/pic32cm1216mc00048-a1/` and checked by `tests/golden/` with QEMU only.
 - The factory demo is gone from the board; `hello.elf` is on it now.
 
+**Tier 1 peripherals (2026-10-13), each checked against this board:** EIC (patch 0009), TC
+(0010), RTC (0011) and EVSYS (0013, with event outputs/inputs in EIC, TC, RTC and PORT). Each has
+a qtest and a `firmware/hello` test app whose silicon transcript is in `golden/` and must match
+the twin byte for byte (`tests/golden/`). Behaviour the data sheet leaves open was settled with
+probe apps (`tcprobe`, `evprobe`) and is written up in each model's header comment. EVSYS
+differences left open on purpose: FALLING_EDGE with pulse generators loses some events on
+silicon (the twin delivers all), CHBUSY after PORT OUT actions is not repeatable, and CHSTATUS
+and the INTFLAG-to-NVIC path lag a few clock cycles on silicon (the twin is instant).
+
 Open MC00 items:
 - The twin defaults to rev A2; this board is A1 (`-global pic32cm1216mc00048-soc.silicon-rev=A1`).
-- TCC0/1 count 24 bits and TCC2 16 bits; the generated tables give every instance 32 bits
-  (PER/PERBUF reset 0xFFFFFFFF). Needs per-instance register widths in the generator.
 - `tools.pp` still defaults to `pic32cm-jh01-cpro`; MC00 runs need `--machine pic32cm-mc00-cpro`.
 - DS SERIES field inconsistency for DSU.DID (6 in the header and bit drawing, 7 in text, errata
   and signature); the twin uses 7.
@@ -151,8 +159,8 @@ Open MC00 items:
    - Read DSU.DID and CPUID with pyOCD in attach mode, which is read-only.
    - Decide on the first programming. It erases BOOTPROT and the factory bootloader.
    - Dump golden reset values, run `hello.elf` on both targets, and diff.
-4. **Tier 1 models** (EIC, TC, RTC, EVSYS), plus a `cortex-m0plus` CPU type in target/arm so the
-   M0+ MPU works (Zephyr needs it).
+4. ~~Tier 1 models (EIC, TC, RTC, EVSYS)~~ **done 2026-10-13**, checked on silicon. Still to do:
+   a `cortex-m0plus` CPU type in target/arm so the M0+ MPU works (Zephyr needs it).
 
 ## Known issues
 

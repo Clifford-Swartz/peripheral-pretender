@@ -18641,7 +18641,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/evsys_u2256.yaml",
-    "sha1": "2e9692ad06cc8d42d81dac528a5f1987689262df",
+    "sha1": "b3018b9c50f0fbe1284a7613046332251c0228f2",
     "status": "applied",
     "versions": [
      "1.0.2"
@@ -18729,10 +18729,12 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
+        "HOOK_PRE_READ",
         "READ_ONLY"
        ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel Status",
        "note": "",
        "fields": [
@@ -18934,6 +18936,16 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
         ],
         [
          "reset",
@@ -19780,7 +19792,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "PAC"
+        "PAC",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": null,
        "read_side_effect": false,
@@ -19865,7 +19878,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "USER",
@@ -19886,7 +19905,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "PAC"
+        "PAC",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": null,
        "read_side_effect": false,
@@ -19902,7 +19922,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       }
      ],
      "reset_overrides": [],

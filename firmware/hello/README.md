@@ -17,6 +17,8 @@ BOARD=<board>` builds `tests/<test>.c` into `build/<board>/<test>.elf`.
 | `tc` | TC counting, READSYNC, commands, one-shot, down counting, PER/CC buffering, compare match, MFRQ, counting rate, COUNT32 pairing, overflow interrupt, synchronization without the clock |
 | `tcprobe` | raw TC observations for behaviour the data sheet leaves open (prints, checks nothing) |
 | `rtc` | RTC (MC00) counting rate, periodic flags, compare with clear-on-match, MODE1, calendar across a leap day, alarm, interrupt, synchronization without the RTC clock |
+| `evsys` | EVSYS (MC00) paths with software events and generators (TC0, EIC, RTC), edge selection, the channel clock rule, CHSTATUS and OVR/EVD with and without ready users, the interrupt, register masks, TC1 event actions (COUNT, RETRIGGER, START, TCINV) and PORT event actions |
+| `evprobe` | raw EVSYS observations for behaviour the data sheet leaves open (prints, checks nothing) |
 
 Their transcripts are deterministic (timing checks have tolerances; run the
 twin with `--icount 5`); silicon captures live in `golden/`.

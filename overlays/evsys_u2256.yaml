@@ -1,11 +1,14 @@
 # Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
 #
-# Behavior overlay for EVSYS U2256 (12 channels; routing is out of scope in v0).
+# Behavior overlay for EVSYS U2256 (12 channels). The mchp-evsys model routes
+# generators and software events to users; CHSTATUS is computed from the
+# channels, their users and their clocks.
 ip: EVSYS
 id: U2256
 versions: ["1.0.2"]
 references:
-  - "DS60001632H 28.6 (EVSYS registers)"
+  - "DS60001632H 28.6 (EVSYS registers), DS60001638E 27 (PIC32CM MC00 EVSYS)"
+  - "silicon, PIC32CM1216MC00048 rev A1, firmware/hello/tests/evprobe.c, 2026-10-13"
 registers:
   CTRLA:
     pac_protected: true
@@ -13,13 +16,18 @@ registers:
     hooks: [post_write]
   INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
   INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  CHSTATUS:
+    dynamic: true
+    hooks: [pre_read]             # USRRDY/CHBUSY from channels and users
   INTFLAG:
     w1c: all
     irq_source: {enable: INTENSET}
   SWEVT:
     pac_protected: true
     hooks: [post_write]           # software event strobe (write-only per ATDF)
-  CHANNEL: {pac_protected: true}
-  USER: {pac_protected: true}
+  CHANNEL: {pac_protected: true, hooks: [post_write]}
+  USER:
+    pac_protected: true
+    hooks: [post_write]           # CHANNEL keeps 4 bits (silicon)
 reset_overrides:
   CHSTATUS: 0x00000FFF            # USRRDY0-11 (silicon, PIC32CM1216MC00048 rev A1 after reset, 2026-10-13)
