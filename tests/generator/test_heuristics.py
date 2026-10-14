@@ -1,12 +1,17 @@
 # Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
-"""Spec 5.2 heuristics on IPs without an overlay (TC, MTB, DMAC, ICM)."""
+"""Spec 5.2 heuristics on IPs without an overlay (TC, MTB, DMAC, ICM).
+
+TC has an overlay now; its heuristic semantics are rebuilt without one.
+"""
 
 import pytest
+
+from mchpgen import semantics
 
 
 @pytest.fixture(scope="module")
 def tc(ds):
-    ip = ds.ip("TC")
+    ip = semantics.build_ip(ds.device, ds.device.modules["TC"], {})
     assert ip.overlay is None and ip.overlay_status == "none"
     return ip
 
@@ -81,7 +86,7 @@ def test_report_lists_heuristics(generated):
     heur = text[text.index("## Heuristics applied"):
                 text.index("## Missing ATDF initvals")]
     assert "**dynamic: register named *SYNCBUSY" in heur
-    assert "tc_u2249/COUNT16 SYNCBUSY" in heur
+    assert "rtc_03608/MODE0 SYNCBUSY" in heur
     assert "**rdz: SWRST self-clearing**" in heur
     assert "**alias: <X>SET/<X>CLR pair, storage <X>SET**" in heur
     missing = text[text.index("## Missing ATDF initvals"):
