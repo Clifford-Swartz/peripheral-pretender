@@ -13,14 +13,54 @@ references:
 # DSU.DID.REVISION per silicon revision (DS80000905G); default first
 silicon_revisions: {A2: 1, A1: 0}
 reset_overrides:
-  DSU:
-    DID: 0x11070106                 # rev A2 (SERIES 7, DEVSEL 0x06)
   NVMCTRL:
     PARAM: 0x04030800               # NVMP 2048, PSZ 3 (64 B), DFP 64; silicon
   SUPC:
     VREG: 0x00000002                # DS: ENABLE at reset (the ATDF says 0)
   MCLK:
-    AHBMASK: 0x000005FF             # DS reset value (the ATDF says 0x7FFF)
+    AHBMASK: 0x000007FF             # silicon (DS says 0x5FF, the ATDF 0x7FFF)
+  PAC:
+    STATUSC: 0x02000000             # silicon
+  DSU:
+    DID: 0x11070106                 # rev A2 (SERIES 7, DEVSEL 0x06)
+    STATUSC: 0x00000008             # silicon (bit 3 is undocumented)
+    MEMTYPE: 0x00000001             # SMEMP: system memory present (silicon)
+  OSCCTRL:
+    CAL48M: 0x00210320              # loaded from the calibration row (silicon)
+  OSC32KCTRL:
+    OSCULP32K: 0x00000E06           # CALIB loaded at power-on (silicon)
+  HMATRIXB:                         # silicon; masters 3-15, slaves 8-15 absent
+    "MCFG[3]": 0
+    "MCFG[4]": 0
+    "MCFG[5]": 0
+    "MCFG[6]": 0
+    "MCFG[7]": 0
+    "MCFG[8]": 0
+    "MCFG[9]": 0
+    "MCFG[10]": 0
+    "MCFG[11]": 0
+    "MCFG[12]": 0
+    "MCFG[13]": 0
+    "MCFG[14]": 0
+    "MCFG[15]": 0
+    "SCFG[0]": 0x00020010
+    "SCFG[1]": 0x00020010
+    "SCFG[2]": 0x00060010
+    "SCFG[6]": 0x000A0010
+    "SCFG[7]": 0x00020010
+    "SCFG[8]": 0
+    "SCFG[9]": 0
+    "SCFG[10]": 0
+    "SCFG[11]": 0
+    "SCFG[12]": 0
+    "SCFG[13]": 0
+    "SCFG[14]": 0
+    "SCFG[15]": 0
+    "PRS[0].PRAS": 0x00000333
+    "PRS[1].PRAS": 0x00000003
+    "PRS[2].PRAS": 0x00000030
+    "PRS[3].PRAS": 0x00000303
+    "SFR[1]": 0x00000003
 nvm_rows:
   # Production settings (DS60001638E Table 8-2; BOOTPROT 7 = none, BODVDD
   # level 4 with reset action, WDT off), confirmed on silicon.

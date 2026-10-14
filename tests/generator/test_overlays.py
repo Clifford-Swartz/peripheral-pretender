@@ -14,7 +14,9 @@ EXPECTED = {("SERCOM", "U2201"), ("PORT", "U2210"), ("OSCCTRL", "U2119"),
             ("OSC32KCTRL", "U2246"), ("GCLK", "U2122"), ("MCLK", "U2234"),
             ("NVMCTRL", "03929"), ("SUPC", "U2117"), ("PM", "U2240"),
             ("RSTC", "U2239"), ("WDT", "U2251"), ("PAC", "U2120"),
-            ("DSU", "U2209"), ("DIVAS", "U2258"), ("EVSYS", "U2256")}
+            ("DSU", "U2209"), ("DIVAS", "U2258"), ("EVSYS", "U2256"),
+            # reset values only (from silicon)
+            ("MTB", "U2002"), ("HMATRIXB", "I7638")}
 
 
 def edited(tmp_path, name, change):
@@ -30,10 +32,16 @@ def build(dev, ov):
     return semantics.build_ip(dev, dev.modules[ov.ip], {(ov.ip, ov.id): ov})
 
 
-def test_all_spec_overlays_present_and_applied(ds, overlays):
+def test_all_spec_overlays_present_and_applied(ds_all, overlays):
+    """Every overlay applies on each device that has its IP, and every
+    overlaid IP exists on at least one device."""
     assert set(overlays) == EXPECTED
-    for ip, _ in EXPECTED:
-        assert ds.ip(ip).overlay_status == "applied", ip
+    for ip, ip_id in EXPECTED:
+        found = [d for d in ds_all
+                 if ip in d.device.modules and d.device.modules[ip].id == ip_id]
+        assert found, ip
+        for d in found:
+            assert d.ip(ip).overlay_status == "applied", (d.device.name, ip)
 
 
 def test_version_guard_falls_back_to_heuristics(dev, tmp_path):

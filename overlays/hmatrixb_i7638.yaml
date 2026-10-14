@@ -1,0 +1,11 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for the HMATRIXB bus matrix (MC00). No model: the
+# registers store and read back. The reset values of the master and slave
+# configurations depend on the device and live in its profile.
+ip: HMATRIXB
+id: I7638
+versions: ["2.1.3"]
+references:
+  - "silicon, PIC32CM1216MC00048 rev A1 after reset, 2026-10-13"
+registers: {}

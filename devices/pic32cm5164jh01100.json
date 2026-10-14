@@ -14615,7 +14615,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/dsu_u2209.yaml",
-    "sha1": "837abcd2d7f2d3fec621b0e2bfbab9971c800da9",
+    "sha1": "f66d810cec817ed97d12dfb54a4339ca65278ba4",
     "status": "applied",
     "versions": [
      "3.0.0"
@@ -15217,7 +15217,7 @@
        "size": 4,
        "count": 1,
        "stride": 4,
-       "reset": 2668609538,
+       "reset": 2668609539,
        "access": "R",
        "access_size": null,
        "impl": 4294963203,
@@ -15267,6 +15267,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides ENTRY0 = 0x9F0FC003 (ATDF initval 0x9F0FC002)"
         ]
        ]
       },
@@ -15276,7 +15281,7 @@
        "size": 4,
        "count": 1,
        "stride": 4,
-       "reset": 0,
+       "reset": 20483,
        "access": "R",
        "access_size": null,
        "impl": 4294967295,
@@ -15306,6 +15311,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides ENTRY1 = 0x5003 (ATDF initval 0x0)"
         ]
        ]
       },
@@ -18531,7 +18541,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/evsys_u2256.yaml",
-    "sha1": "1e17fb6c327fd68b64bf0c020f4dcdb93749f769",
+    "sha1": "2e9692ad06cc8d42d81dac528a5f1987689262df",
     "status": "applied",
     "versions": [
      "1.0.2"
@@ -18606,7 +18616,7 @@
        "size": 4,
        "count": 1,
        "stride": 4,
-       "reset": 0,
+       "reset": 4095,
        "access": "R",
        "access_size": null,
        "impl": 268374015,
@@ -18824,6 +18834,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides CHSTATUS = 0xFFF (ATDF initval 0x0)"
         ]
        ]
       },
@@ -23354,7 +23369,14 @@
    "version": "1.0.0",
    "caption": "Cortex-M0+ Micro-Trace Buffer",
    "core": false,
-   "overlay": null,
+   "overlay": {
+    "file": "overlays/mtb_u2002.yaml",
+    "sha1": "d4ffe9409e1bb031f4f23f3ed3a6eed331e64b5a",
+    "status": "applied",
+    "versions": [
+     "1.0.0"
+    ]
+   },
    "size": 4096,
    "selector": null,
    "default_view": "",
@@ -23554,7 +23576,7 @@
        "size": 4,
        "count": 1,
        "stride": 4,
-       "reset": 0,
+       "reset": 536870912,
        "access": "R",
        "access_size": 4,
        "impl": 4294967295,
@@ -23589,6 +23611,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides BASE = 0x20000000 (ATDF initval 0x0)"
         ]
        ]
       },
@@ -23804,7 +23831,7 @@
        "size": 4,
        "count": 1,
        "stride": 4,
-       "reset": 0,
+       "reset": 15,
        "access": "R",
        "access_size": 4,
        "impl": 4294967295,
@@ -23839,6 +23866,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides AUTHSTATUS = 0xF (ATDF initval 0x0)"
         ]
        ]
       },
@@ -23848,7 +23880,7 @@
        "size": 4,
        "count": 1,
        "stride": 4,
-       "reset": 0,
+       "reset": 1198524977,
        "access": "R",
        "access_size": 4,
        "impl": 4294967295,
@@ -23883,6 +23915,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides DEVARCH = 0x47700A31 (ATDF initval 0x0)"
         ]
        ]
       },
@@ -23936,7 +23973,7 @@
        "size": 4,
        "count": 1,
        "stride": 4,
-       "reset": 0,
+       "reset": 49,
        "access": "R",
        "access_size": 4,
        "impl": 4294967295,
@@ -23971,6 +24008,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides DEVTYPE = 0x31 (ATDF initval 0x0)"
         ]
        ]
       },
@@ -23980,7 +24022,7 @@
        "size": 4,
        "count": 1,
        "stride": 4,
-       "reset": 0,
+       "reset": 4,
        "access": "R",
        "access_size": 4,
        "impl": 4294967295,
@@ -24015,6 +24057,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides PID4 = 0x4 (ATDF initval 0x0)"
         ]
        ]
       },
@@ -24156,7 +24203,7 @@
        "size": 4,
        "count": 1,
        "stride": 4,
-       "reset": 0,
+       "reset": 50,
        "access": "R",
        "access_size": 4,
        "impl": 4294967295,
@@ -24191,6 +24238,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides PID0 = 0x32 (ATDF initval 0x0)"
         ]
        ]
       },
@@ -24200,7 +24252,7 @@
        "size": 4,
        "count": 1,
        "stride": 4,
-       "reset": 0,
+       "reset": 185,
        "access": "R",
        "access_size": 4,
        "impl": 4294967295,
@@ -24235,6 +24287,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides PID1 = 0xB9 (ATDF initval 0x0)"
         ]
        ]
       },
@@ -24244,7 +24301,7 @@
        "size": 4,
        "count": 1,
        "stride": 4,
-       "reset": 0,
+       "reset": 27,
        "access": "R",
        "access_size": 4,
        "impl": 4294967295,
@@ -24279,6 +24336,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides PID2 = 0x1B (ATDF initval 0x0)"
         ]
        ]
       },
@@ -24332,7 +24394,7 @@
        "size": 4,
        "count": 1,
        "stride": 4,
-       "reset": 0,
+       "reset": 13,
        "access": "R",
        "access_size": 4,
        "impl": 4294967295,
@@ -24367,6 +24429,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides CID0 = 0xD (ATDF initval 0x0)"
         ]
        ]
       },
@@ -24376,7 +24443,7 @@
        "size": 4,
        "count": 1,
        "stride": 4,
-       "reset": 0,
+       "reset": 144,
        "access": "R",
        "access_size": 4,
        "impl": 4294967295,
@@ -24411,6 +24478,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides CID1 = 0x90 (ATDF initval 0x0)"
         ]
        ]
       },
@@ -24420,7 +24492,7 @@
        "size": 4,
        "count": 1,
        "stride": 4,
-       "reset": 0,
+       "reset": 5,
        "access": "R",
        "access_size": 4,
        "impl": 4294967295,
@@ -24455,6 +24527,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides CID2 = 0x5 (ATDF initval 0x0)"
         ]
        ]
       },
@@ -24464,7 +24541,7 @@
        "size": 4,
        "count": 1,
        "stride": 4,
-       "reset": 0,
+       "reset": 177,
        "access": "R",
        "access_size": 4,
        "impl": 4294967295,
@@ -24499,6 +24576,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides CID3 = 0xB1 (ATDF initval 0x0)"
         ]
        ]
       }
@@ -26935,7 +27017,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/oscctrl_u2119.yaml",
-    "sha1": "37b9723ab42ad324a91df3df85ecd090b8c401fe",
+    "sha1": "d96015c957e217f61fbde864feda7fe7249be4fd",
     "status": "applied",
     "versions": [
      "2.1.0",
@@ -27146,7 +27228,7 @@
        "size": 4,
        "count": 1,
        "stride": 4,
-       "reset": 0,
+       "reset": 16,
        "access": "RW",
        "access_size": null,
        "impl": 3859,
@@ -27226,6 +27308,11 @@
          "w1c",
          "overlay",
          "XOSCRDY, XOSCFAIL, OSC48MRDY, DPLLLCKR, DPLLLCKF, DPLLLTO, DPLLLDRTO = 0xF13"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides INTFLAG = 0x10 (ATDF initval 0x0)"
         ]
        ]
       },
@@ -31528,7 +31615,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/port_u2210.yaml",
-    "sha1": "69aa766c3eb049ec025787cd38a54e98e82e7a5a",
+    "sha1": "58f104156ededfc919135586e2374ae6e900b89f",
     "status": "applied",
     "versions": [
      "2.1.1",
@@ -32471,6 +32558,11 @@
          "hooks",
          "overlay",
          "post_write"
+        ],
+        [
+         "reset",
+         "overlay",
+         "reset_overrides GROUP[0].PINCFG[30]: element 30 = 0x1 (others 0x0)"
         ]
        ]
       },
@@ -34327,6 +34419,12 @@
        "offset": 63,
        "size": 1,
        "value": 6
+      },
+      {
+       "key": "GROUP[0].PINCFG[30]",
+       "offset": 94,
+       "size": 1,
+       "value": 1
       }
      ],
      "reset_from": []

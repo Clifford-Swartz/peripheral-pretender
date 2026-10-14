@@ -28,5 +28,6 @@ registers:
   PINCFG: {pac_protected: true, hooks: [post_write]}   # INEN/PULLEN affect IN
 reset_overrides:
   # DS 27.7.13 / 7.4: PMUXE = 6 puts PA30 in function G (SWCLK) out of reset.
-  # The ATDF lists no SWCLK signal; PINCFG30 (PMUXEN, pull-up) is unconfirmed.
+  # The ATDF lists no SWCLK signal.
   "GROUP[0].PMUX[15]": 0x06
+  "GROUP[0].PINCFG[30]": 0x01     # PMUXEN (silicon, PIC32CM1216MC00048 rev A1 after reset, 2026-10-13)

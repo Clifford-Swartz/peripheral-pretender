@@ -52,6 +52,11 @@ installed in the user site). "Board effect" is what the command does to the hard
 | build a .pack | `py -m harness.make_pack --out DIR --verify` | none | no |
 | tests | `py -m pytest harness/tests -q` | none (QEMU for 3 tests) | no |
 
+Other boards: `--target` and `--pack` select the part, e.g. the PIC32CM MC00 Curiosity Pro with
+`--target pic32cm1216mc00048 --pack <Microchip.PIC32CM-MC_DFP.1.4.67.pack>` (build the pack with
+`py -m harness.make_pack --dfp ~/.mchp_packs/Microchip/PIC32CM-MC_DFP/1.4.67 --out <dir>/`).
+Captures from real boards live in `golden/`.
+
 Twin transcripts come from the tools runner: `py -m tools.pp run ELF --json > twin.json`. Every
 tool prints `--help`. Exit codes: 0 pass or same, 1 different (compare), 2 refused or bad input,
 3 not programmable as is (`--check`) or snapshot timeout, 124 capture timeout, otherwise the

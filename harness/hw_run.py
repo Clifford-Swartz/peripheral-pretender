@@ -122,7 +122,8 @@ def plan(args: argparse.Namespace, image: Image) -> list[str]:
 
 def check(args: argparse.Namespace, image: Image) -> int:
     """Read-only pre-flight; exit 0 if the image can be programmed as is."""
-    with silicon.session(args.probe, args.pack, frequency=args.frequency) as sess:
+    with silicon.session(args.probe, args.pack, target=args.target,
+                         frequency=args.frequency) as sess:
         info = silicon.preflight(sess)
     print("\n".join(info.describe()))
     if not info.protection:
@@ -140,7 +141,8 @@ def program_pyocd(args: argparse.Namespace, image: Image, port) -> dict:
     from pyocd.flash.file_programmer import FileProgrammer
 
     resets = {"system": Target.ResetType.SYSTEM, "hardware": Target.ResetType.HARDWARE}
-    with silicon.session(args.probe, args.pack, frequency=args.frequency,
+    with silicon.session(args.probe, args.pack, target=args.target,
+                         frequency=args.frequency,
                          allow_halt=True) as sess:
         info = silicon.preflight(sess)
         problems = (info.protection.conflicts(list(image.segments)) if info.protection
@@ -174,7 +176,8 @@ def reset_only(args: argparse.Namespace) -> dict:
     from pyocd.core.target import Target
 
     resets = {"system": Target.ResetType.SYSTEM, "hardware": Target.ResetType.HARDWARE}
-    with silicon.session(args.probe, args.pack, frequency=args.frequency) as sess:
+    with silicon.session(args.probe, args.pack, target=args.target,
+                         frequency=args.frequency) as sess:
         sess.target.reset(resets[args.reset])
         return {"probe": sess.probe.unique_id}
 
@@ -233,6 +236,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--port", help="VCOM port (default: the probe's EDBG port)")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--pack", help=f"DFP directory or .pack (default {silicon.DFP_DIR})")
+    parser.add_argument("--target", default=silicon.TARGET,
+                        help="pyOCD target in the pack (default %(default)s; "
+                             "pic32cm1216mc00048 for the MC00 board)")
     parser.add_argument("--frequency", type=int, default=silicon.FREQUENCY, help="SWD Hz")
     parser.add_argument("--timeout", type=float, default=20.0, help="capture seconds")
     parser.add_argument("--out", help="write the raw VCOM bytes here")

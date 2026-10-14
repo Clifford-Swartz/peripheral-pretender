@@ -1,0 +1,25 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for the Arm Micro Trace Buffer (MTB-M0+). No model: the
+# registers store and read back. Only reset values: the CoreSight
+# identification registers, which the ATDF gives as 0.
+ip: MTB
+id: U2002
+versions: ["1.0.0"]
+references:
+  - "Arm CoreSight MTB-M0+ TRM (DDI 0486): identification registers"
+  - "silicon, PIC32CM1216MC00048 rev A1 after reset, 2026-10-13"
+registers: {}
+reset_overrides:
+  BASE: 0x20000000                # SRAM, where the trace buffer lives
+  AUTHSTATUS: 0x0000000F
+  DEVARCH: 0x47700A31
+  DEVTYPE: 0x00000031
+  PID4: 0x00000004
+  PID0: 0x00000032
+  PID1: 0x000000B9
+  PID2: 0x0000001B
+  CID0: 0x0000000D
+  CID1: 0x00000090
+  CID2: 0x00000005
+  CID3: 0x000000B1

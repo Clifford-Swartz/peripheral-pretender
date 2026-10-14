@@ -48,3 +48,4 @@ reset_overrides:
   # Observable value: OSC48M runs from reset, so OSC48MRDY reads 1 as soon as a
   # debugger can look (DS 7.2). The register is dynamic; this is the fallback.
   STATUS: 0x00000010
+  INTFLAG: 0x00000010             # OSC48MRDY (silicon, PIC32CM1216MC00048 rev A1 after reset, 2026-10-13)

@@ -21,3 +21,5 @@ registers:
     hooks: [post_write]           # software event strobe (write-only per ATDF)
   CHANNEL: {pac_protected: true}
   USER: {pac_protected: true}
+reset_overrides:
+  CHSTATUS: 0x00000FFF            # USRRDY0-11 (silicon, PIC32CM1216MC00048 rev A1 after reset, 2026-10-13)

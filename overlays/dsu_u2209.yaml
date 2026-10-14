@@ -22,3 +22,9 @@ registers:
   DATA: {pac_protected: true}
   DID:
     note: "REVISION[11:8] comes from the SoC silicon-rev property (B0=1, C0=2)"
+reset_overrides:
+  # ROM table at DSU+0x1000: entry 0 -> Cortex-M0+ ROM table (0xE00FF000),
+  # entry 1 -> MTB (0x41008000), both present (EPRES). The ATDF clears
+  # EPRES, and the JH01 ATDF has ENTRY1 = 0 (silicon, PIC32CM1216MC00048 rev A1 after reset, 2026-10-13).
+  ENTRY0: 0x9F0FC003
+  ENTRY1: 0x00005003

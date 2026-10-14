@@ -14,6 +14,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0005 | part B: SERCOM USART and PORT models, LED0 and SW0 on the board, SERCOM and PORT qtests |
 | 0006 | review fixes: clock migration, SERCOM loadvm, ICSR.RETTOBASE on ARMv6-M, unimplemented-write log cap, WDT CONFIG/EWCTRL protection |
 | 0007 | generic `pic32cm-soc` built from generated device descriptors; PIC32CM1216MC00048 and the `pic32cm-mc00-cpro` board; tables regenerated for both devices (shared constants, per-device tables); MC00 qtest and board docs |
+| 0008 | reset values checked against PIC32CM MC00 silicon (golden reset dump): DSU ROM table, MTB IDs, OSC48MRDY flag, PA30 SWCLK, EVSYS, MC00 calibration and bus-matrix values |
 
 ## Setting it up
 

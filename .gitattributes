@@ -1,0 +1,2 @@
+# Golden data captured from silicon: byte-exact, never convert line endings
+golden/** -text

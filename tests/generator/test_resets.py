@@ -37,7 +37,8 @@ def test_genctrl0_override(ds):
 def test_port_pmux15_override(ds):
     port = ds.ip("PORT").view("")
     assert [(o.key, o.offset, o.size, o.value) for o in port.overrides] == \
-        [("GROUP[0].PMUX[15]", 0x3F, 1, 0x06)]
+        [("GROUP[0].PMUX[15]", 0x3F, 1, 0x06),
+         ("GROUP[0].PINCFG[30]", 0x5E, 1, 0x01)]
     for g in range(3):
         assert port.reg(f"GROUP[{g}].PMUX").reset == 0
 
