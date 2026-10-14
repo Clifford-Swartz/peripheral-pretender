@@ -1,0 +1,68 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for TC U2249 (Timer/Counter). The mchp-tc model counts
+# in COUNT8/16/32 with the waveform TOP rules, commands, one-shot, double
+# buffering and compare-match flags; capture, events and waveform pins are
+# not modelled.
+ip: TC
+id: U2249
+versions: ["2.0.0", "3.0.0"]      # 2.0.0: MC00; 3.0.0: JH01 (capture modes)
+references:
+  - "DS60001638E 33 (PIC32CM MC00 TC), DS60001632H 41 (PIC32CM JH01 TC)"
+modes:
+  COUNT16:
+    registers: &tc
+      CTRLA:
+        pac_protected: true
+        enable_protected: {all_except: [SWRST, ENABLE]}
+        sync: {SWRST: SWRST, ENABLE: ENABLE}
+        self_clearing: [SWRST]
+        hooks: [post_write]           # start/stop, MODE view
+      CTRLBCLR:
+        pac_protected: true
+        alias: {storage: CTRLBSET, op: clear}
+        sync: CTRLB
+        hooks: [post_write]           # direction change
+      CTRLBSET:
+        pac_protected: true
+        alias: {storage: CTRLBSET, op: set}
+        sync: CTRLB
+        hooks: [post_write]           # commands, read back 0 when done
+      EVCTRL: {pac_protected: true, enable_protected: all}
+      INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+      INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+      INTFLAG:
+        w1c: all
+        irq_source: {enable: INTENSET}
+        hooks: [post_write]           # cleared flags re-arm the counter timer
+      STATUS:
+        w1c: [PERBUFV, CCBUFV0, CCBUFV1]
+        ro: [STOP, SLAVE]
+      WAVE: {pac_protected: true, enable_protected: all}
+      DRVCTRL: {pac_protected: true, enable_protected: all}
+      DBGCTRL: {pac_protected: true}
+      SYNCBUSY: {dynamic: true}
+      COUNT:
+        pac_protected: true
+        sync: COUNT
+        hooks: [pre_read, post_write]   # last synchronized value; reload
+      PER:
+        pac_protected: true
+        sync: PER
+        hooks: [pre_read, post_write]   # reads show PERBUF while PERBUFV
+        optional: true                  # COUNT8 only
+      CC:
+        pac_protected: true
+        sync: "CC{n}"
+        hooks: [pre_read, post_write]   # reads show CCBUFx while CCBUFVx
+      PERBUF:
+        pac_protected: true
+        hooks: [post_write]             # STATUS.PERBUFV
+        optional: true
+      CCBUF:
+        pac_protected: true
+        hooks: [post_write]             # STATUS.CCBUFVn
+  COUNT8:
+    registers: *tc
+  COUNT32:
+    registers: *tc

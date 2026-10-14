@@ -14,8 +14,11 @@ BOARD=<board>` builds `tests/<test>.c` into `build/<board>/<test>.elf`.
 |---|---|
 | `hello` (default) | the Harmony bring-up, identity, interrupt-driven print, LED0 |
 | `eic` | EIC edges, levels, flag clearing, interrupt, and the clock needed by synchronous edges and their CTRLA synchronization; stimulus: the free test pin's pull resistor (`TEST_PIN` in `board.h`) |
+| `tc` | TC counting, READSYNC, commands, one-shot, down counting, PER/CC buffering, compare match, MFRQ, counting rate, COUNT32 pairing, overflow interrupt, synchronization without the clock |
+| `tcprobe` | raw TC observations for behaviour the data sheet leaves open (prints, checks nothing) |
 
-Their transcripts are deterministic; silicon captures live in `golden/`.
+Their transcripts are deterministic (timing checks have tolerances; run the
+twin with `--icount 5`); silicon captures live in `golden/`.
 
 Most of this README describes the JH01 build; the MC00 build differs only
 where its board does (see [PIC32CM MC00 Curiosity Pro](#pic32cm-mc00-curiosity-pro)).

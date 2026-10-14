@@ -157,7 +157,10 @@ def test_transcript_matches_silicon(mc00, app):
         pytest.skip(f"{elf.relative_to(ROOT)} not built (make -C firmware/hello "
                     f"BOARD=pic32cm_mc00_cpro APP={app})")
     gold = golden()
-    result = run(RunOptions(elf, machine=MACHINE, timeout_s=30, extra_args=[
+    # Deterministic virtual time: peripheral tests compare tick counts with
+    # SysTick, which real-time pacing makes jittery
+    result = run(RunOptions(elf, machine=MACHINE, timeout_s=60, icount_shift=5,
+                            extra_args=[
         "-global", f"{SOC}.silicon-rev={gold['revision']}",
         "-global", f"{SOC}.serial-number={gold['serial_number']}"]))
     silicon = (GOLDEN / f"{app}-vcom.bin").read_bytes().decode("ascii")

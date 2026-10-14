@@ -17,7 +17,7 @@ EXPECTED = {("SERCOM", "U2201"), ("PORT", "U2210"), ("OSCCTRL", "U2119"),
             ("DSU", "U2209"), ("DIVAS", "U2258"), ("EVSYS", "U2256"),
             # reset values only (from silicon)
             ("MTB", "U2002"), ("HMATRIXB", "I7638"),
-            ("EIC", "U2254")}
+            ("EIC", "U2254"), ("TC", "U2249")}
 
 
 def edited(tmp_path, name, change):
