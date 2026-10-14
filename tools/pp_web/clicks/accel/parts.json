@@ -1,0 +1,12 @@
+{
+ "source": "MikroElektronika Accel Click v101 (ClickID): 2D and 3D files (Accel_click_2d_3d_files_v101.zip, CAD/accel_click-mikroid_v101.dxf; silkscreen Accel click, axes X right, Y up, Z out of the board) and schematic v101. Part positions read off the pad groups and the silkscreen; the COMM SEL jumpers sit in the I2C position and ADDR SEL on 0 (ALT ADDRESS to GND: 0x53), as the schematic shows.",
+ "parts": [
+  {"ref": "U1", "kind": "ic", "value": "ADXL345 (LGA-14)", "at_mm": [11.5, 21.2], "size_mm": [5.0, 3.0]},
+  {"ref": "JP1", "kind": "zero_ohm", "value": "I2C", "at_mm": [9.15, 12.77], "size_mm": [1.9, 1.2]},
+  {"ref": "JP2", "kind": "zero_ohm", "value": "I2C", "at_mm": [9.15, 10.23], "size_mm": [1.9, 1.2]},
+  {"ref": "JP3", "kind": "zero_ohm", "value": "I2C", "at_mm": [9.15, 7.69], "size_mm": [1.9, 1.2]},
+  {"ref": "JP4", "kind": "zero_ohm", "value": "ADD0", "at_mm": [14.1, 7.5], "size_mm": [1.9, 1.2]},
+  {"ref": "U2", "kind": "ic", "value": "DS28E36 (ClickID)", "at_mm": [11.8, 1.3], "size_mm": [2.2, 2.2]},
+  {"ref": "LD1", "kind": "led", "value": "PWR", "at_mm": [16.75, 1.95], "size_mm": [1.6, 0.8], "color": "#7be38a"}
+ ]
+}

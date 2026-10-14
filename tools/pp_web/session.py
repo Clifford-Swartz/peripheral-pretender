@@ -197,7 +197,8 @@ class Session:
         elif button == "reset" and pressed:
             await self.qmp.execute("system_reset")
 
-    async def set_click(self, slot: str, prop: str, value: int | bool) -> None:
+    async def set_click(self, slot: str, prop: str,
+                        value: int | bool | str) -> None:
         """Set a QOM property of the Click board in @slot ("ext1")."""
         await self.qmp.execute("qom-set", path=f"/machine/{slot}-click",
                                property=prop, value=value)

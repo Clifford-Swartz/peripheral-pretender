@@ -256,7 +256,7 @@ differs.
 - **Models.** AVR peripherals are different IPs from the SAM ones with the same names (PORT, RTC,
   NVMCTRL). The generic register block logs everything not modelled, so the backlog lists what
   an example needs. `avr8x-*` models exist for PORT/VPORT, USART, SPI, TCB, CLKCTRL, CPUINT,
-  NVMCTRL (FLMAP) and the NVM-backed rows; the examples want TCA, ADC, RTC and TWI next.
+  NVMCTRL (FLMAP), TWI (host) and the NVM-backed rows; the examples want TCA, ADC and RTC next.
 - **Timing.** TCG has no cycle counts: `_delay_ms` busy loops run at host speed under
   `-icount shift=auto` (the web view). Demos for the page take time from a timer interrupt
   (TCB0), as `firmware/avr-hello/blinky.c` does.

@@ -78,18 +78,22 @@ def watched(click: dict) -> list[tuple[str, ...]]:
     return props
 
 
-def stick_values(stick: dict, x: float, y: float) -> dict[str, int]:
+def stick_values(stick: dict, x: float, y: float) -> dict[str, int | str]:
     """QOM property values for a catalog stick at (@x, @y) in the unit
     circle. "stick": the axes scaled to "range". "tilt": the Click leans
     toward (x, y) by asin(r): an accelerometer at rest reads the opposite
     of gravity, so the axis that dips reads negative, and z (up from the
-    Click) the rest of 1 g; "range" is 1 g in the properties' units."""
+    Click) the rest of 1 g; "range" is 1 g in the properties' units. With
+    "xyz_property" the three go in one "x y z" string, so the sensor
+    never samples a half-updated vector."""
     full = stick["range"]
     if stick.get("mode") == "tilt":
         z = math.sqrt(max(0.0, 1 - x * x - y * y))
-        return {stick["x_property"]: round(-x * full),
-                stick["y_property"]: round(-y * full),
-                stick["z_property"]: round(z * full)}
+        g = [round(-x * full), round(-y * full), round(z * full)]
+        if "xyz_property" in stick:
+            return {stick["xyz_property"]: " ".join(map(str, g))}
+        return {stick["x_property"]: g[0], stick["y_property"]: g[1],
+                stick["z_property"]: g[2]}
     return {stick["x_property"]: round(x * full),
             stick["y_property"]: round(y * full)}
 

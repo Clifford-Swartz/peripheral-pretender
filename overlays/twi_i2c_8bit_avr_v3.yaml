@@ -1,0 +1,18 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for the AVR8X TWI (i2c_8bit_avr_v3: AVR Dx, AVR Ex),
+# host side. MSTATUS (bus state, flags) comes from the model; MADDR, MDATA
+# and MCTRLB.MCMD start bus transactions.
+ip: TWI
+id: i2c_8bit_avr_v3
+versions: [""]
+references:
+  - "DS40002324 (AVR64EA48) chapter TWI, host operation and register descriptions"
+registers:
+  MCTRLA: {hooks: [post_write]}            # ENABLE, SMEN, RIEN, WIEN
+  MCTRLB: {hooks: [pre_read, post_write]}  # MCMD (reads 0), ACKACT, FLUSH
+  MSTATUS:
+    dynamic: true
+    hooks: [pre_read, post_write]          # BUSSTATE, W1C flags
+  MADDR: {hooks: [post_write]}             # (repeated) start + address
+  MDATA: {hooks: [pre_read, post_write]}   # send / receive

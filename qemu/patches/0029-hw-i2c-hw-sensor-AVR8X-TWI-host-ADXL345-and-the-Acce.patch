@@ -1,0 +1,1340 @@
+From 32dc2cd8eab5e60df8d9fe272381347af3d943cd Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 14 Oct 2026 15:51:38 -0700
+Subject: [PATCH] hw/i2c, hw/sensor: AVR8X TWI host; ADXL345 and the Accel
+ Click
+
+- avr8x-twi: TWI host mode (DS40002324): bus state (IDLE forced by
+  software), START/repeated START from MADDR, send/receive, ACKACT,
+  MCMD REPSTART/RECVTRANS/STOP, smart mode, W1C flags, RIF/WIF host
+  interrupt on the instance's second vector (TWIM), an I2C bus
+  "twi0.i2c". Regenerated AVR64EA48 TWI tables (overlay
+  twi_i2c_8bit_avr_v3.yaml: hooks on MCTRLA/B, MSTATUS, MADDR, MDATA).
+- avr64ea48-cnano: the Nano Base's mikroBUS I2C on TWI0, so I2C Clicks
+  (thermo8, accel) plug in there too.
+- adxl345: ADXL345 data sheet Rev. G: register map and resets, I2C
+  auto-increment, sampling at the BW_RATE rate on the virtual clock,
+  full-resolution/10-bit/justified/clipped data with OFSx, DATA_READY,
+  OVERRUN, WATERMARK (bypass), INT1/INT2 by INT_MAP and INT_INVERT; tap,
+  activity, free fall, FIFO modes logged as not modelled. "x", "y", "z"
+  in mg.
+- mikrobus: "accel" (schematic v101): 0x53 (ADDR SEL on 0), INT1 on INT,
+  CS R6 100k and RST R8 10k pull-ups.
+- qtests: Accel on EXT1 (identity, standby, scaling, offsets, clipping,
+  overrun, INT polarity and mapping); TWI host with the Accel and the
+  Thermo 8 on the Nano Base.
+
+Not checked against a physical Accel Click.
+
+Peripheral Pretender: AI-assisted, not for upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst         |  11 +
+ docs/system/avr/avr64ea48-cnano.rst           |  13 +-
+ hw/avr/Kconfig                                |   1 +
+ hw/avr/avr64ea48_cnano.c                      |   8 +-
+ hw/avr/avr8x_soc.c                            |  11 +-
+ hw/i2c/Kconfig                                |   5 +
+ hw/i2c/avr8x_twi.c                            | 313 +++++++++++++++
+ hw/i2c/meson.build                            |   1 +
+ hw/misc/mikrobus.c                            |   7 +
+ hw/sensor/adxl345.c                           | 373 ++++++++++++++++++
+ hw/sensor/meson.build                         |   2 +-
+ include/hw/i2c/avr8x_twi.h                    |  17 +
+ .../mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h  |  17 +-
+ include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h     |   2 +-
+ include/hw/sensor/adxl345.h                   |  24 ++
+ tests/qtest/avr64ea48-cnano-test.c            |  90 +++++
+ tests/qtest/pic32cm-click-test.c              | 133 ++++++-
+ 17 files changed, 1006 insertions(+), 22 deletions(-)
+ create mode 100644 hw/i2c/avr8x_twi.c
+ create mode 100644 hw/sensor/adxl345.c
+ create mode 100644 include/hw/i2c/avr8x_twi.h
+ create mode 100644 include/hw/sensor/adxl345.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index a341b5b..fa2eda7 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -107,6 +107,17 @@ resistors are modelled (from their schematics, v100).
+   ``x`` and ``y`` (-1000 to 1000, right and up) and ``pressed``; ``in0``
+   to ``in3`` (mV) set the ADC inputs directly.
+ 
++``accel``
++  Accel Click (v101): an ADXL345 accelerometer (``adxl345``) at I2C
++  address 0x53 (its ADDR SEL jumper on 0; v100 boards and
++  MikroElektronika's driver use 0x1D, ADDR SEL on 1), INT1 on INT
++  (push-pull, no pull resistor); CS (100 kOhm) and RST (10 kOhm, the
++  ClickID switch) pulled up. QOM properties ``x``, ``y``, ``z`` in mg (the
++  sensor's reading: flat and face up is z = 1000); axes as on the Click's
++  silkscreen (x right, y up). Sampling at the BW_RATE data rate,
++  DATA_READY/OVERRUN/WATERMARK and the INT pins are modelled; tap,
++  activity and free-fall detection and the FIFO modes are not.
++
+ SPI Clicks on both headers share the SPI bus; each listens only while its
+ own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
+ 
+diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
+index 40e1d5b..c8e50f5 100644
+--- a/docs/system/avr/avr64ea48-cnano.rst
++++ b/docs/system/avr/avr64ea48-cnano.rst
+@@ -29,13 +29,12 @@ sw0-pressed=on``), the virtual COM port on USART1 (``-serial`` 0), USART2
+ on ``-serial`` 1.
+ 
+ On a Curiosity Nano Base for Click boards (AC164162), ``mb1=``, ``mb2=``
+-and ``mb3=`` plug a Click board into mikroBUS socket 1-3 (``thermo8`` needs
+-I2C, which is not modelled yet; ``buttong``, ``7seg``, ``relay``,
+-``8x8g``, a MAX7219 LED matrix with a ``display`` property, ``buzz``,
+-a piezo buzzer whose ``frequency`` follows the PWM pin, and ``oledc``, an
+-SSD1351 OLED whose picture is the ``frame`` property, and ``thumbstick``,
+-a joystick on an MCP3204 ADC, work). The
+-Click is ``/machine/mbN-click``.
++and ``mb3=`` plug a Click board into mikroBUS socket 1-3: SPI on SPI0, I2C
++on TWI0 (PA2 SDA, PA3 SCL; host mode, ``avr8x-twi``). Every Click of the
++shared catalog works here: ``thermo8``, ``accel``, ``buttong``, ``7seg``,
++``relay``, ``8x8g``, ``buzz``, ``oledc`` and ``thumbstick`` (see the PIC32CM
++MC00 Curiosity Pro for what each one models). The Click is
++``/machine/mbN-click``.
+ 
+ Firmware comes from ``-kernel`` or ``-bios``::
+ 
+diff --git a/hw/avr/Kconfig b/hw/avr/Kconfig
+index 6426067..3f91644 100644
+--- a/hw/avr/Kconfig
++++ b/hw/avr/Kconfig
+@@ -10,6 +10,7 @@ config AVR8X_SOC
+     select AVR8X_USART
+     select AVR8X_SPI
+     select AVR8X_TCB
++    select AVR8X_TWI
+     select MIKROBUS
+     select MCHP_REGFILE
+     select UNIMP
+diff --git a/hw/avr/avr64ea48_cnano.c b/hw/avr/avr64ea48_cnano.c
+index 118cd36..b37586c 100644
+--- a/hw/avr/avr64ea48_cnano.c
++++ b/hw/avr/avr64ea48_cnano.c
+@@ -19,8 +19,8 @@
+  * guide DS50002839B Figure 3-1 and schematic rev 7, through the Nano's
+  * edge pins, schematic sheet 2): SPI0 on PA4 MOSI, PA5 MISO, PA6 SCK for
+  * all three; RST/PWM/INT/CS on PD6/PD0/PD3/PA7, PF3/PD1/PF2/PE2 and
+- * PE1/PD2/PE0/PE3. I2C (TWI0 on PA2/PA3) is not modelled yet. The Click's
+- * device, if it has one, is /machine/mbN-click.
++ * PE1/PD2/PE0/PE3; I2C on TWI0 (PA2 SDA, PA3 SCL) for all three. The
++ * Click's device, if it has one, is /machine/mbN-click.
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -142,6 +142,8 @@ static void avr64ea48_cnano_add_clicks(Avr64ea48CnanoState *s)
+ {
+     DeviceState *spi0 = avr8x_soc_periph(&s->soc, "SPI0");
+     SSIBus *spi = (SSIBus *)qdev_get_child_bus(spi0, "spi0.spi");
++    I2CBus *i2c = I2C_BUS(qdev_get_child_bus(
++        avr8x_soc_periph(&s->soc, "TWI0"), "twi0.i2c"));
+     MikrobusSocket sockets[CNANO_MB_NUM];
+ 
+     for (unsigned n = 0; n < CNANO_MB_NUM; n++) {
+@@ -150,7 +152,7 @@ static void avr64ea48_cnano_add_clicks(Avr64ea48CnanoState *s)
+         sockets[n] = (MikrobusSocket) {
+             .name = names[n], .port = DEVICE(&s->soc.port),
+             .port_in = AVR8X_PORT_IN, .port_pad = AVR8X_PORT_PAD,
+-            .spi = spi,
++            .i2c = i2c, .spi = spi,
+         };
+         memcpy(sockets[n].pins, avr64ea48_cnano_mb_pins[n],
+                sizeof(sockets[n].pins));
+diff --git a/hw/avr/avr8x_soc.c b/hw/avr/avr8x_soc.c
+index a627bb0..9d2fa8a 100644
+--- a/hw/avr/avr8x_soc.c
++++ b/hw/avr/avr8x_soc.c
+@@ -30,6 +30,7 @@
+ #include "hw/core/qdev-properties.h"
+ #include "hw/core/qdev-properties-system.h"
+ #include "hw/misc/unimp.h"
++#include "hw/i2c/avr8x_twi.h"
+ #include "hw/ssi/avr8x_spi.h"
+ #include "hw/timer/avr8x_tcb.h"
+ #include "system/address-spaces.h"
+@@ -50,6 +51,7 @@ static const struct {
+     { "SIGROW", TYPE_AVR8X_NVMBYTES },
+     { "SPI", TYPE_AVR8X_SPI },
+     { "TCB", TYPE_AVR8X_TCB },
++    { "TWI", TYPE_AVR8X_TWI },
+     { "SYSCFG", TYPE_AVR8X_NVMBYTES },
+     { "USART", TYPE_AVR8X_USART },
+     { "USERROW", TYPE_AVR8X_NVMBYTES },
+@@ -401,10 +403,15 @@ static bool avr8x_realize_periph(Avr8xSocState *s, uint8_t rev, Error **errp)
+             return false;
+         }
+         sysbus_mmio_map(sbd, 0, OFFSET_DATA + info->base);
+-        /* USART: RXC, DRE, TXC; generic blocks: their first vector */
++        /*
++         * USART: RXC, DRE, TXC; TWI: TWIS, TWIM; generic blocks: their
++         * first vector
++         */
+         avr8x_connect_vectors(s, sbd, info,
+                               object_dynamic_cast(OBJECT(dev),
+-                                                  TYPE_AVR8X_USART) ? 3 : 1);
++                                                  TYPE_AVR8X_USART) ? 3 :
++                              object_dynamic_cast(OBJECT(dev),
++                                                  TYPE_AVR8X_TWI) ? 2 : 1);
+     }
+     if (nvmctrl) {
+         qdev_connect_gpio_out_named(nvmctrl, AVR8X_NVMCTRL_FLMAP, 0,
+diff --git a/hw/i2c/Kconfig b/hw/i2c/Kconfig
+index 0766130..71db51a 100644
+--- a/hw/i2c/Kconfig
++++ b/hw/i2c/Kconfig
+@@ -54,3 +54,8 @@ config PMBUS
+ config BCM2835_I2C
+     bool
+     select I2C
++
++config AVR8X_TWI
++    bool
++    select I2C
++    select MCHP_REGFILE
+diff --git a/hw/i2c/avr8x_twi.c b/hw/i2c/avr8x_twi.c
+new file mode 100644
+index 0000000..d154b17
+--- /dev/null
++++ b/hw/i2c/avr8x_twi.c
+@@ -0,0 +1,313 @@
++/*
++ * Microchip AVR8X TWI (i2c_8bit_avr_v3: AVR Dx, AVR Ex), host mode
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Behaviour from DS40002324 (AVR64EA48), chapter TWI, host operation:
++ * after MCTRLA.ENABLE the bus state is unknown until software writes
++ * IDLE to MSTATUS.BUSSTATE (or a STOP is seen). Writing MADDR issues a
++ * START (a repeated START while the host owns the bus) and the address:
++ * a write address ends with WIF and RXACK (1: NACK); a read address that
++ * is acknowledged receives the first byte (RIF), a NACKed one sets WIF and
++ * RXACK. Writing MDATA sends a byte (WIF, RXACK). In read mode
++ * MCTRLB.MCMD RECVTRANS sends ACKACT and receives the next byte; STOP
++ * sends ACKACT and a STOP; REPSTART repeats MADDR. Smart mode
++ * (MCTRLA.SMEN) sends ACKACT when MDATA is read and, on ACK, receives
++ * the next byte. RIF and WIF clear by writing 1, by writing MADDR or
++ * MDATA, by an MCMD, or by reading MDATA. The host interrupt (TWIM, the
++ * instance's second vector) follows RIF & RIEN | WIF & WIEN. The bus is
++ * the "i2c" I2C bus of the device. Transfers take no time; MBAUD,
++ * timeouts, quick command, arbitration, the client side and the pin
++ * routing (PORTMUX.TWIROUTEA) are not modelled.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "hw/avr/avr8x_periph.h"
++#include "hw/core/irq.h"
++#include "hw/core/sysbus.h"
++#include "hw/i2c/avr8x_twi.h"
++#include "hw/i2c/i2c.h"
++#include "hw/mchp/gen/twi_i2c_8bit_avr_v3.h"
++#include "migration/vmstate.h"
++
++#define MSTATUS_FLAGS   (R_MCHP_TWI_MSTATUS_RIF_MASK | \
++                         R_MCHP_TWI_MSTATUS_WIF_MASK | \
++                         R_MCHP_TWI_MSTATUS_ARBLOST_MASK | \
++                         R_MCHP_TWI_MSTATUS_BUSERR_MASK)
++
++OBJECT_DECLARE_SIMPLE_TYPE(Avr8xTwiState, AVR8X_TWI)
++
++struct Avr8xTwiState {
++    MchpRegBlock parent_obj;
++
++    I2CBus *bus;
++    qemu_irq irq_host;          /* TWIM; the regblock's own IRQ is TWIS */
++    uint8_t status;             /* MSTATUS */
++    uint8_t data;               /* last byte received */
++    bool reading;               /* the address had R/W = 1 */
++    bool in_transfer;           /* a START is open on the QEMU bus */
++};
++
++static uint8_t avr8x_twi_reg(Avr8xTwiState *s, hwaddr reg)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, reg, 1);
++}
++
++static void avr8x_twi_set_bus(Avr8xTwiState *s, unsigned state)
++{
++    s->status = FIELD_DP8(s->status, MCHP_TWI_MSTATUS, BUSSTATE, state);
++}
++
++static bool avr8x_twi_irq_pending(MchpRegBlock *rb)
++{
++    Avr8xTwiState *s = AVR8X_TWI(rb);
++    uint8_t ctrla = avr8x_twi_reg(s, A_MCHP_TWI_MCTRLA);
++    bool host = ((s->status & R_MCHP_TWI_MSTATUS_RIF_MASK) &&
++                 (ctrla & R_MCHP_TWI_MCTRLA_RIEN_MASK)) ||
++                ((s->status & R_MCHP_TWI_MSTATUS_WIF_MASK) &&
++                 (ctrla & R_MCHP_TWI_MCTRLA_WIEN_MASK));
++
++    qemu_set_irq(s->irq_host, host);
++    return false;               /* client side not modelled */
++}
++
++static bool avr8x_twi_enabled(Avr8xTwiState *s)
++{
++    return avr8x_twi_reg(s, A_MCHP_TWI_MCTRLA) &
++           R_MCHP_TWI_MCTRLA_ENABLE_MASK;
++}
++
++static void avr8x_twi_clear_flags(Avr8xTwiState *s)
++{
++    s->status &= ~(R_MCHP_TWI_MSTATUS_RIF_MASK | R_MCHP_TWI_MSTATUS_WIF_MASK);
++}
++
++static void avr8x_twi_receive(Avr8xTwiState *s)
++{
++    s->data = i2c_recv(s->bus);
++    s->status |= R_MCHP_TWI_MSTATUS_RIF_MASK |
++                 R_MCHP_TWI_MSTATUS_CLKHOLD_MASK;
++}
++
++static void avr8x_twi_stop(Avr8xTwiState *s)
++{
++    if (s->in_transfer) {
++        i2c_end_transfer(s->bus);
++        s->in_transfer = false;
++    }
++    s->status &= ~R_MCHP_TWI_MSTATUS_CLKHOLD_MASK;
++    avr8x_twi_set_bus(s, MCHP_TWI_MSTATUS_BUSSTATE_IDLE);
++}
++
++/* START or repeated START with the address in MADDR */
++static void avr8x_twi_start(Avr8xTwiState *s, uint8_t addr)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    unsigned state = FIELD_EX8(s->status, MCHP_TWI_MSTATUS, BUSSTATE);
++    bool nack;
++
++    avr8x_twi_clear_flags(s);
++    if (!avr8x_twi_enabled(s)) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s.MADDR: write while disabled\n",
++                      rb->name);
++        return;
++    }
++    if (state == MCHP_TWI_MSTATUS_BUSSTATE_UNKNOWN) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s.MADDR: bus state unknown (write "
++                      "IDLE to MSTATUS.BUSSTATE first)\n", rb->name);
++        return;
++    }
++    s->reading = addr & 1;
++    nack = i2c_start_transfer(s->bus, addr >> 1, s->reading) != 0;
++    s->in_transfer = !nack;
++    avr8x_twi_set_bus(s, MCHP_TWI_MSTATUS_BUSSTATE_OWNER);
++    s->status = FIELD_DP8(s->status, MCHP_TWI_MSTATUS, RXACK, nack);
++    if (s->reading && !nack) {
++        avr8x_twi_receive(s);
++    } else {
++        s->status |= R_MCHP_TWI_MSTATUS_WIF_MASK |
++                     R_MCHP_TWI_MSTATUS_CLKHOLD_MASK;
++    }
++}
++
++static void avr8x_twi_send(Avr8xTwiState *s, uint8_t byte)
++{
++    bool nack = true;
++
++    avr8x_twi_clear_flags(s);
++    if (s->in_transfer && !s->reading) {
++        nack = i2c_send(s->bus, byte) != 0;
++    } else {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s.MDATA: write without a write "
++                      "transaction\n", MCHP_REGBLOCK(s)->name);
++    }
++    s->status = FIELD_DP8(s->status, MCHP_TWI_MSTATUS, RXACK, nack);
++    s->status |= R_MCHP_TWI_MSTATUS_WIF_MASK | R_MCHP_TWI_MSTATUS_CLKHOLD_MASK;
++}
++
++/* Send ACKACT for the byte just received; on ACK, receive the next */
++static void avr8x_twi_ack(Avr8xTwiState *s, bool next)
++{
++    bool nack = avr8x_twi_reg(s, A_MCHP_TWI_MCTRLB) &
++                R_MCHP_TWI_MCTRLB_ACKACT_MASK;
++
++    avr8x_twi_clear_flags(s);
++    if (!s->in_transfer || !s->reading) {
++        return;
++    }
++    if (nack) {
++        i2c_nack(s->bus);
++    } else if (next) {
++        avr8x_twi_receive(s);
++    }
++}
++
++static uint32_t avr8x_twi_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                                   unsigned idx, uint32_t stored,
++                                   bool side_effects)
++{
++    Avr8xTwiState *s = AVR8X_TWI(rf->opaque);
++    uint8_t value;
++
++    switch (ri->offset) {
++    case A_MCHP_TWI_MSTATUS:
++        return s->status;
++    case A_MCHP_TWI_MCTRLB:
++        return stored & ~R_MCHP_TWI_MCTRLB_MCMD_MASK;   /* MCMD reads 0 */
++    case A_MCHP_TWI_MDATA:
++        value = s->data;
++        if (side_effects) {
++            avr8x_twi_clear_flags(s);
++            if (avr8x_twi_reg(s, A_MCHP_TWI_MCTRLA) &
++                R_MCHP_TWI_MCTRLA_SMEN_MASK) {
++                avr8x_twi_ack(s, true);
++            }
++            mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++        }
++        return value;
++    }
++    return stored;
++}
++
++static void avr8x_twi_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                 unsigned idx, uint32_t old,
++                                 uint32_t written, uint32_t we)
++{
++    Avr8xTwiState *s = AVR8X_TWI(rf->opaque);
++
++    switch (ri->offset) {
++    case A_MCHP_TWI_MCTRLA:
++        if (!(written & R_MCHP_TWI_MCTRLA_ENABLE_MASK)) {
++            if (s->in_transfer) {
++                i2c_end_transfer(s->bus);
++                s->in_transfer = false;
++            }
++            s->status = 0;      /* disabled: bus state unknown */
++        }
++        break;
++    case A_MCHP_TWI_MCTRLB:
++        if (written & R_MCHP_TWI_MCTRLB_FLUSH_MASK) {
++            s->status &= ~MSTATUS_FLAGS;
++            s->data = 0;
++        }
++        switch (FIELD_EX8(written, MCHP_TWI_MCTRLB, MCMD)) {
++        case MCHP_TWI_MCTRLB_MCMD_REPSTART:
++            avr8x_twi_start(s, avr8x_twi_reg(s, A_MCHP_TWI_MADDR));
++            break;
++        case MCHP_TWI_MCTRLB_MCMD_RECVTRANS:
++            avr8x_twi_ack(s, true);
++            break;
++        case MCHP_TWI_MCTRLB_MCMD_STOP:
++            avr8x_twi_ack(s, false);
++            avr8x_twi_stop(s);
++            break;
++        }
++        break;
++    case A_MCHP_TWI_MSTATUS:
++        s->status &= ~(written & MSTATUS_FLAGS);
++        if (FIELD_EX8(written, MCHP_TWI_MSTATUS, BUSSTATE) ==
++                MCHP_TWI_MSTATUS_BUSSTATE_IDLE && avr8x_twi_enabled(s)) {
++            avr8x_twi_set_bus(s, MCHP_TWI_MSTATUS_BUSSTATE_IDLE);
++        }
++        break;
++    case A_MCHP_TWI_MADDR:
++        avr8x_twi_start(s, written);
++        break;
++    case A_MCHP_TWI_MDATA:
++        avr8x_twi_send(s, written);
++        break;
++    }
++}
++
++static void avr8x_twi_reset_hold(MchpRegBlock *rb)
++{
++    Avr8xTwiState *s = AVR8X_TWI(rb);
++
++    if (s->in_transfer) {
++        i2c_end_transfer(s->bus);
++    }
++    s->status = 0;
++    s->data = 0;
++    s->reading = false;
++    s->in_transfer = false;
++}
++
++static bool avr8x_twi_realize(MchpRegBlock *rb, Error **errp)
++{
++    g_autofree char *bus = g_strdup_printf("%s.i2c", rb->name);
++
++    AVR8X_TWI(rb)->bus = i2c_init_bus(DEVICE(rb), bus);
++    return true;
++}
++
++static void avr8x_twi_init(Object *obj)
++{
++    /* Sysbus IRQ 0 (the regblock's) is TWIS, IRQ 1 TWIM */
++    sysbus_init_irq(SYS_BUS_DEVICE(obj), &AVR8X_TWI(obj)->irq_host);
++}
++
++static const VMStateDescription vmstate_avr8x_twi = {
++    .name = TYPE_AVR8X_TWI,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, Avr8xTwiState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_UINT8(status, Avr8xTwiState),
++        VMSTATE_UINT8(data, Avr8xTwiState),
++        VMSTATE_BOOL(reading, Avr8xTwiState),
++        VMSTATE_BOOL(in_transfer, Avr8xTwiState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void avr8x_twi_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    dc->vmsd = &vmstate_avr8x_twi;
++    c->realize = avr8x_twi_realize;
++    c->pre_read = avr8x_twi_pre_read;
++    c->post_write = avr8x_twi_post_write;
++    c->irq_pending = avr8x_twi_irq_pending;
++    c->reset_hold = avr8x_twi_reset_hold;
++    c->is_enabled = avr8x_never_enabled;
++    c->log_writes = false;
++}
++
++static const TypeInfo avr8x_twi_types[] = {
++    {
++        .name = TYPE_AVR8X_TWI,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(Avr8xTwiState),
++        .instance_init = avr8x_twi_init,
++        .class_init = avr8x_twi_class_init,
++    },
++};
++
++DEFINE_TYPES(avr8x_twi_types)
+diff --git a/hw/i2c/meson.build b/hw/i2c/meson.build
+index 88aea35..c95291a 100644
+--- a/hw/i2c/meson.build
++++ b/hw/i2c/meson.build
+@@ -20,3 +20,4 @@ i2c_ss.add(when: 'CONFIG_PCA954X', if_true: files('i2c_mux_pca954x.c'))
+ i2c_ss.add(when: 'CONFIG_PMBUS', if_true: files('pmbus_device.c'))
+ i2c_ss.add(when: 'CONFIG_BCM2835_I2C', if_true: files('bcm2835_i2c.c'))
+ system_ss.add_all(when: 'CONFIG_I2C', if_true: i2c_ss)
++system_ss.add(when: 'CONFIG_AVR8X_TWI', if_true: files('avr8x_twi.c'))
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index ac92a91..5045faa 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -22,6 +22,7 @@
+ #include "hw/misc/mikrobus.h"
+ #include "hw/adc/mchp_mcp3204.h"
+ #include "hw/display/ssd1351.h"
++#include "hw/sensor/adxl345.h"
+ #include "hw/sensor/mchp_mcp9808.h"
+ #include "hw/ssi/max7219.h"
+ #include "hw/ssi/ti_74hc595.h"
+@@ -99,6 +100,12 @@ static const ClickInfo mikrobus_clicks[] = {
+       .ins = { { SSI_GPIO_CS, MIKROBUS_CS } },
+       .pulls = { { true, MIKROBUS_INT, 1 },               /* R3 10k */
+                  { true, MIKROBUS_CS, 1 } } },            /* R2 100k */
++    { "accel", "Accel Click: ADXL345 accelerometer at I2C 0x53 (ADD jumper "
++      "JP4 on GND), INT1 on INT",
++      TYPE_ADXL345, CLICK_I2C, 0x53, 0,
++      .outs = { { ADXL345_INT1, MIKROBUS_INT } },
++      .pulls = { { true, MIKROBUS_CS, 1 },                /* R6 100k */
++                 { true, MIKROBUS_RST, 1 } } },           /* R8 10k */
+ };
+ 
+ const char *mikrobus_click_names(void)
+diff --git a/hw/sensor/adxl345.c b/hw/sensor/adxl345.c
+new file mode 100644
+index 0000000..9848dea
+--- /dev/null
++++ b/hw/sensor/adxl345.c
+@@ -0,0 +1,373 @@
++/*
++ * Analog Devices ADXL345 3-axis accelerometer (I2C)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * ADXL345 data sheet Rev. G: register map (Table 19, reset values), I2C
++ * with a register address byte and auto-incrementing multi-byte reads and
++ * writes. The part powers up in standby; POWER_CTL.Measure starts
++ * sampling at the BW_RATE output data rate (3200 Hz / 2^(15 - Rate)) on
++ * the virtual clock. Each sample takes the "x", "y", "z" properties (mg)
++ * plus the OFSx offsets (15.6 mg/LSB) and stores them as DATA_FORMAT asks:
++ * full resolution (3.9 mg/LSB, 10 to 13 bits by range) or 10-bit mode
++ * (the range sets the scale), clipped, right-justified with sign
++ * extension or left-justified, LSB first. DATA_READY is set with each
++ * sample; OVERRUN when a sample replaces unread data (bypass mode). Both
++ * clear when the data registers are read (any of 0x32-0x37 here); the
++ * WATERMARK bit is set while the FIFO's sample count (0 in bypass mode)
++ * equals FIFO_CTL.Samples. INT_ENABLE and INT_MAP drive the push-pull
++ * INT1/INT2 pins, active high unless DATA_FORMAT.INT_INVERT. Not modelled
++ * (logged when enabled): tap, activity, inactivity and free-fall
++ * detection, the FIFO modes other than bypass, self-test, sleep and
++ * low-power timing, SPI. Not checked against a physical part.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/core/irq.h"
++#include "hw/i2c/i2c.h"
++#include "hw/sensor/adxl345.h"
++#include "migration/vmstate.h"
++
++enum {
++    REG_DEVID = 0x00,
++    REG_OFSX = 0x1E,
++    REG_ACT_TAP_STATUS = 0x2B,
++    REG_BW_RATE = 0x2C,
++    REG_POWER_CTL = 0x2D,
++    REG_INT_ENABLE = 0x2E,
++    REG_INT_MAP = 0x2F,
++    REG_INT_SOURCE = 0x30,
++    REG_DATA_FORMAT = 0x31,
++    REG_DATAX0 = 0x32,
++    REG_DATAZ1 = 0x37,
++    REG_FIFO_CTL = 0x38,
++    REG_FIFO_STATUS = 0x39,
++    REG_COUNT = 0x40,
++};
++
++#define DEVID               0xE5
++#define POWER_MEASURE       BIT(3)
++#define INT_DATA_READY      BIT(7)
++#define INT_WATERMARK       BIT(1)
++#define INT_OVERRUN         BIT(0)
++#define INT_DATA            (INT_DATA_READY | INT_WATERMARK | INT_OVERRUN)
++#define FMT_INT_INVERT      BIT(5)
++#define FMT_FULL_RES        BIT(3)
++#define FMT_JUSTIFY         BIT(2)
++
++OBJECT_DECLARE_SIMPLE_TYPE(Adxl345State, ADXL345)
++
++struct Adxl345State {
++    I2CSlave parent_obj;
++
++    qemu_irq int_pin[2];
++    QEMUTimer *timer;
++    int32_t accel[3];           /* mg */
++    uint8_t regs[REG_COUNT];
++    uint8_t pointer;
++    bool addressed;             /* the register address byte came */
++};
++
++static void adxl345_update_pins(Adxl345State *s)
++{
++    uint8_t active = s->regs[REG_INT_SOURCE] & s->regs[REG_INT_ENABLE];
++    bool invert = s->regs[REG_DATA_FORMAT] & FMT_INT_INVERT;
++
++    qemu_set_irq(s->int_pin[0], !!(active & ~s->regs[REG_INT_MAP]) ^ invert);
++    qemu_set_irq(s->int_pin[1], !!(active & s->regs[REG_INT_MAP]) ^ invert);
++}
++
++static void adxl345_update_watermark(Adxl345State *s)
++{
++    /* Bypass mode: the FIFO holds no samples */
++    if ((s->regs[REG_FIFO_CTL] & 0x1F) == 0) {
++        s->regs[REG_INT_SOURCE] |= INT_WATERMARK;
++    } else {
++        s->regs[REG_INT_SOURCE] &= ~INT_WATERMARK;
++    }
++}
++
++/* Output code of @mg for the DATA_FORMAT in force */
++static uint16_t adxl345_code(Adxl345State *s, int64_t mg)
++{
++    uint8_t fmt = s->regs[REG_DATA_FORMAT];
++    unsigned range = fmt & 3;
++    unsigned bits = (fmt & FMT_FULL_RES) ? 10 + range : 10;
++    /* 256 LSB/g at full resolution; 10-bit mode halves it per range */
++    int64_t lsb_per_g = (fmt & FMT_FULL_RES) ? 256 : 256 >> range;
++    int64_t code = (mg * lsb_per_g + (mg < 0 ? -500 : 500)) / 1000;
++    int64_t max = (1 << (bits - 1)) - 1;
++
++    code = MIN(MAX(code, -max - 1), max);
++    if (fmt & FMT_JUSTIFY) {
++        return (uint16_t)(code << (16 - bits));
++    }
++    return (uint16_t)code;
++}
++
++static void adxl345_sample(Adxl345State *s)
++{
++    if (s->regs[REG_INT_SOURCE] & INT_DATA_READY) {
++        s->regs[REG_INT_SOURCE] |= INT_OVERRUN;
++    }
++    for (unsigned i = 0; i < 3; i++) {
++        int64_t mg = s->accel[i] +
++                     (int64_t)(int8_t)s->regs[REG_OFSX + i] * 15625 / 1000;
++        uint16_t code = adxl345_code(s, mg);
++
++        s->regs[REG_DATAX0 + 2 * i] = code;
++        s->regs[REG_DATAX0 + 2 * i + 1] = code >> 8;
++    }
++    s->regs[REG_INT_SOURCE] |= INT_DATA_READY;
++    adxl345_update_watermark(s);
++    adxl345_update_pins(s);
++}
++
++static int64_t adxl345_period_ns(Adxl345State *s)
++{
++    unsigned rate = s->regs[REG_BW_RATE] & 0x0F;
++
++    return (NANOSECONDS_PER_SECOND << (15 - rate)) / 3200;
++}
++
++static void adxl345_schedule(Adxl345State *s)
++{
++    if (s->regs[REG_POWER_CTL] & POWER_MEASURE) {
++        timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                            adxl345_period_ns(s));
++    } else {
++        timer_del(s->timer);
++    }
++}
++
++static void adxl345_tick(void *opaque)
++{
++    Adxl345State *s = opaque;
++
++    adxl345_sample(s);
++    adxl345_schedule(s);
++}
++
++static void adxl345_write(Adxl345State *s, uint8_t reg, uint8_t val)
++{
++    uint8_t old = s->regs[reg];
++
++    switch (reg) {
++    case 0x1D ... 0x2A:
++    case REG_BW_RATE:
++    case REG_INT_ENABLE:
++    case REG_INT_MAP:
++    case REG_DATA_FORMAT:
++        s->regs[reg] = val;
++        break;
++    case REG_POWER_CTL:
++        s->regs[reg] = val & 0x3F;
++        if ((val ^ old) & POWER_MEASURE) {
++            adxl345_schedule(s);
++        }
++        if (val & 0x37) {
++            qemu_log_mask(LOG_UNIMP, "adxl345: POWER_CTL link, sleep and "
++                          "wakeup are not modelled\n");
++        }
++        break;
++    case REG_FIFO_CTL:
++        s->regs[reg] = val;
++        if (val >> 6) {
++            qemu_log_mask(LOG_UNIMP, "adxl345: FIFO modes other than "
++                          "bypass are not modelled\n");
++        }
++        adxl345_update_watermark(s);
++        break;
++    default:
++        qemu_log_mask(LOG_GUEST_ERROR, "adxl345: write 0x%02x to read-only "
++                      "or reserved register 0x%02x\n", val, reg);
++        return;
++    }
++    if (reg == REG_INT_ENABLE && (val & 0x7C)) {
++        qemu_log_mask(LOG_UNIMP, "adxl345: tap, activity, inactivity and "
++                      "free-fall interrupts are not modelled\n");
++    }
++    adxl345_update_pins(s);
++}
++
++static uint8_t adxl345_read(Adxl345State *s, uint8_t reg)
++{
++    uint8_t val = reg < REG_COUNT ? s->regs[reg] : 0;
++
++    if (reg >= 0x01 && reg <= 0x1C) {
++        return 0;               /* reserved */
++    }
++    if (reg >= REG_DATAX0 && reg <= REG_DATAZ1) {
++        s->regs[REG_INT_SOURCE] &= ~(INT_DATA_READY | INT_OVERRUN);
++        adxl345_update_pins(s);
++    }
++    return val;
++}
++
++static int adxl345_event(I2CSlave *i2c, enum i2c_event event)
++{
++    Adxl345State *s = ADXL345(i2c);
++
++    if (event == I2C_START_SEND) {
++        s->addressed = false;
++    }
++    return 0;
++}
++
++static int adxl345_send(I2CSlave *i2c, uint8_t data)
++{
++    Adxl345State *s = ADXL345(i2c);
++
++    if (!s->addressed) {
++        s->pointer = data & 0x3F;
++        s->addressed = true;
++        return 0;
++    }
++    adxl345_write(s, s->pointer, data);
++    s->pointer = (s->pointer + 1) & 0x3F;
++    return 0;
++}
++
++static uint8_t adxl345_recv(I2CSlave *i2c)
++{
++    Adxl345State *s = ADXL345(i2c);
++    uint8_t val = adxl345_read(s, s->pointer);
++
++    s->pointer = (s->pointer + 1) & 0x3F;
++    return val;
++}
++
++static void adxl345_get_axis(Object *obj, Visitor *v, const char *name,
++                             void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, opaque, errp);
++}
++
++static void adxl345_set_axis(Object *obj, Visitor *v, const char *name,
++                             void *opaque, Error **errp)
++{
++    int32_t value;
++
++    if (!visit_type_int32(v, name, &value, errp)) {
++        return;
++    }
++    if (value < -16000 || value > 16000) {
++        error_setg(errp, "%s must be -16000 to 16000 mg", name);
++        return;
++    }
++    *(int32_t *)opaque = value;
++}
++
++/*
++ * "xyz": all three axes at once ("x y z" in mg), so no sample mixes old
++ * and new values
++ */
++static char *adxl345_get_xyz(Object *obj, Error **errp)
++{
++    Adxl345State *s = ADXL345(obj);
++
++    return g_strdup_printf("%d %d %d", s->accel[0], s->accel[1],
++                           s->accel[2]);
++}
++
++static void adxl345_set_xyz(Object *obj, const char *value, Error **errp)
++{
++    Adxl345State *s = ADXL345(obj);
++    int v[3];
++    char end;
++
++    if (sscanf(value, "%d %d %d %c", &v[0], &v[1], &v[2], &end) != 3) {
++        error_setg(errp, "xyz must be three integers (mg): \"x y z\"");
++        return;
++    }
++    for (unsigned i = 0; i < 3; i++) {
++        if (v[i] < -16000 || v[i] > 16000) {
++            error_setg(errp, "xyz values must be -16000 to 16000 mg");
++            return;
++        }
++    }
++    memcpy(s->accel, v, sizeof(s->accel));
++}
++
++static void adxl345_reset(DeviceState *dev)
++{
++    Adxl345State *s = ADXL345(dev);
++
++    timer_del(s->timer);
++    memset(s->regs, 0, sizeof(s->regs));
++    s->regs[REG_DEVID] = DEVID;
++    s->regs[REG_BW_RATE] = 0x0A;
++    s->regs[REG_INT_SOURCE] = INT_WATERMARK;
++    s->pointer = 0;
++    s->addressed = false;
++    adxl345_update_pins(s);
++}
++
++static void adxl345_init(Object *obj)
++{
++    Adxl345State *s = ADXL345(obj);
++    static const char *const axes[] = { "x", "y", "z" };
++
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, adxl345_tick, s);
++    s->accel[2] = 1000;         /* flat, face up */
++    qdev_init_gpio_out_named(DEVICE(obj), &s->int_pin[0], ADXL345_INT1, 1);
++    qdev_init_gpio_out_named(DEVICE(obj), &s->int_pin[1], ADXL345_INT2, 1);
++    for (unsigned i = 0; i < 3; i++) {
++        object_property_add(obj, axes[i], "int32", adxl345_get_axis,
++                            adxl345_set_axis, NULL, &s->accel[i]);
++    }
++    object_property_add_str(obj, "xyz", adxl345_get_xyz, adxl345_set_xyz);
++}
++
++static void adxl345_finalize(Object *obj)
++{
++    timer_free(ADXL345(obj)->timer);
++}
++
++static const VMStateDescription vmstate_adxl345 = {
++    .name = TYPE_ADXL345,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, Adxl345State),
++        VMSTATE_TIMER_PTR(timer, Adxl345State),
++        VMSTATE_INT32_ARRAY(accel, Adxl345State, 3),
++        VMSTATE_UINT8_ARRAY(regs, Adxl345State, REG_COUNT),
++        VMSTATE_UINT8(pointer, Adxl345State),
++        VMSTATE_BOOL(addressed, Adxl345State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void adxl345_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
++
++    dc->desc = "Analog Devices ADXL345 accelerometer";
++    dc->vmsd = &vmstate_adxl345;
++    device_class_set_legacy_reset(dc, adxl345_reset);
++    k->event = adxl345_event;
++    k->send = adxl345_send;
++    k->recv = adxl345_recv;
++}
++
++static const TypeInfo adxl345_types[] = {
++    {
++        .name = TYPE_ADXL345,
++        .parent = TYPE_I2C_SLAVE,
++        .instance_size = sizeof(Adxl345State),
++        .instance_init = adxl345_init,
++        .instance_finalize = adxl345_finalize,
++        .class_init = adxl345_class_init,
++    },
++};
++
++DEFINE_TYPES(adxl345_types)
+diff --git a/hw/sensor/meson.build b/hw/sensor/meson.build
+index 78f1c6f..acf95be 100644
+--- a/hw/sensor/meson.build
++++ b/hw/sensor/meson.build
+@@ -8,4 +8,4 @@ system_ss.add(when: 'CONFIG_MAX34451', if_true: files('max34451.c'))
+ system_ss.add(when: 'CONFIG_LSM303DLHC_MAG', if_true: files('lsm303dlhc_mag.c'))
+ system_ss.add(when: 'CONFIG_ISL_PMBUS_VR', if_true: files('isl_pmbus_vr.c'))
+ system_ss.add(when: 'CONFIG_MAX31785', if_true: files('max31785.c'))
+-system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp9808.c'))
++system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp9808.c', 'adxl345.c'))
+diff --git a/include/hw/i2c/avr8x_twi.h b/include/hw/i2c/avr8x_twi.h
+new file mode 100644
+index 0000000..09ebb4d
+--- /dev/null
++++ b/include/hw/i2c/avr8x_twi.h
+@@ -0,0 +1,17 @@
++/*
++ * Microchip AVR8X TWI (i2c_8bit_avr_v3: AVR Dx, AVR Ex), host mode
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The device's I2C bus is "<instance>.i2c" (for example "twi0.i2c").
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_I2C_AVR8X_TWI_H
++#define HW_I2C_AVR8X_TWI_H
++
++#define TYPE_AVR8X_TWI "avr8x-twi"
++
++#endif /* HW_I2C_AVR8X_TWI_H */
+diff --git a/include/hw/mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h b/include/hw/mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h
+index dd412f4..a9c97c0 100644
+--- a/include/hw/mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h
++++ b/include/hw/mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from AVR64EA48.atdf
+  * (AVR-Ex_DFP 2.8.189). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/twi_i2c_8bit_avr_v3.yaml (sha1 fb823cddb035)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -34,15 +34,18 @@ static const MchpRegInfo avr64ea48_twi_regs[] = {
+     },
+     {
+         .name = "MCTRLA", .offset = 0x03, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0xDF, .wmask = 0xDF, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0xDF, .wmask = 0xDF,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "MCTRLB", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
++        .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "MSTATUS", .offset = 0x05, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "MBAUD", .offset = 0x06, .size = 1, .count = 1, .stride = 1,
+@@ -50,11 +53,13 @@ static const MchpRegInfo avr64ea48_twi_regs[] = {
+     },
+     {
+         .name = "MADDR", .offset = 0x07, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "MDATA", .offset = 0x08, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
++        .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "SCTRLA", .offset = 0x09, .size = 1, .count = 1, .stride = 1,
+diff --git a/include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h b/include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h
+index 18c3459..f8097b9 100644
+--- a/include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h
++++ b/include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h
+@@ -8,7 +8,7 @@
+  * AVR64EA48.atdf (AVR-Ex_DFP 2.8.189)
+  * Do not edit.
+  * Devices: AVR64EA48
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/twi_i2c_8bit_avr_v3.yaml (sha1 fb823cddb035)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/sensor/adxl345.h b/include/hw/sensor/adxl345.h
+new file mode 100644
+index 0000000..f552af6
+--- /dev/null
++++ b/include/hw/sensor/adxl345.h
+@@ -0,0 +1,24 @@
++/*
++ * Analog Devices ADXL345 3-axis accelerometer (I2C)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * QOM properties "x", "y", "z": the acceleration the sensor measures, in
++ * mg (at rest: the opposite of gravity, so flat and face up reads z =
++ * 1000), -16000 to 16000, settable at run time; "xyz" sets all three at
++ * once ("x y z"). GPIO outputs "int1" and "int2": push-pull, 1/0 (active
++ * high unless DATA_FORMAT.INT_INVERT).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_SENSOR_ADXL345_H
++#define HW_SENSOR_ADXL345_H
++
++#define TYPE_ADXL345 "adxl345"
++
++#define ADXL345_INT1 "int1"
++#define ADXL345_INT2 "int2"
++
++#endif /* HW_SENSOR_ADXL345_H */
+diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
+index 0589139..bdcefb8 100644
+--- a/tests/qtest/avr64ea48-cnano-test.c
++++ b/tests/qtest/avr64ea48-cnano-test.c
+@@ -31,6 +31,15 @@
+ #define PORTE           (DATA + 0x0480)
+ #define PORTF           (DATA + 0x04A0)
+ #define SPI0            (DATA + 0x0940)
++#define TWI0            (DATA + 0x0900)
++#define T_MCTRLA        0x03
++#define T_MCTRLB        0x04
++#define T_MSTATUS       0x05
++#define T_MADDR         0x07
++#define T_MDATA         0x08
++#define T_RIF           BIT(7)
++#define T_WIF           BIT(6)
++#define T_RXACK         BIT(4)
+ #define TCB0            (DATA + 0x0B00)
+ #define EEPROM          (DATA + 0x1400)
+ #define SRAM            (DATA + 0x6800)
+@@ -344,6 +353,85 @@ static void test_thumbstick(const void *fw)
+     qtest_quit(qts);
+ }
+ 
++/* TWI0 host: write @reg, then read @n bytes (smart mode), STOP */
++static void twi_read(QTestState *qts, uint8_t addr, uint8_t reg,
++                     uint8_t *d, unsigned n)
++{
++    qtest_writeb(qts, TWI0 + T_MADDR, addr << 1);
++    g_assert_cmphex(qtest_readb(qts, TWI0 + T_MSTATUS) & (T_WIF | T_RXACK),
++                    ==, T_WIF);
++    qtest_writeb(qts, TWI0 + T_MDATA, reg);
++    g_assert_cmphex(qtest_readb(qts, TWI0 + T_MSTATUS) & (T_WIF | T_RXACK),
++                    ==, T_WIF);
++    qtest_writeb(qts, TWI0 + T_MADDR, addr << 1 | 1);      /* rep. START */
++    for (unsigned i = 0; i < n; i++) {
++        g_assert_cmphex(qtest_readb(qts, TWI0 + T_MSTATUS) & T_RIF, ==,
++                        T_RIF);
++        qtest_writeb(qts, TWI0 + T_MCTRLB, i == n - 1 ? 0x04 : 0);
++        d[i] = qtest_readb(qts, TWI0 + T_MDATA);
++    }
++    qtest_writeb(qts, TWI0 + T_MCTRLB, 0x07);           /* NACK, STOP */
++    g_assert_cmphex(qtest_readb(qts, TWI0 + T_MSTATUS) & 3, ==, 1);
++}
++
++/*
++ * TWI0 host and the Accel Click (ADXL345, 0x53) on mikroBUS 2: bus state,
++ * address NACK, register writes and smart-mode multi-byte reads, the
++ * host interrupt flag
++ */
++static void test_twi_accel(const void *fw)
++{
++    QTestState *qts = qtest_initf("-M avr64ea48-cnano,mb2=accel -kernel %s",
++                                  (const char *)fw);
++    uint8_t d[6];
++
++    qtest_writeb(qts, TWI0 + T_MCTRLA, 0x03);           /* ENABLE, SMEN */
++    g_assert_cmphex(qtest_readb(qts, TWI0 + T_MSTATUS), ==, 0); /* unknown */
++    qtest_writeb(qts, TWI0 + T_MSTATUS, 0x01);          /* force IDLE */
++    g_assert_cmphex(qtest_readb(qts, TWI0 + T_MSTATUS), ==, 0x01);
++    /* Nobody at 0x1D: WIF with RXACK (NACK); STOP releases the bus */
++    qtest_writeb(qts, TWI0 + T_MADDR, 0x1D << 1);
++    g_assert_cmphex(qtest_readb(qts, TWI0 + T_MSTATUS), ==,
++                    T_WIF | T_RXACK | BIT(5) | 0x02);
++    qtest_writeb(qts, TWI0 + T_MCTRLB, 0x03);
++    g_assert_cmphex(qtest_readb(qts, TWI0 + T_MSTATUS), ==, T_RXACK | 0x01);
++    twi_read(qts, 0x53, 0x00, d, 1);
++    g_assert_cmphex(d[0], ==, 0xE5);                    /* DEVID */
++    /* POWER_CTL Measure, DATA_FORMAT full resolution: 3 bytes from 0x2D */
++    qtest_writeb(qts, TWI0 + T_MADDR, 0x53 << 1);
++    qtest_writeb(qts, TWI0 + T_MDATA, 0x2D);
++    qtest_writeb(qts, TWI0 + T_MDATA, 0x08);
++    qtest_writeb(qts, TWI0 + T_MDATA, 0x00);
++    qtest_writeb(qts, TWI0 + T_MDATA, 0x00);
++    qtest_writeb(qts, TWI0 + T_MDATA, 0x08);
++    qtest_writeb(qts, TWI0 + T_MCTRLB, 0x03);
++    qtest_clock_step(qts, 20 * 1000 * 1000);
++    twi_read(qts, 0x53, 0x32, d, 6);
++    g_assert_cmphex(d[4] | d[5] << 8, ==, 256);         /* z = 1 g */
++    /* RIEN: the TWIM vector's flag follows RIF (no CPU here: the flag) */
++    qtest_writeb(qts, TWI0 + T_MCTRLA, 0x83);
++    qtest_writeb(qts, TWI0 + T_MADDR, 0x53 << 1 | 1);
++    g_assert_cmphex(qtest_readb(qts, TWI0 + T_MSTATUS) & T_RIF, ==, T_RIF);
++    qtest_writeb(qts, TWI0 + T_MSTATUS, T_RIF);         /* W1C */
++    g_assert_cmphex(qtest_readb(qts, TWI0 + T_MSTATUS) & T_RIF, ==, 0);
++    qtest_writeb(qts, TWI0 + T_MCTRLB, 0x07);
++    qtest_quit(qts);
++}
++
++/* Thermo 8 Click (MCP9808) on mikroBUS 1, now that TWI0 is modelled */
++static void test_twi_thermo8(const void *fw)
++{
++    QTestState *qts = qtest_initf("-M avr64ea48-cnano,mb1=thermo8 -kernel %s",
++                                  (const char *)fw);
++    uint8_t d[2];
++
++    qtest_writeb(qts, TWI0 + T_MCTRLA, 0x03);
++    qtest_writeb(qts, TWI0 + T_MSTATUS, 0x01);
++    twi_read(qts, 0x18, 0x06, d, 2);
++    g_assert_cmphex(d[0] << 8 | d[1], ==, 0x0054);      /* manufacturer */
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_autofree char *fw = write_firmware();
+@@ -360,6 +448,8 @@ int main(int argc, char **argv)
+     qtest_add_data_func("avr64ea48-cnano/buzz", fw, test_buzz);
+     qtest_add_data_func("avr64ea48-cnano/oledc", fw, test_oledc);
+     qtest_add_data_func("avr64ea48-cnano/thumbstick", fw, test_thumbstick);
++    qtest_add_data_func("avr64ea48-cnano/twi-accel", fw, test_twi_accel);
++    qtest_add_data_func("avr64ea48-cnano/twi-thermo8", fw, test_twi_thermo8);
+     ret = g_test_run();
+     unlink(fw);
+     return ret;
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index fb09758..4eac4f0 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -34,9 +34,10 @@
+ 
+ #define MCP9808         0x18
+ 
+-static QTestState *click_init(const char *extra)
++/* The machine with the I2C host (SERCOM2) enabled and idle */
++static QTestState *i2c_init(const char *machine)
+ {
+-    QTestState *qts = qtest_initf(MACHINE "%s", extra);
++    QTestState *qts = qtest_init(machine);
+ 
+     qtest_writel(qts, SERCOM2 + 0x00, I2CM_CTRLA);
+     qtest_writel(qts, SERCOM2 + 0x04, I2CM_SMEN);
+@@ -48,6 +49,13 @@ static QTestState *click_init(const char *extra)
+     return qts;
+ }
+ 
++static QTestState *click_init(const char *extra)
++{
++    g_autofree char *machine = g_strdup_printf(MACHINE "%s", extra);
++
++    return i2c_init(machine);
++}
++
+ static void i2c_stop(QTestState *qts)
+ {
+     qtest_writel(qts, SERCOM2 + 0x04, I2CM_SMEN | I2CM_ACKACT | I2CM_STOP);
+@@ -613,6 +621,126 @@ static void test_thumbstick(void)
+     qtest_quit(qts);
+ }
+ 
++/* I2C on SERCOM2 (as mcp_write/mcp_read) to any address */
++static bool i2c_wr(QTestState *qts, uint8_t addr, uint8_t reg,
++                   const uint8_t *d, unsigned n)
++{
++    bool ack;
++
++    qtest_writel(qts, SERCOM2 + 0x24, addr << 1);
++    ack = !(qtest_readw(qts, SERCOM2 + 0x1A) & BIT(2));
++    qtest_writel(qts, SERCOM2 + 0x28, reg);
++    for (unsigned i = 0; i < n; i++) {
++        qtest_writel(qts, SERCOM2 + 0x28, d[i]);
++    }
++    i2c_stop(qts);
++    return ack;
++}
++
++static void i2c_rd(QTestState *qts, uint8_t addr, uint8_t reg, uint8_t *d,
++                   unsigned n)
++{
++    i2c_wr(qts, addr, reg, NULL, 0);
++    qtest_writel(qts, SERCOM2 + 0x24, addr << 1 | 1);
++    for (unsigned i = 0; i < n; i++) {
++        if (i == n - 1) {
++            qtest_writel(qts, SERCOM2 + 0x04, I2CM_SMEN | I2CM_ACKACT);
++        }
++        d[i] = qtest_readb(qts, SERCOM2 + 0x28);
++    }
++    i2c_stop(qts);
++}
++
++#define ADXL345         0x53
++
++static uint8_t adxl_reg(QTestState *qts, uint8_t reg)
++{
++    uint8_t v;
++
++    i2c_rd(qts, ADXL345, reg, &v, 1);
++    return v;
++}
++
++static void adxl_set(QTestState *qts, uint8_t reg, uint8_t v)
++{
++    g_assert_true(i2c_wr(qts, ADXL345, reg, &v, 1));
++}
++
++/* X, Y, Z in one multi-byte read, as the data sheet recommends */
++static void adxl_data(QTestState *qts, int16_t *xyz)
++{
++    uint8_t d[6];
++
++    i2c_rd(qts, ADXL345, 0x32, d, 6);
++    for (unsigned i = 0; i < 3; i++) {
++        xyz[i] = d[2 * i] | d[2 * i + 1] << 8;
++    }
++}
++
++/* Accel Click on EXT1: ADXL345 at 0x53, INT1 on INT (PB02) */
++static void test_accel(void)
++{
++    QTestState *qts = i2c_init("-M pic32cm-mc00-cpro,ext1=accel ");
++    int16_t xyz[3];
++
++    g_assert_false(i2c_wr(qts, 0x1D, 0, NULL, 0));      /* ADD on GND */
++    g_assert_cmphex(adxl_reg(qts, 0x00), ==, 0xE5);     /* DEVID */
++    g_assert_cmphex(adxl_reg(qts, 0x2C), ==, 0x0A);     /* BW_RATE */
++    g_assert_cmphex(adxl_reg(qts, 0x30), ==, 0x02);     /* INT_SOURCE */
++    g_assert_true(pin_high(qts, PA, 17));               /* CS: R6 */
++    /* Standby: no samples */
++    qtest_clock_step(qts, 50 * 1000 * 1000);
++    adxl_data(qts, xyz);
++    g_assert_cmpint(xyz[2], ==, 0);
++    /* Full resolution, +-2 g, 100 Hz: 256 LSB/g; flat reads z = 1 g */
++    adxl_set(qts, 0x31, 0x08);
++    adxl_set(qts, 0x2E, 0x80);                          /* DATA_READY */
++    g_assert_false(pin_high(qts, PB, INT1_PIN));
++    adxl_set(qts, 0x2D, 0x08);                          /* Measure */
++    qtest_clock_step(qts, 10 * 1000 * 1000);
++    g_assert_true(pin_high(qts, PB, INT1_PIN));
++    g_assert_cmphex(adxl_reg(qts, 0x30), ==, 0x82);
++    adxl_data(qts, xyz);
++    g_assert_cmpint(xyz[0], ==, 0);
++    g_assert_cmpint(xyz[2], ==, 256);
++    g_assert_false(pin_high(qts, PB, INT1_PIN));        /* read: cleared */
++    qtest_qmp_assert_success(qts, "{ 'execute': 'qom-set', 'arguments': {"
++                             " 'path': '" CLICK1 "', 'property': 'xyz',"
++                             " 'value': '-500 0 866' } }");
++    qtest_clock_step(qts, 10 * 1000 * 1000);
++    adxl_data(qts, xyz);
++    g_assert_cmpint(xyz[0], ==, -128);
++    g_assert_cmpint(xyz[2], ==, 222);
++    /* Two samples unread: OVERRUN */
++    qtest_clock_step(qts, 20 * 1000 * 1000);
++    g_assert_cmphex(adxl_reg(qts, 0x30), ==, 0x83);
++    /* Clipped at +-2 g in 10 bits; offset 15.6 mg/LSB */
++    qom_set_int(qts, CLICK1, "x", 16000);
++    adxl_set(qts, 0x20, 0x10);                          /* OFSZ +250 mg */
++    qtest_clock_step(qts, 10 * 1000 * 1000);
++    adxl_data(qts, xyz);
++    g_assert_cmpint(xyz[0], ==, 511);
++    g_assert_cmpint(xyz[2], ==, 286);
++    /* 10-bit mode, +-16 g: 32 LSB/g; left-justified full resolution */
++    adxl_set(qts, 0x31, 0x03);
++    qtest_clock_step(qts, 10 * 1000 * 1000);
++    adxl_data(qts, xyz);
++    g_assert_cmpint(xyz[0], ==, 511);
++    g_assert_cmpint(xyz[2], ==, 36);
++    adxl_set(qts, 0x31, 0x0C);
++    qtest_clock_step(qts, 10 * 1000 * 1000);
++    adxl_data(qts, xyz);
++    g_assert_cmphex((uint16_t)xyz[2], ==, 286 << 6);
++    /* INT_INVERT: active low; INT_MAP moves DATA_READY to INT2 */
++    adxl_set(qts, 0x31, 0x28);
++    g_assert_true(pin_high(qts, PB, INT1_PIN));
++    qtest_clock_step(qts, 10 * 1000 * 1000);
++    g_assert_false(pin_high(qts, PB, INT1_PIN));
++    adxl_set(qts, 0x2F, 0x80);
++    g_assert_true(pin_high(qts, PB, INT1_PIN));
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+@@ -623,6 +751,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/two-spi", test_two_spi);
+     qtest_add_func("pic32cm-click/oledc", test_oledc);
+     qtest_add_func("pic32cm-click/thumbstick", test_thumbstick);
++    qtest_add_func("pic32cm-click/accel", test_accel);
+     qtest_add_func("pic32cm-click/thermo8-identity", test_identity);
+     qtest_add_func("pic32cm-click/not-fitted", test_not_fitted);
+     qtest_add_func("pic32cm-click/thermo8-int-pullup", test_int_pullup);
+-- 
+2.53.0.windows.2
+

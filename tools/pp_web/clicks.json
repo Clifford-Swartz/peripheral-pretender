@@ -435,5 +435,60 @@
         ]
       }
     ]
+  },
+  "accel": {
+    "name": "Accel Click",
+    "vendor": "MikroElektronika",
+    "chip": "ADXL345",
+    "bus": "I2C 0x53",
+    "description": "3-axis accelerometer (+-2 to +-16 g); INT1 on INT. Drag the handle to tilt the Click",
+    "image": "accel/top.png",
+    "origin_mm": [
+      -1.27,
+      24.765
+    ],
+    "size_mm": [
+      25.4,
+      28.575
+    ],
+    "controls": [],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          16.75,
+          1.95
+        ],
+        "color": "#5dff7a"
+      }
+    ],
+    "sticks": [
+      {
+        "id": "tilt",
+        "label": "Tilt",
+        "mode": "tilt",
+        "x_property": "x",
+        "y_property": "y",
+        "z_property": "z",
+        "range": 1000,
+        "at_mm": [
+          11.43,
+          11.5
+        ],
+        "size_mm": 14,
+        "xyz_property": "xyz"
+      }
+    ],
+    "signals": [
+      {
+        "id": "INT1",
+        "pin": "int",
+        "active_low": false,
+        "at_mm": [
+          22.86,
+          15.24
+        ]
+      }
+    ]
   }
 }

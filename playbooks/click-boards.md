@@ -23,7 +23,7 @@ adapter (ATMBUSADAPTER-XPRO).
    Generic parts exist for pushbuttons (`click-button`), shift registers (`74hc595`) and the
    MAX7219 LED driver (`max7219`). A board describes its sockets (`MikrobusSocket`: the pads
    behind RST/PWM/INT/CS, the I2C and SPI buses) and calls `mikrobus_plug()`; a socket without
-   the bus a Click needs refuses it (no TWI model on the AVR64EA48 yet: no thermo8 there).
+   the bus a Click needs refuses it.
 4. **qtest.** Identity registers, data encoding, the property, the INT line with and without the
    pad's own pull (`tests/qtest/pic32cm-click-test.c`).
 5. **Art.** `py tools/pp_web/clicks/render_click.py <dxf> <parts.json> out.svg`, then rasterize at

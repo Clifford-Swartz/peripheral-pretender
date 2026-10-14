@@ -243,7 +243,7 @@ part B, reuse its `COREB` prompt and pass in the reports from `docs/handoff/agen
 - **QEMU:** `target/avr` gains an `avrxt` CPU (patch 0021); `hw/avr/avr8x_soc.c` builds the SoC
   from the generated `hw/avr/avr64ea48_device.h` like `pic32cm-soc` does (0023). Modelled: PORT/
   VPORT, USART, SPI host, TCB periodic interrupt, CLKCTRL, CPUINT, NVMCTRL FLMAP, SIGROW/SYSCFG/
-  USERROW/FUSE/LOCK; everything else is a logging regblock (TCA, ADC, RTC, TWI, EVSYS, ...).
+  USERROW/FUSE/LOCK, TWI (host mode, patch 0029); everything else is a logging regblock (TCA, ADC, RTC, EVSYS, ...).
   Machine options `mb1=`..`mb3=` plug Clicks into the Nano Base's mikroBUS sockets; the Click
   catalog is now shared (`hw/misc/mikrobus.c`).
 - **Build:** `qemu/setup.sh` builds `build/` (Arm) and `build-avr/` (AVR). Tools find the AVR
@@ -258,7 +258,7 @@ part B, reuse its `COREB` prompt and pass in the reports from `docs/handoff/agen
 - **Results:** hello: twin = silicon = golden; simulator: SIGROW reads 0 (W0035 unimplemented memory),
   REVID 0. matrix: twin = silicon VCOM. Microchip's examples: `acceptance/avr64ea48_curiosity_nano.yaml`
   (3 pass, 5 gaps: TCA, ADC, RTC, NVMCTRL commands; 1 does not link with XC8 v2.50).
-- **Open:** TCA, ADC, TWI (thermo8 on the Nano Base), RTC, EVSYS, NVM writes, CCP enforcement,
+- **Open:** TCA, ADC, RTC, EVSYS, NVM writes, CCP enforcement,
   NMI/compact vector table, cycle timing (busy-wait delays under `-icount shift=auto` run fast);
   SIGROW serial number and TEMPSENSE from silicon into `profiles/avr64ea48.yaml` `data_rows`;
   the 8x8 G Click's physical LED order (the schematic's is used).

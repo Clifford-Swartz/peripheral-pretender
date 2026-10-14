@@ -20955,7 +20955,14 @@
    "version": "",
    "caption": "Two-Wire Interface",
    "core": false,
-   "overlay": null,
+   "overlay": {
+    "file": "overlays/twi_i2c_8bit_avr_v3.yaml",
+    "sha1": "fb823cddb0359271adfbc9fe8cab297d9477cde7",
+    "status": "applied",
+    "versions": [
+     ""
+    ]
+   },
    "size": 16,
    "selector": null,
    "default_view": "",
@@ -21264,7 +21271,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Host Control A",
@@ -21340,7 +21349,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "MCTRLB",
@@ -21360,9 +21375,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Host Control B",
        "note": "",
        "fields": [
@@ -21423,7 +21441,18 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "MSTATUS",
@@ -21443,9 +21472,13 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC",
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Host STATUS",
        "note": "",
        "fields": [
@@ -21527,7 +21560,23 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "MBAUD",
@@ -21582,7 +21631,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Host Address",
@@ -21597,7 +21648,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "MDATA",
@@ -21617,9 +21674,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Host Data",
        "note": "",
        "fields": [
@@ -21632,7 +21692,18 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "SCTRLA",

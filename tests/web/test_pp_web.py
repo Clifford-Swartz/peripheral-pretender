@@ -656,6 +656,8 @@ def test_stick_values():
     assert stick_values(tilt, 0, 0) == {"x": 0, "y": 0, "z": 1000}
     # Leaning right by 30 degrees: x dips, reads -sin(30) g
     assert stick_values(tilt, 0.5, 0) == {"x": -500, "y": 0, "z": 866}
+    assert stick_values(CLICKS["accel"]["sticks"][0], 0, 0.5) == {
+        "xyz": "0 -500 866"}
 
 
 @pytest.mark.qemu
@@ -694,3 +696,42 @@ def test_session_thumbstick(qemu_path, qemu_machines):
     assert "x=3891 y=2048 right" in uart, uart
     assert "centre pushed" in uart, uart
     assert led > 0.9                                # LED0 on while pushed
+
+
+ACCEL_DEMO = BUILD / "accel.elf"
+
+
+@pytest.mark.qemu
+def test_session_accel(qemu_path, qemu_machines):
+    """accel.elf with an Accel Click on EXT1: tilting it on the page (the
+    server's tilt mapping) reaches the ADXL345's samples; LED0 lights while
+    it leans."""
+    from tools.pp_web import server
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not ACCEL_DEMO.is_file():
+        pytest.skip("accel.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=accel)")
+
+    async def scenario():
+        app = server.App("ev15n46a", ACCEL_DEMO)
+        await app.plug("ext1", "accel")
+        try:
+            await asyncio.sleep(0.8)
+            await app.stick("ext1", "tilt", 0.6, 0.0, None)    # lean right
+            await asyncio.sleep(0.5)
+            led = app.session.pins["a"][24][1]
+            await app.stick("ext1", "tilt", 0.0, -0.8, None)   # bottom down
+            await asyncio.sleep(0.5)
+            await app.stick("ext1", "tilt", 0.0, 0.0, None)
+            await asyncio.sleep(0.5)
+        finally:
+            await app.session.stop()
+        return app.uart_log, led
+
+    uart, led = asyncio.run(scenario())
+    assert "Accel Click found" in uart, uart
+    assert "x=+0 y=+0 z=+1000 mg flat" in uart, uart
+    assert "x=-601 y=+0 z=+800 mg right side down" in uart, uart
+    assert "y=+800 z=+601 mg bottom down" in uart, uart
+    assert led > 0.9

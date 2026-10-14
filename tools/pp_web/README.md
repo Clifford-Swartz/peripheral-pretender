@@ -174,6 +174,14 @@ sets the Click's properties through `stick_values()` (`"mode": "stick"`: the axe
 then pick "Thumbstick Click" for EXT1 (the VCOM prints the axes and the direction; LED0 lights
 while the stick is pushed).
 
+The Accel Click (`clicks/accel/`) uses the same stick in `"mode": "tilt"`: dragging leans the
+Click toward the pointer (drawn with a CSS 3D tilt; it stays where it is let go, double-click
+levels it). `stick_values()` turns the lean into what the ADXL345 measures at rest, the
+opposite of gravity: the axis that dips reads negative, z the rest of 1 g (`range` mg). Axes
+as on the Click's silkscreen (x right, y up). Demo: `make -C firmware/hello
+BOARD=pic32cm_mc00_cpro APP=accel` (EXT1; prints the reading and which side is down, LED0
+while it leans more than 30 degrees). I2C Clicks now plug into the Nano Base too (TWI0).
+
 ## Adapter assets: `adapters/<id>/`
 
 The Curiosity Pro's EXT1/EXT2 are Xplained Pro extension headers, so a Click needs an adapter:
