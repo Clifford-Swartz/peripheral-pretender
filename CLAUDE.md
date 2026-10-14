@@ -9,6 +9,9 @@ Curiosity Pro (EV15N46A, `pic32cm-mc00-cpro`). A personal side project; MIT Lice
 (the build contract: architecture, interfaces, acceptance criteria). Background:
 `docs/walkthrough.md` and the cited research in `docs/research/`.
 
+**Adding a board** (or a Click board): follow `playbooks/README.md`. Fix the playbook whenever it
+falls short.
+
 ## Decisions (from the project owner)
 
 - Customers: professional embedded teams. Delivery: a VS Code extension alongside Microchip's MPLAB
