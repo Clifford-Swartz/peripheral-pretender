@@ -33,6 +33,7 @@ committed tools use `-gdb tcp:127.0.0.1:<port>`; keep it that way.
 | QEMU part B (SERCOM, PORT, LED0/SW0, end to end) | done: acceptance in spec §6.6 met; see "Part B result" | `docs/handoff/agent-progress/qemu-core-b.md`, patch 0005 |
 | Second target: PIC32CM MC00 Curiosity Pro | done: generic SoC, MC00 device and board, hello, qtests | "Second target: PIC32CM MC00" below, patch 0007 |
 | First 8-bit target: AVR64EA48 Curiosity Nano | done: AVRxt CPU, generic AVR8X SoC, board, Nano Base Click slots, 8x8 G Click, web view; checked on silicon and in MPLAB SIM | "AVR64EA48 Curiosity Nano" below, patches 0021-0025 |
+| Click batch 1 | done on the twin (no physical Click checked): Buzz (tone in the browser), OLED C (SSD1351, live picture; `pp_panel` for future display controllers), Thumbstick (MCP3204, drag the stick), Accel (ADXL345, tilt), RTC 6 (MCP79411, time and alarms), 8x8 R/Y/B, Button R/Y; AVR8X TWI host so I2C Clicks work on the Nano Base; demos and web tests on the MC00 | `playbooks/click-boards.md`, `tools/pp_web/README.md`, patches 0026-0031 |
 
 ## Setting up the new machine
 

@@ -1,0 +1,13 @@
+{
+ "source": "MikroElektronika Button Y Click v100: 2D and 3D files (button-y-click-2d-and-3d-files-v100.zip, button_y_click_v100.dxf; silkscreen Button Y click) and schematic v100 (T1 3006.2111 yellow illuminated pushbutton; R2 160, R3 10k to GND, R4 10k, C1 10nF). Positions from the DXF pads.",
+ "parts": [
+  {"ref": "T1", "kind": "button", "value": "3006.2111 illuminated pushbutton, yellow LED", "at_mm": [11.43, 27.16], "size_mm": [10.0, 9.2], "ring": "#ffd60a"},
+  {"ref": "R2", "kind": "resistor", "value": "160", "at_mm": [5.56, 15.39], "size_mm": [2.4, 1.0]},
+  {"ref": "R3", "kind": "resistor", "value": "10k", "at_mm": [11.43, 15.24], "size_mm": [2.6, 1.2]},
+  {"ref": "R4", "kind": "resistor", "value": "10k", "at_mm": [17.42, 15.27], "size_mm": [2.6, 1.2]},
+  {"ref": "C1", "kind": "capacitor", "value": "10nF", "at_mm": [11.43, 12.95], "size_mm": [2.6, 1.3]},
+  {"ref": "R1", "kind": "resistor", "value": "470", "at_mm": [13.59, 0.99], "size_mm": [2.6, 1.2]},
+  {"ref": "PWR", "kind": "led", "value": "green", "at_mm": [9.37, 0.99], "size_mm": [2.6, 1.2], "color": "#7be38a"},
+  {"ref": "VCC SEL", "kind": "zero_ohm", "value": "3V3", "at_mm": [10.38, 8.97], "size_mm": [3.0, 1.3]}
+ ]
+}

@@ -1,0 +1,170 @@
+From f56cad1cbfdf486f87052c247adc8189352d6663 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 14 Oct 2026 16:10:58 -0700
+Subject: [PATCH] hw/misc: 8x8 R/Y/B and Button R/Y Clicks
+
+The colour variants of the 8x8 G and Button G Clicks: the same circuits
+in their v100 schematics (MAX7219 with LOAD on CS and no pull resistors;
+pushbutton on INT with R3 10k to ground, LED on PWM). qtests for each.
+
+Not checked against physical Clicks.
+
+Peripheral Pretender: AI-assisted, not for upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst | 11 +++----
+ docs/system/avr/avr64ea48-cnano.rst   |  8 ++---
+ hw/misc/mikrobus.c                    | 20 +++++++++++++
+ tests/qtest/pic32cm-click-test.c      | 42 +++++++++++++++++++++++++++
+ 4 files changed, 72 insertions(+), 9 deletions(-)
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 5406d84..c8c26d7 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -62,8 +62,8 @@ resistors are modelled (from their schematics, v100).
+   25000) sets the temperature, also at run time:
+   ``qom-set /machine/ext1-click temperature 31500``.
+ 
+-``buttong``
+-  Button G Click: a pushbutton (``click-button``) driving INT high while
++``buttong``, ``buttonr``, ``buttony``
++  Button G, R and Y Clicks (green, red, yellow LED; the same circuit): a pushbutton (``click-button``) driving INT high while
+   pressed, pulled low otherwise (R2/R3 10 kOhm); its LED is on PWM (on while
+   high). The QOM property ``pressed`` holds it down.
+ 
+@@ -80,9 +80,10 @@ resistors are modelled (from their schematics, v100).
+   pulled low by the driver transistors' base resistors. There is no device:
+   the relays follow the pads.
+ 
+-``8x8g``
+-  8x8 G Click: an 8x8 LED matrix on a MAX7219 (``max7219``) on the SPI bus,
+-  LOAD on CS. The QOM property ``display`` reads the eight digit outputs.
++``8x8g``, ``8x8r``, ``8x8y``, ``8x8b``
++  8x8 G, R, Y and B Clicks (green, red, yellow, blue; the same circuit): an
++  8x8 LED matrix on a MAX7219 (``max7219``) on the SPI bus, LOAD on CS. The
++  QOM property ``display`` reads the eight digit outputs.
+ 
+ ``buzz``
+   Buzz Click: a piezo buzzer (``click-buzzer``) switched by a transistor
+diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
+index 10d5b60..eff31bb 100644
+--- a/docs/system/avr/avr64ea48-cnano.rst
++++ b/docs/system/avr/avr64ea48-cnano.rst
+@@ -31,10 +31,10 @@ on ``-serial`` 1.
+ On a Curiosity Nano Base for Click boards (AC164162), ``mb1=``, ``mb2=``
+ and ``mb3=`` plug a Click board into mikroBUS socket 1-3: SPI on SPI0, I2C
+ on TWI0 (PA2 SDA, PA3 SCL; host mode, ``avr8x-twi``). Every Click of the
+-shared catalog works here: ``thermo8``, ``accel``, ``buttong``, ``7seg``,
+-``relay``, ``8x8g``, ``buzz``, ``oledc``, ``thumbstick`` and ``rtc6`` (see
+-the PIC32CM MC00 Curiosity Pro for what each one models). The Click is
+-``/machine/mbN-click``.
++shared catalog works here: ``thermo8``, ``accel``, ``buttong``/``r``/``y``,
++``7seg``, ``relay``, ``8x8g``/``r``/``y``/``b``, ``buzz``, ``oledc``,
++``thumbstick`` and ``rtc6`` (see the PIC32CM MC00 Curiosity Pro for what
++each one models). The Click is ``/machine/mbN-click``.
+ 
+ Firmware comes from ``-kernel`` or ``-bios``::
+ 
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index 1e2b12b..4c851ad 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -64,6 +64,14 @@ static const ClickInfo mikrobus_clicks[] = {
+       TYPE_CLICK_BUTTON, CLICK_GPIO, 0, 0,
+       .outs = { { CLICK_BUTTON_OUT, MIKROBUS_INT } },
+       .pulls = { { true, MIKROBUS_INT, 0 } } },           /* R2/R3 10k */
++    { "buttonr", "Button R Click: pushbutton on INT, its red LED on PWM",
++      TYPE_CLICK_BUTTON, CLICK_GPIO, 0, 0,
++      .outs = { { CLICK_BUTTON_OUT, MIKROBUS_INT } },
++      .pulls = { { true, MIKROBUS_INT, 0 } } },           /* R3 10k, R4 10k */
++    { "buttony", "Button Y Click: pushbutton on INT, its yellow LED on PWM",
++      TYPE_CLICK_BUTTON, CLICK_GPIO, 0, 0,
++      .outs = { { CLICK_BUTTON_OUT, MIKROBUS_INT } },
++      .pulls = { { true, MIKROBUS_INT, 0 } } },           /* R3 10k, R4 10k */
+     { "7seg", "7seg Click: two digits on two 74HC595, LATCH on CS, "
+       "MR# on RST, digits enabled by PWM",
+       TYPE_TI_74HC595, CLICK_SPI, 0, 2,
+@@ -79,6 +87,18 @@ static const ClickInfo mikrobus_clicks[] = {
+       "(no pull resistors)",
+       TYPE_MAX7219, CLICK_SPI, 0, 1,
+       .ins = { { MAX7219_LOAD, MIKROBUS_CS } } },
++    { "8x8r", "8x8 R Click: 8x8 red LED matrix on a MAX7219, LOAD on CS "
++      "(no pull resistors)",
++      TYPE_MAX7219, CLICK_SPI, 0, 1,
++      .ins = { { MAX7219_LOAD, MIKROBUS_CS } } },
++    { "8x8y", "8x8 Y Click: 8x8 yellow LED matrix on a MAX7219, LOAD on CS "
++      "(no pull resistors)",
++      TYPE_MAX7219, CLICK_SPI, 0, 1,
++      .ins = { { MAX7219_LOAD, MIKROBUS_CS } } },
++    { "8x8b", "8x8 B Click: 8x8 blue LED matrix on a MAX7219, LOAD on CS "
++      "(no pull resistors)",
++      TYPE_MAX7219, CLICK_SPI, 0, 1,
++      .ins = { { MAX7219_LOAD, MIKROBUS_CS } } },
+     { "buzz", "Buzz Click: piezo buzzer switched by a transistor from PWM "
+       "(jumper J2 in its default position)",
+       TYPE_CLICK_BUZZER, CLICK_GPIO, 0, 0,
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index efc73bd..523a60d 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -917,6 +917,46 @@ static void test_rtc6_memories(void)
+     qtest_quit(qts);
+ }
+ 
++/* Button R and Button Y Clicks: as Button G (INT pulled low by R3) */
++static void test_button_variants(void)
++{
++    static const char *const names[] = { "buttonr", "buttony" };
++
++    for (unsigned i = 0; i < ARRAY_SIZE(names); i++) {
++        QTestState *qts = qtest_initf("-M pic32cm-mc00-cpro,ext1=%s",
++                                      names[i]);
++
++        g_assert_false(pin_high(qts, PB, INT1_PIN));
++        qtest_qom_set_bool(qts, CLICK1, "pressed", true);
++        g_assert_true(pin_high(qts, PB, INT1_PIN));
++        qtest_quit(qts);
++    }
++}
++
++/* 8x8 R, Y and B Clicks: as 8x8 G (MAX7219 on SPI, LOAD on CS PA17) */
++static void test_8x8_variants(void)
++{
++    static const char *const names[] = { "8x8r", "8x8y", "8x8b" };
++
++    for (unsigned i = 0; i < ARRAY_SIZE(names); i++) {
++        QTestState *qts = qtest_initf("-M pic32cm-mc00-cpro,ext1=%s",
++                                      names[i]);
++        g_autofree char *test = NULL;
++
++        qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16);
++        qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16 | 0x02);
++        qtest_writel(qts, PA + P_OUTSET, BIT(17));
++        qtest_writel(qts, PA + P_DIRSET, BIT(17));
++        qtest_writel(qts, PA + P_OUTCLR, BIT(17));
++        spi_byte(qts, 0x0F);                            /* display test */
++        spi_byte(qts, 0x01);
++        qtest_writel(qts, PA + P_OUTSET, BIT(17));
++        test = qom_str(qts, CLICK1, "display");
++        g_assert_cmpstr(test, ==, "ff ff ff ff ff ff ff ff");
++        qtest_quit(qts);
++    }
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+@@ -931,6 +971,8 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/rtc6-time", test_rtc6_time);
+     qtest_add_func("pic32cm-click/rtc6-alarm", test_rtc6_alarm);
+     qtest_add_func("pic32cm-click/rtc6-memories", test_rtc6_memories);
++    qtest_add_func("pic32cm-click/button-variants", test_button_variants);
++    qtest_add_func("pic32cm-click/8x8-variants", test_8x8_variants);
+     qtest_add_func("pic32cm-click/thermo8-identity", test_identity);
+     qtest_add_func("pic32cm-click/not-fitted", test_not_fitted);
+     qtest_add_func("pic32cm-click/thermo8-int-pullup", test_int_pullup);
+-- 
+2.53.0.windows.2
+

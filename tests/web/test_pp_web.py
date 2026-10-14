@@ -778,3 +778,77 @@ def test_session_rtc6(qemu_path, qemu_machines):
     assert "2026-10-14 12:00:05 ALARM" in uart, uart
     assert "2026-10-14 12:00:00" in times and "2026-10-14 12:00:05" in times
     assert 0 in mfp and mfp[-1] == 1, mfp      # asserted, then cleared
+
+
+@pytest.mark.qemu
+@pytest.mark.parametrize("button", ["buttonr", "buttony"])
+def test_session_button_variants(button, qemu_path, qemu_machines):
+    """Button R and Y Clicks behave as Button G: clicks.elf counts their
+    presses and lights their LED (on PWM, PB10) while held."""
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not CLICKS_DEMO.is_file():
+        pytest.skip("clicks.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=clicks)")
+
+    async def scenario():
+        uart, pins = [], []
+
+        def emit(msg):
+            if msg["type"] == "uart":
+                uart.append(msg["data"])
+            elif msg["type"] == "pins":
+                pins.append(msg["pins"])
+
+        s = Session(f"pic32cm-mc00-cpro,ext1={button},ext2=7seg", CLICKS_DEMO,
+                    emit)
+        await s.start()
+        try:
+            await asyncio.sleep(0.6)
+            await s.set_click("ext1", "pressed", True)
+            await asyncio.sleep(0.4)
+            held = pins[-1]["b"][10][0]
+            await s.set_click("ext1", "pressed", False)
+            await asyncio.sleep(0.2)
+        finally:
+            await s.stop()
+        return "".join(uart), held
+
+    uart, held = asyncio.run(scenario())
+    assert "press count=0x01" in uart, uart
+    assert held > 0.9
+
+
+@pytest.mark.qemu
+@pytest.mark.parametrize("matrix", ["8x8r", "8x8y", "8x8b"])
+def test_session_8x8_variants(matrix):
+    """8x8 R, Y and B Clicks behave as 8x8 G on the Nano Base: matrix.elf
+    scrolls its text through the MAX7219's display property."""
+    from tools.pp_web.server import pin_groups, watched
+    _avr_twin()
+    if not (AVR_BUILD / "matrix.elf").is_file():
+        pytest.skip("matrix.elf not built (make -C firmware/avr-hello)")
+    board = json.loads((BOARDS / "ev66e56a" / "board.json").read_text())
+
+    async def scenario():
+        uart, states = [], []
+
+        def emit(msg):
+            if msg["type"] == "uart":
+                uart.append(msg["data"])
+            elif msg["type"] == "clickstate":
+                states.append(msg["state"].get("mb1.display"))
+
+        m = Session(f"{board['machine']},mb1={matrix}",
+                    AVR_BUILD / "matrix.elf", emit, groups=pin_groups(board),
+                    watch=[("mb1", *p) for p in watched(CLICKS[matrix])])
+        await m.start()
+        try:
+            await asyncio.sleep(1.5)
+        finally:
+            await m.stop()
+        return "".join(uart), states
+
+    uart, states = asyncio.run(scenario())
+    assert "frame: 3C 42 A9 85 85 A9 42 3C" in uart, uart
+    assert len({f for f in states if f}) >= 3

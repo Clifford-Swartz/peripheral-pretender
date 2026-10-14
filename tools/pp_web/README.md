@@ -51,7 +51,7 @@ MPLAB, and with `--watch` on that folder the page follows every build.
 - `server.py` (aiohttp) serves the page, accepts `POST /api/firmware` with an ELF, and relays
   messages over `/ws`.
 - `static/` is the page. It places the board's LEDs and buttons from `board.json`.
-- Click boards: `clicks.json` is the catalog (today the Thermo 8 Click). Picking one for a
+- Click boards: `clicks.json` is the catalog (see `playbooks/click-boards.md` for its entries). Picking one for a
   header restarts the twin with `-M <machine>,ext1=<click>`, like plugging it in with the power
   off. Its controls (the temperature) are `qom-set`s on `/machine/ext1-click` while it runs.
   Its signals (ALERT on INT) light from the PORT's `pa-levels`/`pb-levels`, which include
@@ -188,6 +188,12 @@ MFP lights the INT signal while low. Demo: `make -C firmware/hello BOARD=pic32cm
 APP=rtc6` (EXT1; starts the stopped clock at 2026-10-14 12:00:00, prints the time each second
 and an alarm every five seconds, LED0 with each alarm). The model starts from the chip's
 power-on state like a Click without a battery; the firmware sets the time.
+
+Colour variants: 8x8 R, Y and B and Button R and Y share their device with 8x8 G and Button G
+and have their own art and LED colours. The 8x8 B Click's page links the 8x8 R Click's 2D files,
+so its art is the 8x8 R DXF with the silkscreen letter replaced (`silk_label`).
+`clicks/make_art.py` renders and rasterizes a Click in one step, `clicks/dxf_pads.py` lists a
+DXF's pads for placing part bodies.
 
 ## Adapter assets: `adapters/<id>/`
 

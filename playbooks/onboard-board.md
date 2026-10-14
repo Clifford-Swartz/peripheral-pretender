@@ -23,13 +23,27 @@ those two do it. The JH01 was onboarded by a fresh agent from this playbook; its
 - **Shared pp-qemu.** The fork lives outside the repository (`C:/pp/pp-qemu`, see
   `docs/handoff.md`) and other sessions may use it. Ask before editing or rebuilding it if
   another session is active. A rebuild needs every QEMU and `tools.pp_web` process stopped, or
-  the link fails with "Permission denied".
-- **Generator reports** (`generator/out/report-*.md`) are gitignored. To check that the
-  generated files are current without touching pp-qemu, generate into a scratch folder
-  (`--qemu-out <scratch>`) and compare.
+  the link fails with "Permission denied" (stop only your own: check the process path).
+- **Parallel sessions** work in git worktrees of both repositories
+  (`git worktree add <dir> -b <branch>` in the repository and in `C:/pp/pp-qemu`), with their own
+  builds in the pp-qemu worktree: copy the downloaded meson subprojects
+  (`subprojects/keycodemapdb` and the other folders) from `C:/pp/pp-qemu`, then configure
+  `build/` and `build-avr/` with the arguments `qemu/setup.sh` uses and run `ninja` there.
+  The "cannot symlink ... keymaps" warnings on Windows are harmless. Point `PP_QEMU`,
+  `PP_QEMU_SRC` and `PP_QEMU_AVR` at the worktree's builds.
+- **Generator reports** (`generator/out/report-*.md`) are gitignored, but
+  `tests/generator/test_outputs.py` wants them: in a fresh checkout or worktree, generate once
+  with the reports into the repository and the QEMU files into a scratch folder:
+  `py generator/atdf2qemu.py --atdf <JH01> --atdf <MC00> --atdf <AVR64EA48> --qemu-out <scratch> --json-out <scratch> --report "generator/out/report-{device}.md"`
+  (the ATDFs: `~/.mchp_packs/Microchip/PIC32CM-JH_DFP/1.3.221/PIC32CM-JH01/atdf/PIC32CM5164JH01100.atdf`,
+  `.../PIC32CM-MC_DFP/1.4.67/PIC32CM1216MC00048/atdf/PIC32CM1216MC00048.atdf`,
+  `.../AVR-Ex_DFP/2.8.189/atdf/AVR64EA48.atdf`). To check that the generated files are current
+  without touching pp-qemu, generate into a scratch folder and compare.
 - **Firmware builds** run in an MSYS2 UCRT64 shell with the packs folder named:
   `MSYSTEM=UCRT64 /c/msys64/usr/bin/bash.exe -lc 'cd <repo>/firmware/hello && make BOARD=<board> APP=<app> PACKS="C:/Users/<you>/.mchp_packs"'`.
-  The golden tests skip until the MC00 test apps are built (`eic evsys mpu rtc sercom tc tcc`).
+  Tests skip when their ELF is missing, so build every app before the gate: MC00
+  `hello blinky breathe thermo clicks relay eic evsys mpu rtc sercom tc tcc` and the Click demos
+  `buzz oledc thumbstick accel rtc6`; JH01 `hello blinky`; `firmware/avr-hello` (all apps).
 - **Hardware.** `CLAUDE.md` makes the boards read-only unless the owner approves. Approvals are
   listed in [README.md](README.md#hardware).
 - **Python on Windows** is `py`.

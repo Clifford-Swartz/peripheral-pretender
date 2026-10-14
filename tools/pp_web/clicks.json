@@ -541,5 +541,317 @@
         ]
       }
     ]
+  },
+  "8x8r": {
+    "name": "8x8 R Click",
+    "vendor": "MikroElektronika",
+    "chip": "MAX7219",
+    "bus": "SPI",
+    "description": "8x8 red LED matrix on a MAX7219; LOAD on CS",
+    "image": "8x8r/top.png",
+    "origin_mm": [
+      -1.27,
+      46.0248
+    ],
+    "size_mm": [
+      25.4,
+      49.8348
+    ],
+    "controls": [],
+    "leds": [],
+    "signals": [],
+    "display": {
+      "type": "matrix",
+      "property": "display",
+      "color": "#ff3b30",
+      "cols_mm": [
+        0.28,
+        3.455,
+        6.63,
+        9.83,
+        12.98,
+        16.18,
+        19.355,
+        22.53
+      ],
+      "rows_mm": [
+        43.675,
+        40.5,
+        37.325,
+        34.15,
+        30.975,
+        27.8,
+        24.625,
+        21.45
+      ],
+      "col_digits": [
+        7,
+        6,
+        5,
+        4,
+        3,
+        2,
+        1,
+        0
+      ],
+      "row_bits": [
+        7,
+        6,
+        5,
+        4,
+        3,
+        2,
+        1,
+        0
+      ],
+      "size_mm": [
+        1.6,
+        2.2
+      ]
+    }
+  },
+  "8x8y": {
+    "name": "8x8 Y Click",
+    "vendor": "MikroElektronika",
+    "chip": "MAX7219",
+    "bus": "SPI",
+    "description": "8x8 yellow LED matrix on a MAX7219; LOAD on CS",
+    "image": "8x8y/top.png",
+    "origin_mm": [
+      -1.27,
+      46.0248
+    ],
+    "size_mm": [
+      25.4,
+      49.8348
+    ],
+    "controls": [],
+    "leds": [],
+    "signals": [],
+    "display": {
+      "type": "matrix",
+      "property": "display",
+      "color": "#ffd60a",
+      "cols_mm": [
+        0.28,
+        3.455,
+        6.63,
+        9.83,
+        12.98,
+        16.18,
+        19.355,
+        22.53
+      ],
+      "rows_mm": [
+        43.675,
+        40.5,
+        37.325,
+        34.15,
+        30.975,
+        27.8,
+        24.625,
+        21.45
+      ],
+      "col_digits": [
+        7,
+        6,
+        5,
+        4,
+        3,
+        2,
+        1,
+        0
+      ],
+      "row_bits": [
+        7,
+        6,
+        5,
+        4,
+        3,
+        2,
+        1,
+        0
+      ],
+      "size_mm": [
+        1.6,
+        2.2
+      ]
+    }
+  },
+  "8x8b": {
+    "name": "8x8 B Click",
+    "vendor": "MikroElektronika",
+    "chip": "MAX7219",
+    "bus": "SPI",
+    "description": "8x8 blue LED matrix on a MAX7219; LOAD on CS",
+    "image": "8x8b/top.png",
+    "origin_mm": [
+      -1.27,
+      46.0248
+    ],
+    "size_mm": [
+      25.4,
+      49.8348
+    ],
+    "controls": [],
+    "leds": [],
+    "signals": [],
+    "display": {
+      "type": "matrix",
+      "property": "display",
+      "color": "#4f8cff",
+      "cols_mm": [
+        0.28,
+        3.455,
+        6.63,
+        9.83,
+        12.98,
+        16.18,
+        19.355,
+        22.53
+      ],
+      "rows_mm": [
+        43.675,
+        40.5,
+        37.325,
+        34.15,
+        30.975,
+        27.8,
+        24.625,
+        21.45
+      ],
+      "col_digits": [
+        7,
+        6,
+        5,
+        4,
+        3,
+        2,
+        1,
+        0
+      ],
+      "row_bits": [
+        7,
+        6,
+        5,
+        4,
+        3,
+        2,
+        1,
+        0
+      ],
+      "size_mm": [
+        1.6,
+        2.2
+      ]
+    }
+  },
+  "buttonr": {
+    "name": "Button R Click",
+    "vendor": "MikroElektronika",
+    "chip": "illuminated pushbutton",
+    "bus": "GPIO",
+    "description": "Pushbutton on INT (high while pressed); its red LED on PWM",
+    "image": "buttonr/top.png",
+    "origin_mm": [
+      -1.27,
+      24.765
+    ],
+    "size_mm": [
+      25.4,
+      28.575
+    ],
+    "controls": [],
+    "buttons": [
+      {
+        "id": "T1",
+        "property": "pressed",
+        "at_mm": [
+          11.43,
+          19.05
+        ],
+        "size_mm": [
+          10.0,
+          9.2
+        ]
+      }
+    ],
+    "leds": [
+      {
+        "id": "T1 LED",
+        "at_mm": [
+          11.43,
+          19.05
+        ],
+        "color": "#ff3b30",
+        "pin": "pwm",
+        "size_mm": 9.0
+      }
+    ],
+    "signals": [
+      {
+        "id": "BUTTON",
+        "pin": "int",
+        "active_low": false,
+        "at_mm": [
+          22.86,
+          15.24
+        ]
+      }
+    ]
+  },
+  "buttony": {
+    "name": "Button Y Click",
+    "vendor": "MikroElektronika",
+    "chip": "illuminated pushbutton",
+    "bus": "GPIO",
+    "description": "Pushbutton on INT (high while pressed); its yellow LED on PWM",
+    "image": "buttony/top.png",
+    "origin_mm": [
+      -1.2725,
+      34.2671
+    ],
+    "size_mm": [
+      25.4051,
+      38.0771
+    ],
+    "controls": [],
+    "buttons": [
+      {
+        "id": "T1",
+        "property": "pressed",
+        "at_mm": [
+          11.43,
+          27.16
+        ],
+        "size_mm": [
+          10.0,
+          9.2
+        ]
+      }
+    ],
+    "leds": [
+      {
+        "id": "T1 LED",
+        "at_mm": [
+          11.43,
+          27.16
+        ],
+        "color": "#ffd60a",
+        "pin": "pwm",
+        "size_mm": 9.0
+      }
+    ],
+    "signals": [
+      {
+        "id": "BUTTON",
+        "pin": "int",
+        "active_low": false,
+        "at_mm": [
+          22.86,
+          15.24
+        ]
+      }
+    ]
   }
 }

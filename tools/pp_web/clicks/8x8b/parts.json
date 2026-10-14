@@ -1,0 +1,902 @@
+{
+ "source": "MikroElektronika 8x8 B Click v100: schematic v100 (the same circuit and layout as the 8x8 R/G/Y Clicks). The product page's 2D and 3D files are the 8x8 R Click's (8x8-r-click-2d-and-3d-files.zip), so this art is drawn from 8x8_red_click_v100.dxf with the silkscreen letter box replaced (silk_label) by B. LED positions as for 8x8 G.",
+ "parts": [
+  {
+   "ref": "LD1",
+   "kind": "led",
+   "at_mm": [
+    0.28,
+    43.675
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD2",
+   "kind": "led",
+   "at_mm": [
+    3.455,
+    43.675
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD3",
+   "kind": "led",
+   "at_mm": [
+    6.63,
+    43.675
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD4",
+   "kind": "led",
+   "at_mm": [
+    9.83,
+    43.675
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD5",
+   "kind": "led",
+   "at_mm": [
+    12.98,
+    43.675
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD6",
+   "kind": "led",
+   "at_mm": [
+    16.18,
+    43.675
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD7",
+   "kind": "led",
+   "at_mm": [
+    19.355,
+    43.675
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD8",
+   "kind": "led",
+   "at_mm": [
+    22.53,
+    43.675
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD9",
+   "kind": "led",
+   "at_mm": [
+    0.28,
+    40.5
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD10",
+   "kind": "led",
+   "at_mm": [
+    3.455,
+    40.5
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD11",
+   "kind": "led",
+   "at_mm": [
+    6.63,
+    40.5
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD12",
+   "kind": "led",
+   "at_mm": [
+    9.83,
+    40.5
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD13",
+   "kind": "led",
+   "at_mm": [
+    12.98,
+    40.5
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD14",
+   "kind": "led",
+   "at_mm": [
+    16.18,
+    40.5
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD15",
+   "kind": "led",
+   "at_mm": [
+    19.355,
+    40.5
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD16",
+   "kind": "led",
+   "at_mm": [
+    22.53,
+    40.5
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD17",
+   "kind": "led",
+   "at_mm": [
+    0.28,
+    37.325
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD18",
+   "kind": "led",
+   "at_mm": [
+    3.455,
+    37.325
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD19",
+   "kind": "led",
+   "at_mm": [
+    6.63,
+    37.325
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD20",
+   "kind": "led",
+   "at_mm": [
+    9.83,
+    37.325
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD21",
+   "kind": "led",
+   "at_mm": [
+    12.98,
+    37.325
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD22",
+   "kind": "led",
+   "at_mm": [
+    16.18,
+    37.325
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD23",
+   "kind": "led",
+   "at_mm": [
+    19.355,
+    37.325
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD24",
+   "kind": "led",
+   "at_mm": [
+    22.53,
+    37.325
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD25",
+   "kind": "led",
+   "at_mm": [
+    0.28,
+    34.15
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD26",
+   "kind": "led",
+   "at_mm": [
+    3.455,
+    34.15
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD27",
+   "kind": "led",
+   "at_mm": [
+    6.63,
+    34.15
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD28",
+   "kind": "led",
+   "at_mm": [
+    9.83,
+    34.15
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD29",
+   "kind": "led",
+   "at_mm": [
+    12.98,
+    34.15
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD30",
+   "kind": "led",
+   "at_mm": [
+    16.18,
+    34.15
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD31",
+   "kind": "led",
+   "at_mm": [
+    19.355,
+    34.15
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD32",
+   "kind": "led",
+   "at_mm": [
+    22.53,
+    34.15
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD33",
+   "kind": "led",
+   "at_mm": [
+    0.28,
+    30.975
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD34",
+   "kind": "led",
+   "at_mm": [
+    3.455,
+    30.975
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD35",
+   "kind": "led",
+   "at_mm": [
+    6.63,
+    30.975
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD36",
+   "kind": "led",
+   "at_mm": [
+    9.83,
+    30.975
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD37",
+   "kind": "led",
+   "at_mm": [
+    12.98,
+    30.975
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD38",
+   "kind": "led",
+   "at_mm": [
+    16.18,
+    30.975
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD39",
+   "kind": "led",
+   "at_mm": [
+    19.355,
+    30.975
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD40",
+   "kind": "led",
+   "at_mm": [
+    22.53,
+    30.975
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD41",
+   "kind": "led",
+   "at_mm": [
+    0.28,
+    27.8
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD42",
+   "kind": "led",
+   "at_mm": [
+    3.455,
+    27.8
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD43",
+   "kind": "led",
+   "at_mm": [
+    6.63,
+    27.8
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD44",
+   "kind": "led",
+   "at_mm": [
+    9.83,
+    27.8
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD45",
+   "kind": "led",
+   "at_mm": [
+    12.98,
+    27.8
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD46",
+   "kind": "led",
+   "at_mm": [
+    16.18,
+    27.8
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD47",
+   "kind": "led",
+   "at_mm": [
+    19.355,
+    27.8
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD48",
+   "kind": "led",
+   "at_mm": [
+    22.53,
+    27.8
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD49",
+   "kind": "led",
+   "at_mm": [
+    0.28,
+    24.625
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD50",
+   "kind": "led",
+   "at_mm": [
+    3.455,
+    24.625
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD51",
+   "kind": "led",
+   "at_mm": [
+    6.63,
+    24.625
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD52",
+   "kind": "led",
+   "at_mm": [
+    9.83,
+    24.625
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD53",
+   "kind": "led",
+   "at_mm": [
+    12.98,
+    24.625
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD54",
+   "kind": "led",
+   "at_mm": [
+    16.18,
+    24.625
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD55",
+   "kind": "led",
+   "at_mm": [
+    19.355,
+    24.625
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD56",
+   "kind": "led",
+   "at_mm": [
+    22.53,
+    24.625
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD57",
+   "kind": "led",
+   "at_mm": [
+    0.28,
+    21.45
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD58",
+   "kind": "led",
+   "at_mm": [
+    3.455,
+    21.45
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD59",
+   "kind": "led",
+   "at_mm": [
+    6.63,
+    21.45
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD60",
+   "kind": "led",
+   "at_mm": [
+    9.83,
+    21.45
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD61",
+   "kind": "led",
+   "at_mm": [
+    12.98,
+    21.45
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD62",
+   "kind": "led",
+   "at_mm": [
+    16.18,
+    21.45
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD63",
+   "kind": "led",
+   "at_mm": [
+    19.355,
+    21.45
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "LD64",
+   "kind": "led",
+   "at_mm": [
+    22.53,
+    21.45
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ],
+   "color": "#4f8cff"
+  },
+  {
+   "ref": "U1",
+   "kind": "ic",
+   "value": "MAX7219 (SO-24W)",
+   "at_mm": [
+    13.98,
+    9.02
+   ],
+   "size_mm": [
+    7.5,
+    15.4
+   ]
+  },
+  {
+   "ref": "E1",
+   "kind": "capacitor",
+   "value": "10 uF",
+   "at_mm": [
+    5.08,
+    14.02
+   ],
+   "size_mm": [
+    3.2,
+    5.0
+   ]
+  },
+  {
+   "ref": "R1",
+   "kind": "resistor",
+   "value": "10k (ISET)",
+   "at_mm": [
+    4.08,
+    6.58
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ]
+  },
+  {
+   "ref": "C1",
+   "kind": "capacitor",
+   "value": "100 nF",
+   "at_mm": [
+    6.33,
+    6.58
+   ],
+   "size_mm": [
+    1.25,
+    2.6
+   ]
+  },
+  {
+   "ref": "label",
+   "kind": "silk_label",
+   "value": "B",
+   "at_mm": [
+    11.455,
+    -2.17
+   ],
+   "size_mm": [
+    2.4,
+    2.5
+   ]
+  }
+ ]
+}

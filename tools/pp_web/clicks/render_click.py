@@ -263,6 +263,14 @@ def main(dxf: str, parts_file: str, out: str) -> None:
             svg.append(f'<text x="{cx:.3f}" y="{Y(cy / k):.3f}" fill="#6b7076" '
                        'font-family="Arial, sans-serif" font-size="1.4" '
                        'text-anchor="middle" dominant-baseline="central">+</text>')
+        elif kind == "silk_label":      # a filled silkscreen box, text cut out
+            # (a colour variant drawn from a sibling's DXF: 8x8 B from R)
+            svg.append(f'<rect x="{x:.3f}" y="{y:.3f}" width="{pw}" height="{ph}" '
+                       f'fill="{SILK}"/>')
+            svg.append(f'<text x="{cx:.3f}" y="{Y(cy / k) + ph * 0.06:.3f}" fill="{MASK}" '
+                       'font-family="Arial, Helvetica, sans-serif" font-weight="bold" '
+                       f'font-size="{ph * 0.95:.3f}" text-anchor="middle" '
+                       f'dominant-baseline="central">{p["value"]}</text>')
         elif kind == "crystal":         # small metal can
             svg.append(f'<rect x="{x:.3f}" y="{y:.3f}" width="{pw}" height="{ph}" '
                        f'rx="{min(pw, ph) / 2:.3f}" fill="#c9ccd0" stroke="#8d9299" '
