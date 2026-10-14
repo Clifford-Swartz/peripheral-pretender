@@ -390,5 +390,50 @@
       ]
     },
     "signals": []
+  },
+  "thumbstick": {
+    "name": "Thumbstick Click",
+    "vendor": "MikroElektronika",
+    "chip": "MCP3204 + joystick",
+    "bus": "SPI",
+    "description": "Two-axis joystick on an MCP3204 12-bit ADC (CH0 vertical, CH1 horizontal); pushing the stick pulls INT low",
+    "image": "thumbstick/top.png",
+    "origin_mm": [
+      -1.27,
+      24.7498
+    ],
+    "size_mm": [
+      25.4,
+      28.575
+    ],
+    "controls": [],
+    "leds": [],
+    "sticks": [
+      {
+        "id": "stick",
+        "label": "Joystick",
+        "mode": "stick",
+        "x_property": "x",
+        "y_property": "y",
+        "range": 1000,
+        "press_property": "pressed",
+        "at_mm": [
+          10.29,
+          13.31
+        ],
+        "size_mm": 12.6
+      }
+    ],
+    "signals": [
+      {
+        "id": "SW",
+        "pin": "int",
+        "active_low": true,
+        "at_mm": [
+          22.86,
+          15.22
+        ]
+      }
+    ]
   }
 }

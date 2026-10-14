@@ -286,6 +286,15 @@ function drawClick(stack, h, id, def) {
     put(cv, [d.at_mm[0] - d.size_mm[0] / 2, d.at_mm[1] + d.size_mm[1] / 2],
         d.size_mm[0], d.size_mm[1]);
   }
+  // Sticks: a joystick knob to drag (springs back; hold still to push
+  // it), or, in "tilt" mode, which way the Click leans (stays put;
+  // double-click levels it)
+  art.dataset.rot = rot;
+  for (const st of def.sticks || []) {
+    put(makeStick(h.slot, st, art), [st.at_mm[0] - st.size_mm / 2,
+                                     st.at_mm[1] + st.size_mm / 2],
+        st.size_mm, st.size_mm);
+  }
   // A buzzer: its tone follows the Click's frequency property
   if (def.sound) {
     const el = document.createElement("div");
@@ -410,6 +419,76 @@ function updateClickParts() {
       seg.style.opacity = lit ? Math.max(0.08, bright) : 0.07;
     }
   }
+}
+
+// A stick control on a Click (see drawClick); sends {"type": "stick"}
+function makeStick(slot, st, art) {
+  const el = document.createElement("div"), knob = document.createElement("b");
+  const tilt = st.mode === "tilt";
+  el.className = tilt ? "click-stick tilt" : "click-stick";
+  el.title = tilt ? `${st.label || "Tilt"}: drag to lean the Click, double-click to level it`
+                  : `${st.label || "Joystick"}: drag to move, hold still to push`;
+  el.appendChild(knob);
+  let pos = [0, 0], start = null, pressed = false, holdTimer = null, last = 0;
+  const show = () => {
+    knob.style.left = `${50 + pos[0] * 50}%`;
+    knob.style.top = `${50 - pos[1] * 50}%`;
+    if (tilt) {
+      const r = Number(art.dataset.rot || 0);
+      art.style.transform = `translate(-50%, -50%) rotate(${r}deg) perspective(60em) ` +
+        `rotateY(${pos[0] * 30}deg) rotateX(${pos[1] * 30}deg)`;
+    }
+  };
+  const sendPos = (force) => {
+    const now = performance.now();
+    if (!force && now - last < 30) return;
+    last = now;
+    send({ type: "stick", slot, id: st.id, x: pos[0], y: pos[1],
+           ...(st.press_property ? { pressed } : {}) });
+  };
+  // Screen offset from the stick's centre to stick units (-1..1, y up),
+  // turned back by the Click's rotation on the board
+  const toStick = (e) => {
+    const b = el.getBoundingClientRect(), rad = b.width / 2;
+    const dx = e.clientX - (b.left + rad), dy = e.clientY - (b.top + rad);
+    const r = (Number(art.dataset.rot || 0) * Math.PI) / 180;
+    let x = (dx * Math.cos(r) + dy * Math.sin(r)) / rad;
+    let y = -(-dx * Math.sin(r) + dy * Math.cos(r)) / rad;
+    const m = Math.hypot(x, y);
+    if (m > 1) { x /= m; y /= m; }
+    return [x, y];
+  };
+  el.addEventListener("pointerdown", (e) => {
+    try { el.setPointerCapture(e.pointerId); } catch (_) { /* synthetic */ }
+    start = [e.clientX, e.clientY];
+    el.classList.add("held");
+    if (st.press_property) {
+      holdTimer = setTimeout(() => { pressed = true; el.classList.add("pushed"); sendPos(true); }, 250);
+    }
+  });
+  el.addEventListener("pointermove", (e) => {
+    if (!start || Math.hypot(e.clientX - start[0], e.clientY - start[1]) < 3) return;
+    clearTimeout(holdTimer);
+    if (pressed) { pressed = false; el.classList.remove("pushed"); }
+    pos = toStick(e);
+    show();
+    sendPos(false);
+  });
+  const end = () => {
+    if (!start) return;
+    start = null;
+    clearTimeout(holdTimer);
+    pressed = false;
+    el.classList.remove("held", "pushed");
+    if (!tilt) pos = [0, 0];                    // a joystick springs back
+    show();
+    sendPos(true);
+  };
+  el.addEventListener("pointerup", end);
+  el.addEventListener("pointercancel", end);
+  el.addEventListener("dblclick", () => { pos = [0, 0]; show(); sendPos(true); });
+  show();
+  return el;
 }
 
 // RGB565 pixels (base64, two bytes each, high first) onto a canvas

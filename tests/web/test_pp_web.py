@@ -641,3 +641,56 @@ def test_session_oledc(qemu_path, qemu_machines):
     black = {_rgb565(inverted, 89, y) for y in range(0, 96, 4)}
     assert 0x0000 in white and 0xFFFF not in white, white
     assert 0xFFFF in black, black
+
+
+THUMBSTICK_DEMO = BUILD / "thumbstick.elf"
+
+
+def test_stick_values():
+    """A joystick's axes, and a tilt as gravity on x, y and z."""
+    from tools.pp_web.server import stick_values
+    joy = CLICKS["thumbstick"]["sticks"][0]
+    assert stick_values(joy, 0.5, -1.0) == {"x": 500, "y": -1000}
+    tilt = {"mode": "tilt", "range": 1000, "x_property": "x",
+            "y_property": "y", "z_property": "z"}
+    assert stick_values(tilt, 0, 0) == {"x": 0, "y": 0, "z": 1000}
+    # Leaning right by 30 degrees: x dips, reads -sin(30) g
+    assert stick_values(tilt, 0.5, 0) == {"x": -500, "y": 0, "z": 866}
+
+
+@pytest.mark.qemu
+def test_session_thumbstick(qemu_path, qemu_machines):
+    """thumbstick.elf with a Thumbstick Click on EXT1, through the server's
+    stick path (what the page sends): the MCP3204 reads the stick, the
+    push switch pulls INT low and LED0 follows it."""
+    from tools.pp_web import server
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not THUMBSTICK_DEMO.is_file():
+        pytest.skip("thumbstick.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=thumbstick)")
+
+    async def scenario():
+        app = server.App("ev15n46a", THUMBSTICK_DEMO)
+        await app.plug("ext1", "thumbstick")
+        try:
+            await asyncio.sleep(0.8)
+            await app.stick("ext1", "stick", 0.0, 1.0, False)      # up
+            await asyncio.sleep(0.4)
+            await app.stick("ext1", "stick", 0.9, 0.0, False)      # right
+            await asyncio.sleep(0.4)
+            await app.stick("ext1", "stick", 0.0, 0.0, True)       # push
+            await asyncio.sleep(0.4)
+            led = app.session.pins["a"][24][1]
+            await app.stick("ext1", "stick", 0.0, 0.0, False)
+            await asyncio.sleep(0.4)
+        finally:
+            await app.session.stop()
+        return app.uart_log, led
+
+    uart, led = asyncio.run(scenario())
+    assert "stick x=2048 y=2048 centre" in uart, uart
+    assert "y=0 up" in uart, uart
+    assert "x=3891 y=2048 right" in uart, uart
+    assert "centre pushed" in uart, uart
+    assert led > 0.9                                # LED0 on while pushed

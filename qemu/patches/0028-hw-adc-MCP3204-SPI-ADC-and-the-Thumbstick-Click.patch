@@ -1,0 +1,569 @@
+From 39f30fcc26b98e62d4f8f32480b9a49769aac70f Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 14 Oct 2026 15:35:56 -0700
+Subject: [PATCH] hw/adc: MCP3204 SPI ADC and the Thumbstick Click
+
+- mchp-mcp3204: MCP3204 data sheet (DS21298) bit by bit: start bit,
+  SGL/DIFF and channel, sample clock, null bit, 12 bits MSB first, then
+  LSB first while CS stays low; CS high ends it; single-ended and
+  differential pairs; "in0".."in3" and "vref" in mV.
+- click-thumbstick: an MCP3204 with the joystick on CH0 (vertical, more
+  is down) and CH1 (horizontal, more is right), as MikroElektronika's
+  driver reads it; "x", "y" (-1000..1000) and "pressed"; the switch is a
+  GPIO output (0 pressed, -1 released).
+- mikrobus: "thumbstick" (schematic v101): switch on INT with R3 10k
+  pull-up, CS# R2 100k pull-up.
+- qtests: centre, axes, differential, unconnected channels, another
+  byte alignment with the LSB-first tail, the switch; on mikroBUS 3 of
+  the Nano Base too.
+
+Not checked against a physical Thumbstick Click.
+
+Peripheral Pretender: AI-assisted, not for upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |   8 +
+ docs/system/avr/avr64ea48-cnano.rst   |   3 +-
+ hw/adc/mchp_mcp3204.c                 | 279 ++++++++++++++++++++++++++
+ hw/adc/meson.build                    |   1 +
+ hw/misc/mikrobus.c                    |   8 +
+ include/hw/adc/mchp_mcp3204.h         |  28 +++
+ tests/qtest/avr64ea48-cnano-test.c    |  33 +++
+ tests/qtest/pic32cm-click-test.c      |  73 +++++++
+ 8 files changed, 432 insertions(+), 1 deletion(-)
+ create mode 100644 hw/adc/mchp_mcp3204.c
+ create mode 100644 include/hw/adc/mchp_mcp3204.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index af076c4..a341b5b 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -99,6 +99,14 @@ resistors are modelled (from their schematics, v100).
+   on every change) give the picture; ``panel-width`` and ``panel-height``
+   its size.
+ 
++``thumbstick``
++  Thumbstick Click: a two-axis joystick on an MCP3204 12-bit SPI ADC
++  (``click-thumbstick``, an ``mchp-mcp3204``): CH0 vertical (more is down),
++  CH1 horizontal (more is right), VREF 3.3 V; CS 100 kOhm pull-up; the
++  stick's push switch pulls INT low (10 kOhm pull-up). QOM properties
++  ``x`` and ``y`` (-1000 to 1000, right and up) and ``pressed``; ``in0``
++  to ``in3`` (mV) set the ADC inputs directly.
++
+ SPI Clicks on both headers share the SPI bus; each listens only while its
+ own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
+ 
+diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
+index 32503a9..40e1d5b 100644
+--- a/docs/system/avr/avr64ea48-cnano.rst
++++ b/docs/system/avr/avr64ea48-cnano.rst
+@@ -33,7 +33,8 @@ and ``mb3=`` plug a Click board into mikroBUS socket 1-3 (``thermo8`` needs
+ I2C, which is not modelled yet; ``buttong``, ``7seg``, ``relay``,
+ ``8x8g``, a MAX7219 LED matrix with a ``display`` property, ``buzz``,
+ a piezo buzzer whose ``frequency`` follows the PWM pin, and ``oledc``, an
+-SSD1351 OLED whose picture is the ``frame`` property, work). The
++SSD1351 OLED whose picture is the ``frame`` property, and ``thumbstick``,
++a joystick on an MCP3204 ADC, work). The
+ Click is ``/machine/mbN-click``.
+ 
+ Firmware comes from ``-kernel`` or ``-bios``::
+diff --git a/hw/adc/mchp_mcp3204.c b/hw/adc/mchp_mcp3204.c
+new file mode 100644
+index 0000000..6630f0e
+--- /dev/null
++++ b/hw/adc/mchp_mcp3204.c
+@@ -0,0 +1,279 @@
++/*
++ * Microchip MCP3204 4-channel 12-bit SPI ADC, and the Thumbstick Click
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * MCP3204/3208 data sheet (DS21298), section 5 and 6.1: with CS low, the
++ * first 1 on DIN is the start bit; then SGL/DIFF, D2, D1, D0 (D2 is
++ * ignored by the MCP3204). The input is sampled on the next clock, the
++ * clock after that shifts out a null bit (0), and the following twelve
++ * shift out the result MSB first. With CS still low, the device then
++ * shifts out the result again LSB first (B1 to B11), then zeros. CS
++ * high ends the conversion. DOUT is high impedance outside the result:
++ * it reads 0 here. The model works bit by bit, so any byte alignment of
++ * the command works. Result: 4096 * Vin / VREF, clipped to 0..4095; in
++ * differential mode Vin is IN+ minus IN- (CH0-CH1, CH1-CH0, CH2-CH3,
++ * CH3-CH2). Conversion time and sampling errors are not modelled.
++ *
++ * Thumbstick Click (MikroElektronika, schematic v101): the joystick's
++ * vertical potentiometer on CH0, horizontal on CH1, between VCC and GND
++ * (VREF = VCC = 3.3 V), push switch to ground on INT (R3 10k pull-up), CS#
++ * pulled up by R2 100k. MikroElektronika's thumbstick driver reads CH0
++ * as vertical (more is down) and CH1 as horizontal (more is right): "y"
++ * up lowers CH0, "x" right raises CH1, the centre is VREF / 2. Not
++ * checked against a physical Click.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "hw/adc/mchp_mcp3204.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/ssi/ssi.h"
++#include "migration/vmstate.h"
++
++#define MCP3204_CHANNELS    4
++#define MCP3204_MAX         4095
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpMcp3204State, MCHP_MCP3204)
++
++struct MchpMcp3204State {
++    SSIPeripheral parent_obj;
++
++    uint32_t in[MCP3204_CHANNELS];      /* mV */
++    uint32_t vref;                      /* mV */
++    bool started;
++    uint8_t clocks;                     /* since the start bit */
++    uint8_t cfg;                        /* SGL/DIFF D2 D1 D0 */
++    uint16_t result;
++
++    /* Thumbstick Click */
++    qemu_irq button;
++    int32_t x;
++    int32_t y;
++    bool pressed;
++};
++
++static uint16_t mcp3204_convert(MchpMcp3204State *s)
++{
++    unsigned ch = s->cfg & 3;
++    int64_t mv = s->in[ch];
++
++    if (!(s->cfg & 8)) {                /* differential: pairs */
++        mv -= s->in[ch ^ 1];
++    }
++    if (mv <= 0 || !s->vref) {
++        return 0;
++    }
++    return MIN(MCP3204_MAX, mv * 4096 / s->vref);
++}
++
++static unsigned mcp3204_clock(MchpMcp3204State *s, unsigned din)
++{
++    unsigned n;
++
++    if (!s->started) {
++        s->started = din;
++        s->clocks = 0;
++        s->cfg = 0;
++        return 0;
++    }
++    n = ++s->clocks;
++    if (n <= 4) {
++        s->cfg = s->cfg << 1 | din;
++        if (n == 4) {
++            s->result = mcp3204_convert(s);
++        }
++        return 0;
++    }
++    if (n >= 7 && n <= 18) {
++        return (s->result >> (18 - n)) & 1;         /* MSB first */
++    }
++    if (n >= 19 && n <= 29) {
++        return (s->result >> (n - 18)) & 1;         /* then LSB first */
++    }
++    s->clocks = MIN(n, 30);
++    return 0;                           /* sample, null bit, zeros */
++}
++
++static uint32_t mcp3204_transfer(SSIPeripheral *dev, uint32_t val)
++{
++    MchpMcp3204State *s = MCHP_MCP3204(dev);
++    uint32_t out = 0;
++
++    for (int bit = 7; bit >= 0; bit--) {
++        out = out << 1 | mcp3204_clock(s, (val >> bit) & 1);
++    }
++    return out;
++}
++
++static int mcp3204_set_cs(SSIPeripheral *dev, bool high)
++{
++    MchpMcp3204State *s = MCHP_MCP3204(dev);
++
++    if (high) {
++        s->started = false;             /* ends the conversion */
++    }
++    return 0;
++}
++
++static void mcp3204_realize(SSIPeripheral *dev, Error **errp)
++{
++}
++
++static void mcp3204_reset(DeviceState *dev)
++{
++    MchpMcp3204State *s = MCHP_MCP3204(dev);
++
++    s->started = false;
++    s->clocks = 0;
++    s->cfg = 0;
++    s->result = 0;
++    s->parent_obj.cs = true;            /* CS# pulled up */
++}
++
++static void mcp3204_init(Object *obj)
++{
++    MchpMcp3204State *s = MCHP_MCP3204(obj);
++
++    for (unsigned i = 0; i < MCP3204_CHANNELS; i++) {
++        g_autofree char *name = g_strdup_printf("in%u", i);
++
++        object_property_add_uint32_ptr(obj, name, &s->in[i],
++                                       OBJ_PROP_FLAG_READWRITE);
++    }
++}
++
++static const Property mcp3204_properties[] = {
++    DEFINE_PROP_UINT32("vref", MchpMcp3204State, vref, 3300),
++};
++
++static const VMStateDescription vmstate_mcp3204 = {
++    .name = TYPE_MCHP_MCP3204,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_SSI_PERIPHERAL(parent_obj, MchpMcp3204State),
++        VMSTATE_UINT32_ARRAY(in, MchpMcp3204State, MCP3204_CHANNELS),
++        VMSTATE_BOOL(started, MchpMcp3204State),
++        VMSTATE_UINT8(clocks, MchpMcp3204State),
++        VMSTATE_UINT8(cfg, MchpMcp3204State),
++        VMSTATE_UINT16(result, MchpMcp3204State),
++        VMSTATE_INT32(x, MchpMcp3204State),
++        VMSTATE_INT32(y, MchpMcp3204State),
++        VMSTATE_BOOL(pressed, MchpMcp3204State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void mcp3204_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    SSIPeripheralClass *k = SSI_PERIPHERAL_CLASS(klass);
++
++    dc->desc = "MCP3204 4-channel 12-bit SPI ADC";
++    dc->vmsd = &vmstate_mcp3204;
++    device_class_set_props(dc, mcp3204_properties);
++    device_class_set_legacy_reset(dc, mcp3204_reset);
++    k->realize = mcp3204_realize;
++    k->transfer = mcp3204_transfer;
++    k->set_cs = mcp3204_set_cs;
++    k->cs_polarity = SSI_CS_LOW;
++}
++
++/* Thumbstick Click: the stick sets CH0 and CH1, the switch INT */
++
++static void thumbstick_update(MchpMcp3204State *s)
++{
++    int64_t half = s->vref / 2;
++
++    s->in[0] = half - (int64_t)s->y * half / 1000;
++    s->in[1] = half + (int64_t)s->x * half / 1000;
++    qemu_set_irq(s->button, s->pressed ? 0 : -1);
++}
++
++static void thumbstick_get_axis(Object *obj, Visitor *v, const char *name,
++                                void *opaque, Error **errp)
++{
++    int32_t *axis = opaque;
++
++    visit_type_int32(v, name, axis, errp);
++}
++
++static void thumbstick_set_axis(Object *obj, Visitor *v, const char *name,
++                                void *opaque, Error **errp)
++{
++    int32_t *axis = opaque, value;
++
++    if (!visit_type_int32(v, name, &value, errp)) {
++        return;
++    }
++    if (value < -1000 || value > 1000) {
++        error_setg(errp, "%s must be -1000 to 1000", name);
++        return;
++    }
++    *axis = value;
++    thumbstick_update(MCHP_MCP3204(obj));
++}
++
++static bool thumbstick_get_pressed(Object *obj, Error **errp)
++{
++    return MCHP_MCP3204(obj)->pressed;
++}
++
++static void thumbstick_set_pressed(Object *obj, bool value, Error **errp)
++{
++    MchpMcp3204State *s = MCHP_MCP3204(obj);
++
++    s->pressed = value;
++    thumbstick_update(s);
++}
++
++static void thumbstick_reset(DeviceState *dev)
++{
++    mcp3204_reset(dev);
++    thumbstick_update(MCHP_MCP3204(dev));      /* the stick is held */
++}
++
++static void thumbstick_init(Object *obj)
++{
++    MchpMcp3204State *s = MCHP_MCP3204(obj);
++
++    qdev_init_gpio_out_named(DEVICE(obj), &s->button,
++                             CLICK_THUMBSTICK_BUTTON, 1);
++    object_property_add(obj, "x", "int32", thumbstick_get_axis,
++                        thumbstick_set_axis, NULL, &s->x);
++    object_property_add(obj, "y", "int32", thumbstick_get_axis,
++                        thumbstick_set_axis, NULL, &s->y);
++    object_property_add_bool(obj, "pressed", thumbstick_get_pressed,
++                             thumbstick_set_pressed);
++}
++
++static void thumbstick_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->desc = "Thumbstick Click: MCP3204 with a joystick and its switch";
++    device_class_set_legacy_reset(dc, thumbstick_reset);
++}
++
++static const TypeInfo mcp3204_types[] = {
++    {
++        .name = TYPE_MCHP_MCP3204,
++        .parent = TYPE_SSI_PERIPHERAL,
++        .instance_size = sizeof(MchpMcp3204State),
++        .instance_init = mcp3204_init,
++        .class_init = mcp3204_class_init,
++    }, {
++        .name = TYPE_CLICK_THUMBSTICK,
++        .parent = TYPE_MCHP_MCP3204,
++        .instance_init = thumbstick_init,
++        .class_init = thumbstick_class_init,
++    },
++};
++
++DEFINE_TYPES(mcp3204_types)
+diff --git a/hw/adc/meson.build b/hw/adc/meson.build
+index 7f7acc1..f5787eb 100644
+--- a/hw/adc/meson.build
++++ b/hw/adc/meson.build
+@@ -2,3 +2,4 @@ system_ss.add(when: 'CONFIG_STM32F2XX_ADC', if_true: files('stm32f2xx_adc.c'))
+ system_ss.add(when: 'CONFIG_ASPEED_SOC', if_true: files('aspeed_adc.c'))
+ system_ss.add(when: 'CONFIG_NPCM7XX', if_true: files('npcm7xx_adc.c'))
+ system_ss.add(when: 'CONFIG_ZYNQ', if_true: files('zynq-xadc.c'))
++system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp3204.c'))
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index 4085c19..ac92a91 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -20,6 +20,7 @@
+ #include "hw/misc/click_button.h"
+ #include "hw/misc/click_buzzer.h"
+ #include "hw/misc/mikrobus.h"
++#include "hw/adc/mchp_mcp3204.h"
+ #include "hw/display/ssd1351.h"
+ #include "hw/sensor/mchp_mcp9808.h"
+ #include "hw/ssi/max7219.h"
+@@ -91,6 +92,13 @@ static const ClickInfo mikrobus_clicks[] = {
+       .pulls = { { true, MIKROBUS_CS, 1 },                /* R7 100k */
+                  { true, MIKROBUS_RST, 1 },               /* R8 10k */
+                  { true, MIKROBUS_INT, 0 } } },           /* R9 10k */
++    { "thumbstick", "Thumbstick Click: joystick on an MCP3204 SPI ADC "
++      "(CH0 vertical, CH1 horizontal), its switch on INT",
++      TYPE_CLICK_THUMBSTICK, CLICK_SPI, 0, 0,
++      .outs = { { CLICK_THUMBSTICK_BUTTON, MIKROBUS_INT } },
++      .ins = { { SSI_GPIO_CS, MIKROBUS_CS } },
++      .pulls = { { true, MIKROBUS_INT, 1 },               /* R3 10k */
++                 { true, MIKROBUS_CS, 1 } } },            /* R2 100k */
+ };
+ 
+ const char *mikrobus_click_names(void)
+diff --git a/include/hw/adc/mchp_mcp3204.h b/include/hw/adc/mchp_mcp3204.h
+new file mode 100644
+index 0000000..73d09e8
+--- /dev/null
++++ b/include/hw/adc/mchp_mcp3204.h
+@@ -0,0 +1,28 @@
++/*
++ * Microchip MCP3204 4-channel 12-bit SPI ADC, and the Thumbstick Click
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * "mchp-mcp3204": an SSI peripheral (chip select active low). QOM
++ * properties "in0".."in3" (the input voltages in mV, settable at run time)
++ * and "vref" (mV, default 3300).
++ *
++ * "click-thumbstick": an MCP3204 with a two-axis joystick on CH0
++ * (vertical) and CH1 (horizontal) and its push switch. QOM properties
++ * "x" (-1000 left .. 1000 right), "y" (-1000 down .. 1000 up) and
++ * "pressed"; GPIO output "button": 0 while pressed, -1 (released, the
++ * Click's pull-up sets the pin) otherwise.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_ADC_MCHP_MCP3204_H
++#define HW_ADC_MCHP_MCP3204_H
++
++#define TYPE_MCHP_MCP3204 "mchp-mcp3204"
++#define TYPE_CLICK_THUMBSTICK "click-thumbstick"
++
++#define CLICK_THUMBSTICK_BUTTON "button"
++
++#endif /* HW_ADC_MCHP_MCP3204_H */
+diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
+index 17494d7..0589139 100644
+--- a/tests/qtest/avr64ea48-cnano-test.c
++++ b/tests/qtest/avr64ea48-cnano-test.c
+@@ -312,6 +312,38 @@ static void test_oledc(const void *fw)
+     qtest_quit(qts);
+ }
+ 
++static uint8_t spi0_xfer(QTestState *qts, uint8_t v)
++{
++    qtest_writeb(qts, SPI0 + 4, v);
++    return qtest_readb(qts, SPI0 + 4);
++}
++
++/* Thumbstick Click on mikroBUS 3: MCP3204 (CS# PE3), switch on INT PE0 */
++static void test_thumbstick(const void *fw)
++{
++    QTestState *qts = qtest_initf("-M avr64ea48-cnano,mb3=thumbstick "
++                                  "-kernel %s", (const char *)fw);
++    unsigned hi, lo;
++
++    g_assert_cmphex(qtest_readb(qts, PORTE + P_IN) & BIT(0), ==, BIT(0));
++    qtest_qom_set_bool(qts, "/machine/mb3-click", "pressed", true);
++    g_assert_cmphex(qtest_readb(qts, PORTE + P_IN) & BIT(0), ==, 0);
++    qtest_qmp_assert_success(qts, "{ 'execute': 'qom-set', 'arguments': {"
++                             " 'path': '/machine/mb3-click', 'property': 'x',"
++                             " 'value': -500 } }");
++    qtest_writeb(qts, PORTE + 0x05, BIT(3));
++    qtest_writeb(qts, PORTE + P_DIRSET, BIT(3));
++    qtest_writeb(qts, PORTA + 0x01, BIT(4) | BIT(6));
++    qtest_writeb(qts, SPI0 + 0, 0x21);
++    qtest_writeb(qts, PORTE + 0x06, BIT(3));
++    spi0_xfer(qts, 0x06);
++    hi = spi0_xfer(qts, 0x40);                          /* CH1 */
++    lo = spi0_xfer(qts, 0x00);
++    qtest_writeb(qts, PORTE + 0x05, BIT(3));
++    g_assert_cmpuint((hi & 0x0F) << 8 | lo, ==, 1024);  /* half left */
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_autofree char *fw = write_firmware();
+@@ -327,6 +359,7 @@ int main(int argc, char **argv)
+     qtest_add_data_func("avr64ea48-cnano/tcb", fw, test_tcb);
+     qtest_add_data_func("avr64ea48-cnano/buzz", fw, test_buzz);
+     qtest_add_data_func("avr64ea48-cnano/oledc", fw, test_oledc);
++    qtest_add_data_func("avr64ea48-cnano/thumbstick", fw, test_thumbstick);
+     ret = g_test_run();
+     unlink(fw);
+     return ret;
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index 5ef5820..fb09758 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -541,6 +541,78 @@ static void test_oledc(void)
+     qtest_quit(qts);
+ }
+ 
++static uint8_t spi_xfer(QTestState *qts, uint8_t v)
++{
++    qtest_writel(qts, SERCOM1 + 0x28, v);
++    return qtest_readl(qts, SERCOM1 + 0x28);
++}
++
++/* One MCP3204 conversion, the data sheet's 8-bit alignment (Figure 6-1) */
++static unsigned mcp3204_read(QTestState *qts, uint8_t b0, uint8_t b1)
++{
++    unsigned hi, lo;
++
++    qtest_writel(qts, PA + P_OUTCLR, BIT(17));          /* CS# (EXT1) */
++    g_assert_cmphex(spi_xfer(qts, b0), ==, 0);
++    hi = spi_xfer(qts, b1);
++    lo = spi_xfer(qts, 0);
++    qtest_writel(qts, PA + P_OUTSET, BIT(17));
++    g_assert_cmphex(hi & 0xF0, ==, 0);                  /* hi-Z, null bit */
++    return (hi & 0x0F) << 8 | lo;
++}
++
++static void qom_set_int(QTestState *qts, const char *path, const char *prop,
++                        int64_t v)
++{
++    qtest_qmp_assert_success(qts, "{ 'execute': 'qom-set', 'arguments': {"
++                             " 'path': %s, 'property': %s, 'value': %"
++                             PRId64 " } }", path, prop, v);
++}
++
++/* Thumbstick Click on EXT1: MCP3204 on SPI (CS# PA17), switch on INT */
++static void test_thumbstick(void)
++{
++    QTestState *qts = qtest_init("-M pic32cm-mc00-cpro,ext1=thumbstick ");
++
++    g_assert_true(pin_high(qts, PA, 17));               /* R2 pull-up */
++    g_assert_true(pin_high(qts, PB, INT1_PIN));         /* R3 pull-up */
++    qtest_qom_set_bool(qts, CLICK1, "pressed", true);
++    g_assert_false(pin_high(qts, PB, INT1_PIN));
++    qtest_qom_set_bool(qts, CLICK1, "pressed", false);
++    g_assert_true(pin_high(qts, PB, INT1_PIN));
++
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16);
++    qtest_writel(qts, SERCOM1 + 0x04, BIT(17));         /* RXEN */
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16 | 0x02);
++    qtest_writel(qts, PA + P_OUTSET, BIT(17));
++    qtest_writel(qts, PA + P_DIRSET, BIT(17));
++    /* Centred: VREF / 2 on both axes */
++    g_assert_cmpuint(mcp3204_read(qts, 0x06, 0x00), ==, 2048);
++    g_assert_cmpuint(mcp3204_read(qts, 0x06, 0x40), ==, 2048);
++    qom_set_int(qts, CLICK1, "x", 1000);                /* right */
++    qom_set_int(qts, CLICK1, "y", 500);                 /* half up */
++    g_assert_cmpuint(mcp3204_read(qts, 0x06, 0x40), ==, 4095);
++    g_assert_cmpuint(mcp3204_read(qts, 0x06, 0x00), ==, 1024);
++    /* CH1 - CH0 differential; CH2 and CH3 are not connected (0 V) */
++    g_assert_cmpuint(mcp3204_read(qts, 0x04, 0x40), ==, 3072);
++    g_assert_cmpuint(mcp3204_read(qts, 0x04, 0x00), ==, 0);
++    g_assert_cmpuint(mcp3204_read(qts, 0x06, 0x80), ==, 0);
++    qom_set_int(qts, CLICK1, "in2", 825);               /* plain MCP3204 */
++    g_assert_cmpuint(mcp3204_read(qts, 0x06, 0x80), ==, 1024);
++    /*
++     * Another alignment: the start bit last in its byte; CS# held low
++     * after B0 repeats the result LSB first. 2000 mV: 2482 = 0x9B2
++     */
++    qom_set_int(qts, CLICK1, "in0", 2000);
++    qtest_writel(qts, PA + P_OUTCLR, BIT(17));
++    g_assert_cmphex(spi_xfer(qts, 0x01), ==, 0);        /* start */
++    g_assert_cmphex(spi_xfer(qts, 0x80), ==, 0x02);     /* SGL CH0, B11 B10 */
++    g_assert_cmphex(spi_xfer(qts, 0x00), ==, 0x6C);     /* B9..B2 */
++    g_assert_cmphex(spi_xfer(qts, 0x00), ==, 0xA6);     /* B1 B0, B1..B6 */
++    qtest_writel(qts, PA + P_OUTSET, BIT(17));
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+@@ -550,6 +622,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/buzz", test_buzz);
+     qtest_add_func("pic32cm-click/two-spi", test_two_spi);
+     qtest_add_func("pic32cm-click/oledc", test_oledc);
++    qtest_add_func("pic32cm-click/thumbstick", test_thumbstick);
+     qtest_add_func("pic32cm-click/thermo8-identity", test_identity);
+     qtest_add_func("pic32cm-click/not-fitted", test_not_fitted);
+     qtest_add_func("pic32cm-click/thermo8-int-pullup", test_int_pullup);
+-- 
+2.53.0.windows.2
+

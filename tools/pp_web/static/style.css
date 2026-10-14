@@ -155,3 +155,17 @@ h2 small { color: var(--muted); font-weight: normal; }
 /* A display panel on a Click (OLED C): the controller's picture */
 .click-panel { position: absolute; image-rendering: pixelated; background: #000;
   pointer-events: none; }
+
+/* A stick on a Click: joystick knob (Thumbstick) or tilt handle (Accel) */
+.click-stick { position: absolute; border-radius: 50%; cursor: grab; touch-action: none;
+  pointer-events: auto; }
+.click-stick:hover { box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
+.click-stick.held { cursor: grabbing; }
+.click-stick b { position: absolute; width: 46%; height: 46%; border-radius: 50%;
+  transform: translate(-50%, -50%); pointer-events: none;
+  background: radial-gradient(circle at 35% 35%, #8a8f97, #4a4e55 60%, #2c2f34);
+  box-shadow: 0 2px 6px #000a; transition: left 60ms, top 60ms; }
+.click-stick.pushed b { width: 40%; height: 40%; background: radial-gradient(circle at 35% 35%, #9fd3ff, #3b6d99 60%, #23415c); }
+.click-stick.tilt b { width: 22%; height: 22%;
+  background: radial-gradient(circle at 35% 35%, #fff, #8fd3ff 55%, #2d7fb8); opacity: .85; }
+.click-board { transition: transform 80ms; }

@@ -21,7 +21,9 @@ Messages from the page: {"type": "select-board", "board": "<id>"}
 "pressed": bool}, {"type": "uart", "data": str}, {"type": "click",
 "slot": "ext1", "click": "thermo8"|null} (plugs or unplugs a Click: the
 twin restarts with it, like a power cycle) and {"type": "control",
-"slot": "ext1", "id": "temperature", "value": 31.5} (live). POST
+"slot": "ext1", "id": "temperature", "value": 31.5} (live) and
+{"type": "stick", "slot": "ext1", "id": "stick", "x": .5, "y": -.2,
+"pressed": false} (a joystick or a tilt, live; see stick_values()). POST
 /api/firmware with the ELF as the body (re)starts the twin.
 
 Local, single-user prototype: one twin shared by every open page.
@@ -32,6 +34,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import shutil
 import tempfile
 from pathlib import Path
@@ -73,6 +76,22 @@ def watched(click: dict) -> list[tuple[str, ...]]:
         props += [(click["sound"]["property"],),
                   (click["sound"]["duty_property"],)]
     return props
+
+
+def stick_values(stick: dict, x: float, y: float) -> dict[str, int]:
+    """QOM property values for a catalog stick at (@x, @y) in the unit
+    circle. "stick": the axes scaled to "range". "tilt": the Click leans
+    toward (x, y) by asin(r): an accelerometer at rest reads the opposite
+    of gravity, so the axis that dips reads negative, and z (up from the
+    Click) the rest of 1 g; "range" is 1 g in the properties' units."""
+    full = stick["range"]
+    if stick.get("mode") == "tilt":
+        z = math.sqrt(max(0.0, 1 - x * x - y * y))
+        return {stick["x_property"]: round(-x * full),
+                stick["y_property"]: round(-y * full),
+                stick["z_property"]: round(z * full)}
+    return {stick["x_property"]: round(x * full),
+            stick["y_property"]: round(y * full)}
 
 
 def board_list() -> list[dict]:
@@ -183,6 +202,28 @@ class App:
             except (RuntimeError, ConnectionError):
                 pass                    # restarting; run() applies it
 
+    async def stick(self, slot: str, sid: str, x: float, y: float,
+                    pressed: bool | None) -> None:
+        """A stick on the Click in @slot moved to (@x, @y), both -1..1 (y
+        up, inside the unit circle): a joystick's axes, or, in "tilt"
+        mode, which way the Click leans (gravity on its x, y, z)."""
+        c = self.clicks.get(slot)
+        st = c and next((k for k in CLICKS[c["id"]].get("sticks", [])
+                         if k["id"] == sid), None)
+        if not st or not (self.session and self.session.qmp):
+            return
+        r = math.hypot(x, y)
+        if r > 1:
+            x, y = x / r, y / r
+        values = stick_values(st, x, y)
+        if pressed is not None and "press_property" in st:
+            values[st["press_property"]] = bool(pressed)
+        try:
+            for prop, value in values.items():
+                await self.session.set_click(slot, prop, value)
+        except (RuntimeError, ConnectionError):
+            pass
+
     def emit(self, msg: dict) -> None:
         if msg["type"] == "uart":
             self.uart_log = (self.uart_log + msg["data"])[-20000:]
@@ -262,6 +303,11 @@ class App:
                 continue
             if req.get("type") == "click":
                 await self.plug(str(req.get("slot")), req.get("click"))
+                continue
+            if req.get("type") == "stick":
+                await self.stick(str(req.get("slot")), str(req.get("id")),
+                                 float(req.get("x", 0)), float(req.get("y", 0)),
+                                 req.get("pressed"))
                 continue
             if req.get("type") == "control":
                 await self.control(str(req.get("slot")), str(req.get("id")),

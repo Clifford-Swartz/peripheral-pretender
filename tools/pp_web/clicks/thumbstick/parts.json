@@ -1,0 +1,6 @@
+{
+ "source": "MikroElektronika Thumbstick Click v101: 2D and 3D files (THUMBSTICK_Click_2d_3d_files.zip, CAD/THUMBSTICK_click_v101.dxf; silkscreen Thumbstick click) and schematic v101. The joystick's housing from its four mounting pads; the MCP3204, the resistors and the PWR LED are on the bottom side (no top pads).",
+ "parts": [
+  {"ref": "JOY1", "kind": "joystick", "value": "COM-09032", "at_mm": [10.29, 13.31], "size_mm": [16.6, 16.6]}
+ ]
+}

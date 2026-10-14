@@ -165,6 +165,15 @@ area sits on the glass is an estimate. Demo: `make -C firmware/hello BOARD=pic32
 APP=oledc`, then pick "OLED C Click" for EXT1 (colour bars and a bouncing square; SW0 inverts).
 The long Click (57 mm) needed wider stages (`view_mm`) on EV15N46A and EV66E56A.
 
+The Thumbstick Click (`clicks/thumbstick/`) has a `sticks` entry: a knob over the joystick
+(`at_mm`, `size_mm`) to drag. The page turns the pointer's offset back by the Click's rotation on
+the board and sends `{"type": "stick", "x", "y", "pressed"}` (unit circle, y up); the server
+sets the Click's properties through `stick_values()` (`"mode": "stick"`: the axes times
+`range`). The knob springs back when let go; holding it still for 250 ms pushes it
+(`press_property`). Demo: `make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=thumbstick`,
+then pick "Thumbstick Click" for EXT1 (the VCOM prints the axes and the direction; LED0 lights
+while the stick is pushed).
+
 ## Adapter assets: `adapters/<id>/`
 
 The Curiosity Pro's EXT1/EXT2 are Xplained Pro extension headers, so a Click needs an adapter:
