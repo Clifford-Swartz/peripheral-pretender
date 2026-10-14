@@ -227,6 +227,46 @@ def main(dxf: str, parts_file: str, out: str) -> None:
         elif kind == "digit":           # 7-segment display body, segments off
             svg.append(f'<rect x="{x:.3f}" y="{y:.3f}" width="{pw}" height="{ph}" '
                        'rx="0.3" fill="#232427" stroke="#000" stroke-width="0.1"/>')
+        elif kind == "buzzer":          # round piezo transducer, sound hole
+            r, cyy = pw / 2, Y(cy / k)
+            svg.append(f'<circle cx="{cx:.3f}" cy="{cyy:.3f}" r="{r:.3f}" '
+                       'fill="#1d1e21" stroke="#000" stroke-width="0.15"/>')
+            svg.append(f'<circle cx="{cx:.3f}" cy="{cyy:.3f}" r="{r * 0.82:.3f}" '
+                       'fill="none" stroke="#2c2e33" stroke-width="0.25"/>')
+            svg.append(f'<circle cx="{cx:.3f}" cy="{cyy:.3f}" r="{r * 0.16:.3f}" '
+                       'fill="#050506" stroke="#3a3c42" stroke-width="0.1"/>')
+            svg.append(f'<text x="{cx + r * 0.5:.3f}" y="{cyy + r * 0.5:.3f}" '
+                       'fill="#8a8d93" font-family="Arial, sans-serif" '
+                       'font-size="1.6" text-anchor="middle" '
+                       'dominant-baseline="central">+</text>')
+        elif kind == "oled":            # display module: frame, dark glass
+            svg.append(f'<rect x="{x:.3f}" y="{y:.3f}" width="{pw}" height="{ph}" '
+                       'rx="0.2" fill="#3b3d42" stroke="#1a1b1e" stroke-width="0.1"/>')
+            ax, ay = p.get("active_mm", [pw * 0.9, ph * 0.9])
+            acx, acy = p.get("active_at_mm", [cx, cy])
+            svg.append(f'<rect x="{acx - ax / 2:.3f}" y="{Y(acy / k) - ay / 2:.3f}" '
+                       f'width="{ax}" height="{ay}" fill="#050506"/>')
+        elif kind == "joystick":        # thumbstick: housing, round cap
+            svg.append(f'<rect x="{x:.3f}" y="{y:.3f}" width="{pw}" height="{ph}" '
+                       'rx="0.6" fill="#2a2c30" stroke="#111" stroke-width="0.15"/>')
+            r = min(pw, ph) * 0.38
+            svg.append(f'<circle cx="{cx:.3f}" cy="{Y(cy / k):.3f}" r="{r:.3f}" '
+                       'fill="#4a4d53" stroke="#16171a" stroke-width="0.3"/>')
+            svg.append(f'<circle cx="{cx:.3f}" cy="{Y(cy / k):.3f}" r="{r * 0.6:.3f}" '
+                       'fill="none" stroke="#3b3e44" stroke-width="0.35"/>')
+        elif kind == "battery":         # coin cell in its holder
+            svg.append(f'<rect x="{x:.3f}" y="{y:.3f}" width="{pw}" height="{ph}" '
+                       'rx="0.4" fill="#1b1c1f" stroke="#000" stroke-width="0.1"/>')
+            r = min(pw, ph) * 0.44
+            svg.append(f'<circle cx="{cx:.3f}" cy="{Y(cy / k):.3f}" r="{r:.3f}" '
+                       'fill="#c9ccd0" stroke="#8d9299" stroke-width="0.15"/>')
+            svg.append(f'<text x="{cx:.3f}" y="{Y(cy / k):.3f}" fill="#6b7076" '
+                       'font-family="Arial, sans-serif" font-size="1.4" '
+                       'text-anchor="middle" dominant-baseline="central">+</text>')
+        elif kind == "crystal":         # small metal can
+            svg.append(f'<rect x="{x:.3f}" y="{y:.3f}" width="{pw}" height="{ph}" '
+                       f'rx="{min(pw, ph) / 2:.3f}" fill="#c9ccd0" stroke="#8d9299" '
+                       'stroke-width="0.1"/>')
     svg.append("</svg>")
     Path(out).write_text("\n".join(svg), encoding="utf-8")
     print(json.dumps({"origin_mm": [round(vx, 4), round(y1 * k, 4)],

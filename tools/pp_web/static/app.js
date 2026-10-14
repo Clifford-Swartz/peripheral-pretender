@@ -275,6 +275,23 @@ function drawClick(stack, h, id, def) {
           m.size_mm[1]);
     }));
   }
+  // A buzzer: its tone follows the Click's frequency property
+  if (def.sound) {
+    const el = document.createElement("div");
+    el.className = "click-sound";
+    el.dataset.slot = h.slot;
+    el.dataset.prop = `${h.slot}.${def.sound.property}`;
+    el.dataset.duty = `${h.slot}.${def.sound.duty_property}`;
+    el.title = "Buzzer (click to mute or unmute)";
+    el.innerHTML = "<i></i><i></i><span></span>";
+    el.addEventListener("click", () => {
+      muted = !muted;
+      updateClickParts();
+    });
+    put(el, [def.sound.at_mm[0] - def.sound.size_mm / 2,
+             def.sound.at_mm[1] + def.sound.size_mm / 2],
+        def.sound.size_mm, def.sound.size_mm);
+  }
   updateClickParts();
   for (const sig of def.signals) {
     if (!sig.at_mm) continue;
@@ -351,6 +368,23 @@ function updateClickParts() {
     const v = parseInt(bytes[Number(el.dataset.digit)] || "0", 16) || 0;
     el.classList.toggle("on", ((v >>> Number(el.dataset.bit)) & 1) === 1);
   }
+  const sounding = new Set();
+  for (const el of document.querySelectorAll(".click-sound")) {
+    const hz = Number(clickState[el.dataset.prop] || 0);
+    const duty = Number(clickState[el.dataset.duty] || 0) / 1000;
+    const on = hz >= 20 && hz <= 20000;
+    el.classList.toggle("on", on);
+    el.classList.toggle("muted", muted);
+    el.querySelector("span").textContent = on
+      ? (hz >= 1000 ? `${(hz / 1000).toFixed(2)} kHz` : `${hz} Hz`) : "";
+    if (on) sounding.add(el.dataset.slot);
+    tone(el.dataset.slot, on && !muted ? hz : 0, duty);
+  }
+  for (const slot of Object.keys(tones)) {
+    if (!sounding.has(slot) || !document.querySelector(`.click-sound[data-slot="${slot}"]`)) {
+      tone(slot, 0, 0);
+    }
+  }
   for (const el of document.querySelectorAll(".click-7seg")) {
     const value = Number(clickState[el.dataset.prop] || 0);
     const bright = Math.min(1, pinHigh(el.dataset.enable));
@@ -361,11 +395,44 @@ function updateClickParts() {
   }
 }
 
+// Web Audio: browsers start it only after a user gesture on the page
+let audio, muted = false;
+const tones = {};
+function audioCtx() {
+  audio = audio || new AudioContext();
+  if (audio.state === "suspended") audio.resume();
+  return audio;
+}
+document.addEventListener("pointerdown", () => { try { audioCtx(); } catch (_) { /* no audio */ } });
+
+// A buzzer's tone per slot: a square wave at @hz (0: silent). The level
+// follows the fundamental of a pulse train of duty @duty: sin(pi * duty)
+function tone(slot, hz, duty) {
+  let t = tones[slot];
+  if (!hz) {
+    if (t) t.gain.gain.setTargetAtTime(0, t.ctx.currentTime, 0.01);
+    return;
+  }
+  try {
+    const ctx = audioCtx();
+    if (!t) {
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = "square";
+      gain.gain.value = 0;
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      t = tones[slot] = { ctx, osc, gain };
+    }
+    t.osc.frequency.setTargetAtTime(hz, ctx.currentTime, 0.005);
+    t.gain.gain.setTargetAtTime(0.06 * Math.sin(Math.PI * Math.min(1, duty || 0.5)),
+                                ctx.currentTime, 0.01);
+  } catch (_) { /* no audio */ }
+}
+
 // A relay's click, from a short burst of noise
-let audio;
 function tick() {
   try {
-    audio = audio || new AudioContext();
+    audioCtx();
     const n = Math.floor(audio.sampleRate * 0.012);
     const buf = audio.createBuffer(1, n, audio.sampleRate), data = buf.getChannelData(0);
     for (let i = 0; i < n; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / n);

@@ -1,0 +1,123 @@
+{
+ "source": "MikroElektronika Buzz Click v100: 2D and 3D files (BUZZ_Click_2d_3d_files.zip, CAD/BUZZ_click_v100.dxf; its silkscreen reads BUZZ click, PZ1, J2, J3) and schematic v100. Positions from the DXF pads. J3 (CS) is left empty: J2 (PWM) is the default.",
+ "parts": [
+  {
+   "ref": "PZ1",
+   "kind": "buzzer",
+   "value": "EPT-14A4005P",
+   "at_mm": [
+    11.4,
+    16.89
+   ],
+   "size_mm": [
+    12.4,
+    12.4
+   ]
+  },
+  {
+   "ref": "J2",
+   "kind": "zero_ohm",
+   "value": "PWM (default)",
+   "at_mm": [
+    19.3,
+    11.94
+   ],
+   "size_mm": [
+    1.5,
+    3.6
+   ]
+  },
+  {
+   "ref": "E1",
+   "kind": "capacitor",
+   "value": "10uF",
+   "at_mm": [
+    6.1,
+    7.37
+   ],
+   "size_mm": [
+    5.4,
+    3.0
+   ]
+  },
+  {
+   "ref": "R1",
+   "kind": "resistor",
+   "value": "10k",
+   "at_mm": [
+    12.45,
+    8.38
+   ],
+   "size_mm": [
+    2.6,
+    1.2
+   ]
+  },
+  {
+   "ref": "R2",
+   "kind": "resistor",
+   "value": "1k",
+   "at_mm": [
+    13.44,
+    6.35
+   ],
+   "size_mm": [
+    2.6,
+    1.2
+   ]
+  },
+  {
+   "ref": "Q1",
+   "kind": "ic",
+   "value": "BC846",
+   "at_mm": [
+    17.97,
+    7.5
+   ],
+   "size_mm": [
+    2.9,
+    1.4
+   ]
+  },
+  {
+   "ref": "R3",
+   "kind": "resistor",
+   "value": "2k2",
+   "at_mm": [
+    6.1,
+    2.29
+   ],
+   "size_mm": [
+    1.2,
+    2.6
+   ]
+  },
+  {
+   "ref": "PWR",
+   "kind": "led",
+   "value": "green",
+   "at_mm": [
+    17.78,
+    2.29
+   ],
+   "size_mm": [
+    3.6,
+    1.8
+   ],
+   "color": "#7be38a"
+  },
+  {
+   "ref": "PWR SEL",
+   "kind": "zero_ohm",
+   "value": "3.3V",
+   "at_mm": [
+    10.38,
+    2.21
+   ],
+   "size_mm": [
+    3.4,
+    1.5
+   ]
+  }
+ ]
+}

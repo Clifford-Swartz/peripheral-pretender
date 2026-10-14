@@ -1,0 +1,524 @@
+From 025dee610d3ddfc0bd892d9a8b9e762cde50ac9d Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 14 Oct 2026 15:15:51 -0700
+Subject: [PATCH] hw/misc: Buzz Click (piezo buzzer on PWM); own CS per SPI
+ Click socket
+
+- click-buzzer: times the rising edges of its drive pin on the virtual
+  clock; "frequency" (Hz) and "duty" (per mille) of the last period, 0
+  once two periods pass without an edge; the first edge after a silence
+  starts a new tone. Buzz Click schematic v100: PWM through R1 10k into
+  Q1's base (modelled as a pull-down), jumper J2 (default).
+- mikrobus: new Click "buzz"; up to four inputs and pulls per Click; an
+  SPI Click's "cs" index is its socket number. Before, two SPI Clicks on
+  one board (ext1=8x8g,ext2=7seg) stopped QEMU with "CS index '0x0' in
+  use".
+- pic32cm-mc00-cpro: ext1/ext2 help lists the shared catalog.
+- qtests: Buzz Click on EXT1 and on mikroBUS 1 of the Nano Base; two SPI
+  Clicks on one bus.
+
+Not checked against a physical Buzz Click.
+
+Peripheral Pretender: AI-assisted, not for upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  13 ++
+ docs/system/avr/avr64ea48-cnano.rst   |   5 +-
+ hw/arm/pic32cm_mc00_cpro.c            |  14 ++-
+ hw/misc/click_buzzer.c                | 172 ++++++++++++++++++++++++++
+ hw/misc/meson.build                   |   1 +
+ hw/misc/mikrobus.c                    |  18 ++-
+ include/hw/misc/click_buzzer.h        |  21 ++++
+ tests/qtest/avr64ea48-cnano-test.c    |  25 ++++
+ tests/qtest/pic32cm-click-test.c      |  69 +++++++++++
+ 9 files changed, 326 insertions(+), 12 deletions(-)
+ create mode 100644 hw/misc/click_buzzer.c
+ create mode 100644 include/hw/misc/click_buzzer.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 8004e3b..60016c4 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -80,6 +80,19 @@ resistors are modelled (from their schematics, v100).
+   pulled low by the driver transistors' base resistors. There is no device:
+   the relays follow the pads.
+ 
++``8x8g``
++  8x8 G Click: an 8x8 LED matrix on a MAX7219 (``max7219``) on the SPI bus,
++  LOAD on CS. The QOM property ``display`` reads the eight digit outputs.
++
++``buzz``
++  Buzz Click: a piezo buzzer (``click-buzzer``) switched by a transistor
++  from PWM (jumper J2, the default; R1 into the transistor's base holds the
++  pin low while undriven). The QOM properties ``frequency`` (Hz) and
++  ``duty`` (per mille) give the tone the PWM signal plays, 0 while silent.
++
++SPI Clicks on both headers share the SPI bus; each listens only while its
++own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
++
+ .. code-block:: bash
+ 
+   $ qemu-system-arm -M pic32cm-mc00-cpro,ext1=thermo8 -kernel thermo.elf       -display none -serial stdio
+diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
+index 7f12554..2a5b065 100644
+--- a/docs/system/avr/avr64ea48-cnano.rst
++++ b/docs/system/avr/avr64ea48-cnano.rst
+@@ -30,8 +30,9 @@ on ``-serial`` 1.
+ 
+ On a Curiosity Nano Base for Click boards (AC164162), ``mb1=``, ``mb2=``
+ and ``mb3=`` plug a Click board into mikroBUS socket 1-3 (``thermo8`` needs
+-I2C, which is not modelled yet; ``buttong``, ``7seg``, ``relay`` and
+-``8x8g``, a MAX7219 LED matrix with a ``display`` property, work). The
++I2C, which is not modelled yet; ``buttong``, ``7seg``, ``relay``,
++``8x8g``, a MAX7219 LED matrix with a ``display`` property, and ``buzz``,
++a piezo buzzer whose ``frequency`` follows the PWM pin, work). The
+ Click is ``/machine/mbN-click``.
+ 
+ Firmware comes from ``-kernel`` or ``-bios``::
+diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
+index c1db36a..0c2187d 100644
+--- a/hw/arm/pic32cm_mc00_cpro.c
++++ b/hw/arm/pic32cm_mc00_cpro.c
+@@ -216,14 +216,16 @@ static void pic32cm_mc00_cpro_class_init(ObjectClass *oc, const void *data)
+                                           "Hold user switch SW0 (PA25) down");
+     object_class_property_add_str(oc, "ext1", pic32cm_mc00_cpro_get_ext1,
+                                   pic32cm_mc00_cpro_set_ext1);
+-    object_class_property_set_description(oc, "ext1",
+-        "Click board on EXT1 (see mikrobus_clicks[]: thermo8, buttong, "
+-        "7seg, relay, 8x8g, none)");
+     object_class_property_add_str(oc, "ext2", pic32cm_mc00_cpro_get_ext2,
+                                   pic32cm_mc00_cpro_set_ext2);
+-    object_class_property_set_description(oc, "ext2",
+-        "Click board on EXT2 (see mikrobus_clicks[]: thermo8, buttong, "
+-        "7seg, relay, 8x8g, none)");
++    for (unsigned n = 1; n <= CPRO_EXT_NUM; n++) {
++        g_autofree char *name = g_strdup_printf("ext%u", n);
++        g_autofree char *desc = g_strdup_printf(
++            "Click board on EXT%u through a mikroBUS Xplained Pro (%s)",
++            n, mikrobus_click_names());
++
++        object_class_property_set_description(oc, name, desc);
++    }
+ }
+ 
+ static const TypeInfo pic32cm_mc00_cpro_types[] = {
+diff --git a/hw/misc/click_buzzer.c b/hw/misc/click_buzzer.c
+new file mode 100644
+index 0000000..52fc79a
+--- /dev/null
++++ b/hw/misc/click_buzzer.c
+@@ -0,0 +1,172 @@
++/*
++ * A piezo buzzer on a Click board, driven from one header pin
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Buzz Click (MikroElektronika, schematic v100): the PWM pin drives the
++ * base of Q1 (BC846) through R1 10k; Q1 switches the EPT-14A4005P piezo
++ * transducer (R2 1k across it). The transducer has no oscillator of its
++ * own: it sounds at the frequency of the drive signal and stays silent
++ * under a constant level, high or low.
++ *
++ * The model times the rising edges of the drive signal on the virtual
++ * clock: "frequency" is 1 / (the last full period), rounded to Hz, and
++ * "duty" the high time of that period in per mille. The tone has ended
++ * once no edge has come for two periods (plus 1 ms): both read 0 then,
++ * and the next rising edge starts a new tone instead of ending a period
++ * that spans the silence.
++ * Loudness, resonance (4 kHz) and the transistor are not modelled. Not
++ * checked against a physical Click.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/visitor.h"
++#include "qemu/timer.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/misc/click_buzzer.h"
++#include "migration/vmstate.h"
++
++OBJECT_DECLARE_SIMPLE_TYPE(ClickBuzzerState, CLICK_BUZZER)
++
++struct ClickBuzzerState {
++    DeviceState parent_obj;
++
++    bool level;
++    int64_t rise_ns;            /* last rising edge, -1: none yet */
++    int64_t edge_ns;            /* last edge of either kind */
++    int64_t period_ns;          /* last full period, 0: none */
++    int64_t high_ns;            /* high time in that period */
++    int64_t pending_high_ns;    /* high time since rise_ns */
++    uint32_t periods;
++};
++
++static void click_buzzer_set_in(void *opaque, int n, int level)
++{
++    ClickBuzzerState *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    bool high = level > 0;
++    int64_t last = s->edge_ns;
++
++    if (high == s->level) {
++        return;
++    }
++    s->level = high;
++    s->edge_ns = now;
++    if (high) {
++        if (s->rise_ns >= 0 && (!s->period_ns ||
++                                now - last <= 2 * s->period_ns + SCALE_MS)) {
++            s->period_ns = now - s->rise_ns;
++            s->high_ns = s->pending_high_ns;
++        } else {
++            s->period_ns = 0;           /* after a silence: a new tone */
++        }
++        s->rise_ns = now;
++        s->periods++;
++    } else if (s->rise_ns >= 0) {
++        s->pending_high_ns = now - s->rise_ns;
++    }
++}
++
++/* True while the last period is still the current tone */
++static bool click_buzzer_sounding(ClickBuzzerState *s)
++{
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    return s->period_ns > 0 &&
++           now - s->edge_ns <= 2 * s->period_ns + SCALE_MS;
++}
++
++static void click_buzzer_get_frequency(Object *obj, Visitor *v,
++                                       const char *name, void *opaque,
++                                       Error **errp)
++{
++    ClickBuzzerState *s = CLICK_BUZZER(obj);
++    uint32_t hz = 0;
++
++    if (click_buzzer_sounding(s)) {
++        hz = (NANOSECONDS_PER_SECOND + s->period_ns / 2) / s->period_ns;
++    }
++    visit_type_uint32(v, name, &hz, errp);
++}
++
++static void click_buzzer_get_duty(Object *obj, Visitor *v, const char *name,
++                                  void *opaque, Error **errp)
++{
++    ClickBuzzerState *s = CLICK_BUZZER(obj);
++    uint32_t duty = 0;
++
++    if (click_buzzer_sounding(s)) {
++        duty = MIN(1000, (s->high_ns * 1000 + s->period_ns / 2) /
++                         s->period_ns);
++    }
++    visit_type_uint32(v, name, &duty, errp);
++}
++
++static void click_buzzer_reset(DeviceState *dev)
++{
++    ClickBuzzerState *s = CLICK_BUZZER(dev);
++
++    /* The level stays what the pin drives; the tone starts afresh */
++    s->rise_ns = -1;
++    s->edge_ns = 0;
++    s->period_ns = 0;
++    s->high_ns = 0;
++    s->pending_high_ns = 0;
++    s->periods = 0;
++}
++
++static void click_buzzer_init(Object *obj)
++{
++    ClickBuzzerState *s = CLICK_BUZZER(obj);
++
++    qdev_init_gpio_in_named(DEVICE(obj), click_buzzer_set_in,
++                            CLICK_BUZZER_IN, 1);
++    object_property_add(obj, "frequency", "uint32",
++                        click_buzzer_get_frequency, NULL, NULL, NULL);
++    object_property_add(obj, "duty", "uint32", click_buzzer_get_duty,
++                        NULL, NULL, NULL);
++    object_property_add_uint32_ptr(obj, "periods", &s->periods,
++                                   OBJ_PROP_FLAG_READ);
++    s->rise_ns = -1;
++}
++
++static const VMStateDescription vmstate_click_buzzer = {
++    .name = TYPE_CLICK_BUZZER,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_BOOL(level, ClickBuzzerState),
++        VMSTATE_INT64(rise_ns, ClickBuzzerState),
++        VMSTATE_INT64(edge_ns, ClickBuzzerState),
++        VMSTATE_INT64(period_ns, ClickBuzzerState),
++        VMSTATE_INT64(high_ns, ClickBuzzerState),
++        VMSTATE_INT64(pending_high_ns, ClickBuzzerState),
++        VMSTATE_UINT32(periods, ClickBuzzerState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void click_buzzer_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->desc = "Click board piezo buzzer";
++    dc->vmsd = &vmstate_click_buzzer;
++    device_class_set_legacy_reset(dc, click_buzzer_reset);
++}
++
++static const TypeInfo click_buzzer_types[] = {
++    {
++        .name = TYPE_CLICK_BUZZER,
++        .parent = TYPE_DEVICE,
++        .instance_size = sizeof(ClickBuzzerState),
++        .instance_init = click_buzzer_init,
++        .class_init = click_buzzer_class_init,
++    },
++};
++
++DEFINE_TYPES(click_buzzer_types)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 0af9659..b6ad612 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -24,6 +24,7 @@ system_ss.add(when: 'CONFIG_MCHP_REGFILE', if_true: files(
+ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files(
+   'mikrobus.c',
+   'click_button.c',
++  'click_buzzer.c',
+ ))
+ system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files(
+   'mchp_clock.c',
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index 671ddf5..44cb4ce 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -18,6 +18,7 @@
+ #include "hw/core/irq.h"
+ #include "hw/core/qdev-properties.h"
+ #include "hw/misc/click_button.h"
++#include "hw/misc/click_buzzer.h"
+ #include "hw/misc/mikrobus.h"
+ #include "hw/sensor/mchp_mcp9808.h"
+ #include "hw/ssi/max7219.h"
+@@ -46,8 +47,8 @@ typedef struct ClickInfo {
+     uint8_t addr;               /* on the I2C bus */
+     uint32_t length;            /* "length" property, 0 for none */
+     ClickLine outs[2];          /* device output onto a socket pin */
+-    ClickLine ins[2];           /* socket pin into a device input */
+-    ClickPull pulls[3];
++    ClickLine ins[4];           /* socket pin into a device input */
++    ClickPull pulls[4];
+ } ClickInfo;
+ 
+ static const ClickInfo mikrobus_clicks[] = {
+@@ -74,6 +75,11 @@ static const ClickInfo mikrobus_clicks[] = {
+       "(no pull resistors)",
+       TYPE_MAX7219, CLICK_SPI, 0, 1,
+       .ins = { { MAX7219_LOAD, MIKROBUS_CS } } },
++    { "buzz", "Buzz Click: piezo buzzer switched by a transistor from PWM "
++      "(jumper J2 in its default position)",
++      TYPE_CLICK_BUZZER, CLICK_GPIO, 0, 0,
++      .ins = { { CLICK_BUZZER_IN, MIKROBUS_PWM } },
++      .pulls = { { true, MIKROBUS_PWM, 0 } } },           /* R1 10k, Q1 */
+ };
+ 
+ const char *mikrobus_click_names(void)
+@@ -129,7 +135,7 @@ static unsigned mikrobus_pin(const MikrobusSocket *sock, const ClickInfo *c,
+ }
+ 
+ static void mikrobus_plug_one(Object *machine, const MikrobusSocket *sock,
+-                              const ClickInfo *c)
++                              unsigned index, const ClickInfo *c)
+ {
+     DeviceState *dev = NULL;
+ 
+@@ -150,6 +156,10 @@ static void mikrobus_plug_one(Object *machine, const MikrobusSocket *sock,
+         if (c->length) {
+             qdev_prop_set_uint32(dev, "length", c->length);
+         }
++        if (c->bus == CLICK_SPI) {
++            /* Sockets share the SPI bus; each Click has its own CS */
++            qdev_prop_set_uint8(dev, "cs", index);
++        }
+         object_property_add_child(machine, child, OBJECT(dev));
+         switch (c->bus) {
+         case CLICK_I2C:
+@@ -214,6 +224,6 @@ void mikrobus_plug(Object *machine, const MikrobusSocket *sockets,
+             }
+         }
+         plugged[i] = c;
+-        mikrobus_plug_one(machine, &sockets[i], c);
++        mikrobus_plug_one(machine, &sockets[i], i, c);
+     }
+ }
+diff --git a/include/hw/misc/click_buzzer.h b/include/hw/misc/click_buzzer.h
+new file mode 100644
+index 0000000..cc10c47
+--- /dev/null
++++ b/include/hw/misc/click_buzzer.h
+@@ -0,0 +1,21 @@
++/*
++ * A piezo buzzer on a Click board, driven from one header pin
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * GPIO input "in": the drive signal (a PWM pin). QOM properties
++ * (read-only): "frequency" (Hz of the last full period, 0 while silent),
++ * "duty" (per mille high over that period) and "periods" (rising edges
++ * so far).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_CLICK_BUZZER_H
++#define HW_MISC_CLICK_BUZZER_H
++
++#define TYPE_CLICK_BUZZER "click-buzzer"
++#define CLICK_BUZZER_IN "in"
++
++#endif /* HW_MISC_CLICK_BUZZER_H */
+diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
+index 3c1ca86..f9fef81 100644
+--- a/tests/qtest/avr64ea48-cnano-test.c
++++ b/tests/qtest/avr64ea48-cnano-test.c
+@@ -27,6 +27,7 @@
+ #define NVMCTRL         (DATA + 0x1000)
+ #define SIGROW          (DATA + 0x1100)
+ #define PORTA           (DATA + 0x0400)
++#define PORTD           (DATA + 0x0460)
+ #define SPI0            (DATA + 0x0940)
+ #define TCB0            (DATA + 0x0B00)
+ #define EEPROM          (DATA + 0x1400)
+@@ -230,6 +231,29 @@ static void test_tcb(const void *fw)
+     qtest_quit(qts);
+ }
+ 
++/* Buzz Click on mikroBUS 1: the PWM pin (PD0) sets the tone */
++static void test_buzz(const void *fw)
++{
++    QTestState *qts = qtest_initf("-M avr64ea48-cnano,mb1=buzz -kernel %s",
++                                  (const char *)fw);
++
++    g_assert_cmphex(qtest_readb(qts, PORTD + P_IN) & BIT(0), ==, 0);
++    qtest_writeb(qts, PORTD + P_DIRSET, BIT(0));
++    for (unsigned i = 0; i < 6; i++) {
++        qtest_writeb(qts, PORTD + 0x05, BIT(0));                /* OUTSET */
++        qtest_clock_step(qts, 227273);
++        qtest_writeb(qts, PORTD + P_OUTCLR, BIT(0));
++        qtest_clock_step(qts, 909091);
++    }
++    qtest_writeb(qts, PORTD + 0x05, BIT(0));
++    g_assert_cmpuint(qom_uint(qts, "/machine/mb1-click", "frequency"), ==,
++                     880);
++    g_assert_cmpuint(qom_uint(qts, "/machine/mb1-click", "duty"), ==, 200);
++    qtest_clock_step(qts, 10 * 1000 * 1000);
++    g_assert_cmpuint(qom_uint(qts, "/machine/mb1-click", "frequency"), ==, 0);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_autofree char *fw = write_firmware();
+@@ -243,6 +267,7 @@ int main(int argc, char **argv)
+                         test_usart_cpuint);
+     qtest_add_data_func("avr64ea48-cnano/spi-8x8g", fw, test_spi_8x8g);
+     qtest_add_data_func("avr64ea48-cnano/tcb", fw, test_tcb);
++    qtest_add_data_func("avr64ea48-cnano/buzz", fw, test_buzz);
+     ret = g_test_run();
+     unlink(fw);
+     return ret;
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index 6d722b9..0f9e2a8 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -337,12 +337,81 @@ static void test_relay(void)
+     qtest_quit(qts);
+ }
+ 
++/* Drive @pin of @group as a square wave: @n periods of @hi_ns + @lo_ns */
++static void square(QTestState *qts, uint32_t group, unsigned pin,
++                   unsigned n, int64_t hi_ns, int64_t lo_ns)
++{
++    for (unsigned i = 0; i < n; i++) {
++        qtest_writel(qts, group + P_OUTSET, BIT(pin));
++        qtest_clock_step(qts, hi_ns);
++        qtest_writel(qts, group + P_OUTCLR, BIT(pin));
++        qtest_clock_step(qts, lo_ns);
++    }
++}
++
++/*
++ * Buzz Click on EXT1: PWM (PB10) pulled low through R1 and Q1's base; the
++ * tone is the frequency of the drive signal, silence under a steady level
++ */
++static void test_buzz(void)
++{
++    QTestState *qts = qtest_init("-M pic32cm-mc00-cpro,ext1=buzz ");
++
++    g_assert_false(pin_high(qts, PB, 10));
++    g_assert_cmpint(qom_int(qts, CLICK1, "frequency"), ==, 0);
++    qtest_writel(qts, PB + P_DIRSET, BIT(10));
++    square(qts, PB, 10, 8, 125000, 125000);             /* 4 kHz */
++    qtest_writel(qts, PB + P_OUTSET, BIT(10));
++    g_assert_cmpint(qom_int(qts, CLICK1, "frequency"), ==, 4000);
++    g_assert_cmpint(qom_int(qts, CLICK1, "duty"), ==, 500);
++    g_assert_cmpint(qom_int(qts, CLICK1, "periods"), ==, 9);
++    /* Held high: silent once two periods (and 1 ms) pass without an edge */
++    qtest_clock_step(qts, 1400000);
++    g_assert_cmpint(qom_int(qts, CLICK1, "frequency"), ==, 4000);
++    qtest_clock_step(qts, 200000);
++    g_assert_cmpint(qom_int(qts, CLICK1, "frequency"), ==, 0);
++    g_assert_cmpint(qom_int(qts, CLICK1, "duty"), ==, 0);
++    /* A new tone after the silence: 500 Hz, 25 % */
++    qtest_writel(qts, PB + P_OUTCLR, BIT(10));
++    qtest_clock_step(qts, 10000000);
++    square(qts, PB, 10, 4, 500000, 1500000);
++    g_assert_cmpint(qom_int(qts, CLICK1, "frequency"), ==, 500);
++    g_assert_cmpint(qom_int(qts, CLICK1, "duty"), ==, 250);
++    qtest_quit(qts);
++}
++
++/* Two SPI Clicks share SERCOM1: each takes the bytes on its own CS only */
++static void test_two_spi(void)
++{
++    QTestState *qts = qtest_init("-M pic32cm-mc00-cpro,ext1=8x8g,ext2=7seg ");
++    QDict *rsp;
++
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16);
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16 | 0x02);
++    qtest_writel(qts, PA + P_OUTSET, BIT(15) | BIT(17));
++    qtest_writel(qts, PA + P_DIRSET, BIT(15) | BIT(17));
++    qtest_writel(qts, PA + P_OUTCLR, BIT(15));          /* 7seg LATCH */
++    spi_byte(qts, 0x0F);                                /* display test */
++    spi_byte(qts, 0x01);
++    qtest_writel(qts, PA + P_OUTSET, BIT(15));
++    g_assert_cmphex(qom_int(qts, CLICK2, "outputs"), ==, 0x0F01);
++    rsp = qtest_qmp(qts, "{ 'execute': 'qom-get', 'arguments': {"
++                    " 'path': '" CLICK1 "', 'property': 'display' } }");
++    /* The MAX7219 shifted the bytes too, but its LOAD (PA17) stayed high */
++    g_assert_cmpstr(qdict_get_str(rsp, "return"), ==,
++                    "00 00 00 00 00 00 00 00");
++    qobject_unref(rsp);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+     qtest_add_func("pic32cm-click/button-g", test_button_g);
+     qtest_add_func("pic32cm-click/7seg", test_7seg);
+     qtest_add_func("pic32cm-click/relay", test_relay);
++    qtest_add_func("pic32cm-click/buzz", test_buzz);
++    qtest_add_func("pic32cm-click/two-spi", test_two_spi);
+     qtest_add_func("pic32cm-click/thermo8-identity", test_identity);
+     qtest_add_func("pic32cm-click/not-fitted", test_not_fitted);
+     qtest_add_func("pic32cm-click/thermo8-int-pullup", test_int_pullup);
+-- 
+2.53.0.windows.2
+

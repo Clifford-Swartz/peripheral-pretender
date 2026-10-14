@@ -310,5 +310,42 @@
         2.2
       ]
     }
+  },
+  "buzz": {
+    "name": "Buzz Click",
+    "vendor": "MikroElektronika",
+    "chip": "EPT-14A4005P piezo",
+    "bus": "PWM",
+    "description": "Piezo buzzer switched by a transistor from PWM: it sounds at the PWM frequency, silent under a steady level",
+    "image": "buzz/top.png",
+    "origin_mm": [
+      -1.2954,
+      24.7396
+    ],
+    "size_mm": [
+      25.4254,
+      28.5496
+    ],
+    "controls": [],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          17.78,
+          2.29
+        ],
+        "color": "#5dff7a"
+      }
+    ],
+    "sound": {
+      "property": "frequency",
+      "duty_property": "duty",
+      "at_mm": [
+        11.4,
+        16.89
+      ],
+      "size_mm": 12.4
+    },
+    "signals": []
   }
 }

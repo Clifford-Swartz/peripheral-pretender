@@ -137,3 +137,17 @@ h2 small { color: var(--muted); font-weight: normal; }
 .click-dot { position: absolute; border-radius: 30%; opacity: .12;
   background: var(--seg); box-shadow: 0 0 0 transparent; }
 .click-dot.on { opacity: 1; box-shadow: 0 0 6px 2px var(--seg); }
+
+/* A buzzer on a Click (Buzz Click): rings and the tone while it sounds */
+.click-sound { position: absolute; border-radius: 50%; cursor: pointer;
+  display: flex; align-items: flex-end; justify-content: center; }
+.click-sound i { position: absolute; inset: 0; border-radius: 50%; opacity: 0;
+  border: 2px solid #8fd3ff; pointer-events: none; }
+.click-sound.on i { animation: ring 0.6s linear infinite; }
+.click-sound.on i + i { animation-delay: .3s; }
+.click-sound.muted.on i { border-color: #9aa0a6; }
+@keyframes ring { from { transform: scale(.35); opacity: .9; } to { transform: scale(1.15); opacity: 0; } }
+.click-sound span { transform: translateY(120%); font: 700 10px/1 system-ui, sans-serif;
+  color: #fff; background: #000a; border-radius: 3px; padding: 1px 4px; white-space: nowrap; }
+.click-sound span:empty { display: none; }
+.click-sound.muted span::after { content: " (muted)"; }

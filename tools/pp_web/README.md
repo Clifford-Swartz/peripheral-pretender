@@ -147,6 +147,13 @@ MAX7219's `display` property ("d0 ... d7", hex) and lights dot (row r, column c)
 `row_bits[r]` of digit `col_digits[c]`. Rows and columns follow the schematic (DIG7 left, DP at
 the top); the physical LED order is not confirmed. LED positions come from the DXF's pads.
 
+The Buzz Click (`clicks/buzz/`) has a `sound` entry instead of a display: the page polls the
+buzzer's `frequency` and `duty` properties (`server.watched()` lists what a Click entry polls)
+and plays a square wave at that pitch through Web Audio, louder the closer the duty is to 50 %;
+rings and the pitch show on the buzzer, and clicking it mutes the page. Browsers start audio
+only after a click on the page. Demo: `make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=buzz`,
+then pick "Buzz Click" for EXT1 (TCC0 plays C5 E5 G5 C6 on PB10; hold SW0 for A4).
+
 ## Adapter assets: `adapters/<id>/`
 
 The Curiosity Pro's EXT1/EXT2 are Xplained Pro extension headers, so a Click needs an adapter:

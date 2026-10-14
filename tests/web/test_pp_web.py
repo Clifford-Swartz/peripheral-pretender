@@ -525,3 +525,55 @@ def test_session_ev66e56a_blinky_and_8x8g():
     frames = {f for f in states if f}
     assert len(frames) >= 3, frames        # the text scrolls
     assert all(len(f.split()) == 8 for f in frames), frames
+
+
+BUZZ_DEMO = BUILD / "buzz.elf"
+
+
+@pytest.mark.qemu
+def test_session_buzz(qemu_path, qemu_machines):
+    """buzz.elf with a Buzz Click on EXT1: the page hears the tune TCC0
+    plays on PB10 (the buzzer's frequency property, the property the page
+    polls), silence between notes, and A4 while SW0 is held."""
+    from tools.pp_web.server import watched
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not BUZZ_DEMO.is_file():
+        pytest.skip("buzz.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=buzz)")
+
+    async def scenario():
+        uart, tones = [], []
+
+        def emit(msg):
+            if msg["type"] == "uart":
+                uart.append(msg["data"])
+            elif msg["type"] == "clickstate":
+                tones.append((msg["state"]["ext1.frequency"],
+                              msg["state"]["ext1.duty"]))
+
+        s = Session("pic32cm-mc00-cpro,ext1=buzz", BUZZ_DEMO, emit,
+                    watch=[("ext1", p) for p in watched(CLICKS["buzz"])])
+        await s.start()
+        try:
+            await asyncio.sleep(2.5)
+            tune = list(tones)
+            await s.press("sw0", True)
+            await asyncio.sleep(1.0)
+            held = tones[-1]
+            await s.press("sw0", False)
+            await asyncio.sleep(0.5)
+            after = tones[-1]
+        finally:
+            await s.stop()
+        return "".join(uart), tune, held, after
+
+    uart, tune, held, after = asyncio.run(scenario())
+    assert "note 523 Hz" in uart and "note 1047 Hz" in uart, uart
+    heard = {f for f, _ in tune if f}
+    for note in (523, 659, 784, 1047):
+        assert any(abs(f - note) <= 1 for f in heard), (note, heard)
+    assert all(abs(d - 500) <= 5 for f, d in tune if f), tune
+    assert (0, 0) in tune                       # rests are silent
+    assert held[0] == 440 and abs(held[1] - 500) <= 5, held
+    assert after[0] != 440, after

@@ -32,6 +32,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0023 | generic `avr8x-soc` (flash, FLMAP window, SRAM, EEPROM, CCP, regblocks wired by vector); PORT/VPORT, USART, CLKCTRL, CPUINT, NVMCTRL and NVM-byte models; the `avr64ea48-cnano` board (LED0, SW0, VCOM on USART1); qtest |
 | 0024 | regenerated AVR64EA48 tables: SPI and TCB overlays, CLKCTRL.MCLKSTATUS read-only by field |
 | 0025 | AVR8X SPI host and TCB (periodic interrupt); MAX7219 (8x8 G Click); shared mikroBUS Click catalog `hw/misc/mikrobus.c` (the MC00 board uses it too); `mb1=`..`mb3=` Click slots of a Curiosity Nano Base on `avr64ea48-cnano`; qtests, board docs |
+| 0026 | Buzz Click (`click-buzzer`: tone from the PWM pin's edges); each SPI Click gets its socket's CS index (two SPI Clicks on one board failed before); qtests |
 
 ## Setting it up
 

@@ -13,7 +13,7 @@ Messages to the page: {"type": "status"|"pins"|"uart"|"board"|"clicks",
 ...}; "pins" maps a PORT group ("a", "b") to 32 [driven-high, driven-low]
 fractions of the last frame, "levels" each group's pad levels as a
 32-bit mask (whoever drives them); "clickstate" maps "<slot>.<property>" to
-the value of each plugged Click's display property; "board" carries the board, the Click
+the value of each property a plugged Click shows (display, sound); "board" carries the board, the Click
 catalog and the adapters; "clicks" maps each header slot ("ext1") to its Click and control
 values, or null.
 Messages from the page: {"type": "select-board", "board": "<id>"}
@@ -57,6 +57,17 @@ def newest_elf(target: Path) -> Path | None:
     return max(found, key=lambda p: p.stat().st_mtime, default=None)
 CLICKS = json.loads((HERE / "clicks.json").read_text(encoding="utf-8"))
 ADAPTERS = json.loads((HERE / "adapters.json").read_text(encoding="utf-8"))
+
+
+def watched(click: dict) -> list[str]:
+    """QOM properties of a catalog Click that the page shows: its display,
+    its sound (frequency, duty)."""
+    props = []
+    if "display" in click:
+        props.append(click["display"]["property"])
+    if "sound" in click:
+        props += [click["sound"]["property"], click["sound"]["duty_property"]]
+    return props
 
 
 def board_list() -> list[dict]:
@@ -128,10 +139,9 @@ class App:
         return ",".join([self.board["machine"], *opts])
 
     def click_watch(self) -> list[tuple[str, str]]:
-        """(slot, property) of each plugged Click's display, polled live."""
-        return [(slot, CLICKS[c["id"]]["display"]["property"])
-                for slot, c in self.clicks.items()
-                if c and "display" in CLICKS[c["id"]]]
+        """(slot, property) of what each plugged Click shows, polled live."""
+        return [(slot, prop) for slot, c in self.clicks.items() if c
+                for prop in watched(CLICKS[c["id"]])]
 
     async def plug(self, slot: str, click: str | None) -> None:
         if slot not in self.clicks or (click and click not in CLICKS):
