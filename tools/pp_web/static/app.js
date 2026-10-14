@@ -295,6 +295,17 @@ function drawClick(stack, h, id, def) {
                                      st.at_mm[1] + st.size_mm / 2],
         st.size_mm, st.size_mm);
   }
+  // A text readout (RTC 6's time): a polled string property
+  if (def.display && def.display.type === "text") {
+    const d = def.display, el = document.createElement("div");
+    el.className = "click-text";
+    el.dataset.prop = `${h.slot}.${d.property}`;
+    el.innerHTML = `<svg viewBox="0 0 ${d.size_mm[0]} ${d.size_mm[1]}"><text x="${d.size_mm[0] / 2}" ` +
+      `y="${d.size_mm[1] * 0.72}" font-size="${d.size_mm[1] * 0.78}" fill="${d.color || "#9fe8ff"}" ` +
+      `text-anchor="middle" textLength="${d.size_mm[0] * 0.92}" lengthAdjust="spacingAndGlyphs"></text></svg>`;
+    put(el, [d.at_mm[0] - d.size_mm[0] / 2, d.at_mm[1] + d.size_mm[1] / 2],
+        d.size_mm[0], d.size_mm[1]);
+  }
   // A buzzer: its tone follows the Click's frequency property
   if (def.sound) {
     const el = document.createElement("div");
@@ -393,6 +404,10 @@ function updateClickParts() {
     if (shownFrames.get(cv) === frame) continue;
     shownFrames.set(cv, frame);
     drawPanel(cv, frame);
+  }
+  for (const el of document.querySelectorAll(".click-text")) {
+    const t = el.querySelector("text"), v = String(clickState[el.dataset.prop] ?? "");
+    if (t.textContent !== v) t.textContent = v;
   }
   const sounding = new Set();
   for (const el of document.querySelectorAll(".click-sound")) {

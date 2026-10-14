@@ -490,5 +490,56 @@
         ]
       }
     ]
+  },
+  "rtc6": {
+    "name": "RTC 6 Click",
+    "vendor": "MikroElektronika",
+    "chip": "MCP79411",
+    "bus": "I2C 0x6F/0x57",
+    "description": "RTCC with alarms, 64 bytes of SRAM, 1 Kbit EEPROM and an EUI-48; MFP (alarm, square wave or output) on INT. The time the chip counts shows on the Click",
+    "image": "rtc6/top.png",
+    "origin_mm": [
+      -1.27,
+      39.116
+    ],
+    "size_mm": [
+      25.4,
+      42.926
+    ],
+    "controls": [],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          17.33,
+          2.54
+        ],
+        "color": "#5dff7a"
+      }
+    ],
+    "display": {
+      "type": "text",
+      "property": "time",
+      "at_mm": [
+        11.43,
+        24.4
+      ],
+      "size_mm": [
+        23.0,
+        3.4
+      ],
+      "color": "#9fe8ff"
+    },
+    "signals": [
+      {
+        "id": "MFP",
+        "pin": "int",
+        "active_low": true,
+        "at_mm": [
+          22.86,
+          15.24
+        ]
+      }
+    ]
   }
 }

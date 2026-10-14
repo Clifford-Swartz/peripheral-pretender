@@ -36,6 +36,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0027 | SSD1351 OLED driver and the OLED C Click (`oledc`); `pp_panel`, the panel picture (`frame`, `frame-gen`) that headless front ends poll, shared by future display controllers; qtests |
 | 0028 | MCP3204 SPI ADC (`mchp-mcp3204`, bit by bit) and the Thumbstick Click (`click-thumbstick`: joystick on CH0/CH1, switch on INT); qtests |
 | 0029 | AVR8X TWI host (`avr8x-twi`; regenerated AVR64EA48 TWI tables), I2C on the Nano Base's mikroBUS sockets; ADXL345 and the Accel Click (`accel`); qtests |
+| 0030 | MCP79411 RTCC with SRAM/EEPROM (`mchp-mcp79411`, two I2C addresses) and the RTC 6 Click (`rtc6`); qtests |
 
 ## Setting it up
 

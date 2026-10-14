@@ -1,0 +1,1158 @@
+From c3faa4b90ee1ca4e69d2de55ccf04a1f9e8a7359 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 14 Oct 2026 16:05:48 -0700
+Subject: [PATCH] hw/rtc: MCP79411 RTCC and the RTC 6 Click
+
+- mchp-mcp79411 (MCP7941X data sheet DS20002266H): one device answering
+  0x6F (RTCC registers, 64-byte SRAM) and 0x57 (EEPROM, protected block
+  with the EUI-48, STATUS) through its own match_and_add. Timekeeping on
+  the virtual clock once ST is set (BCD, 12/24 h, weekdays, month
+  lengths, leap years, OSCRUN), power-on reset values, two alarms with
+  all masks and ALMPOL logic (ALMxIF set again while the match
+  persists), the open-drain MFP (alarm output, 1 Hz square wave, OUT),
+  EEPROM page writes at STOP with a 5 ms busy time, block protection and
+  the 0x55/0xAA unlock for the protected block. "time" (read/load),
+  "running", "eui48".
+- mikrobus: "rtc6" (schematic v100): MFP on INT with R2 10k pull-up.
+- qtests: time and rollovers (new year, leap day, 12-hour), ST, alarm
+  latching and polarity, square wave, SRAM wrap, EEPROM busy, page wrap,
+  block protection, unlock; on mikroBUS 3 of the Nano Base too.
+
+Not checked against a physical RTC 6 Click.
+
+Peripheral Pretender: AI-assisted, not for upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  11 +
+ docs/system/avr/avr64ea48-cnano.rst   |   4 +-
+ hw/misc/mikrobus.c                    |   6 +
+ hw/rtc/mchp_mcp7941x.c                | 753 ++++++++++++++++++++++++++
+ hw/rtc/meson.build                    |   1 +
+ include/hw/rtc/mchp_mcp7941x.h        |  27 +
+ tests/qtest/avr64ea48-cnano-test.c    |  33 ++
+ tests/qtest/pic32cm-click-test.c      | 179 ++++++
+ 8 files changed, 1012 insertions(+), 2 deletions(-)
+ create mode 100644 hw/rtc/mchp_mcp7941x.c
+ create mode 100644 include/hw/rtc/mchp_mcp7941x.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index fa2eda7..5406d84 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -118,6 +118,17 @@ resistors are modelled (from their schematics, v100).
+   DATA_READY/OVERRUN/WATERMARK and the INT pins are modelled; tap,
+   activity and free-fall detection and the FIFO modes are not.
+ 
++``rtc6``
++  RTC 6 Click: an MCP79411 RTCC (``mchp-mcp79411``) at I2C 0x6F (RTCC
++  registers, 64 bytes of SRAM) and 0x57 (1 Kbit EEPROM, the protected
++  block with the EUI-48, STATUS), its open-drain MFP on INT (R2 10 kOhm
++  pull-up). The clock counts virtual time once ST is set, from the
++  power-on date 2001-01-01; alarms, the 1 Hz square wave and the general
++  purpose output drive MFP; EEPROM writes take 5 ms. QOM properties
++  ``time`` ("YYYY-MM-DD HH:MM:SS", read or load), ``running`` and
++  ``eui48``. Trimming, power-fail time-stamps and the faster square waves
++  are not modelled.
++
+ SPI Clicks on both headers share the SPI bus; each listens only while its
+ own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
+ 
+diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
+index c8e50f5..10d5b60 100644
+--- a/docs/system/avr/avr64ea48-cnano.rst
++++ b/docs/system/avr/avr64ea48-cnano.rst
+@@ -32,8 +32,8 @@ On a Curiosity Nano Base for Click boards (AC164162), ``mb1=``, ``mb2=``
+ and ``mb3=`` plug a Click board into mikroBUS socket 1-3: SPI on SPI0, I2C
+ on TWI0 (PA2 SDA, PA3 SCL; host mode, ``avr8x-twi``). Every Click of the
+ shared catalog works here: ``thermo8``, ``accel``, ``buttong``, ``7seg``,
+-``relay``, ``8x8g``, ``buzz``, ``oledc`` and ``thumbstick`` (see the PIC32CM
+-MC00 Curiosity Pro for what each one models). The Click is
++``relay``, ``8x8g``, ``buzz``, ``oledc``, ``thumbstick`` and ``rtc6`` (see
++the PIC32CM MC00 Curiosity Pro for what each one models). The Click is
+ ``/machine/mbN-click``.
+ 
+ Firmware comes from ``-kernel`` or ``-bios``::
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index 5045faa..1e2b12b 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -22,6 +22,7 @@
+ #include "hw/misc/mikrobus.h"
+ #include "hw/adc/mchp_mcp3204.h"
+ #include "hw/display/ssd1351.h"
++#include "hw/rtc/mchp_mcp7941x.h"
+ #include "hw/sensor/adxl345.h"
+ #include "hw/sensor/mchp_mcp9808.h"
+ #include "hw/ssi/max7219.h"
+@@ -106,6 +107,11 @@ static const ClickInfo mikrobus_clicks[] = {
+       .outs = { { ADXL345_INT1, MIKROBUS_INT } },
+       .pulls = { { true, MIKROBUS_CS, 1 },                /* R6 100k */
+                  { true, MIKROBUS_RST, 1 } } },           /* R8 10k */
++    { "rtc6", "RTC 6 Click: MCP79411 RTCC with SRAM and EEPROM at I2C "
++      "0x6F/0x57, its MFP on INT",
++      TYPE_MCHP_MCP79411, CLICK_I2C, MCHP_MCP7941X_RTCC_ADDR, 0,
++      .outs = { { MCHP_MCP7941X_MFP, MIKROBUS_INT } },
++      .pulls = { { true, MIKROBUS_INT, 1 } } },           /* R2 10k */
+ };
+ 
+ const char *mikrobus_click_names(void)
+diff --git a/hw/rtc/mchp_mcp7941x.c b/hw/rtc/mchp_mcp7941x.c
+new file mode 100644
+index 0000000..73aa78c
+--- /dev/null
++++ b/hw/rtc/mchp_mcp7941x.c
+@@ -0,0 +1,753 @@
++/*
++ * Microchip MCP79410/MCP79411/MCP79412 I2C RTCC with SRAM and EEPROM
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * MCP7941X data sheet DS20002266H, modelled as the MCP79411:
++ *
++ * - Control byte 1101111 (0x6F): RTCC registers 0x00-0x1F (Table 5-1) and
++ *   64 bytes of SRAM 0x20-0x5F; sequential access wraps from 0x1F to 0x00
++ *   and from 0x5F to 0x20; other addresses are not acknowledged. Reset
++ *   values from the register descriptions (2001-01-01, day 1, CONTROL
++ *   0x80, oscillator stopped).
++ * - Timekeeping: with RTCSEC.ST set the counters advance once a second of
++ *   virtual time, in BCD, 12- or 24-hour, with weekday 1-7, month lengths
++ *   and leap years (year % 4, LPYR read-only); OSCRUN follows ST. EXTOSC
++ *   needs a clock on X1 that the Click does not have: the counters stop.
++ * - Alarms 0 and 1: ALMxMSK selects seconds, minutes, hours, weekday, date
++ *   or all fields; a match sets ALMxIF, writing ALMxWKDAY clears it and it
++ *   is set again while the match persists. ALM1WKDAY.ALMPOL and the ALMx
++ *   12/24 bits read the values they reflect.
++ * - MFP (open drain): the 1 Hz square wave (SQWEN, SQWFS = 00 as Register
++ *   5-14 gives it; Table 5-8 lists the codes the other way round, and the
++ *   other frequencies are not modelled), else the alarm output (single
++ *   alarm: ALMPOL ? IF : !IF; both: ALMPOL ? IF0 | IF1 : !(IF0 & IF1)),
++ *   else CONTROL.OUT.
++ * - Control byte 1010111 (0x57): 128 bytes of EEPROM (erased, 0xFF), the
++ *   protected block 0xF0-0xF7 with the EUI-48 at 0xF2-0xF7, and STATUS
++ *   (BP1:BP0 block protection) at 0xFF. Writes go through an 8-byte page
++ *   buffer and are programmed at STOP; the device then does not
++ *   acknowledge its EEPROM control byte for 5 ms. The protected block is
++ *   written only right after 0x55, 0xAA to EEUNLOCK (0x09), one write
++ *   command per unlock.
++ *
++ * Not modelled: digital trimming, power-fail time-stamps and the battery
++ * switch-over (VBATEN is stored), 4.096/8.192/32.768 kHz outputs. The
++ * EEPROM and SRAM do not persist across runs. Not checked against a
++ * physical part or Click.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/i2c/i2c.h"
++#include "hw/rtc/mchp_mcp7941x.h"
++#include "migration/vmstate.h"
++
++enum {
++    RTCSEC = 0x00,
++    RTCMIN = 0x01,
++    RTCHOUR = 0x02,
++    RTCWKDAY = 0x03,
++    RTCDATE = 0x04,
++    RTCMTH = 0x05,
++    RTCYEAR = 0x06,
++    CONTROL = 0x07,
++    OSCTRIM = 0x08,
++    EEUNLOCK = 0x09,
++    ALM0 = 0x0A,
++    ALM1 = 0x11,
++    RTCC_REGS = 0x20,
++    SRAM_BASE = 0x20,
++    SRAM_SIZE = 64,
++    EE_SIZE = 128,
++    EE_PROT = 0xF0,
++    EE_STATUS = 0xFF,
++};
++
++/* Offsets within an alarm block (ALMxSEC ... ALMxMTH) */
++enum { A_SEC, A_MIN, A_HOUR, A_WKDAY, A_DATE, A_MTH };
++
++#define SEC_ST          BIT(7)
++#define HOUR_12         BIT(6)
++#define HOUR_PM         BIT(5)
++#define WKDAY_OSCRUN    BIT(5)
++#define WKDAY_PWRFAIL   BIT(4)
++#define MTH_LPYR        BIT(5)
++#define CTRL_OUT        BIT(7)
++#define CTRL_SQWEN      BIT(6)
++#define CTRL_ALM1EN     BIT(5)
++#define CTRL_ALM0EN     BIT(4)
++#define CTRL_CRSTRIM    BIT(2)
++#define ALM_POL         BIT(7)
++#define ALM_IF          BIT(3)
++
++#define HALF_SECOND_NS  (NANOSECONDS_PER_SECOND / 2)
++#define EE_WRITE_NS     (5 * SCALE_MS)
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpMcp7941xState, MCHP_MCP79411)
++
++struct MchpMcp7941xState {
++    I2CSlave parent_obj;
++
++    qemu_irq mfp;
++    QEMUTimer *timer;
++    char *eui48_str;
++
++    uint8_t regs[RTCC_REGS];
++    uint8_t sram[SRAM_SIZE];
++    uint8_t eeprom[EE_SIZE];
++    uint8_t prot[8];
++    uint8_t status;
++
++    uint8_t target;             /* the address of the current transfer */
++    bool addressed;             /* its address byte came */
++    uint8_t rtcc_ptr;
++    uint8_t ee_ptr;
++    bool half;                  /* the second half of the current second */
++    uint8_t unlock;             /* 0, 1 (0x55 seen), 2 (unlocked) */
++    uint8_t page[8];
++    uint8_t page_valid;         /* bytes of page[] loaded */
++    uint8_t page_base;
++    bool status_pending;
++    uint8_t status_new;
++    int64_t ee_busy_until;
++    int64_t next_tick;
++    bool unimp_logged;
++};
++
++static unsigned bcd2bin_u8(uint8_t v)
++{
++    return (v >> 4) * 10 + (v & 0xF);
++}
++
++static uint8_t bin2bcd_u8(unsigned v)
++{
++    return (v / 10) << 4 | (v % 10);
++}
++
++static bool mcp7941x_running(MchpMcp7941xState *s)
++{
++    return s->regs[RTCSEC] & SEC_ST;
++}
++
++static unsigned mcp7941x_days(unsigned month, unsigned year)
++{
++    static const uint8_t days[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31,
++                                    30, 31 };
++
++    if (month == 2 && year % 4 == 0) {
++        return 29;
++    }
++    return days[(month - 1) % 12];
++}
++
++static unsigned mcp7941x_hour24(MchpMcp7941xState *s)
++{
++    uint8_t h = s->regs[RTCHOUR];
++
++    if (h & HOUR_12) {
++        return bcd2bin_u8(h & 0x1F) % 12 + (h & HOUR_PM ? 12 : 0);
++    }
++    return bcd2bin_u8(h & 0x3F);
++}
++
++static void mcp7941x_set_hour24(MchpMcp7941xState *s, unsigned h)
++{
++    if (s->regs[RTCHOUR] & HOUR_12) {
++        unsigned h12 = h % 12 ? h % 12 : 12;
++
++        s->regs[RTCHOUR] = HOUR_12 | (h >= 12 ? HOUR_PM : 0) |
++                           bin2bcd_u8(h12);
++    } else {
++        s->regs[RTCHOUR] = bin2bcd_u8(h);
++    }
++}
++
++static void mcp7941x_update_lpyr(MchpMcp7941xState *s)
++{
++    if (bcd2bin_u8(s->regs[RTCYEAR]) % 4 == 0) {
++        s->regs[RTCMTH] |= MTH_LPYR;
++    } else {
++        s->regs[RTCMTH] &= ~MTH_LPYR;
++    }
++}
++
++static void mcp7941x_advance(MchpMcp7941xState *s)
++{
++    unsigned sec = bcd2bin_u8(s->regs[RTCSEC] & 0x7F) + 1;
++    unsigned min, hour, date, month, year, wk;
++
++    if (sec < 60) {
++        s->regs[RTCSEC] = SEC_ST | bin2bcd_u8(sec);
++        return;
++    }
++    s->regs[RTCSEC] = SEC_ST;
++    min = bcd2bin_u8(s->regs[RTCMIN] & 0x7F) + 1;
++    if (min < 60) {
++        s->regs[RTCMIN] = bin2bcd_u8(min);
++        return;
++    }
++    s->regs[RTCMIN] = 0;
++    hour = mcp7941x_hour24(s) + 1;
++    if (hour < 24) {
++        mcp7941x_set_hour24(s, hour);
++        return;
++    }
++    mcp7941x_set_hour24(s, 0);
++    wk = s->regs[RTCWKDAY] & 7;
++    s->regs[RTCWKDAY] = (s->regs[RTCWKDAY] & ~7) | (wk >= 7 ? 1 : wk + 1);
++    date = bcd2bin_u8(s->regs[RTCDATE] & 0x3F) + 1;
++    month = bcd2bin_u8(s->regs[RTCMTH] & 0x1F);
++    year = bcd2bin_u8(s->regs[RTCYEAR]);
++    if (date <= mcp7941x_days(month, year)) {
++        s->regs[RTCDATE] = bin2bcd_u8(date);
++        return;
++    }
++    s->regs[RTCDATE] = 1;
++    if (++month > 12) {
++        month = 1;
++        s->regs[RTCYEAR] = bin2bcd_u8((year + 1) % 100);
++    }
++    s->regs[RTCMTH] = bin2bcd_u8(month);
++    mcp7941x_update_lpyr(s);
++}
++
++static bool mcp7941x_match(MchpMcp7941xState *s, unsigned base)
++{
++    const uint8_t *a = &s->regs[base];
++    const uint8_t *r = s->regs;
++    bool sec = (a[A_SEC] & 0x7F) == (r[RTCSEC] & 0x7F);
++    bool min = (a[A_MIN] & 0x7F) == (r[RTCMIN] & 0x7F);
++    bool hour = (a[A_HOUR] & 0x3F) == (r[RTCHOUR] & 0x3F);
++    bool wkday = (a[A_WKDAY] & 7) == (r[RTCWKDAY] & 7);
++    bool date = (a[A_DATE] & 0x3F) == (r[RTCDATE] & 0x3F);
++    bool mth = (a[A_MTH] & 0x1F) == (r[RTCMTH] & 0x1F);
++
++    switch ((a[A_WKDAY] >> 4) & 7) {
++    case 0:
++        return sec;
++    case 1:
++        return min;
++    case 2:
++        return hour;
++    case 3:
++        return wkday;
++    case 4:
++        return date;
++    case 7:
++        return sec && min && hour && wkday && date && mth;
++    default:
++        return false;           /* reserved masks */
++    }
++}
++
++static void mcp7941x_check_alarms(MchpMcp7941xState *s)
++{
++    if ((s->regs[CONTROL] & CTRL_ALM0EN) && mcp7941x_match(s, ALM0)) {
++        s->regs[ALM0 + A_WKDAY] |= ALM_IF;
++    }
++    if ((s->regs[CONTROL] & CTRL_ALM1EN) && mcp7941x_match(s, ALM1)) {
++        s->regs[ALM1 + A_WKDAY] |= ALM_IF;
++    }
++}
++
++static void mcp7941x_update_mfp(MchpMcp7941xState *s)
++{
++    uint8_t ctrl = s->regs[CONTROL];
++    bool level;
++
++    if (ctrl & CTRL_SQWEN) {
++        if ((ctrl & 3) || (ctrl & CTRL_CRSTRIM)) {
++            if (!s->unimp_logged) {
++                qemu_log_mask(LOG_UNIMP, "mcp7941x: only the 1 Hz square "
++                              "wave is modelled\n");
++                s->unimp_logged = true;
++            }
++            level = true;
++        } else {
++            /* 1 Hz: high for the first half of each second */
++            level = !mcp7941x_running(s) || !s->half;
++        }
++    } else if (ctrl & (CTRL_ALM0EN | CTRL_ALM1EN)) {
++        bool pol = s->regs[ALM0 + A_WKDAY] & ALM_POL;
++        bool any = false, all = true;
++
++        if (ctrl & CTRL_ALM0EN) {
++            bool f = s->regs[ALM0 + A_WKDAY] & ALM_IF;
++
++            any |= f;
++            all &= f;
++        }
++        if (ctrl & CTRL_ALM1EN) {
++            bool f = s->regs[ALM1 + A_WKDAY] & ALM_IF;
++
++            any |= f;
++            all &= f;
++        }
++        level = pol ? any : !all;
++    } else {
++        level = ctrl & CTRL_OUT;
++    }
++    qemu_set_irq(s->mfp, level ? -1 : 0);
++}
++
++static void mcp7941x_schedule(MchpMcp7941xState *s, int64_t from)
++{
++    if (mcp7941x_running(s)) {
++        s->next_tick = from + HALF_SECOND_NS;
++        timer_mod(s->timer, s->next_tick);
++    } else {
++        timer_del(s->timer);
++    }
++}
++
++static void mcp7941x_tick(void *opaque)
++{
++    MchpMcp7941xState *s = opaque;
++
++    s->half = !s->half;
++    if (!s->half) {
++        mcp7941x_advance(s);
++        mcp7941x_check_alarms(s);
++    }
++    mcp7941x_update_mfp(s);
++    mcp7941x_schedule(s, s->next_tick);
++}
++
++static uint8_t mcp7941x_rtcc_read(MchpMcp7941xState *s, uint8_t addr)
++{
++    if (addr >= SRAM_BASE) {
++        return s->sram[addr - SRAM_BASE];
++    }
++    switch (addr) {
++    case EEUNLOCK:
++    case 0x10:
++    case 0x17:
++        return 0;
++    case ALM0 + A_HOUR:
++    case ALM1 + A_HOUR:
++        return (s->regs[addr] & 0x3F) | (s->regs[RTCHOUR] & HOUR_12);
++    case ALM1 + A_WKDAY:
++        return (s->regs[addr] & 0x7F) | (s->regs[ALM0 + A_WKDAY] & ALM_POL);
++    }
++    return s->regs[addr];
++}
++
++static void mcp7941x_rtcc_write(MchpMcp7941xState *s, uint8_t addr,
++                                uint8_t val)
++{
++    static const uint8_t wmask[RTCC_REGS] = {
++        [RTCSEC] = 0xFF, [RTCMIN] = 0x7F, [RTCHOUR] = 0x7F,
++        [RTCWKDAY] = 0x0F, [RTCDATE] = 0x3F, [RTCMTH] = 0x1F,
++        [RTCYEAR] = 0xFF, [CONTROL] = 0xFF, [OSCTRIM] = 0xFF,
++        [ALM0 + A_SEC] = 0x7F, [ALM0 + A_MIN] = 0x7F,
++        [ALM0 + A_HOUR] = 0x3F, [ALM0 + A_WKDAY] = 0xF7,
++        [ALM0 + A_DATE] = 0x3F, [ALM0 + A_MTH] = 0x1F,
++        [ALM1 + A_SEC] = 0x7F, [ALM1 + A_MIN] = 0x7F,
++        [ALM1 + A_HOUR] = 0x3F, [ALM1 + A_WKDAY] = 0x77,
++        [ALM1 + A_DATE] = 0x3F, [ALM1 + A_MTH] = 0x1F,
++    };
++    bool was_running = mcp7941x_running(s);
++
++    if (addr >= SRAM_BASE) {
++        s->sram[addr - SRAM_BASE] = val;
++        return;
++    }
++    if (addr == EEUNLOCK) {
++        s->unlock = val == 0x55 ? 1 : (val == 0xAA && s->unlock == 1) ? 2 : 0;
++        return;
++    }
++    if (!wmask[addr]) {
++        qemu_log_mask(LOG_GUEST_ERROR, "mcp7941x: write 0x%02x to read-only "
++                      "or reserved register 0x%02x\n", val, addr);
++        return;
++    }
++    s->regs[addr] = (s->regs[addr] & ~wmask[addr]) | (val & wmask[addr]);
++    switch (addr) {
++    case RTCSEC:
++        if (mcp7941x_running(s) != was_running) {
++            if (mcp7941x_running(s)) {
++                s->regs[RTCWKDAY] |= WKDAY_OSCRUN;
++                s->half = false;
++                mcp7941x_schedule(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
++            } else {
++                s->regs[RTCWKDAY] &= ~WKDAY_OSCRUN;
++                timer_del(s->timer);
++            }
++        }
++        break;
++    case RTCWKDAY:
++        s->regs[RTCWKDAY] &= ~WKDAY_PWRFAIL;    /* writing clears it */
++        break;
++    case RTCYEAR:
++        mcp7941x_update_lpyr(s);
++        break;
++    case CONTROL:
++        if (val & 0x08) {
++            qemu_log_mask(LOG_UNIMP, "mcp7941x: EXTOSC: the Click has no "
++                          "external clock on X1\n");
++        }
++        break;
++    case ALM0 + A_WKDAY:
++    case ALM1 + A_WKDAY:
++        s->regs[addr] &= ~ALM_IF;               /* writing clears ALMxIF */
++        mcp7941x_check_alarms(s);               /* ... unless still met */
++        break;
++    }
++    mcp7941x_update_mfp(s);
++}
++
++static bool mcp7941x_rtcc_valid(uint8_t addr)
++{
++    return addr < SRAM_BASE + SRAM_SIZE;
++}
++
++static uint8_t mcp7941x_rtcc_next(uint8_t addr)
++{
++    if (addr == RTCC_REGS - 1) {
++        return 0;
++    }
++    if (addr == SRAM_BASE + SRAM_SIZE - 1) {
++        return SRAM_BASE;
++    }
++    return addr + 1;
++}
++
++static bool mcp7941x_ee_valid(uint8_t addr)
++{
++    return addr < EE_SIZE || (addr >= EE_PROT && addr < EE_PROT + 8) ||
++           addr == EE_STATUS;
++}
++
++static bool mcp7941x_ee_protected(MchpMcp7941xState *s, uint8_t addr)
++{
++    static const uint8_t from[] = { EE_SIZE, 0x60, 0x40, 0x00 };
++
++    return addr >= from[(s->status >> 2) & 3];
++}
++
++/* STOP after a write: program the page buffer (or STATUS) */
++static void mcp7941x_ee_commit(MchpMcp7941xState *s)
++{
++    bool wrote = false;
++
++    if (s->status_pending) {
++        s->status = s->status_new & 0x0C;
++        wrote = true;
++    }
++    for (unsigned i = 0; i < 8 && s->page_valid; i++) {
++        uint8_t addr = s->page_base | i;
++
++        if (!(s->page_valid & BIT(i))) {
++            continue;
++        }
++        if (addr >= EE_PROT) {
++            if (s->unlock == 2) {
++                s->prot[addr - EE_PROT] = s->page[i];
++                wrote = true;
++            }
++        } else if (!mcp7941x_ee_protected(s, addr)) {
++            s->eeprom[addr] = s->page[i];
++            wrote = true;
++        }
++    }
++    if (s->page_valid || s->status_pending) {
++        s->unlock = 0;          /* one write command per unlock */
++    }
++    if (wrote) {
++        s->ee_busy_until = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                           EE_WRITE_NS;
++    }
++    s->page_valid = 0;
++    s->status_pending = false;
++}
++
++static int mcp7941x_ee_send(MchpMcp7941xState *s, uint8_t data)
++{
++    if (!s->addressed) {
++        if (!mcp7941x_ee_valid(data)) {
++            return 1;
++        }
++        s->ee_ptr = data;
++        s->addressed = true;
++        return 0;
++    }
++    if (s->ee_ptr == EE_STATUS) {
++        s->status_new = data;   /* only the last byte counts */
++        s->status_pending = true;
++        return 0;
++    }
++    if (!s->page_valid) {
++        s->page_base = s->ee_ptr & ~7;
++    }
++    s->page[s->ee_ptr & 7] = data;
++    s->page_valid |= BIT(s->ee_ptr & 7);
++    s->ee_ptr = s->page_base | ((s->ee_ptr + 1) & 7);
++    return 0;
++}
++
++static uint8_t mcp7941x_ee_recv(MchpMcp7941xState *s)
++{
++    uint8_t addr = s->ee_ptr;
++
++    if (addr == EE_STATUS) {
++        return s->status;
++    }
++    if (addr >= EE_PROT) {
++        s->ee_ptr = EE_PROT | ((addr + 1) & 7);
++        return s->prot[addr - EE_PROT];
++    }
++    s->ee_ptr = (addr + 1) % EE_SIZE;
++    return s->eeprom[addr];
++}
++
++static bool mcp7941x_match_and_add(I2CSlave *candidate, uint8_t address,
++                                   bool broadcast, I2CNodeList *current_devs)
++{
++    MchpMcp7941xState *s = MCHP_MCP79411(candidate);
++
++    if (address != MCHP_MCP7941X_RTCC_ADDR &&
++        address != MCHP_MCP7941X_EEPROM_ADDR && !broadcast) {
++        return false;
++    }
++    s->target = address;
++    {
++        I2CNode *node = g_new(struct I2CNode, 1);
++
++        node->elt = candidate;
++        QLIST_INSERT_HEAD(current_devs, node, next);
++    }
++    return true;
++}
++
++static int mcp7941x_event(I2CSlave *i2c, enum i2c_event event)
++{
++    MchpMcp7941xState *s = MCHP_MCP79411(i2c);
++    bool ee = s->target == MCHP_MCP7941X_EEPROM_ADDR;
++
++    switch (event) {
++    case I2C_START_SEND:
++    case I2C_START_RECV:
++        if (ee && qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) < s->ee_busy_until) {
++            return 1;           /* write cycle: no ACK */
++        }
++        if (event == I2C_START_SEND) {
++            s->addressed = false;
++        }
++        break;
++    case I2C_FINISH:
++        if (ee) {
++            mcp7941x_ee_commit(s);
++        }
++        break;
++    default:
++        break;
++    }
++    return 0;
++}
++
++static int mcp7941x_send(I2CSlave *i2c, uint8_t data)
++{
++    MchpMcp7941xState *s = MCHP_MCP79411(i2c);
++
++    if (s->target == MCHP_MCP7941X_EEPROM_ADDR) {
++        return mcp7941x_ee_send(s, data);
++    }
++    if (!s->addressed) {
++        if (!mcp7941x_rtcc_valid(data)) {
++            return 1;
++        }
++        s->rtcc_ptr = data;
++        s->addressed = true;
++        return 0;
++    }
++    mcp7941x_rtcc_write(s, s->rtcc_ptr, data);
++    s->rtcc_ptr = mcp7941x_rtcc_next(s->rtcc_ptr);
++    return 0;
++}
++
++static uint8_t mcp7941x_recv(I2CSlave *i2c)
++{
++    MchpMcp7941xState *s = MCHP_MCP79411(i2c);
++    uint8_t val;
++
++    if (s->target == MCHP_MCP7941X_EEPROM_ADDR) {
++        return mcp7941x_ee_recv(s);
++    }
++    val = mcp7941x_rtcc_read(s, s->rtcc_ptr);
++    s->rtcc_ptr = mcp7941x_rtcc_next(s->rtcc_ptr);
++    return val;
++}
++
++static char *mcp7941x_get_time(Object *obj, Error **errp)
++{
++    MchpMcp7941xState *s = MCHP_MCP79411(obj);
++
++    return g_strdup_printf("20%02u-%02u-%02u %02u:%02u:%02u",
++                           bcd2bin_u8(s->regs[RTCYEAR]),
++                           bcd2bin_u8(s->regs[RTCMTH] & 0x1F),
++                           bcd2bin_u8(s->regs[RTCDATE] & 0x3F),
++                           mcp7941x_hour24(s),
++                           bcd2bin_u8(s->regs[RTCMIN] & 0x7F),
++                           bcd2bin_u8(s->regs[RTCSEC] & 0x7F));
++}
++
++static void mcp7941x_set_time(Object *obj, const char *value, Error **errp)
++{
++    MchpMcp7941xState *s = MCHP_MCP79411(obj);
++    unsigned y, mo, d, h, mi, sec;
++    char end;
++
++    if (sscanf(value, "%u-%u-%u %u:%u:%u %c", &y, &mo, &d, &h, &mi, &sec,
++               &end) != 6 || y < 2000 || y > 2099 || mo < 1 || mo > 12 ||
++        d < 1 || d > mcp7941x_days(mo, y % 100) || h > 23 || mi > 59 ||
++        sec > 59) {
++        error_setg(errp, "time must be \"YYYY-MM-DD HH:MM:SS\" (2000-2099)");
++        return;
++    }
++    s->regs[RTCSEC] = (s->regs[RTCSEC] & SEC_ST) | bin2bcd_u8(sec);
++    s->regs[RTCMIN] = bin2bcd_u8(mi);
++    mcp7941x_set_hour24(s, h);
++    s->regs[RTCDATE] = bin2bcd_u8(d);
++    s->regs[RTCMTH] = bin2bcd_u8(mo);
++    s->regs[RTCYEAR] = bin2bcd_u8(y % 100);
++    mcp7941x_update_lpyr(s);
++    mcp7941x_update_mfp(s);
++}
++
++static bool mcp7941x_get_running(Object *obj, Error **errp)
++{
++    return mcp7941x_running(MCHP_MCP79411(obj));
++}
++
++static void mcp7941x_realize(DeviceState *dev, Error **errp)
++{
++    MchpMcp7941xState *s = MCHP_MCP79411(dev);
++    const char *eui = s->eui48_str ?: "00:04:A3:00:00:01";
++    unsigned b[6];
++    char end;
++
++    if (sscanf(eui, "%x:%x:%x:%x:%x:%x %c", &b[0], &b[1], &b[2], &b[3],
++               &b[4], &b[5], &end) != 6) {
++        error_setg(errp, "eui48 must be six hex bytes, xx:xx:xx:xx:xx:xx");
++        return;
++    }
++    s->prot[0] = s->prot[1] = 0xFF;
++    for (unsigned i = 0; i < 6; i++) {
++        s->prot[2 + i] = b[i];
++    }
++    memset(s->eeprom, 0xFF, sizeof(s->eeprom));
++}
++
++static void mcp7941x_reset(DeviceState *dev)
++{
++    MchpMcp7941xState *s = MCHP_MCP79411(dev);
++
++    timer_del(s->timer);
++    memset(s->regs, 0, sizeof(s->regs));
++    s->regs[RTCWKDAY] = 0x01;
++    s->regs[RTCDATE] = 0x01;
++    s->regs[RTCMTH] = 0x01;
++    s->regs[RTCYEAR] = 0x01;
++    s->regs[CONTROL] = CTRL_OUT;
++    s->regs[ALM0 + A_WKDAY] = 0x01;
++    s->regs[ALM0 + A_DATE] = 0x01;
++    s->regs[ALM0 + A_MTH] = 0x01;
++    s->regs[ALM1 + A_WKDAY] = 0x01;
++    s->regs[ALM1 + A_DATE] = 0x01;
++    s->regs[ALM1 + A_MTH] = 0x01;
++    s->addressed = false;
++    s->rtcc_ptr = 0;
++    s->ee_ptr = 0;
++    s->half = false;
++    s->unlock = 0;
++    s->page_valid = 0;
++    s->status_pending = false;
++    s->ee_busy_until = 0;
++    mcp7941x_update_mfp(s);
++}
++
++static void mcp7941x_init(Object *obj)
++{
++    MchpMcp7941xState *s = MCHP_MCP79411(obj);
++
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mcp7941x_tick, s);
++    qdev_init_gpio_out_named(DEVICE(obj), &s->mfp, MCHP_MCP7941X_MFP, 1);
++    object_property_add_str(obj, "time", mcp7941x_get_time,
++                            mcp7941x_set_time);
++    object_property_add_bool(obj, "running", mcp7941x_get_running, NULL);
++}
++
++static void mcp7941x_finalize(Object *obj)
++{
++    timer_free(MCHP_MCP79411(obj)->timer);
++}
++
++static const Property mcp7941x_properties[] = {
++    DEFINE_PROP_STRING("eui48", MchpMcp7941xState, eui48_str),
++};
++
++static const VMStateDescription vmstate_mcp7941x = {
++    .name = TYPE_MCHP_MCP79411,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, MchpMcp7941xState),
++        VMSTATE_TIMER_PTR(timer, MchpMcp7941xState),
++        VMSTATE_UINT8_ARRAY(regs, MchpMcp7941xState, RTCC_REGS),
++        VMSTATE_UINT8_ARRAY(sram, MchpMcp7941xState, SRAM_SIZE),
++        VMSTATE_UINT8_ARRAY(eeprom, MchpMcp7941xState, EE_SIZE),
++        VMSTATE_UINT8_ARRAY(prot, MchpMcp7941xState, 8),
++        VMSTATE_UINT8(status, MchpMcp7941xState),
++        VMSTATE_UINT8(target, MchpMcp7941xState),
++        VMSTATE_BOOL(addressed, MchpMcp7941xState),
++        VMSTATE_UINT8(rtcc_ptr, MchpMcp7941xState),
++        VMSTATE_UINT8(ee_ptr, MchpMcp7941xState),
++        VMSTATE_BOOL(half, MchpMcp7941xState),
++        VMSTATE_UINT8(unlock, MchpMcp7941xState),
++        VMSTATE_UINT8_ARRAY(page, MchpMcp7941xState, 8),
++        VMSTATE_UINT8(page_valid, MchpMcp7941xState),
++        VMSTATE_UINT8(page_base, MchpMcp7941xState),
++        VMSTATE_BOOL(status_pending, MchpMcp7941xState),
++        VMSTATE_UINT8(status_new, MchpMcp7941xState),
++        VMSTATE_INT64(ee_busy_until, MchpMcp7941xState),
++        VMSTATE_INT64(next_tick, MchpMcp7941xState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void mcp7941x_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
++
++    dc->desc = "Microchip MCP79411 RTCC with SRAM and EEPROM";
++    dc->realize = mcp7941x_realize;
++    dc->vmsd = &vmstate_mcp7941x;
++    device_class_set_props(dc, mcp7941x_properties);
++    device_class_set_legacy_reset(dc, mcp7941x_reset);
++    k->event = mcp7941x_event;
++    k->send = mcp7941x_send;
++    k->recv = mcp7941x_recv;
++    k->match_and_add = mcp7941x_match_and_add;
++}
++
++static const TypeInfo mcp7941x_types[] = {
++    {
++        .name = TYPE_MCHP_MCP79411,
++        .parent = TYPE_I2C_SLAVE,
++        .instance_size = sizeof(MchpMcp7941xState),
++        .instance_init = mcp7941x_init,
++        .instance_finalize = mcp7941x_finalize,
++        .class_init = mcp7941x_class_init,
++    },
++};
++
++DEFINE_TYPES(mcp7941x_types)
+diff --git a/hw/rtc/meson.build b/hw/rtc/meson.build
+index d3807cd..96e8c70 100644
+--- a/hw/rtc/meson.build
++++ b/hw/rtc/meson.build
+@@ -15,3 +15,4 @@ system_ss.add(when: 'CONFIG_LS7A_RTC', if_true: files('ls7a_rtc.c'))
+ system_ss.add(when: 'CONFIG_ALLWINNER_H3', if_true: files('allwinner-rtc.c'))
+ system_ss.add(when: 'CONFIG_MC146818RTC', if_true: files('mc146818rtc.c'))
+ system_ss.add(when: 'CONFIG_RS5C372_RTC', if_true: files('rs5c372.c'))
++system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp7941x.c'))
+diff --git a/include/hw/rtc/mchp_mcp7941x.h b/include/hw/rtc/mchp_mcp7941x.h
+new file mode 100644
+index 0000000..597c10f
+--- /dev/null
++++ b/include/hw/rtc/mchp_mcp7941x.h
+@@ -0,0 +1,27 @@
++/*
++ * Microchip MCP79410/MCP79411/MCP79412 I2C RTCC with SRAM and EEPROM
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * "mchp-mcp79411": answers at I2C 0x6F (RTCC registers and SRAM) and 0x57
++ * (EEPROM). QOM properties: "time" ("YYYY-MM-DD HH:MM:SS", 24-hour, years
++ * 2000-2099; reading gives the counters, writing loads them), "running"
++ * (read-only: the oscillator runs), "eui48" (the pre-programmed node
++ * address, "xx:xx:xx:xx:xx:xx"; default 00:04:A3:00:00:01, Microchip's
++ * OUI with a made-up extension). GPIO output "mfp": the open-drain MFP
++ * pin, 0 while driven low, -1 while released.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_RTC_MCHP_MCP7941X_H
++#define HW_RTC_MCHP_MCP7941X_H
++
++#define TYPE_MCHP_MCP79411 "mchp-mcp79411"
++
++#define MCHP_MCP7941X_RTCC_ADDR     0x6F
++#define MCHP_MCP7941X_EEPROM_ADDR   0x57
++#define MCHP_MCP7941X_MFP           "mfp"
++
++#endif /* HW_RTC_MCHP_MCP7941X_H */
+diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
+index bdcefb8..6872e20 100644
+--- a/tests/qtest/avr64ea48-cnano-test.c
++++ b/tests/qtest/avr64ea48-cnano-test.c
+@@ -432,6 +432,38 @@ static void test_twi_thermo8(const void *fw)
+     qtest_quit(qts);
+ }
+ 
++/* RTC 6 Click (MCP79411) on mikroBUS 3: the clock runs, MFP on INT PE0 */
++static void test_twi_rtc6(const void *fw)
++{
++    QTestState *qts = qtest_initf("-M avr64ea48-cnano,mb3=rtc6 -kernel %s",
++                                  (const char *)fw);
++    uint8_t d[3];
++
++    qtest_writeb(qts, TWI0 + T_MCTRLA, 0x03);
++    qtest_writeb(qts, TWI0 + T_MSTATUS, 0x01);
++    g_assert_cmphex(qtest_readb(qts, PORTE + P_IN) & BIT(0), ==, BIT(0));
++    /* 12:34:56 and ST; CONTROL OUT = 0 pulls MFP low */
++    qtest_writeb(qts, TWI0 + T_MADDR, 0x6F << 1);
++    qtest_writeb(qts, TWI0 + T_MDATA, 0x00);
++    qtest_writeb(qts, TWI0 + T_MDATA, 0x80 | 0x56);
++    qtest_writeb(qts, TWI0 + T_MDATA, 0x34);
++    qtest_writeb(qts, TWI0 + T_MDATA, 0x12);
++    qtest_writeb(qts, TWI0 + T_MCTRLB, 0x03);
++    qtest_writeb(qts, TWI0 + T_MADDR, 0x6F << 1);
++    qtest_writeb(qts, TWI0 + T_MDATA, 0x07);
++    qtest_writeb(qts, TWI0 + T_MDATA, 0x00);
++    qtest_writeb(qts, TWI0 + T_MCTRLB, 0x03);
++    g_assert_cmphex(qtest_readb(qts, PORTE + P_IN) & BIT(0), ==, 0);
++    qtest_clock_step(qts, 5 * 1000 * 1000 * 1000LL);
++    twi_read(qts, 0x6F, 0x00, d, 3);
++    g_assert_cmphex(d[0], ==, 0x80 | 0x01);             /* 12:35:01 */
++    g_assert_cmphex(d[1], ==, 0x35);
++    g_assert_cmphex(d[2], ==, 0x12);
++    twi_read(qts, 0x57, 0xF2, d, 3);                    /* EUI-48 OUI */
++    g_assert_cmphex(d[2], ==, 0xA3);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_autofree char *fw = write_firmware();
+@@ -450,6 +482,7 @@ int main(int argc, char **argv)
+     qtest_add_data_func("avr64ea48-cnano/thumbstick", fw, test_thumbstick);
+     qtest_add_data_func("avr64ea48-cnano/twi-accel", fw, test_twi_accel);
+     qtest_add_data_func("avr64ea48-cnano/twi-thermo8", fw, test_twi_thermo8);
++    qtest_add_data_func("avr64ea48-cnano/twi-rtc6", fw, test_twi_rtc6);
+     ret = g_test_run();
+     unlink(fw);
+     return ret;
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index 4eac4f0..efc73bd 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -15,6 +15,7 @@
+ #include "qemu/osdep.h"
+ #include "libqtest.h"
+ #include "qemu/bitops.h"
++#include "qemu/timer.h"
+ #include "qobject/qdict.h"
+ 
+ #define MACHINE         "-M pic32cm-mc00-cpro,ext1=thermo8 "
+@@ -741,6 +742,181 @@ static void test_accel(void)
+     qtest_quit(qts);
+ }
+ 
++/* RTC 6 Click on EXT2: MCP79411 at 0x6F (RTCC, SRAM) and 0x57 (EEPROM) */
++#define RTCC            0x6F
++#define RTCEE           0x57
++#define MFP_PIN         28      /* PA28, EXT2 INT */
++
++static uint8_t rtc_reg(QTestState *qts, uint8_t reg)
++{
++    uint8_t v;
++
++    i2c_rd(qts, RTCC, reg, &v, 1);
++    return v;
++}
++
++static void rtc_set(QTestState *qts, uint8_t reg, uint8_t v)
++{
++    g_assert_true(i2c_wr(qts, RTCC, reg, &v, 1));
++}
++
++static char *qom_str(QTestState *qts, const char *path, const char *prop)
++{
++    QDict *rsp = qtest_qmp(qts, "{ 'execute': 'qom-get', 'arguments': {"
++                           " 'path': %s, 'property': %s } }", path, prop);
++    char *v = g_strdup(qdict_get_str(rsp, "return"));
++
++    qobject_unref(rsp);
++    return v;
++}
++
++static void test_rtc6_time(void)
++{
++    QTestState *qts = i2c_init("-M pic32cm-mc00-cpro,ext2=rtc6 ");
++    static const uint8_t por[] = { 0, 0, 0, 1, 1, 1, 1, 0x80, 0 };
++    /* 2023-12-31 23:59:58, weekday 7, VBATEN, oscillator on */
++    static const uint8_t newyear[] = { 0x80 | 0x58, 0x59, 0x23, 0x0F, 0x31,
++                                       0x12, 0x23 };
++    static const uint8_t leap[] = { 0x80 | 0x59, 0x59, 0x71, 0x03, 0x28,
++                                    0x02, 0x24 };
++    uint8_t r[9];
++    g_autofree char *t0 = NULL, *t1 = NULL;
++
++    i2c_rd(qts, RTCC, 0x00, r, 9);
++    g_assert_cmpmem(r, 9, por, 9);
++    t0 = qom_str(qts, CLICK2, "time");
++    g_assert_cmpstr(t0, ==, "2001-01-01 00:00:00");
++    g_assert_true(pin_high(qts, PA, MFP_PIN));          /* OUT = 1, R2 */
++    rtc_set(qts, 0x07, 0x00);                           /* OUT = 0 */
++    g_assert_false(pin_high(qts, PA, MFP_PIN));
++    /* Stopped: the counters hold */
++    qtest_clock_step(qts, 3 * NANOSECONDS_PER_SECOND);
++    g_assert_cmphex(rtc_reg(qts, 0x00), ==, 0x00);
++    g_assert_true(i2c_wr(qts, RTCC, 0x00, newyear, sizeof(newyear)));
++    g_assert_cmphex(rtc_reg(qts, 0x03), ==, 0x2F);      /* OSCRUN */
++    qtest_clock_step(qts, 2 * NANOSECONDS_PER_SECOND);
++    i2c_rd(qts, RTCC, 0x00, r, 7);
++    g_assert_cmphex(r[0], ==, 0x80);                    /* ST, :00 */
++    g_assert_cmphex(r[1], ==, 0x00);
++    g_assert_cmphex(r[2], ==, 0x00);
++    g_assert_cmphex(r[3], ==, 0x29);                    /* weekday 1 */
++    g_assert_cmphex(r[4], ==, 0x01);
++    g_assert_cmphex(r[5], ==, 0x21);                    /* LPYR, January */
++    g_assert_cmphex(r[6], ==, 0x24);
++    t1 = qom_str(qts, CLICK2, "time");
++    g_assert_cmpstr(t1, ==, "2024-01-01 00:00:00");
++    /* 12-hour mode: 11:59:59 PM on 28 February 2024 (a leap year) */
++    g_assert_true(i2c_wr(qts, RTCC, 0x00, leap, sizeof(leap)));
++    qtest_clock_step(qts, NANOSECONDS_PER_SECOND);
++    i2c_rd(qts, RTCC, 0x02, r, 3);
++    g_assert_cmphex(r[0], ==, 0x52);                    /* 12 AM */
++    g_assert_cmphex(r[1] & 7, ==, 4);
++    g_assert_cmphex(r[2], ==, 0x29);                    /* 29 February */
++    /* ST cleared: OSCRUN clears, the counters stop */
++    rtc_set(qts, 0x00, 0x10);
++    g_assert_cmphex(rtc_reg(qts, 0x03) & 0x20, ==, 0);
++    qtest_clock_step(qts, 2 * NANOSECONDS_PER_SECOND);
++    g_assert_cmphex(rtc_reg(qts, 0x00), ==, 0x10);
++    qtest_quit(qts);
++}
++
++static void test_rtc6_alarm(void)
++{
++    QTestState *qts = i2c_init("-M pic32cm-mc00-cpro,ext2=rtc6 ");
++
++    /* Alarm 0 on seconds = 05, active low; started at :00 */
++    rtc_set(qts, 0x0A, 0x05);
++    rtc_set(qts, 0x0D, 0x00);                           /* ALMPOL 0, secs */
++    rtc_set(qts, 0x07, 0x10);                           /* ALM0EN */
++    g_assert_true(pin_high(qts, PA, MFP_PIN));          /* !IF: released */
++    rtc_set(qts, 0x00, 0x80);
++    qtest_clock_step(qts, 4 * NANOSECONDS_PER_SECOND + 900 * SCALE_MS);
++    g_assert_true(pin_high(qts, PA, MFP_PIN));
++    qtest_clock_step(qts, 200 * SCALE_MS);              /* :05 */
++    g_assert_false(pin_high(qts, PA, MFP_PIN));
++    g_assert_cmphex(rtc_reg(qts, 0x0D), ==, 0x08);      /* ALM0IF */
++    rtc_set(qts, 0x0D, 0x00);                           /* still :05 */
++    g_assert_cmphex(rtc_reg(qts, 0x0D), ==, 0x08);
++    qtest_clock_step(qts, NANOSECONDS_PER_SECOND);      /* latched */
++    g_assert_false(pin_high(qts, PA, MFP_PIN));
++    rtc_set(qts, 0x0D, 0x00);
++    g_assert_true(pin_high(qts, PA, MFP_PIN));
++    /* ALMPOL 1 (ALM1WKDAY reads it); both alarms: OR */
++    rtc_set(qts, 0x11, 0x08);
++    rtc_set(qts, 0x14, 0x00);
++    rtc_set(qts, 0x0D, 0x80);
++    g_assert_cmphex(rtc_reg(qts, 0x14), ==, 0x80);
++    rtc_set(qts, 0x07, 0x30);
++    g_assert_false(pin_high(qts, PA, MFP_PIN));         /* no IF: low */
++    qtest_clock_step(qts, 2 * NANOSECONDS_PER_SECOND);  /* :08 */
++    g_assert_true(pin_high(qts, PA, MFP_PIN));
++    g_assert_cmphex(rtc_reg(qts, 0x14), ==, 0x88);
++    /* 1 Hz square wave: high, then low half a second later */
++    rtc_set(qts, 0x07, 0x40);
++    qtest_clock_step(qts, NANOSECONDS_PER_SECOND - 100 * SCALE_MS);
++    g_assert_true(pin_high(qts, PA, MFP_PIN));
++    qtest_clock_step(qts, 500 * SCALE_MS);
++    g_assert_false(pin_high(qts, PA, MFP_PIN));
++    qtest_clock_step(qts, 500 * SCALE_MS);
++    g_assert_true(pin_high(qts, PA, MFP_PIN));
++    qtest_quit(qts);
++}
++
++static void test_rtc6_memories(void)
++{
++    QTestState *qts = i2c_init("-M pic32cm-mc00-cpro,ext2=rtc6 ");
++    static const uint8_t data[] = { 0xDE, 0xAD, 0xBE, 0xEF };
++    uint8_t r[8];
++
++    /* SRAM: sequential access wraps from 0x5F to 0x20 */
++    g_assert_true(i2c_wr(qts, RTCC, 0x5E, data, 4));
++    i2c_rd(qts, RTCC, 0x5E, r, 4);
++    g_assert_cmpmem(r, 4, data, 4);
++    i2c_rd(qts, RTCC, 0x20, r, 2);
++    g_assert_cmphex(r[1], ==, 0xEF);
++    /* EEPROM: erased; the EUI-48 at 0xF2 */
++    i2c_rd(qts, RTCEE, 0x10, r, 2);
++    g_assert_cmphex(r[0], ==, 0xFF);
++    i2c_rd(qts, RTCEE, 0xF0, r, 8);
++    g_assert_cmphex(r[1], ==, 0xFF);
++    g_assert_cmphex(r[2], ==, 0x00);
++    g_assert_cmphex(r[3], ==, 0x04);
++    g_assert_cmphex(r[4], ==, 0xA3);
++    /* Page write, then 5 ms without ACK */
++    g_assert_true(i2c_wr(qts, RTCEE, 0x10, data, 4));
++    g_assert_false(i2c_wr(qts, RTCEE, 0x10, NULL, 0));
++    qtest_clock_step(qts, 6 * SCALE_MS);
++    i2c_rd(qts, RTCEE, 0x10, r, 4);
++    g_assert_cmpmem(r, 4, data, 4);
++    /* A page write wraps within its 8 bytes */
++    g_assert_true(i2c_wr(qts, RTCEE, 0x16, data, 4));
++    qtest_clock_step(qts, 6 * SCALE_MS);
++    i2c_rd(qts, RTCEE, 0x10, r, 8);
++    g_assert_cmphex(r[0], ==, 0xBE);
++    g_assert_cmphex(r[6], ==, 0xDE);
++    /* STATUS BP1:BP0 = 11 protects the array */
++    g_assert_true(i2c_wr(qts, RTCEE, 0xFF, (const uint8_t[]){ 0x0C }, 1));
++    qtest_clock_step(qts, 6 * SCALE_MS);
++    i2c_wr(qts, RTCEE, 0x00, data, 1);
++    qtest_clock_step(qts, 6 * SCALE_MS);
++    i2c_rd(qts, RTCEE, 0x00, r, 1);
++    g_assert_cmphex(r[0], ==, 0xFF);
++    /* The protected block: only right after 0x55, 0xAA to EEUNLOCK */
++    i2c_wr(qts, RTCEE, 0xF0, data, 1);
++    qtest_clock_step(qts, 6 * SCALE_MS);
++    i2c_rd(qts, RTCEE, 0xF0, r, 1);
++    g_assert_cmphex(r[0], ==, 0xFF);
++    rtc_set(qts, 0x09, 0x55);
++    rtc_set(qts, 0x09, 0xAA);
++    g_assert_true(i2c_wr(qts, RTCEE, 0xF0, data, 2));
++    qtest_clock_step(qts, 6 * SCALE_MS);
++    i2c_rd(qts, RTCEE, 0xF0, r, 3);
++    g_assert_cmphex(r[0], ==, 0xDE);
++    g_assert_cmphex(r[1], ==, 0xAD);
++    g_assert_cmphex(r[2], ==, 0x00);                    /* EUI kept */
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+@@ -752,6 +928,9 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/oledc", test_oledc);
+     qtest_add_func("pic32cm-click/thumbstick", test_thumbstick);
+     qtest_add_func("pic32cm-click/accel", test_accel);
++    qtest_add_func("pic32cm-click/rtc6-time", test_rtc6_time);
++    qtest_add_func("pic32cm-click/rtc6-alarm", test_rtc6_alarm);
++    qtest_add_func("pic32cm-click/rtc6-memories", test_rtc6_memories);
+     qtest_add_func("pic32cm-click/thermo8-identity", test_identity);
+     qtest_add_func("pic32cm-click/not-fitted", test_not_fitted);
+     qtest_add_func("pic32cm-click/thermo8-int-pullup", test_int_pullup);
+-- 
+2.53.0.windows.2
+

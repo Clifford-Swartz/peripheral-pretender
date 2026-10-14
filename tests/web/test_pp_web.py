@@ -735,3 +735,46 @@ def test_session_accel(qemu_path, qemu_machines):
     assert "x=-601 y=+0 z=+800 mg right side down" in uart, uart
     assert "y=+800 z=+601 mg bottom down" in uart, uart
     assert led > 0.9
+
+
+RTC6_DEMO = BUILD / "rtc6.elf"
+
+
+@pytest.mark.qemu
+def test_session_rtc6(qemu_path, qemu_machines):
+    """rtc6.elf with an RTC 6 Click on EXT1: the time the page shows (the
+    MCP79411's "time") runs with the twin, alarm 0 pulls MFP (INT, PB02)
+    low and the firmware sees it."""
+    from tools.pp_web.server import watched
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not RTC6_DEMO.is_file():
+        pytest.skip("rtc6.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=rtc6)")
+    assert watched(CLICKS["rtc6"]) == [("time",)]
+
+    async def scenario():
+        uart, times, mfp = [], [], []
+
+        def emit(msg):
+            if msg["type"] == "uart":
+                uart.append(msg["data"])
+            elif msg["type"] == "clickstate":
+                times.append(msg["state"]["ext1.time"])
+            elif msg["type"] == "levels":
+                mfp.append((msg["levels"]["b"] >> 2) & 1)
+
+        s = Session("pic32cm-mc00-cpro,ext1=rtc6", RTC6_DEMO, emit,
+                    watch=[("ext1", *p) for p in watched(CLICKS["rtc6"])])
+        await s.start()
+        try:
+            await asyncio.sleep(7.0)
+        finally:
+            await s.stop()
+        return "".join(uart), times, mfp
+
+    uart, times, mfp = asyncio.run(scenario())
+    assert "EUI-48 00:04:A3:00:00:01" in uart and "SRAM ok" in uart, uart
+    assert "2026-10-14 12:00:05 ALARM" in uart, uart
+    assert "2026-10-14 12:00:00" in times and "2026-10-14 12:00:05" in times
+    assert 0 in mfp and mfp[-1] == 1, mfp      # asserted, then cleared

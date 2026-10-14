@@ -182,6 +182,13 @@ as on the Click's silkscreen (x right, y up). Demo: `make -C firmware/hello
 BOARD=pic32cm_mc00_cpro APP=accel` (EXT1; prints the reading and which side is down, LED0
 while it leans more than 30 degrees). I2C Clicks now plug into the Nano Base too (TWI0).
 
+The RTC 6 Click (`clicks/rtc6/`) has a `display` of type `text`: the MCP79411's `time`
+property, polled every frame, in a readout over the Click (`at_mm`, `size_mm`, `color`). Its
+MFP lights the INT signal while low. Demo: `make -C firmware/hello BOARD=pic32cm_mc00_cpro
+APP=rtc6` (EXT1; starts the stopped clock at 2026-10-14 12:00:00, prints the time each second
+and an alarm every five seconds, LED0 with each alarm). The model starts from the chip's
+power-on state like a Click without a battery; the firmware sets the time.
+
 ## Adapter assets: `adapters/<id>/`
 
 The Curiosity Pro's EXT1/EXT2 are Xplained Pro extension headers, so a Click needs an adapter:

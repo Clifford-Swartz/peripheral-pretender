@@ -1,0 +1,16 @@
+{
+ "source": "MikroElektronika RTC 6 Click v100: 2D and 3D files (RTC_6_click__2d_3d_filesV100.zip, rtc_6_click_V100.dxf; silkscreen RTC 6 click, U1, PWR) and schematic v100 (MCP79411, X1 32.768 kHz, BATT1). Positions from the DXF pads; the coin cell from the holder's pads and silkscreen.",
+ "parts": [
+  {"ref": "BATT1", "kind": "battery", "value": "coin cell", "at_mm": [11.43, 32.48], "size_mm": [12.4, 11.0]},
+  {"ref": "U1", "kind": "ic", "value": "MCP79411 (SOIC-8)", "at_mm": [11.79, 13.30], "size_mm": [3.9, 4.9]},
+  {"ref": "X1", "kind": "crystal", "value": "32.768 kHz", "at_mm": [6.45, 14.56], "size_mm": [2.0, 5.2]},
+  {"ref": "C1", "kind": "capacitor", "at_mm": [11.78, 17.56], "size_mm": [3.0, 1.4]},
+  {"ref": "R2", "kind": "resistor", "at_mm": [17.78, 17.56], "size_mm": [3.0, 1.4]},
+  {"ref": "R3", "kind": "resistor", "at_mm": [17.78, 15.42], "size_mm": [3.0, 1.4]},
+  {"ref": "R4", "kind": "resistor", "at_mm": [17.78, 13.27], "size_mm": [3.0, 1.4]},
+  {"ref": "C2", "kind": "capacitor", "at_mm": [17.78, 11.13], "size_mm": [3.0, 1.4]},
+  {"ref": "R1", "kind": "resistor", "at_mm": [12.42, 2.54], "size_mm": [3.0, 1.4]},
+  {"ref": "PWR", "kind": "led", "value": "green", "at_mm": [17.33, 2.54], "size_mm": [3.6, 1.8], "color": "#7be38a"},
+  {"ref": "PWR SEL", "kind": "zero_ohm", "value": "3.3V", "at_mm": [5.05, 2.54], "size_mm": [3.4, 1.5]}
+ ]
+}
