@@ -1,0 +1,11 @@
+PP eic: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+edge rise: fall=0x0 rise=0x1
+edge fall: fall=0x1 rise=0x0
+edge both: fall=0x1 rise=0x1
+edge none: fall=0x0 rise=0x0
+level high: set=0x1 after-clear=0x1 low=0x0
+level low: set=0x1 high=0x0
+irq both: count=0x06
+no gclk: sync=0x0 async=0x1
+no gclk syncbusy: sync-disable=0x1 sync-enable=0x1 async-disable=0x0 async-enable=0x0
+PP:EXIT 0

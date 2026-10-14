@@ -7,6 +7,16 @@ One test image, built per board with `make BOARD=<board>`:
 | `pic32cm_jh01_cpro` (default) | PIC32CM JH01 Curiosity Pro (EV81X90A) | PIC32CM5164JH01100 | `pic32cm-jh01-cpro` |
 | `pic32cm_mc00_cpro` | PIC32CM MC00 Curiosity Pro (EV15N46A) | PIC32CM1216MC00048 | `pic32cm-mc00-cpro` |
 
+Peripheral tests share the board bring-up and console: `make APP=<test>
+BOARD=<board>` builds `tests/<test>.c` into `build/<board>/<test>.elf`.
+
+| `APP` | checks |
+|---|---|
+| `hello` (default) | the Harmony bring-up, identity, interrupt-driven print, LED0 |
+| `eic` | EIC edges, levels, flag clearing, interrupt, and the clock needed by synchronous edges and their CTRLA synchronization; stimulus: the free test pin's pull resistor (`TEST_PIN` in `board.h`) |
+
+Their transcripts are deterministic; silicon captures live in `golden/`.
+
 Most of this README describes the JH01 build; the MC00 build differs only
 where its board does (see [PIC32CM MC00 Curiosity Pro](#pic32cm-mc00-curiosity-pro)).
 

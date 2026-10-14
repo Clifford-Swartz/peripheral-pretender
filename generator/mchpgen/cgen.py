@@ -582,6 +582,7 @@ def device_header(ds: DeviceSem) -> str:
         f".irq_lines = {sym}_irq_lines", f".nirq_lines = {SYM}_NUM_IRQ_LINES",
         f".gclk_channels = {sym}_gclk_channels",
         f".ngclk_channels = {SYM}_NUM_GCLK_CHANNEL_USERS",
+        f".signals = {sym}_signals", f".nsignals = {SYM}_NUM_SIGNALS",
         f".revisions = {sym}_revisions",
         f".nrevisions = ARRAY_SIZE({sym}_revisions)",
     ]

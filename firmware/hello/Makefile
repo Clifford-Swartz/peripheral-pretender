@@ -21,10 +21,15 @@ OBJCOPY  := $(CROSS)objcopy
 OBJDUMP  := $(CROSS)objdump
 SIZE     := $(CROSS)size
 
+# Application: the hello image (src/main.c) or a peripheral test
+# (tests/<APP>.c): make APP=eic BOARD=pic32cm_mc00_cpro
+APP      ?= hello
+APP_SRC  := $(if $(filter hello,$(APP)),src/main.c,tests/$(APP).c)
+
 BUILD    := build/$(BOARD)
-ELF      := $(BUILD)/hello.elf
+ELF      := $(BUILD)/$(APP).elf
 LDSCRIPT := dfp/$(DEVICE)_flash.ld
-SRCS     := src/main.c src/console.c boards/$(BOARD)/board.c \
+SRCS     := $(APP_SRC) src/console.c src/util.c boards/$(BOARD)/board.c \
             dfp/startup_$(DEVICE).c
 OBJS     := $(SRCS:%.c=$(BUILD)/%.o)
 
@@ -41,11 +46,11 @@ CRTI     := $(shell $(CC) $(ARCH) -print-file-name=crti.o)
 CRTN     := $(shell $(CC) $(ARCH) -print-file-name=crtn.o)
 LDFLAGS  := $(ARCH) -T$(LDSCRIPT) -nostartfiles --specs=nano.specs \
             -Wl,--entry=Reset_Handler -Wl,--gc-sections \
-            -Wl,-Map=$(BUILD)/hello.map -Wl,--print-memory-usage
+            -Wl,-Map=$(BUILD)/$(APP).map -Wl,--print-memory-usage
 
 .PHONY: all check clean packs
 
-all: $(ELF) $(BUILD)/hello.hex $(BUILD)/hello.lst
+all: $(ELF) $(BUILD)/$(APP).hex $(BUILD)/$(APP).lst
 	$(SIZE) $(ELF)
 
 $(ELF): $(OBJS) $(LDSCRIPT) Makefile boards/$(BOARD)/board.mk
@@ -55,15 +60,15 @@ $(BUILD)/%.o: %.c Makefile | packs
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/hello.hex: $(ELF)
+$(BUILD)/$(APP).hex: $(ELF)
 	$(OBJCOPY) -O ihex $< $@
 
-$(BUILD)/hello.lst: $(ELF)
+$(BUILD)/$(APP).lst: $(ELF)
 	$(OBJDUMP) -h -S $< > $@
 
 check: $(ELF)
 	CROSS=$(CROSS) VCOM_IRQ=$(VCOM_IRQ) VCOM_HANDLER=$(VCOM_HANDLER) \
-	    sh check-elf.sh $(ELF) $(BUILD)/hello.map
+	    sh check-elf.sh $(ELF) $(BUILD)/$(APP).map
 
 clean:
 	rm -rf $(BUILD)

@@ -17,9 +17,7 @@ void sys_initialize(void);
 /* board.c: one line per SYS_Initialize step, read back with checks */
 void report_steps(void);
 
-/* main.c: " NAME=0x<value>", and the same counting a failed check */
-void put_field(const char *name, uint32_t value, unsigned int digits);
-void put_checked(const char *name, uint32_t value, uint32_t expected,
-                 unsigned int digits);
+/* util.h: put_field(), put_checked() for report_steps() */
+#include "util.h"
 
 #endif /* SYS_INIT_H */

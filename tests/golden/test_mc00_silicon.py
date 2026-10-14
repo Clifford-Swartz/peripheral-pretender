@@ -3,7 +3,8 @@
 
 golden/pic32cm1216mc00048-a1/ holds what an EV15N46A (PIC32CM1216MC00048,
 rev A1) gave on 2026-10-13: every register right after a reset
-(reset.json) and the VCOM output of firmware/hello (hello-vcom.bin). The
+(reset.json) and the VCOM output of firmware/hello applications
+(<app>-vcom.bin: hello, and the peripheral tests in tests/). The
 twin, configured as that part (revision and serial number), must
 reproduce both; the only register differences allowed are listed in
 EXPECTED with the reason.
@@ -25,7 +26,9 @@ ROOT = Path(__file__).resolve().parents[2]
 GOLDEN = ROOT / "golden" / "pic32cm1216mc00048-a1"
 MACHINE = "pic32cm-mc00-cpro"
 SOC = "pic32cm1216mc00048-soc"
-HELLO = ROOT / "firmware" / "hello" / "build" / "pic32cm_mc00_cpro" / "hello.elf"
+BUILD = ROOT / "firmware" / "hello" / "build" / "pic32cm_mc00_cpro"
+# firmware/hello applications whose silicon VCOM output is in GOLDEN
+APPS = sorted(p.name[:-len("-vcom.bin")] for p in GOLDEN.glob("*-vcom.bin"))
 
 # Differences that are not twin bugs, or are known and open
 EXPECTED = {
@@ -147,14 +150,16 @@ def test_reset_values_match_silicon(mc00):
     assert len(gold["registers"]) > 800
 
 
-def test_hello_transcript_matches_silicon(mc00):
-    if not HELLO.is_file():
-        pytest.skip(f"{HELLO.relative_to(ROOT)} not built "
-                    "(make -C firmware/hello BOARD=pic32cm_mc00_cpro)")
+@pytest.mark.parametrize("app", APPS)
+def test_transcript_matches_silicon(mc00, app):
+    elf = BUILD / f"{app}.elf"
+    if not elf.is_file():
+        pytest.skip(f"{elf.relative_to(ROOT)} not built (make -C firmware/hello "
+                    f"BOARD=pic32cm_mc00_cpro APP={app})")
     gold = golden()
-    result = run(RunOptions(HELLO, machine=MACHINE, timeout_s=30, extra_args=[
+    result = run(RunOptions(elf, machine=MACHINE, timeout_s=30, extra_args=[
         "-global", f"{SOC}.silicon-rev={gold['revision']}",
         "-global", f"{SOC}.serial-number={gold['serial_number']}"]))
-    silicon = (GOLDEN / "hello-vcom.bin").read_bytes().decode("ascii")
+    silicon = (GOLDEN / f"{app}-vcom.bin").read_bytes().decode("ascii")
     assert result.exit_code == 0, result.uart
     assert result.uart == silicon.replace("\r\n", "\n")

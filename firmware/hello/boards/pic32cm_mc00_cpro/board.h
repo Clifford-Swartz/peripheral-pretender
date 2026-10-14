@@ -25,4 +25,10 @@
 /* GCLK0 runs from OSC48M divided by 1 once sys_initialize() returns. */
 #define CPU_CLOCK_HZ        48000000U
 
+/* Peripheral tests: a free pin whose function A is EXTINT TEST_EXTINT
+ * (PA16, EXT1/EXT2 SPI MISO, unused without an extension board) */
+#define TEST_PIN_GROUP      (&PORT_REGS->GROUP[0])
+#define TEST_PIN            16U
+#define TEST_EXTINT         0U
+
 #endif /* BOARD_H */

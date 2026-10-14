@@ -1,0 +1,37 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for EIC U2254 (IRQ 3, NMI). The mchp-eic model detects
+# edges and levels on the EXTINT inputs routed from PORT (function A) and on
+# NMI; filtering and debouncing are instantaneous.
+ip: EIC
+id: U2254
+versions: ["2.0.4", "3.1.0"]      # 2.0.4: MC00; 3.1.0: JH01 (debouncer, PINSTATE)
+references:
+  - "DS60001638E 25 (PIC32CM MC00 EIC), DS60001632H 24 (PIC32CM JH01 EIC)"
+registers:
+  CTRLA:
+    pac_protected: true
+    enable_protected: [CKSEL]
+    sync: {SWRST: SWRST, ENABLE: ENABLE}
+    self_clearing: [SWRST]
+    hooks: [post_write]           # enable: re-evaluate the inputs
+  NMICTRL: {pac_protected: true, hooks: [post_write]}
+  NMIFLAG:
+    w1c: [NMI]
+    hooks: [post_write]           # a level NMI sets the flag again
+  SYNCBUSY: {dynamic: true}
+  EVCTRL: {pac_protected: true, enable_protected: all}
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: all
+    irq_source: {enable: INTENSET}
+    hooks: [post_write]           # a level EXTINT sets the flag again
+  ASYNCH: {pac_protected: true, enable_protected: all}
+  CONFIG0: {pac_protected: true, enable_protected: all}
+  CONFIG1: {pac_protected: true, enable_protected: all}
+  DEBOUNCEN: {pac_protected: true, enable_protected: all, optional: true}
+  DPRESCALER: {pac_protected: true, enable_protected: all, optional: true}
+  PINSTATE:
+    dynamic: true                 # debounced pin levels
+    optional: true

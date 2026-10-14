@@ -9443,7 +9443,15 @@
    "version": "2.0.4",
    "caption": "External Interrupt Controller",
    "core": false,
-   "overlay": null,
+   "overlay": {
+    "file": "overlays/eic_u2254.yaml",
+    "sha1": "b26fcda6dfb10f60d814eb1aafefadd270c823bc",
+    "status": "applied",
+    "versions": [
+     "2.0.4",
+     "3.1.0"
+    ]
+   },
    "size": 36,
    "selector": null,
    "default_view": "",
@@ -9455,7 +9463,7 @@
      "irq": {
       "flag": "INTFLAG",
       "enable": "INTENSET",
-      "source": "heuristic"
+      "source": "overlay"
      },
      "registers": [
       {
@@ -9472,11 +9480,14 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 1,
-       "enprot": 0,
+       "enprot": 16,
        "syncbusy": 3,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control A",
@@ -9521,13 +9532,23 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
+         "enprot",
+         "overlay",
+         "CKSEL = 0x10"
         ],
         [
          "sync",
-         "heuristic",
-         "access=WSYNC; SYNCBUSY bits matched by name: 0x3"
+         "overlay",
+         "SWRST->SWRST, ENABLE->ENABLE: SYNCBUSY 0x3"
         ]
        ]
       },
@@ -9549,7 +9570,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Non-Maskable Interrupt Control",
@@ -9622,7 +9646,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "NMIFLAG",
@@ -9642,7 +9672,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Non-Maskable Interrupt Flag Status and Clear",
@@ -9660,8 +9692,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:NMIFLAG: all fields W1C (0x1)"
+         "overlay",
+         "NMI = 0x1"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -9717,8 +9754,8 @@
         ],
         [
          "dynamic",
-         "heuristic",
-         "register named *SYNCBUSY: dynamic, reads 0"
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -9736,11 +9773,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 65535,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Event Control",
@@ -9875,7 +9914,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0xFFFF"
+        ]
+       ]
       },
       {
        "name": "INTENCLR",
@@ -9896,6 +9941,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_CLEAR"
        ],
        "alias_of": "INTENSET",
@@ -10035,8 +10081,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "clear -> INTENSET"
         ]
        ]
       },
@@ -10059,6 +10105,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_SET"
        ],
        "alias_of": "INTENSET",
@@ -10198,8 +10245,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "set -> INTENSET"
         ]
        ]
       },
@@ -10221,7 +10268,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Interrupt Flag Status and Clear",
@@ -10359,8 +10408,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:INTFLAG: all fields W1C (0xFFFF)"
+         "overlay",
+         "all = 0xFFFF"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -10378,11 +10432,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 65535,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "External Interrupt Asynchronous Mode",
@@ -10693,7 +10749,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0xFFFF"
+        ]
+       ]
       },
       {
        "name": "CONFIG0",
@@ -10709,11 +10771,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 4294967295,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "External Interrupt Sense Configuration",
@@ -11096,7 +11160,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0xFFFFFFFF"
+        ]
+       ]
       },
       {
        "name": "CONFIG1",
@@ -11112,11 +11182,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 4294967295,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "External Interrupt Sense Configuration",
@@ -11499,7 +11571,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0xFFFFFFFF"
+        ]
+       ]
       }
      ],
      "reset_overrides": [],
@@ -24280,7 +24358,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/port_u2210.yaml",
-    "sha1": "58f104156ededfc919135586e2374ae6e900b89f",
+    "sha1": "389b43ae7984905b26dbed1eda71351a3ecbdd62",
     "status": "applied",
     "versions": [
      "2.1.1",
@@ -25014,7 +25092,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "PAC"
+        "PAC",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": null,
        "read_side_effect": false,
@@ -25141,6 +25220,11 @@
         }
        ],
        "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
         [
          "reset",
          "overlay",
@@ -25938,7 +26022,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "PAC"
+        "PAC",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": null,
        "read_side_effect": false,
@@ -26064,7 +26149,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "GROUP[1].PINCFG",

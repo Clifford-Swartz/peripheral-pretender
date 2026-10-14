@@ -24,7 +24,7 @@ registers:
     pac_protected: true
     hooks: [post_write]           # bulk PINCFG/PMUX update (write-only per ATDF)
   EVCTRL: {pac_protected: true}
-  PMUX: {pac_protected: true}
+  PMUX: {pac_protected: true, hooks: [post_write]}     # routes pads to peripherals
   PINCFG: {pac_protected: true, hooks: [post_write]}   # INEN/PULLEN affect IN
 reset_overrides:
   # DS 27.7.13 / 7.4: PMUXE = 6 puts PA30 in function G (SWCLK) out of reset.

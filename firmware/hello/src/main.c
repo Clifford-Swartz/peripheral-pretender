@@ -13,6 +13,7 @@
 
 #include "console.h"
 #include "sys_init.h"
+#include "util.h"
 
 #define IRQ_PRINT_TIMEOUT_MS    100U
 #define BLINK_COUNT             3U
@@ -22,52 +23,6 @@
 static const uintptr_t serial_number_addr[] = {
     0x0080A00CU, 0x0080A040U, 0x0080A044U, 0x0080A048U,
 };
-
-static unsigned int failures;
-
-/* SysTick from the CPU clock, wrapping every millisecond; no interrupt. */
-static void systick_start(void)
-{
-    SysTick->LOAD = CPU_CLOCK_HZ / 1000U - 1U;
-    SysTick->VAL = 0U;
-    SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_ENABLE_Msk;
-}
-
-/* True once per wrap: reading CTRL clears COUNTFLAG. */
-static bool systick_ms_elapsed(void)
-{
-    return (SysTick->CTRL & SysTick_CTRL_COUNTFLAG_Msk) != 0U;
-}
-
-static void delay_ms(uint32_t ms)
-{
-    while (ms > 0U) {
-        if (systick_ms_elapsed()) {
-            ms--;
-        }
-    }
-}
-
-void put_field(const char *name, uint32_t value, unsigned int digits)
-{
-    console_putc(' ');
-    console_puts(name);
-    console_puts("=0x");
-    console_put_hex(value, digits);
-}
-
-/* put_field(), counting a failure when @value is not @expected. */
-void put_checked(const char *name, uint32_t value, uint32_t expected,
-                        unsigned int digits)
-{
-    put_field(name, value, digits);
-    if (value != expected) {
-        console_puts("(expected 0x");
-        console_put_hex(expected, digits);
-        console_putc(')');
-        failures++;
-    }
-}
 
 /* Identity and factory data; only the DID's device bits are checked. */
 static void report_identity(void)

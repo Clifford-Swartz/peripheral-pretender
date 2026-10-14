@@ -1,0 +1,1191 @@
+From 83b6ff9e861dd6a8d1143776b36a9fb83dd0be45 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Tue, 13 Oct 2026 17:52:56 -0700
+Subject: [PATCH] hw/misc: EIC model, PORT routing to peripheral function A
+
+mchp-eic (U2254, PIC32CM MC00 and JH01): edge and level detection on the
+16 EXTINT inputs and NMI, W1C flags with level re-assertion, the EIC
+interrupt, event outputs, NMI to the CPU even with the EIC disabled.
+Synchronous edges need the EIC clock (GCLK_EIC, or CLK_ULP32K with
+CKSEL); asynchronous ones and levels do not. A change of CTRLA.ENABLE
+while the configuration needs the clock and the clock is off stalls
+SYNCBUSY.ENABLE until it runs; checked on PIC32CM MC00 silicon with a
+test image whose transcript matches the twin byte for byte.
+
+mchp-port gains "func-a" outputs: the pad level of pins muxed to
+function A; the SoC wires them to the EIC from the pad signal table
+(OR-ed where several pins share an input). MchpDeviceInfo carries the
+signal table. New overlay-driven PMUX write hook. New qtest
+pic32cm-eic-test.
+
+Peripheral Pretender downstream patch; not for upstream submission.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/arm/pic32cm1216mc00048_device.h            |   2 +
+ hw/arm/pic32cm5164jh01100_device.h            |   2 +
+ hw/arm/pic32cm_soc.c                          |  58 ++++
+ hw/gpio/mchp_port.c                           |  52 ++-
+ hw/misc/mchp_eic.c                            | 326 ++++++++++++++++++
+ hw/misc/meson.build                           |   1 +
+ hw/misc/trace-events                          |   3 +
+ include/hw/gpio/mchp_port.h                   |   4 +
+ include/hw/mchp/gen/eic_u2254.h               |   2 +-
+ .../mchp/gen/pic32cm1216mc00048/eic_u2254.h   |  24 +-
+ .../mchp/gen/pic32cm1216mc00048/port_u2210.h  |   6 +-
+ .../mchp/gen/pic32cm5164jh01100/eic_u2254.h   |  30 +-
+ .../mchp/gen/pic32cm5164jh01100/port_u2210.h  |   8 +-
+ include/hw/mchp/gen/port_u2210.h              |   2 +-
+ include/hw/mchp/mchp_device.h                 |   2 +
+ include/hw/misc/mchp_eic.h                    |  30 ++
+ tests/qtest/meson.build                       |   2 +-
+ tests/qtest/pic32cm-eic-test.c                | 180 ++++++++++
+ 18 files changed, 697 insertions(+), 37 deletions(-)
+ create mode 100644 hw/misc/mchp_eic.c
+ create mode 100644 include/hw/misc/mchp_eic.h
+ create mode 100644 tests/qtest/pic32cm-eic-test.c
+
+diff --git a/hw/arm/pic32cm1216mc00048_device.h b/hw/arm/pic32cm1216mc00048_device.h
+index 2cd1d78..52b8b85 100644
+--- a/hw/arm/pic32cm1216mc00048_device.h
++++ b/hw/arm/pic32cm1216mc00048_device.h
+@@ -49,6 +49,8 @@ static const MchpDeviceInfo pic32cm1216mc00048_device = {
+     .nirq_lines = PIC32CM1216MC00048_NUM_IRQ_LINES,
+     .gclk_channels = pic32cm1216mc00048_gclk_channels,
+     .ngclk_channels = PIC32CM1216MC00048_NUM_GCLK_CHANNEL_USERS,
++    .signals = pic32cm1216mc00048_signals,
++    .nsignals = PIC32CM1216MC00048_NUM_SIGNALS,
+     .revisions = pic32cm1216mc00048_revisions,
+     .nrevisions = ARRAY_SIZE(pic32cm1216mc00048_revisions),
+ };
+diff --git a/hw/arm/pic32cm5164jh01100_device.h b/hw/arm/pic32cm5164jh01100_device.h
+index 2fd8b05..39a4c3e 100644
+--- a/hw/arm/pic32cm5164jh01100_device.h
++++ b/hw/arm/pic32cm5164jh01100_device.h
+@@ -49,6 +49,8 @@ static const MchpDeviceInfo pic32cm5164jh01100_device = {
+     .nirq_lines = PIC32CM5164JH01100_NUM_IRQ_LINES,
+     .gclk_channels = pic32cm5164jh01100_gclk_channels,
+     .ngclk_channels = PIC32CM5164JH01100_NUM_GCLK_CHANNEL_USERS,
++    .signals = pic32cm5164jh01100_signals,
++    .nsignals = PIC32CM5164JH01100_NUM_SIGNALS,
+     .revisions = pic32cm5164jh01100_revisions,
+     .nrevisions = ARRAY_SIZE(pic32cm5164jh01100_revisions),
+ };
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index 2e8c0a3..3c70b49 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -23,6 +23,7 @@
+ #include "hw/core/qdev-properties.h"
+ #include "hw/core/qdev-properties-system.h"
+ #include "hw/gpio/mchp_port.h"
++#include "hw/misc/mchp_eic.h"
+ #include "hw/mchp/gen/rstc_u2239.h"
+ #include "hw/misc/mchp_sysctrl.h"
+ #include "hw/misc/unimp.h"
+@@ -39,6 +40,7 @@ static const struct {
+ } pic32cm_models[] = {
+     { "DIVAS", TYPE_MCHP_DIVAS },
+     { "DSU", TYPE_MCHP_DSU },
++    { "EIC", TYPE_MCHP_EIC },
+     { "GCLK", TYPE_MCHP_GCLK },
+     { "MCLK", TYPE_MCHP_MCLK },
+     { "NVMCTRL", TYPE_MCHP_NVMCTRL },
+@@ -431,6 +433,61 @@ static bool pic32cm_realize_periph(Pic32cmSocState *s, uint8_t rev,
+     return true;
+ }
+ 
++/*
++ * Pads to the EIC: every pin whose function A is EXTINTn (or NMI) feeds
++ * that input through PORT "func-a". Pins sharing an input are OR-ed;
++ * PORT drives 0 for pins not muxed to function A, so the OR follows the
++ * pin that is (the data sheet keeps the first programmed one active).
++ */
++static void pic32cm_connect_eic(Pic32cmSocState *s)
++{
++    DeviceState *port = pic32cm_periph(s, "PORT");
++    DeviceState *eic = pic32cm_periph(s, "EIC");
++    unsigned npins[17] = { 0 };         /* EXTINT0-15, NMI */
++
++    for (int pass = 0; pass < 2; pass++) {
++        unsigned seen[17] = { 0 };
++        DeviceState *gate[17] = { NULL };
++
++        for (unsigned i = 0; i < s->dev->nsignals; i++) {
++            const MchpSignalInfo *sig = &s->dev->signals[i];
++            bool nmi = !strcmp(sig->group, "NMI");
++            unsigned n = nmi ? 16 : sig->index;
++            qemu_irq in;
++
++            if (strcmp(sig->instance, "EIC") || sig->pmux != 0 ||
++                sig->pin < 0 || (!nmi && n >= 16)) {
++                continue;
++            }
++            if (pass == 0) {
++                npins[n]++;
++                continue;
++            }
++            in = nmi ? qdev_get_gpio_in_named(eic, MCHP_EIC_NMI_IN, 0)
++                     : qdev_get_gpio_in_named(eic, MCHP_EIC_EXTINT, n);
++            if (npins[n] > 1) {
++                if (!gate[n]) {
++                    g_autofree char *name = g_strdup_printf("eic-in%u-or", n);
++                    Object *or = object_new(TYPE_OR_IRQ);
++
++                    object_property_add_child(OBJECT(s), name, or);
++                    object_unref(or);
++                    object_property_set_int(or, "num-lines", npins[n],
++                                            &error_abort);
++                    qdev_realize(DEVICE(or), NULL, &error_abort);
++                    qdev_connect_gpio_out(DEVICE(or), 0, in);
++                    gate[n] = DEVICE(or);
++                }
++                in = qdev_get_gpio_in(gate[n], seen[n]++);
++            }
++            qdev_connect_gpio_out_named(port, MCHP_PORT_FUNC_A, sig->pin, in);
++        }
++    }
++    qdev_connect_gpio_out_named(eic, MCHP_EIC_NMI_OUT, 0,
++                                qdev_get_gpio_in_named(DEVICE(&s->armv7m),
++                                                       "NMI", 0));
++}
++
+ /* Reset sources that RSTC records in RCAUSE */
+ static void pic32cm_connect_resets(Pic32cmSocState *s)
+ {
+@@ -465,6 +522,7 @@ static void pic32cm_soc_realize(DeviceState *dev, Error **errp)
+         return;
+     }
+     pic32cm_connect_resets(s);
++    pic32cm_connect_eic(s);
+ }
+ 
+ static const Property pic32cm_soc_properties[] = {
+diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
+index e1334d5..378bf3f 100644
+--- a/hw/gpio/mchp_port.c
++++ b/hw/gpio/mchp_port.c
+@@ -38,12 +38,15 @@ struct MchpPortState {
+     MchpRegBlock parent_obj;
+ 
+     qemu_irq out[MCHP_PORT_NUM_PINS];
++    qemu_irq func_a[MCHP_PORT_NUM_PINS];
+     /* External drivers, per group: the pads they drive and the levels */
+     uint32_t ext_mask[MCHP_PORT_GROUP_COUNT];
+     uint32_t ext_level[MCHP_PORT_GROUP_COUNT];
+     /* The PORT's own drive, as last signalled on "port-out" */
+     uint32_t drive_mask[MCHP_PORT_GROUP_COUNT];
+     uint32_t drive_level[MCHP_PORT_GROUP_COUNT];
++    /* Pads of pins muxed to peripheral function A, as last signalled */
++    uint32_t func_level[MCHP_PORT_GROUP_COUNT];
+     /* Groups this device has (MCHP_PORT_GROUP_COUNT is the largest) */
+     unsigned ngroups;
+ };
+@@ -122,6 +125,43 @@ static uint32_t mchp_port_in(MchpPortState *s, unsigned g)
+ }
+ 
+ /* Signal the pads of group @g whose drive changed on "port-out". */
++/* Pins of group @g handed to peripheral function A (PMUXEN, PMUX = 0) */
++static uint32_t mchp_port_func_a(MchpPortState *s, unsigned g)
++{
++    uint32_t pmuxen = mchp_port_pincfg(s, g,
++                                       R_MCHP_PORT_GROUP_PINCFG_PMUXEN_MASK);
++    uint32_t pins = 0;
++
++    for (unsigned pin = 0; pin < MCHP_PORT_GROUP_PINS; pin++) {
++        hwaddr pmux = mchp_port_offset(g, A_MCHP_PORT_GROUP_PMUX + pin / 2);
++
++        if (extract32(pmuxen, pin, 1) &&
++            !extract32(mchp_regfile_peek(mchp_port_rf(s), pmux, 1),
++                       (pin & 1) * 4, 4)) {
++            pins |= BIT(pin);
++        }
++    }
++    return pins;
++}
++
++/*
++ * Signal "func-a": the pad level of each pin muxed to function A (EIC
++ * EXTINT/NMI), 0 for the other pins.
++ */
++static void mchp_port_update_func(MchpPortState *s, unsigned g)
++{
++    uint32_t level = mchp_port_pads(s, g) & mchp_port_func_a(s, g);
++    uint32_t changed = level ^ s->func_level[g];
++
++    s->func_level[g] = level;
++    for (unsigned pin = 0; pin < MCHP_PORT_GROUP_PINS; pin++) {
++        if (extract32(changed, pin, 1)) {
++            qemu_set_irq(s->func_a[g * MCHP_PORT_GROUP_PINS + pin],
++                         extract32(level, pin, 1));
++        }
++    }
++}
++
+ static void mchp_port_update(MchpPortState *s, unsigned g)
+ {
+     uint32_t mask = mchp_port_drive_mask(s, g);
+@@ -139,6 +179,7 @@ static void mchp_port_update(MchpPortState *s, unsigned g)
+             qemu_set_irq(s->out[g * MCHP_PORT_GROUP_PINS + pin], value);
+         }
+     }
++    mchp_port_update_func(s, g);
+ }
+ 
+ /* WRCONFIG: PINCFG and PMUX of up to 16 pins in one write (DS 27.7.11) */
+@@ -209,6 +250,7 @@ static void mchp_port_set_input(void *opaque, int n, int level)
+     trace_mchp_port_in('A' + g, pin, level);
+     s->ext_mask[g] = deposit32(s->ext_mask[g], pin, 1, level >= 0);
+     s->ext_level[g] = deposit32(s->ext_level[g], pin, 1, level > 0);
++    mchp_port_update_func(s, g);
+ }
+ 
+ static void mchp_port_get_in(Object *obj, Visitor *v, const char *name,
+@@ -231,6 +273,7 @@ static void mchp_port_set_in(Object *obj, Visitor *v, const char *name,
+     if (visit_type_uint32(v, name, &value, errp)) {
+         s->ext_level[g] = value;
+         s->ext_mask[g] = UINT32_MAX;
++        mchp_port_update_func(s, g);
+     }
+ }
+ 
+@@ -251,6 +294,7 @@ static void mchp_port_set_in_mask(Object *obj, Visitor *v, const char *name,
+ 
+     if (visit_type_uint32(v, name, &value, errp)) {
+         s->ext_mask[GPOINTER_TO_UINT(opaque)] = value;
++        mchp_port_update_func(s, GPOINTER_TO_UINT(opaque));
+     }
+ }
+ 
+@@ -288,6 +332,8 @@ static void mchp_port_init(Object *obj)
+                              MCHP_PORT_NUM_PINS);
+     qdev_init_gpio_in_named(DEVICE(obj), mchp_port_set_input, MCHP_PORT_IN,
+                             MCHP_PORT_NUM_PINS);
++    qdev_init_gpio_out_named(DEVICE(obj), s->func_a, MCHP_PORT_FUNC_A,
++                             MCHP_PORT_NUM_PINS);
+ }
+ 
+ /* The groups of this device, and a QOM property set per group */
+@@ -320,8 +366,8 @@ static bool mchp_port_realize(MchpRegBlock *rb, Error **errp)
+ 
+ static const VMStateDescription vmstate_mchp_port = {
+     .name = TYPE_MCHP_PORT,
+-    .version_id = 1,
+-    .minimum_version_id = 1,
++    .version_id = 2,
++    .minimum_version_id = 2,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpPortState, 1, vmstate_mchp_regblock,
+                        MchpRegBlock),
+@@ -330,6 +376,8 @@ static const VMStateDescription vmstate_mchp_port = {
+         VMSTATE_UINT32_ARRAY(drive_mask, MchpPortState, MCHP_PORT_GROUP_COUNT),
+         VMSTATE_UINT32_ARRAY(drive_level, MchpPortState,
+                              MCHP_PORT_GROUP_COUNT),
++        VMSTATE_UINT32_ARRAY(func_level, MchpPortState,
++                             MCHP_PORT_GROUP_COUNT),
+         VMSTATE_END_OF_LIST()
+     },
+ };
+diff --git a/hw/misc/mchp_eic.c b/hw/misc/mchp_eic.c
+new file mode 100644
+index 0000000..2c65161
+--- /dev/null
++++ b/hw/misc/mchp_eic.c
+@@ -0,0 +1,326 @@
++/*
++ * Microchip SAM/PIC32CM External Interrupt Controller (EIC U2254)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Follows DS60001638E chapter 25 (PIC32CM MC00) and DS60001632H chapter 24
++ * (PIC32CM JH01). Each EXTINT input carries the level of the pad PORT
++ * routes to the EIC (function A); NMI likewise. Edge detection needs the
++ * EIC clock (GCLK_EIC, or CLK_ULP32K with CTRLA.CKSEL) unless the line is
++ * asynchronous; level detection does not. A change of CTRLA.ENABLE made
++ * while the configuration needs the EIC clock (synchronous edges,
++ * filtering) and the clock is off keeps SYNCBUSY.ENABLE set until the
++ * clock runs (PIC32CM MC00 silicon).
++ * Filtering and debouncing take effect at once. Register semantics (W1C, aliases, enable protection,
++ * SWRST) come from the generated tables through mchp-regblock.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "hw/core/clock.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/misc/mchp_eic.h"
++#include "hw/mchp/gen/eic_u2254.h"
++#include "migration/vmstate.h"
++#include "trace.h"
++
++#define MCHP_EIC_LINES          16
++
++/* CONFIGn.SENSEx and NMICTRL.NMISENSE (DS 25.7.10) */
++enum {
++    MCHP_EIC_SENSE_NONE,
++    MCHP_EIC_SENSE_RISE,
++    MCHP_EIC_SENSE_FALL,
++    MCHP_EIC_SENSE_BOTH,
++    MCHP_EIC_SENSE_HIGH,
++    MCHP_EIC_SENSE_LOW,
++};
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpEicState, MCHP_EIC)
++
++struct MchpEicState {
++    MchpRegBlock parent_obj;
++
++    qemu_irq nmi;
++    qemu_irq event[MCHP_EIC_LINES];
++    uint32_t level;             /* EXTINT input levels */
++    bool nmi_level;
++    uint32_t sync_pending;      /* SYNCBUSY bits waiting for the EIC clock */
++};
++
++static uint32_t mchp_eic_reg(MchpEicState *s, hwaddr offset, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, offset, size);
++}
++
++static void mchp_eic_set_reg(MchpEicState *s, hwaddr offset, unsigned size,
++                             uint32_t val)
++{
++    mchp_regfile_poke(&MCHP_REGBLOCK(s)->rf, offset, size, val);
++}
++
++static bool mchp_eic_enabled(MchpEicState *s)
++{
++    return FIELD_EX32(mchp_eic_reg(s, A_MCHP_EIC_CTRLA, 1), MCHP_EIC_CTRLA,
++                      ENABLE);
++}
++
++/* The clock that synchronous edge detection and filtering sample with */
++static bool mchp_eic_clocked(MchpEicState *s)
++{
++    return FIELD_EX32(mchp_eic_reg(s, A_MCHP_EIC_CTRLA, 1), MCHP_EIC_CTRLA,
++                      CKSEL) ||
++           clock_get_hz(MCHP_REGBLOCK(s)->gclk) != 0;
++}
++
++static unsigned mchp_eic_sense(MchpEicState *s, unsigned line);
++static bool mchp_eic_is_level(unsigned sense);
++
++/*
++ * Whether the configuration makes the EIC request its clock (DS 25.6.3):
++ * synchronous edge detection or filtering on a line, or on NMI.
++ */
++static bool mchp_eic_needs_clock(MchpEicState *s)
++{
++    uint32_t asynch = mchp_eic_reg(s, A_MCHP_EIC_ASYNCH, 4);
++    uint32_t nmi = mchp_eic_reg(s, A_MCHP_EIC_NMICTRL, 1);
++    unsigned nmisense = FIELD_EX32(nmi, MCHP_EIC_NMICTRL, NMISENSE);
++
++    for (unsigned line = 0; line < MCHP_EIC_LINES; line++) {
++        hwaddr reg = line < 8 ? A_MCHP_EIC_CONFIG0 : A_MCHP_EIC_CONFIG1;
++        unsigned sense = mchp_eic_sense(s, line);
++
++        if (extract32(mchp_eic_reg(s, reg, 4), (line % 8) * 4 + 3, 1) ||
++            (sense && !mchp_eic_is_level(sense) &&
++             !extract32(asynch, line, 1))) {
++            return true;
++        }
++    }
++    return FIELD_EX32(nmi, MCHP_EIC_NMICTRL, NMIFILTEN) ||
++           (nmisense && !mchp_eic_is_level(nmisense) &&
++            !FIELD_EX32(nmi, MCHP_EIC_NMICTRL, NMIASYNCH));
++}
++
++static unsigned mchp_eic_sense(MchpEicState *s, unsigned line)
++{
++    hwaddr reg = line < 8 ? A_MCHP_EIC_CONFIG0 : A_MCHP_EIC_CONFIG1;
++
++    return extract32(mchp_eic_reg(s, reg, 4), (line % 8) * 4, 3);
++}
++
++static bool mchp_eic_is_level(unsigned sense)
++{
++    return sense == MCHP_EIC_SENSE_HIGH || sense == MCHP_EIC_SENSE_LOW;
++}
++
++/* Does a change from @old to @new (or the level @new) match @sense? */
++static bool mchp_eic_match(unsigned sense, bool old, bool new)
++{
++    switch (sense) {
++    case MCHP_EIC_SENSE_RISE:
++        return !old && new;
++    case MCHP_EIC_SENSE_FALL:
++        return old && !new;
++    case MCHP_EIC_SENSE_BOTH:
++        return old != new;
++    case MCHP_EIC_SENSE_HIGH:
++        return new;
++    case MCHP_EIC_SENSE_LOW:
++        return !new;
++    default:
++        return false;
++    }
++}
++
++/*
++ * Evaluate the EXTINT lines in @lines after their inputs changed from
++ * @old (edges), or re-evaluate the level-sensitive ones (@old == level).
++ */
++static void mchp_eic_detect(MchpEicState *s, uint32_t old, uint32_t lines)
++{
++    uint32_t flags = mchp_eic_reg(s, A_MCHP_EIC_INTFLAG, 4);
++    uint32_t asynch = mchp_eic_reg(s, A_MCHP_EIC_ASYNCH, 4);
++    uint32_t evctrl = mchp_eic_reg(s, A_MCHP_EIC_EVCTRL, 4);
++    bool clocked = mchp_eic_clocked(s);
++
++    if (!mchp_eic_enabled(s)) {
++        return;
++    }
++    for (unsigned line = 0; line < MCHP_EIC_LINES; line++) {
++        unsigned sense = mchp_eic_sense(s, line);
++        bool was = extract32(old, line, 1), now = extract32(s->level, line, 1);
++
++        if (!extract32(lines, line, 1) || !mchp_eic_match(sense, was, now)) {
++            continue;
++        }
++        if (!mchp_eic_is_level(sense) && !extract32(asynch, line, 1) &&
++            !clocked) {
++            continue;           /* synchronous edges need the EIC clock */
++        }
++        if (!extract32(flags, line, 1) || !mchp_eic_is_level(sense)) {
++            trace_mchp_eic_detect(line, sense, now);
++            if (extract32(evctrl, line, 1)) {
++                qemu_irq_pulse(s->event[line]);
++            }
++        }
++        flags |= BIT(line);
++    }
++    mchp_eic_set_reg(s, A_MCHP_EIC_INTFLAG, 4, flags);
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++/* NMI detection only depends on NMICTRL.NMISENSE (DS 25.6.4.1). */
++static void mchp_eic_detect_nmi(MchpEicState *s, bool old)
++{
++    uint32_t ctrl = mchp_eic_reg(s, A_MCHP_EIC_NMICTRL, 1);
++    unsigned sense = FIELD_EX32(ctrl, MCHP_EIC_NMICTRL, NMISENSE);
++    bool flag = mchp_eic_reg(s, A_MCHP_EIC_NMIFLAG, 1) &
++                R_MCHP_EIC_NMIFLAG_NMI_MASK;
++
++    if (mchp_eic_match(sense, old, s->nmi_level) &&
++        (mchp_eic_is_level(sense) ||
++         FIELD_EX32(ctrl, MCHP_EIC_NMICTRL, NMIASYNCH) ||
++         mchp_eic_clocked(s))) {
++        if (!flag) {
++            trace_mchp_eic_detect(MCHP_EIC_LINES, sense, s->nmi_level);
++        }
++        flag = true;
++        mchp_eic_set_reg(s, A_MCHP_EIC_NMIFLAG, 1,
++                         R_MCHP_EIC_NMIFLAG_NMI_MASK);
++    }
++    qemu_set_irq(s->nmi, flag);
++}
++
++static void mchp_eic_set_extint(void *opaque, int line, int level)
++{
++    MchpEicState *s = opaque;
++    uint32_t old = s->level;
++
++    s->level = deposit32(s->level, line, 1, level > 0);
++    if (s->level != old) {
++        mchp_eic_detect(s, old, BIT(line));
++    }
++}
++
++static void mchp_eic_set_nmi(void *opaque, int n, int level)
++{
++    MchpEicState *s = opaque;
++    bool old = s->nmi_level;
++
++    s->nmi_level = level > 0;
++    if (s->nmi_level != old) {
++        mchp_eic_detect_nmi(s, old);
++    }
++}
++
++static uint32_t mchp_eic_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                                  unsigned idx, uint32_t stored,
++                                  bool side_effects)
++{
++    MchpEicState *s = MCHP_EIC(rf->opaque);
++
++    if (!strcmp(ri->name, "PINSTATE")) {
++        return s->level;        /* debouncing is instant */
++    }
++    if (ri->offset == A_MCHP_EIC_SYNCBUSY) {
++        /* Synchronization is instant, but needs the EIC clock (silicon) */
++        if (mchp_eic_clocked(s)) {
++            s->sync_pending = 0;
++        }
++        return s->sync_pending;
++    }
++    return stored;
++}
++
++static void mchp_eic_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                unsigned idx, uint32_t old, uint32_t written,
++                                uint32_t we)
++{
++    MchpEicState *s = MCHP_EIC(rf->opaque);
++
++    switch (ri->offset) {
++    case A_MCHP_EIC_CTRLA:
++        if (written & we & R_MCHP_EIC_CTRLA_SWRST_MASK) {
++            return;             /* mchp-regblock resets the EIC next */
++        }
++        /*
++         * Synchronization waits for the EIC clock when the configuration
++         * needs that clock (seen on silicon)
++         */
++        if ((written & we & R_MCHP_EIC_CTRLA_ENABLE_MASK) != (old & we &
++             R_MCHP_EIC_CTRLA_ENABLE_MASK) &&
++            mchp_eic_needs_clock(s) && !mchp_eic_clocked(s)) {
++            s->sync_pending |= R_MCHP_EIC_SYNCBUSY_ENABLE_MASK;
++        }
++        /* fall through: enabling starts level detection */
++    case A_MCHP_EIC_INTFLAG:
++        /* A cleared level flag is set again while the level persists. */
++        mchp_eic_detect(s, s->level, UINT32_MAX);
++        break;
++    case A_MCHP_EIC_NMICTRL:
++    case A_MCHP_EIC_NMIFLAG:
++        mchp_eic_detect_nmi(s, s->nmi_level);
++        break;
++    }
++}
++
++static void mchp_eic_reset_exit(MchpRegBlock *rb)
++{
++    MchpEicState *s = MCHP_EIC(rb);
++
++    s->sync_pending = 0;
++    qemu_set_irq(s->nmi, 0);
++}
++
++static void mchp_eic_init(Object *obj)
++{
++    MchpEicState *s = MCHP_EIC(obj);
++    DeviceState *dev = DEVICE(obj);
++
++    qdev_init_gpio_in_named(dev, mchp_eic_set_extint, MCHP_EIC_EXTINT,
++                            MCHP_EIC_LINES);
++    qdev_init_gpio_in_named(dev, mchp_eic_set_nmi, MCHP_EIC_NMI_IN, 1);
++    qdev_init_gpio_out_named(dev, &s->nmi, MCHP_EIC_NMI_OUT, 1);
++    qdev_init_gpio_out_named(dev, s->event, MCHP_EIC_EVENT, MCHP_EIC_LINES);
++}
++
++static const VMStateDescription vmstate_mchp_eic = {
++    .name = TYPE_MCHP_EIC,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpEicState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_UINT32(level, MchpEicState),
++        VMSTATE_BOOL(nmi_level, MchpEicState),
++        VMSTATE_UINT32(sync_pending, MchpEicState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void mchp_eic_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_eic;
++    c->pre_read = mchp_eic_pre_read;
++    c->post_write = mchp_eic_post_write;
++    c->reset_exit = mchp_eic_reset_exit;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_eic_types[] = {
++    {
++        .name = TYPE_MCHP_EIC,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpEicState),
++        .instance_init = mchp_eic_init,
++        .class_init = mchp_eic_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_eic_types)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 80314fa..ebb2985 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -23,6 +23,7 @@ system_ss.add(when: 'CONFIG_MCHP_REGFILE', if_true: files(
+ ))
+ system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files(
+   'mchp_clock.c',
++  'mchp_eic.c',
+   'mchp_sysctrl.c',
+ ))
+ 
+diff --git a/hw/misc/trace-events b/hw/misc/trace-events
+index 88d4d68..591ce20 100644
+--- a/hw/misc/trace-events
++++ b/hw/misc/trace-events
+@@ -453,3 +453,6 @@ mchp_clk_update(const char *inst, const char *clock, uint64_t hz) "%s.%s: %" PRI
+ 
+ # mchp_sysctrl.c
+ mchp_rstc_reset_request(const char *inst, uint8_t rcause) "%s: reset requested, RCAUSE 0x%02x"
++
++# mchp_eic.c
++mchp_eic_detect(unsigned line, unsigned sense, int level) "EXTINT%u (16 = NMI): sense %u, level %d"
+diff --git a/include/hw/gpio/mchp_port.h b/include/hw/gpio/mchp_port.h
+index c348e5d..72e7459 100644
+--- a/include/hw/gpio/mchp_port.h
++++ b/include/hw/gpio/mchp_port.h
+@@ -15,6 +15,9 @@
+  *                  is a GPIO output (DIR = 1, PINCFG.PMUXEN = 0), else -1
+  *   "port-in"[n]   an external driver on pad n: 0 or 1, or -1 to release
+  *                  the pad
++ *   "func-a"[n]    the level of pad n while the pin is muxed to peripheral
++ *                  function A (PINCFG.PMUXEN, PMUX = 0: EIC EXTINT/NMI),
++ *                  else 0; the SoC wires it to the EIC
+  * IN reads the pad of each pin whose input buffer is on (PINCFG.INEN): the
+  * PORT's own drive, else the external driver, else the pull resistor
+  * (PINCFG.PULLEN, towards OUT), else 0 for a floating pad.
+@@ -39,6 +42,7 @@
+ 
+ #define MCHP_PORT_OUT "port-out"
+ #define MCHP_PORT_IN "port-in"
++#define MCHP_PORT_FUNC_A "func-a"
+ 
+ /* GPIO line of pin P<group><pin>, for example MCHP_PORT_PIN('C', 5) */
+ #define MCHP_PORT_PIN(group, pin) (((group) - 'A') * 32 + (pin))
+diff --git a/include/hw/mchp/gen/eic_u2254.h b/include/hw/mchp/gen/eic_u2254.h
+index a73c977..1b4c0e2 100644
+--- a/include/hw/mchp/gen/eic_u2254.h
++++ b/include/hw/mchp/gen/eic_u2254.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/eic_u2254.yaml (sha1 b26fcda6dfb1)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h b/include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h
+index e850c59..ae5c7d9 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/eic_u2254.yaml (sha1 b26fcda6dfb1)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,16 +23,18 @@ static const MchpRegInfo pic32cm1216mc00048_eic_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x13, .wmask = 0x13, .rdz = 0x01,
+-        .syncbusy = 0x00000003 /* SYNCBUSY */, .flags = 0,
++        .enprot = 0x10, .syncbusy = 0x00000003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "NMICTRL", .offset = 0x01, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x1F, .wmask = 0x1F, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x1F, .wmask = 0x1F,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "NMIFLAG", .offset = 0x02, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x0001, .wmask = 0x0000,
+-        .w1c = 0x0001, .flags = 0,
++        .w1c = 0x0001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x04, .size = 4, .count = 1, .stride = 4,
+@@ -42,37 +44,37 @@ static const MchpRegInfo pic32cm1216mc00048_eic_regs[] = {
+     {
+         .name = "EVCTRL", .offset = 0x08, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x0000FFFF, .flags = 0,
++        .wmask = 0x0000FFFF, .enprot = 0x0000FFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x0C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = 6 /* INTENSET */, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x0000FFFF, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x0000FFFF, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+         .alias_of = 6 /* INTENSET */, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x0000FFFF, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x0000FFFF, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x14, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x00000000, .w1c = 0x0000FFFF, .flags = 0,
++        .wmask = 0x00000000, .w1c = 0x0000FFFF, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "ASYNCH", .offset = 0x18, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x0000FFFF, .flags = 0,
++        .wmask = 0x0000FFFF, .enprot = 0x0000FFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "CONFIG0", .offset = 0x1C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .enprot = 0xFFFFFFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "CONFIG1", .offset = 0x20, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .enprot = 0xFFFFFFFF, .flags = MCHP_F_PAC,
+     },
+ };
+ #define PIC32CM1216MC00048_EIC_NREGS 11
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h b/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h
+index e01b025..3a508fb 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/port_u2210.yaml (sha1 58f104156ede)
++ * Overlay: overlays/port_u2210.yaml (sha1 389b43ae7984)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -90,7 +90,7 @@ static const MchpRegInfo pic32cm1216mc00048_port_regs[] = {
+     {
+         .name = "GROUP[0].PMUX", .offset = 0x30, .size = 1, .count = 16,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
+-        .flags = MCHP_F_PAC,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "GROUP[0].PINCFG", .offset = 0x40, .size = 1, .count = 32,
+@@ -167,7 +167,7 @@ static const MchpRegInfo pic32cm1216mc00048_port_regs[] = {
+     {
+         .name = "GROUP[1].PMUX", .offset = 0xB0, .size = 1, .count = 16,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
+-        .flags = MCHP_F_PAC,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "GROUP[1].PINCFG", .offset = 0xC0, .size = 1, .count = 32,
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h b/include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h
+index bcaa9ee..ba20842 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/eic_u2254.yaml (sha1 b26fcda6dfb1)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,16 +23,18 @@ static const MchpRegInfo pic32cm5164jh01100_eic_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x13, .wmask = 0x13, .rdz = 0x01,
+-        .syncbusy = 0x00000003 /* SYNCBUSY */, .flags = 0,
++        .enprot = 0x10, .syncbusy = 0x00000003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "NMICTRL", .offset = 0x01, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x1F, .wmask = 0x1F, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x1F, .wmask = 0x1F,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "NMIFLAG", .offset = 0x02, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x00, .w1c = 0x01,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x04, .size = 4, .count = 1, .stride = 4,
+@@ -42,52 +44,52 @@ static const MchpRegInfo pic32cm5164jh01100_eic_regs[] = {
+     {
+         .name = "EVCTRL", .offset = 0x08, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x0000FFFF, .flags = 0,
++        .wmask = 0x0000FFFF, .enprot = 0x0000FFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x0C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = 6 /* INTENSET */, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x0000FFFF, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x0000FFFF, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+         .alias_of = 6 /* INTENSET */, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x0000FFFF, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x0000FFFF, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x14, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x00000000, .w1c = 0x0000FFFF, .flags = 0,
++        .wmask = 0x00000000, .w1c = 0x0000FFFF, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "ASYNCH", .offset = 0x18, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x0000FFFF, .flags = 0,
++        .wmask = 0x0000FFFF, .enprot = 0x0000FFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "CONFIG0", .offset = 0x1C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .enprot = 0xFFFFFFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "CONFIG1", .offset = 0x20, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .enprot = 0xFFFFFFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "DEBOUNCEN", .offset = 0x30, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x0000FFFF, .flags = 0,
++        .wmask = 0x0000FFFF, .enprot = 0x0000FFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "DPRESCALER", .offset = 0x34, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x000100FF,
+-        .wmask = 0x000100FF, .flags = 0,
++        .wmask = 0x000100FF, .enprot = 0x000100FF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "PINSTATE", .offset = 0x38, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+ };
+ #define PIC32CM5164JH01100_EIC_NREGS 14
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h b/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h
+index 345002c..1d66bb2 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/port_u2210.yaml (sha1 58f104156ede)
++ * Overlay: overlays/port_u2210.yaml (sha1 389b43ae7984)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -90,7 +90,7 @@ static const MchpRegInfo pic32cm5164jh01100_port_regs[] = {
+     {
+         .name = "GROUP[0].PMUX", .offset = 0x30, .size = 1, .count = 16,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
+-        .flags = MCHP_F_PAC,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "GROUP[0].PINCFG", .offset = 0x40, .size = 1, .count = 32,
+@@ -167,7 +167,7 @@ static const MchpRegInfo pic32cm5164jh01100_port_regs[] = {
+     {
+         .name = "GROUP[1].PMUX", .offset = 0xB0, .size = 1, .count = 16,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
+-        .flags = MCHP_F_PAC,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "GROUP[1].PINCFG", .offset = 0xC0, .size = 1, .count = 32,
+@@ -244,7 +244,7 @@ static const MchpRegInfo pic32cm5164jh01100_port_regs[] = {
+     {
+         .name = "GROUP[2].PMUX", .offset = 0x130, .size = 1, .count = 16,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
+-        .flags = MCHP_F_PAC,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "GROUP[2].PINCFG", .offset = 0x140, .size = 1, .count = 32,
+diff --git a/include/hw/mchp/gen/port_u2210.h b/include/hw/mchp/gen/port_u2210.h
+index 0b66c8d..5e27855 100644
+--- a/include/hw/mchp/gen/port_u2210.h
++++ b/include/hw/mchp/gen/port_u2210.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/port_u2210.yaml (sha1 58f104156ede)
++ * Overlay: overlays/port_u2210.yaml (sha1 389b43ae7984)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/mchp_device.h b/include/hw/mchp/mchp_device.h
+index eba2a92..0bde9a0 100644
+--- a/include/hw/mchp/mchp_device.h
++++ b/include/hw/mchp/mchp_device.h
+@@ -148,6 +148,8 @@ typedef struct MchpDeviceInfo {
+     unsigned nirq_lines;
+     const MchpPeriphRef *gclk_channels;
+     unsigned ngclk_channels;
++    const MchpSignalInfo *signals;  /* pad signals, by pin */
++    unsigned nsignals;
+     const MchpSiliconRev *revisions; /* the first is the default */
+     unsigned nrevisions;
+ } MchpDeviceInfo;
+diff --git a/include/hw/misc/mchp_eic.h b/include/hw/misc/mchp_eic.h
+new file mode 100644
+index 0000000..b802414
+--- /dev/null
++++ b/include/hw/misc/mchp_eic.h
+@@ -0,0 +1,30 @@
++/*
++ * Microchip SAM/PIC32CM External Interrupt Controller (EIC U2254)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * A TYPE_MCHP_REGBLOCK subclass configured with mchp_regblock_set_info().
++ * GPIO lines:
++ *   "extint"[16]   in: level of the pad routed to EXTINTn (0 or 1)
++ *   "nmi-in"       in: level of the NMI pad
++ *   "nmi"          out: the CPU's NMI request (NMIFLAG.NMI)
++ *   "event"[16]    out: pulse per detection with EVCTRL.EXTINTEOn set
++ * sysbus IRQ 0 is the EIC interrupt (INTFLAG & INTENSET).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_MCHP_EIC_H
++#define HW_MISC_MCHP_EIC_H
++
++#include "hw/misc/mchp_regblock.h"
++
++#define TYPE_MCHP_EIC "mchp-eic"
++
++#define MCHP_EIC_EXTINT "extint"
++#define MCHP_EIC_NMI_IN "nmi-in"
++#define MCHP_EIC_NMI_OUT "nmi"
++#define MCHP_EIC_EVENT "event"
++
++#endif /* HW_MISC_MCHP_EIC_H */
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index a55cd1e..c7920d4 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -252,7 +252,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-eic-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-eic-test.c b/tests/qtest/pic32cm-eic-test.c
+new file mode 100644
+index 0000000..3c86bec
+--- /dev/null
++++ b/tests/qtest/pic32cm-eic-test.c
+@@ -0,0 +1,180 @@
++/*
++ * QTest for the EIC of the PIC32CM MC00 (pic32cm-mc00-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Pads are driven through the PORT's QOM properties (pa-in, pa-in-mask)
++ * and reach the EIC through function A. Expected behaviour from
++ * DS60001638E chapter 25 and from PIC32CM MC00 silicon (the clock rule of
++ * synchronization).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++#include "qobject/qdict.h"
++
++#define MACHINE         "-M pic32cm-mc00-cpro "
++
++#define GCLK            0x40001C00
++#define EIC             0x40002800
++#define PA              0x41000000
++#define SCB_ICSR        0xE000ED04
++#define NVIC_ISPR       0xE000E200
++
++#define E_CTRLA         0x00
++#define E_NMICTRL       0x01
++#define E_NMIFLAG       0x02
++#define E_SYNCBUSY      0x04
++#define E_INTENSET      0x10
++#define E_INTFLAG       0x14
++#define E_ASYNCH        0x18
++#define E_CONFIG0       0x1C
++
++#define P_PMUX          0x30
++#define P_PINCFG        0x40
++
++#define EIC_IRQ         3
++#define EIC_GCLK_ID     2
++#define PIN             16      /* PA16: EXTINT0 */
++#define NMI_PIN         8       /* PA08: NMI */
++
++static void drive(QTestState *qts, uint32_t mask, uint32_t level)
++{
++    QDict *rsp;
++
++    rsp = qtest_qmp(qts, "{ 'execute': 'qom-set', 'arguments':"
++                    " { 'path': '/machine/soc/port', 'property': 'pa-in',"
++                    " 'value': %u } }", level);
++    qobject_unref(rsp);
++    rsp = qtest_qmp(qts, "{ 'execute': 'qom-set', 'arguments':"
++                    " { 'path': '/machine/soc/port', 'property': 'pa-in-mask',"
++                    " 'value': %u } }", mask);
++    qobject_unref(rsp);
++}
++
++/* Mux @pin to function A (EIC) */
++static void mux_a(QTestState *qts, unsigned pin)
++{
++    qtest_writeb(qts, PA + P_PINCFG + pin, 0x03);           /* PMUXEN, INEN */
++    qtest_writeb(qts, PA + P_PMUX + pin / 2, 0x00);
++}
++
++static void eic_on(QTestState *qts, uint32_t config0, uint32_t asynch)
++{
++    qtest_writeb(qts, EIC + E_CTRLA, 0);
++    qtest_writel(qts, EIC + E_CONFIG0, config0);
++    qtest_writel(qts, EIC + E_ASYNCH, asynch);
++    qtest_writeb(qts, EIC + E_CTRLA, 0x02);
++    qtest_writel(qts, EIC + E_INTFLAG, 0xFFFFFFFF);
++}
++
++static void test_edges_and_irq(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, GCLK + 0x80 + 4 * EIC_GCLK_ID, 0x40);   /* GCLK0 */
++    mux_a(qts, PIN);
++    drive(qts, BIT(PIN), 0);
++    eic_on(qts, 0x1, 0);                                      /* RISE */
++    qtest_writel(qts, EIC + E_INTENSET, BIT(0));
++    g_assert_cmphex(qtest_readl(qts, EIC + E_INTFLAG), ==, 0);
++    drive(qts, BIT(PIN), BIT(PIN));
++    g_assert_cmphex(qtest_readl(qts, EIC + E_INTFLAG), ==, BIT(0));
++    g_assert_true(qtest_readl(qts, NVIC_ISPR) & BIT(EIC_IRQ));
++    qtest_writel(qts, EIC + E_INTFLAG, BIT(0));
++    g_assert_cmphex(qtest_readl(qts, EIC + E_INTFLAG), ==, 0);
++
++    /* Not muxed to the EIC: no input */
++    qtest_writeb(qts, PA + P_PINCFG + PIN, 0x02);
++    drive(qts, BIT(PIN), 0);
++    qtest_writeb(qts, PA + P_PINCFG + PIN, 0x03);
++    qtest_writel(qts, EIC + E_INTFLAG, BIT(0));
++    drive(qts, BIT(PIN), BIT(PIN));
++    g_assert_cmphex(qtest_readl(qts, EIC + E_INTFLAG), ==, BIT(0));
++    qtest_quit(qts);
++}
++
++static void test_level(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    mux_a(qts, PIN);
++    drive(qts, BIT(PIN), BIT(PIN));
++    eic_on(qts, 0x4, 0);                                      /* HIGH */
++    g_assert_cmphex(qtest_readl(qts, EIC + E_INTFLAG), ==, BIT(0));
++    qtest_writel(qts, EIC + E_INTFLAG, BIT(0));
++    g_assert_cmphex(qtest_readl(qts, EIC + E_INTFLAG), ==, BIT(0));
++    drive(qts, BIT(PIN), 0);
++    qtest_writel(qts, EIC + E_INTFLAG, BIT(0));
++    g_assert_cmphex(qtest_readl(qts, EIC + E_INTFLAG), ==, 0);
++    qtest_quit(qts);
++}
++
++/* Synchronous edges and their CTRLA synchronization need GCLK_EIC */
++static void test_clock(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    mux_a(qts, PIN);
++    drive(qts, BIT(PIN), 0);
++    qtest_writel(qts, GCLK + 0x80 + 4 * EIC_GCLK_ID, 0x40);
++    eic_on(qts, 0x1, 0);
++    qtest_writel(qts, GCLK + 0x80 + 4 * EIC_GCLK_ID, 0);
++    drive(qts, BIT(PIN), BIT(PIN));
++    g_assert_cmphex(qtest_readl(qts, EIC + E_INTFLAG), ==, 0);
++    qtest_writeb(qts, EIC + E_CTRLA, 0);
++    g_assert_cmphex(qtest_readl(qts, EIC + E_SYNCBUSY), ==, 0x2);
++    qtest_writel(qts, GCLK + 0x80 + 4 * EIC_GCLK_ID, 0x40);
++    g_assert_cmphex(qtest_readl(qts, EIC + E_SYNCBUSY), ==, 0);
++
++    /* Asynchronous: no clock needed, no stall */
++    qtest_writel(qts, GCLK + 0x80 + 4 * EIC_GCLK_ID, 0);
++    drive(qts, BIT(PIN), 0);
++    eic_on(qts, 0x1, BIT(0));
++    g_assert_cmphex(qtest_readl(qts, EIC + E_SYNCBUSY), ==, 0);
++    drive(qts, BIT(PIN), BIT(PIN));
++    g_assert_cmphex(qtest_readl(qts, EIC + E_INTFLAG), ==, BIT(0));
++
++    /* CTRLA.CKSEL: CLK_ULP32K always runs */
++    qtest_writeb(qts, EIC + E_CTRLA, 0);
++    qtest_writel(qts, EIC + E_ASYNCH, 0);
++    qtest_writeb(qts, EIC + E_CTRLA, 0x12);
++    qtest_writel(qts, EIC + E_INTFLAG, BIT(0));
++    drive(qts, BIT(PIN), 0);
++    drive(qts, BIT(PIN), BIT(PIN));
++    g_assert_cmphex(qtest_readl(qts, EIC + E_INTFLAG), ==, BIT(0));
++    qtest_quit(qts);
++}
++
++/* NMI works with the EIC disabled and pends the CPU's NMI */
++static void test_nmi(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    mux_a(qts, NMI_PIN);
++    drive(qts, BIT(NMI_PIN), 0);
++    qtest_writeb(qts, EIC + E_NMICTRL, 0x11);           /* RISE, NMIASYNCH */
++    g_assert_cmphex(qtest_readb(qts, EIC + E_NMIFLAG), ==, 0);
++    drive(qts, BIT(NMI_PIN), BIT(NMI_PIN));
++    g_assert_cmphex(qtest_readb(qts, EIC + E_NMIFLAG), ==, 1);
++    g_assert_true(qtest_readl(qts, SCB_ICSR) & BIT(31));    /* NMIPENDSET */
++    qtest_writeb(qts, EIC + E_NMIFLAG, 1);
++    g_assert_cmphex(qtest_readb(qts, EIC + E_NMIFLAG), ==, 0);
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++
++    qtest_add_func("pic32cm-eic/edges-and-irq", test_edges_and_irq);
++    qtest_add_func("pic32cm-eic/level", test_level);
++    qtest_add_func("pic32cm-eic/clock", test_clock);
++    qtest_add_func("pic32cm-eic/nmi", test_nmi);
++
++    return g_test_run();
++}
+-- 
+2.53.0.windows.2
+
