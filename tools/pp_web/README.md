@@ -45,10 +45,26 @@ It is a local, single-user prototype: one twin is shared by every open page. Hos
 `top.png` is rendered from Microchip's production Gerbers for the PIC32CM MC00 Curiosity Pro
 (design files R3, from the EV15N46A product page: "PIC32CM MC00 Curiosity Pro Evaluation Kit
 Design Documentation"). It was made with tracespace 4.2.1: every layer except the Mechanical 2
-drawing frame, cropped to the board edge, and rasterized at 20 px/mm with resvg.
+drawing frame. `recolor_board.py` then gives it the board's red solder mask (copper showing
+through as traces, gold pads) and crops it to the board edge, and resvg rasterizes it at
+20 px/mm.
 
 Part positions in `board.json` come from the pick-and-place file of the same release. Its
 coordinates are the Gerber coordinates in mm, checked against the paste pads of U300 and
 D700. `origin_mm` is the image's top-left corner in those coordinates (y points up on the
 board, down in the image). Designators: LED0 = D700 (PA24, active low), SW0 = SW700
 (PA25), RESET = SW301, EXT1 = J200, EXT2 = J201.
+
+## Click assets: `clicks/<id>/`
+
+`top.png` is the Click's top side, rendered by `clicks/render_click.py` from MikroElektronika's
+"2D and 3D files" for the board (Thermo 8 Click v100: `Thermo_8_click_v100.zip`, from the
+Downloads section of the product page). The DXF gives the outline (GKO), the silkscreen (GTO)
+and the mask openings (GTS). It has no part bodies, so `parts.json` lists them by position,
+identified from their pads and the schematic. The DXF coordinates are mm. `origin_mm` and
+`size_mm` in `clicks.json` place the image, and LED and signal positions (`at_mm`) are in the
+same coordinates. The zip also holds a STEP model for the 3D view later.
+
+On the board view, a plugged Click is centred on the header's `click_at_mm` in `board.json`.
+`view_mm` widens the stage beyond the board so the Click fits. Its PWR LED glows while the
+twin runs, and a signal pin (ALERT on INT) glows while the pad is at its active level.

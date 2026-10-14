@@ -29,11 +29,11 @@ main { flex: 1; display: flex; min-height: 0; }
   padding: 16px; min-width: 0;
 }
 #board { position: relative; height: 100%; aspect-ratio: 58.98 / 99.026; max-width: 100%; }
-#board-img { width: 100%; height: 100%; display: block; border-radius: 6px;
-  box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+#board-img { position: absolute; transform: translate(-50%, -50%); display: block;
+  border-radius: 6px; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
 #overlays { position: absolute; inset: 0; }
 .led {
-  position: absolute; width: 9%; aspect-ratio: 1; transform: translate(-50%, -50%);
+  position: absolute; aspect-ratio: 1; transform: translate(-50%, -50%);
   mix-blend-mode: screen; filter: blur(.5px);
   border-radius: 50%; pointer-events: none; opacity: 0; transition: opacity 40ms linear;
 }
@@ -89,11 +89,21 @@ h2 small { color: var(--muted); font-weight: normal; }
 .signal small { color: var(--muted); }
 .signal i { width: 10px; height: 10px; border-radius: 50%; background: #2a3038; }
 .signal.active i { background: #ff5252; box-shadow: 0 0 8px #ff5252; }
-.click-tag {
-  position: absolute; transform: translate(-50%, -50%) rotate(-90deg);
-  padding: 2px 8px; border-radius: 4px; color: #fff; font-size: 11px; font-weight: 600;
-  white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.6); pointer-events: none;
+.click-board {
+  position: absolute; transform: translate(-50%, -50%);
+  filter: drop-shadow(0 8px 14px rgba(0,0,0,.65)); animation: plug .25s ease-out;
 }
+.click-board img { width: 100%; height: 100%; display: block; }
+@keyframes plug { from { opacity: 0; transform: translate(-50%, -54%); } }
+.click-led, .click-pin {
+  position: absolute; aspect-ratio: 1; transform: translate(-50%, -50%);
+  border-radius: 50%; pointer-events: none;
+}
+.click-led { mix-blend-mode: screen; opacity: 0; transition: opacity .2s; }
+#board.powered .click-led { opacity: 1; }
+.click-pin { opacity: 0; transition: opacity 60ms;
+  background: radial-gradient(circle, #ffd0d0 0 18%, #ff3b3b 35%, #ff3b3b55 55%, transparent 72%); }
+.click-pin.active { opacity: 1; }
 @media (max-width: 800px) {
   main { flex-direction: column; }
   #side { width: auto; max-width: none; border-left: 0; }

@@ -5,14 +5,48 @@
     "chip": "MCP9808",
     "bus": "I2C 0x18",
     "description": "Digital temperature sensor, +/-0.25 C typical; ALERT on the INT pin",
-    "color": "#c62828",
     "controls": [
-      {"id": "temperature", "label": "Temperature", "property": "temperature",
-       "unit": "°C", "min": -40, "max": 125, "step": 0.25, "scale": 1000,
-       "default": 25}
+      {
+        "id": "temperature",
+        "label": "Temperature",
+        "property": "temperature",
+        "unit": "°C",
+        "min": -40,
+        "max": 125,
+        "step": 0.25,
+        "scale": 1000,
+        "default": 25
+      }
     ],
     "signals": [
-      {"id": "ALERT", "pin": "int", "active_low": true}
+      {
+        "id": "ALERT",
+        "pin": "int",
+        "active_low": true,
+        "at_mm": [
+          22.86,
+          15.24
+        ]
+      }
+    ],
+    "image": "thermo8/top.png",
+    "origin_mm": [
+      -1.27,
+      39.116
+    ],
+    "size_mm": [
+      25.4,
+      42.926
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          7.11,
+          0.51
+        ],
+        "color": "#5dff7a"
+      }
     ]
   }
 }

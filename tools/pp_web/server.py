@@ -180,6 +180,15 @@ class App:
             await self.session.stop()
 
 
+async def click_file(request: web.Request) -> web.StreamResponse:
+    """A Click board's rendered image (clicks/<id>/top.png)."""
+    root = (HERE / "clicks").resolve()
+    path = (root / request.match_info["click"] / request.match_info["name"]).resolve()
+    if path.parent.parent != root or path.suffix != ".png" or not path.is_file():
+        raise web.HTTPNotFound()
+    return web.FileResponse(path)
+
+
 def make_app(board: str = "ev15n46a", elf: Path | None = None) -> web.Application:
     state = App(board, elf)
     app = web.Application(client_max_size=MAX_ELF + 1024)
@@ -189,6 +198,7 @@ def make_app(board: str = "ev15n46a", elf: Path | None = None) -> web.Applicatio
         web.post("/api/firmware", state.firmware),
         web.get("/ws", state.ws),
         web.static("/static", STATIC),
+        web.get("/clicks/{click}/{name}", click_file),
     ])
     app.on_startup.append(state.on_startup)
     app.on_cleanup.append(state.on_cleanup)

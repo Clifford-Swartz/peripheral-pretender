@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import struct
 import time
 from pathlib import Path
 
@@ -30,6 +31,21 @@ def test_board_description():
     assert (led["id"], led["ref"], led["pin"]) == ("LED0", "D700", "PA24")
     slots = {h["slot"]: h["int_pin"] for h in board["headers"]}
     assert slots == {"ext1": "PB02", "ext2": "PA28"}
+    # A plugged Click is drawn inside the stage, and two never overlap
+    (vx, vy), (vw, vh) = board["view_mm"]["origin"], board["view_mm"]["size"]
+    h = max(c["size_mm"][1] for c in CLICKS.values())
+    w = max(c["size_mm"][0] for c in CLICKS.values())
+    centres = sorted(hd["click_at_mm"] for hd in board["headers"])
+    for x, y in centres:
+        assert vx <= x - w / 2 and x + w / 2 <= vx + vw
+        assert vy - vh <= y - h / 2 and y + h / 2 <= vy
+    assert abs(centres[0][1] - centres[1][1]) >= h
+    assert _png_size(BOARDS / "ev15n46a" / board["image"]) == tuple(
+        round(v * board["px_per_mm"]) for v in board["size_mm"])
+
+
+def _png_size(path: Path) -> tuple[int, int]:
+    return struct.unpack(">II", path.read_bytes()[16:24])
 
 
 def test_click_catalog():
@@ -38,6 +54,14 @@ def test_click_catalog():
             assert ctl["min"] <= ctl["default"] <= ctl["max"], ctl
         for sig in click["signals"]:
             assert sig["pin"] == "int", sig
+        # The image is rendered at 20 px/mm over the outline
+        image = BOARDS.parent / "clicks" / click["image"]
+        assert _png_size(image) == tuple(round(v * 20)
+                                         for v in click["size_mm"])
+        (ox, oy), (w, h) = click["origin_mm"], click["size_mm"]
+        for part in click.get("leds", []) + click["signals"]:
+            x, y = part["at_mm"]
+            assert ox <= x <= ox + w and oy - h <= y <= oy, part
 
 
 def _led0(pins: dict) -> float:

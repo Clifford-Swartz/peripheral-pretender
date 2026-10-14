@@ -20,10 +20,24 @@ function setStatus(state, text) {
   el.textContent = text;
 }
 
-// Board millimetres (origin bottom-left) to percentages of the image
+// The stage: the board image plus room beside it for plugged Click boards
+function view() {
+  return board.view_mm || { origin: board.origin_mm, size: board.size_mm };
+}
+
+// Board millimetres (origin bottom-left) to percentages of the stage
 function pos(atMm) {
-  const [x0, y0] = board.origin_mm, [w, h] = board.size_mm;
+  const { origin: [x0, y0], size: [w, h] } = view();
   return [((atMm[0] - x0) / w) * 100, ((y0 - atMm[1]) / h) * 100];
+}
+
+// A box of @sizeMm centred on @atMm, in stage percentages
+function place(el, atMm, sizeMm) {
+  const [x, y] = pos(atMm), [w, h] = view().size;
+  el.style.left = `${x}%`;
+  el.style.top = `${y}%`;
+  el.style.width = `${(sizeMm[0] / w) * 100}%`;
+  el.style.height = `${(sizeMm[1] / h) * 100}%`;
 }
 
 function pinRef(pin) {
@@ -35,14 +49,17 @@ function buildBoard(b, cat) {
   catalog = cat || {};
   $("board-name").textContent = b.name;
   $("board-img").src = `/board/${b.image}`;
+  // The image covers the board outline; the stage may be larger
+  const v = view();
+  $("board").style.aspectRatio = `${v.size[0]} / ${v.size[1]}`;
+  place($("board-img"), [b.origin_mm[0] + b.size_mm[0] / 2,
+                         b.origin_mm[1] - b.size_mm[1] / 2], b.size_mm);
   const layer = $("overlays");
   layer.textContent = "";
   leds = b.leds.map((led) => {
     const el = document.createElement("div");
-    const [x, y] = pos(led.at_mm);
+    place(el, led.at_mm, [5.3, 5.3]);
     el.className = "led";
-    el.style.left = `${x}%`;
-    el.style.top = `${y}%`;
     el.style.background = `radial-gradient(circle, #fff 0 12%, ${led.color} 22%, ${led.color}66 45%, transparent 70%)`;
     el.title = `${led.id} (${led.pin})`;
     layer.appendChild(el);
@@ -50,12 +67,8 @@ function buildBoard(b, cat) {
   });
   for (const btn of b.buttons) {
     const el = document.createElement("div");
-    const [x, y] = pos(btn.at_mm);
+    place(el, btn.at_mm, btn.size_mm);
     el.className = "button";
-    el.style.left = `${x}%`;
-    el.style.top = `${y}%`;
-    el.style.width = `${(btn.size_mm[0] / b.size_mm[0]) * 100}%`;
-    el.style.height = `${(btn.size_mm[1] / b.size_mm[1]) * 100}%`;
     el.innerHTML = `<span class="tag">${btn.id}</span>`;
     const press = (down) => {
       el.classList.toggle("down", down);
@@ -94,13 +107,50 @@ function buildSlots() {
     body.className = "slot-body";
     row.append(head, body);
     box.appendChild(row);
-    const tag = document.createElement("div");
-    tag.className = "click-tag";
-    const [x, y] = pos(h.at_mm);
-    tag.style.left = `${x}%`;
-    tag.style.top = `${y}%`;
-    tag.dataset.slot = h.slot;
-    $("overlays").appendChild(tag);
+    const art = document.createElement("div");
+    art.className = "click-board";
+    art.dataset.slot = h.slot;
+    art.style.display = "none";
+    $("overlays").appendChild(art);
+  }
+}
+
+// Draw a plugged Click from its rendered top side, centred where the board
+// file says (click_at_mm), with its LEDs and signal pins as overlays
+function drawClick(art, h, id, def) {
+  if (art.dataset.click === (id || "")) return;
+  art.dataset.click = id || "";
+  art.textContent = "";
+  art.style.display = def && def.image ? "" : "none";
+  if (!def || !def.image) return;
+  const [ox, oy] = def.origin_mm, [w, hh] = def.size_mm;
+  place(art, h.click_at_mm, def.size_mm);
+  art.title = `${def.name} on ${h.id}`;
+  const img = document.createElement("img");
+  img.src = `/clicks/${def.image}`;
+  img.alt = def.name;
+  art.appendChild(img);
+  const at = (el, mm, d) => {
+    el.style.left = `${((mm[0] - ox) / w) * 100}%`;
+    el.style.top = `${((oy - mm[1]) / hh) * 100}%`;
+    el.style.width = `${(d / w) * 100}%`;
+    art.appendChild(el);
+  };
+  for (const led of def.leds || []) {
+    const el = document.createElement("div");
+    el.className = "click-led";
+    el.style.background = `radial-gradient(circle, #fff 0 12%, ${led.color} 25%, ${led.color}55 48%, transparent 70%)`;
+    el.title = led.id;
+    at(el, led.at_mm, 3.2);
+  }
+  for (const sig of def.signals) {
+    if (!sig.at_mm) continue;
+    const el = document.createElement("div");
+    el.className = "click-pin";
+    el.dataset.pin = sig.pin === "int" ? h.int_pin : sig.pin;
+    el.dataset.activeLow = sig.active_low ? "1" : "";
+    el.title = `${sig.id} (${el.dataset.pin})`;
+    at(el, sig.at_mm, 2.6);
   }
 }
 
@@ -109,14 +159,10 @@ function showClicks(state) {
   for (const h of board.headers.filter((x) => x.slot)) {
     const c = state[h.slot], def = c && catalog[c.id];
     const row = document.querySelector(`.slot[data-slot="${h.slot}"]`);
-    const tag = document.querySelector(`.click-tag[data-slot="${h.slot}"]`);
+    const art = document.querySelector(`.click-board[data-slot="${h.slot}"]`);
     const sel = row.querySelector("select"), body = row.querySelector(".slot-body");
     sel.value = c ? c.id : "";
-    tag.style.display = def ? "" : "none";
-    if (def) {
-      tag.textContent = def.name.replace(/ Click$/, "");
-      tag.style.background = def.color;
-    }
+    drawClick(art, h, c && c.id, def);
     if (!def) { body.textContent = ""; body.dataset.click = ""; continue; }
     if (body.dataset.click !== c.id) {
       body.dataset.click = c.id;
@@ -157,7 +203,7 @@ function showClicks(state) {
 // A Click output is "active" while its pad sits at the active level
 function showSignals(lv) {
   levels = lv;
-  for (const s of document.querySelectorAll(".signal")) {
+  for (const s of document.querySelectorAll(".signal, .click-pin")) {
     const { group, bit } = pinRef(s.dataset.pin);
     if (!(group in lv)) { s.classList.remove("active"); continue; }
     const high = (lv[group] >>> bit) & 1;
@@ -195,6 +241,7 @@ function handle(msg) {
   case "uart": appendUart(msg.data); break;
   case "reset": $("console").textContent = ""; showPins({}); showSignals({}); break;
   case "status":
+    $("board").classList.toggle("powered", msg.state === "running");
     if (msg.state === "running") setStatus("running", `running ${msg.elf}`);
     else if (msg.state === "stopped") setStatus("stopped", `stopped (exit ${msg.code})`);
     else if (msg.state === "error") setStatus("error", msg.error);
