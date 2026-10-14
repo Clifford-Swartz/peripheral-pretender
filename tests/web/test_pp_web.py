@@ -553,7 +553,7 @@ def test_session_buzz(qemu_path, qemu_machines):
                               msg["state"]["ext1.duty"]))
 
         s = Session("pic32cm-mc00-cpro,ext1=buzz", BUZZ_DEMO, emit,
-                    watch=[("ext1", p) for p in watched(CLICKS["buzz"])])
+                    watch=[("ext1", *p) for p in watched(CLICKS["buzz"])])
         await s.start()
         try:
             await asyncio.sleep(2.5)
@@ -577,3 +577,67 @@ def test_session_buzz(qemu_path, qemu_machines):
     assert (0, 0) in tune                       # rests are silent
     assert held[0] == 440 and abs(held[1] - 500) <= 5, held
     assert after[0] != 440, after
+
+
+OLEDC_DEMO = BUILD / "oledc.elf"
+
+
+def _rgb565(frame: str, x: int, y: int, width: int = 96) -> int:
+    import base64
+    data = base64.b64decode(frame)
+    return data[2 * (y * width + x)] << 8 | data[2 * (y * width + x) + 1]
+
+
+@pytest.mark.qemu
+def test_session_oledc(qemu_path, qemu_machines):
+    """oledc.elf with an OLED C Click on EXT1: the panel picture the page
+    polls (fetched when frame-gen moves) shows the colour bars and the
+    moving square; SW0 inverts it."""
+    from tools.pp_web.server import watched
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not OLEDC_DEMO.is_file():
+        pytest.skip("oledc.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=oledc)")
+    assert watched(CLICKS["oledc"]) == [("frame", "frame-gen")]
+
+    async def scenario():
+        uart, frames = [], []
+
+        def emit(msg):
+            if msg["type"] == "uart":
+                uart.append(msg["data"])
+            elif msg["type"] == "clickstate":
+                frames.append(msg["state"]["ext1.frame"])
+
+        s = Session("pic32cm-mc00-cpro,ext1=oledc", OLEDC_DEMO, emit,
+                    watch=[("ext1", *p) for p in watched(CLICKS["oledc"])])
+        await s.start()
+        try:
+            await asyncio.sleep(2.0)
+            normal = list(frames)
+            await s.press("sw0", True)
+            await asyncio.sleep(0.6)
+            inverted = frames[-1]
+            await s.press("sw0", False)
+            await asyncio.sleep(0.3)
+        finally:
+            await s.stop()
+        return "".join(uart), normal, inverted
+
+    uart, normal, inverted = asyncio.run(scenario())
+    assert "bars drawn" in uart and "inverse" in uart, uart
+    last = normal[-1]
+    # Bars 12 pixels wide: white, yellow, cyan, green, magenta, red, blue,
+    # black; the square may cover part of a bar, so look down each one
+    bars = [0xFFFF, 0xFFE0, 0x07FF, 0x07E0, 0xF81F, 0xF800, 0x001F, 0x0000]
+    for b, color in enumerate(bars):
+        seen = {_rgb565(last, 12 * b + 5, y) for y in range(0, 96, 4)}
+        assert color in seen, (b, [hex(v) for v in seen])
+    assert any(0xFD20 == _rgb565(last, x, y)
+               for x in range(96) for y in range(96))       # the square
+    assert len(set(normal)) >= 10                           # it moves
+    white = {_rgb565(inverted, 5, y) for y in range(0, 96, 4)}
+    black = {_rgb565(inverted, 89, y) for y in range(0, 96, 4)}
+    assert 0x0000 in white and 0xFFFF not in white, white
+    assert 0xFFFF in black, black

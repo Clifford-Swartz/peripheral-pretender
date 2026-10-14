@@ -151,3 +151,7 @@ h2 small { color: var(--muted); font-weight: normal; }
   color: #fff; background: #000a; border-radius: 3px; padding: 1px 4px; white-space: nowrap; }
 .click-sound span:empty { display: none; }
 .click-sound.muted span::after { content: " (muted)"; }
+
+/* A display panel on a Click (OLED C): the controller's picture */
+.click-panel { position: absolute; image-rendering: pixelated; background: #000;
+  pointer-events: none; }

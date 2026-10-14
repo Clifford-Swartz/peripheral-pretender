@@ -154,6 +154,17 @@ rings and the pitch show on the buzzer, and clicking it mutes the page. Browsers
 only after a click on the page. Demo: `make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=buzz`,
 then pick "Buzz Click" for EXT1 (TCC0 plays C5 E5 G5 C6 on PB10; hold SW0 for A4).
 
+The OLED C Click (`clicks/oledc/`) has a `display` of type `panel`: a canvas over the glass
+(`at_mm`, `size_mm`) showing `width` x `height` pixels from the controller's `frame` property
+(base64 RGB565). The session polls `gen_property` (`frame-gen`) every frame and fetches the
+picture only when it changes. Any display controller that keeps a `PpPanel` in pp-qemu
+(`include/hw/display/pp_panel.h`) works the same way, so a TFT (ST7789) needs only its model and
+a catalog entry. The PSP27801 panel is not in Mikroe's DXF (only its FPC pads are): it is drawn
+from the panel's specification (25.8 x 30.1 mm glass, 20.14 mm active area); where the active
+area sits on the glass is an estimate. Demo: `make -C firmware/hello BOARD=pic32cm_mc00_cpro
+APP=oledc`, then pick "OLED C Click" for EXT1 (colour bars and a bouncing square; SW0 inverts).
+The long Click (57 mm) needed wider stages (`view_mm`) on EV15N46A and EV66E56A.
+
 ## Adapter assets: `adapters/<id>/`
 
 The Curiosity Pro's EXT1/EXT2 are Xplained Pro extension headers, so a Click needs an adapter:

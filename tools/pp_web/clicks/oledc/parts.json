@@ -1,0 +1,17 @@
+{
+ "source": "MikroElektronika OLED C Click v102 (no ClickID): 2D and 3D files (OLED_C_click_2d_3d_files_NOID_v102.zip, CAD/oled_c_click_v102.dxf; silkscreen OLED C click, OLED1) and schematic v102 (noID). The DXF has the display's FPC pads (OLED1) but not the panel: the PSP27801 panel (25.8 x 30.1 mm, active area 20.135 x 20.14 mm, product specification A01) is placed over the top of the board from the product photo; the active area position on the glass is an estimate.",
+ "parts": [
+  {"ref": "OLED1", "kind": "oled", "value": "PSP27801 96x96 RGB", "at_mm": [11.43, 38.2], "size_mm": [25.0, 30.1], "active_mm": [20.14, 20.14], "active_at_mm": [11.43, 41.2]},
+  {"ref": "L1", "kind": "ic", "value": "10uH", "at_mm": [16.36, 8.03], "size_mm": [5.2, 7.6]},
+  {"ref": "D1", "kind": "ic", "value": "PMEG3010ER", "at_mm": [16.13, 13.41], "size_mm": [3.6, 1.5]},
+  {"ref": "U1", "kind": "ic", "value": "TPS61041", "at_mm": [10.9, 8.65], "size_mm": [1.7, 3.0]},
+  {"ref": "C6", "kind": "capacitor", "at_mm": [3.07, 20.02], "size_mm": [1.4, 3.0]},
+  {"ref": "C7", "kind": "capacitor", "at_mm": [15.39, 19.96], "size_mm": [1.4, 3.0]},
+  {"ref": "C5", "kind": "capacitor", "at_mm": [17.45, 19.96], "size_mm": [1.4, 3.0]},
+  {"ref": "C4", "kind": "capacitor", "at_mm": [19.51, 19.96], "size_mm": [1.4, 3.0]},
+  {"ref": "R8", "kind": "resistor", "at_mm": [11.56, 20.87], "size_mm": [1.0, 2.0]},
+  {"ref": "R7", "kind": "resistor", "at_mm": [13.16, 20.87], "size_mm": [1.0, 2.0]},
+  {"ref": "C1", "kind": "capacitor", "at_mm": [10.44, 12.52], "size_mm": [1.4, 3.0]},
+  {"ref": "PWR1", "kind": "led", "value": "green", "at_mm": [12.98, 0.99], "size_mm": [3.2, 1.4], "color": "#7be38a"}
+ ]
+}

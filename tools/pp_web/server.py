@@ -59,14 +59,19 @@ CLICKS = json.loads((HERE / "clicks.json").read_text(encoding="utf-8"))
 ADAPTERS = json.loads((HERE / "adapters.json").read_text(encoding="utf-8"))
 
 
-def watched(click: dict) -> list[str]:
+def watched(click: dict) -> list[tuple[str, ...]]:
     """QOM properties of a catalog Click that the page shows: its display,
-    its sound (frequency, duty)."""
+    its sound (frequency, duty). A display panel's picture comes as
+    (property, generation property): it is fetched only when the
+    generation moves."""
     props = []
     if "display" in click:
-        props.append(click["display"]["property"])
+        d = click["display"]
+        props.append((d["property"], d["gen_property"]) if "gen_property" in d
+                     else (d["property"],))
     if "sound" in click:
-        props += [click["sound"]["property"], click["sound"]["duty_property"]]
+        props += [(click["sound"]["property"],),
+                  (click["sound"]["duty_property"],)]
     return props
 
 
@@ -138,9 +143,10 @@ class App:
         opts = [f"{slot}={c['id']}" for slot, c in self.clicks.items() if c]
         return ",".join([self.board["machine"], *opts])
 
-    def click_watch(self) -> list[tuple[str, str]]:
-        """(slot, property) of what each plugged Click shows, polled live."""
-        return [(slot, prop) for slot, c in self.clicks.items() if c
+    def click_watch(self) -> list[tuple[str, ...]]:
+        """(slot, property[, generation property]) of what each plugged
+        Click shows, polled live."""
+        return [(slot, *prop) for slot, c in self.clicks.items() if c
                 for prop in watched(CLICKS[c["id"]])]
 
     async def plug(self, slot: str, click: str | None) -> None:

@@ -89,7 +89,9 @@ class Session:
     emit: Callable[[dict], None]
     groups: tuple[str, ...] = ("a", "b")
     extra_args: tuple[str, ...] = ()        # more QEMU arguments (-d, -D)
-    watch: list[tuple[str, str]] = field(default_factory=list)  # Click props
+    # Click properties: (slot, property) or (slot, property, generation
+    # property), the last read only when the generation changes
+    watch: list[tuple[str, ...]] = field(default_factory=list)
     click_state: dict[str, object] = field(default_factory=dict)
     proc: asyncio.subprocess.Process | None = None
     qmp: Qmp | None = None
@@ -98,6 +100,7 @@ class Session:
     pins: dict[str, list[list[float]]] = field(default_factory=dict)
     levels: dict[str, int] = field(default_factory=dict)
     _stats: dict[str, list[int]] = field(default_factory=dict)
+    _gens: dict[str, object] = field(default_factory=dict)
 
     async def start(self) -> None:
         qmp_port, uart_port = free_port(), free_port()
@@ -165,9 +168,17 @@ class Session:
                 self.levels = levels
                 self.emit({"type": "levels", "levels": levels})
             state = {}
-            for slot, prop in self.watch:
-                state[f"{slot}.{prop}"] = await self.qmp.execute(
-                    "qom-get", path=f"/machine/{slot}-click", property=prop)
+            for slot, prop, *gen in self.watch:
+                key, path = f"{slot}.{prop}", f"/machine/{slot}-click"
+                if gen:
+                    g = await self.qmp.execute("qom-get", path=path,
+                                               property=gen[0])
+                    if key in self.click_state and self._gens.get(key) == g:
+                        state[key] = self.click_state[key]
+                        continue
+                    self._gens[key] = g
+                state[key] = await self.qmp.execute("qom-get", path=path,
+                                                    property=prop)
             if state != self.click_state:
                 self.click_state = state
                 self.emit({"type": "clickstate", "state": state})

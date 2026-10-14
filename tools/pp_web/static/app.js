@@ -275,6 +275,17 @@ function drawClick(stack, h, id, def) {
           m.size_mm[1]);
     }));
   }
+  // A display panel (OLED C's SSD1351, later TFTs): the controller's
+  // "frame" (base64 RGB565, rows top to bottom) on a canvas over the glass
+  if (def.display && def.display.type === "panel") {
+    const d = def.display, cv = document.createElement("canvas");
+    cv.className = "click-panel";
+    cv.width = d.width;
+    cv.height = d.height;
+    cv.dataset.prop = `${h.slot}.${d.property}`;
+    put(cv, [d.at_mm[0] - d.size_mm[0] / 2, d.at_mm[1] + d.size_mm[1] / 2],
+        d.size_mm[0], d.size_mm[1]);
+  }
   // A buzzer: its tone follows the Click's frequency property
   if (def.sound) {
     const el = document.createElement("div");
@@ -368,6 +379,12 @@ function updateClickParts() {
     const v = parseInt(bytes[Number(el.dataset.digit)] || "0", 16) || 0;
     el.classList.toggle("on", ((v >>> Number(el.dataset.bit)) & 1) === 1);
   }
+  for (const cv of document.querySelectorAll(".click-panel")) {
+    const frame = clickState[cv.dataset.prop] || "";
+    if (shownFrames.get(cv) === frame) continue;
+    shownFrames.set(cv, frame);
+    drawPanel(cv, frame);
+  }
   const sounding = new Set();
   for (const el of document.querySelectorAll(".click-sound")) {
     const hz = Number(clickState[el.dataset.prop] || 0);
@@ -393,6 +410,24 @@ function updateClickParts() {
       seg.style.opacity = lit ? Math.max(0.08, bright) : 0.07;
     }
   }
+}
+
+// RGB565 pixels (base64, two bytes each, high first) onto a canvas
+const shownFrames = new WeakMap();
+function drawPanel(cv, b64) {
+  const ctx = cv.getContext("2d"), img = ctx.createImageData(cv.width, cv.height);
+  const n = cv.width * cv.height;
+  let bytes = null;
+  try { bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)); } catch (_) { /* none */ }
+  for (let i = 0; i < n; i++) {
+    const v = bytes && bytes.length >= 2 * n ? (bytes[2 * i] << 8) | bytes[2 * i + 1] : 0;
+    const r = (v >> 11) & 0x1f, g = (v >> 5) & 0x3f, b = v & 0x1f;
+    img.data[4 * i] = (r << 3) | (r >> 2);
+    img.data[4 * i + 1] = (g << 2) | (g >> 4);
+    img.data[4 * i + 2] = (b << 3) | (b >> 2);
+    img.data[4 * i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
 }
 
 // Web Audio: browsers start it only after a user gesture on the page

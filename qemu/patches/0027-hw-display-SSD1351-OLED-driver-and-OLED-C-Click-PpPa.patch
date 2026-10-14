@@ -1,0 +1,1036 @@
+From c4093e0140d81bd0602676527f73a8f96950d1ca Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 14 Oct 2026 15:27:38 -0700
+Subject: [PATCH] hw/display: SSD1351 OLED driver and OLED C Click; PpPanel for
+ headless views
+
+- pp_panel: what a display panel shows, for front ends without a QEMU
+  console: "frame" (base64 RGB565), "frame-gen" (bumped on change),
+  "panel-width"/"panel-height", composed on demand by the controller's
+  render callback. Meant for every SPI/parallel display controller
+  (ST7789 next).
+- ssd1351: SSD1351 data sheet rev 1.3, 4-wire SPI: column/row windows,
+  Write RAM (65k and 262k), re-map and colour swap, start line, offset,
+  MUX ratio, display modes, sleep, the command lock and the commands it
+  protects after reset; other commands take their parameters and are
+  ignored; scrolling not modelled. D/C, RES# and the panel's supply are
+  GPIO inputs. Panel geometry properties; the defaults are the OLED C
+  Click's PSP27801 (96x96 on SEG111..16, COM127..32), inferred from
+  MikroElektronika's oledc driver.
+- mikrobus: OLED C Click "oledc" (schematic v102): CS, D/C on PWM, RES#
+  on RST, the 15 V EN on INT; pulls R7 100k (CS), R8 10k (RST), R9 10k
+  (EN, down).
+- qtests: the mikroSDK init sequence and pixels, BGR order, inverse/all
+  on, lock, sleep, supply off, RES#, locked A2h; on mikroBUS 2 of the
+  Nano Base too.
+
+Not checked against a physical OLED C Click.
+
+Peripheral Pretender: AI-assisted, not for upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |   9 +
+ docs/system/avr/avr64ea48-cnano.rst   |   5 +-
+ hw/display/meson.build                |   1 +
+ hw/display/pp_panel.c                 |  53 +++
+ hw/display/ssd1351.c                  | 509 ++++++++++++++++++++++++++
+ hw/misc/mikrobus.c                    |  11 +
+ include/hw/display/pp_panel.h         |  59 +++
+ include/hw/display/ssd1351.h          |  23 ++
+ tests/qtest/avr64ea48-cnano-test.c    |  59 +++
+ tests/qtest/pic32cm-click-test.c      | 138 +++++++
+ 10 files changed, 865 insertions(+), 2 deletions(-)
+ create mode 100644 hw/display/pp_panel.c
+ create mode 100644 hw/display/ssd1351.c
+ create mode 100644 include/hw/display/pp_panel.h
+ create mode 100644 include/hw/display/ssd1351.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 60016c4..af076c4 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -90,6 +90,15 @@ resistors are modelled (from their schematics, v100).
+   pin low while undriven). The QOM properties ``frequency`` (Hz) and
+   ``duty`` (per mille) give the tone the PWM signal plays, 0 while silent.
+ 
++``oledc``
++  OLED C Click: an SSD1351 OLED driver (``ssd1351``) with a 96x96 RGB panel
++  (PSP27801) on the SPI bus: CS (100 kOhm pull-up), D/C on PWM, RES# on RST
++  (10 kOhm pull-up), and EN of the panel's 15 V supply on INT (10 kOhm
++  pull-down: dark until the firmware drives INT high). The QOM properties
++  ``frame`` (base64 RGB565, rows top to bottom) and ``frame-gen`` (bumped
++  on every change) give the picture; ``panel-width`` and ``panel-height``
++  its size.
++
+ SPI Clicks on both headers share the SPI bus; each listens only while its
+ own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
+ 
+diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
+index 2a5b065..32503a9 100644
+--- a/docs/system/avr/avr64ea48-cnano.rst
++++ b/docs/system/avr/avr64ea48-cnano.rst
+@@ -31,8 +31,9 @@ on ``-serial`` 1.
+ On a Curiosity Nano Base for Click boards (AC164162), ``mb1=``, ``mb2=``
+ and ``mb3=`` plug a Click board into mikroBUS socket 1-3 (``thermo8`` needs
+ I2C, which is not modelled yet; ``buttong``, ``7seg``, ``relay``,
+-``8x8g``, a MAX7219 LED matrix with a ``display`` property, and ``buzz``,
+-a piezo buzzer whose ``frequency`` follows the PWM pin, work). The
++``8x8g``, a MAX7219 LED matrix with a ``display`` property, ``buzz``,
++a piezo buzzer whose ``frequency`` follows the PWM pin, and ``oledc``, an
++SSD1351 OLED whose picture is the ``frame`` property, work). The
+ Click is ``/machine/mbN-click``.
+ 
+ Firmware comes from ``-kernel`` or ``-bios``::
+diff --git a/hw/display/meson.build b/hw/display/meson.build
+index ffecedb..93e9081 100644
+--- a/hw/display/meson.build
++++ b/hw/display/meson.build
+@@ -16,6 +16,7 @@ system_ss.add(when: 'CONFIG_IMX6UL_LCDIF', if_true: files('imx6ul_lcdif.c'))
+ system_ss.add(when: 'CONFIG_SII9022', if_true: files('sii9022.c'))
+ system_ss.add(when: 'CONFIG_SSD0303', if_true: files('ssd0303.c'))
+ system_ss.add(when: 'CONFIG_SSD0323', if_true: files('ssd0323.c'))
++system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('pp_panel.c', 'ssd1351.c'))
+ system_ss.add(when: 'CONFIG_XEN_BUS', if_true: files('xenfb.c'))
+ 
+ system_ss.add(when: 'CONFIG_VGA_PCI', if_true: files('vga-pci.c'))
+diff --git a/hw/display/pp_panel.c b/hw/display/pp_panel.c
+new file mode 100644
+index 0000000..0558da8
+--- /dev/null
++++ b/hw/display/pp_panel.c
+@@ -0,0 +1,53 @@
++/*
++ * What a display panel on a board shows, for headless front ends
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * See include/hw/display/pp_panel.h.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/visitor.h"
++#include "hw/display/pp_panel.h"
++
++static void pp_panel_get_frame(Object *obj, Visitor *v, const char *name,
++                               void *opaque, Error **errp)
++{
++    PpPanel *p = opaque;
++    size_t n = (size_t)p->width * p->height;
++    g_autofree uint8_t *bytes = g_malloc(n * 2);
++    g_autofree char *b64 = NULL;
++
++    if (p->stale) {
++        p->render(p->opaque, p->fb);
++        p->stale = false;
++    }
++    for (size_t i = 0; i < n; i++) {
++        bytes[2 * i] = p->fb[i] >> 8;
++        bytes[2 * i + 1] = p->fb[i];
++    }
++    b64 = g_base64_encode(bytes, n * 2);
++    visit_type_str(v, name, &b64, errp);
++}
++
++void pp_panel_init(PpPanel *p, Object *owner, uint32_t width,
++                   uint32_t height, PpPanelRender *render, void *opaque)
++{
++    p->width = width;
++    p->height = height;
++    p->fb = g_new0(uint16_t, (size_t)width * height);
++    p->render = render;
++    p->opaque = opaque;
++    p->stale = true;
++    object_property_add_uint32_ptr(owner, "panel-width", &p->width,
++                                   OBJ_PROP_FLAG_READ);
++    object_property_add_uint32_ptr(owner, "panel-height", &p->height,
++                                   OBJ_PROP_FLAG_READ);
++    object_property_add_uint32_ptr(owner, "frame-gen", &p->gen,
++                                   OBJ_PROP_FLAG_READ);
++    object_property_add(owner, "frame", "str", pp_panel_get_frame,
++                        NULL, NULL, p);
++}
+diff --git a/hw/display/ssd1351.c b/hw/display/ssd1351.c
+new file mode 100644
+index 0000000..5b78090
+--- /dev/null
++++ b/hw/display/ssd1351.c
+@@ -0,0 +1,509 @@
++/*
++ * Solomon Systech SSD1351 128x128 RGB OLED driver on an SSI bus
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * SSD1351 data sheet rev 1.3 (Oct 2009), 4-wire SPI (BS1:BS0 = 00): bytes
++ * are commands while D/C# is low and their parameters or display data
++ * while it is high (Table 9-1). Modelled: column and row windows (15h,
++ * 75h) and Write RAM (5Ch) into the 128 x 128 x 18-bit GDDRAM with
++ * horizontal or vertical increment, re-map and colour depth (A0h: column
++ * re-map, A/C swap, COM scan direction; 65k and 262k data), display start
++ * line (A1h), display offset (A2h), display modes (A4h-A7h), sleep
++ * (AEh/AFh), MUX ratio (CAh) and the command lock (FDh: 12h/16h lock the
++ * interface, B0h/B1h the commands A2h, B1h, B3h, BBh, BEh, C1h, which are
++ * locked after reset). Every other command takes its documented number
++ * of parameters and is otherwise ignored: grey-scale table, contrast and
++ * timing do not change the picture. Not modelled: scrolling (96h, 9Eh),
++ * 262k format 2, COM split off, reading RAM (not possible over SPI).
++ * RES# low returns every register to its reset value; the RAM keeps its
++ * contents.
++ *
++ * The panel: "width" x "height" visible pixels; column x shows segment
++ * "seg-left" - x, row y common "com-top" - y. The defaults are the OLED C
++ * Click's PSP27801 (96 x 96 on SEG111..16 and COM127..32), inferred from
++ * MikroElektronika's oledc driver (columns 16-111, MUX 95, offset 20h,
++ * re-map 32h: COM scan reversed, columns re-mapped), whose pictures come
++ * out upright that way. Colour A is blue, B green, C red, so 65k data in
++ * the A->B->C order is RGB565. Nothing lights while the panel supply
++ * ("vcc") is off, in sleep, or in reset. Not checked against a physical
++ * display.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/log.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/display/pp_panel.h"
++#include "hw/display/ssd1351.h"
++#include "hw/ssi/ssi.h"
++#include "migration/vmstate.h"
++
++#define SSD1351_SIZE        128
++#define SSD1351_MAX_ARGS    63
++
++enum {
++    MODE_OFF = 0xA4,
++    MODE_ON = 0xA5,
++    MODE_NORMAL = 0xA6,
++    MODE_INVERSE = 0xA7,
++};
++
++#define REMAP_VERTICAL      BIT(0)
++#define REMAP_COLUMNS       BIT(1)
++#define REMAP_SWAP          BIT(2)
++#define REMAP_COM_REVERSE   BIT(4)
++#define REMAP_SPLIT         BIT(5)
++
++OBJECT_DECLARE_SIMPLE_TYPE(Ssd1351State, SSD1351)
++
++struct Ssd1351State {
++    SSIPeripheral parent_obj;
++
++    PpPanel panel;
++    uint32_t width;
++    uint32_t height;
++    uint32_t seg_left;
++    uint32_t com_top;
++
++    /* GDDRAM: C in bits 17:12, B in 11:6, A in 5:0 */
++    uint32_t ram[SSD1351_SIZE * SSD1351_SIZE];
++    uint8_t cmd;
++    uint8_t nargs;              /* parameters the command takes */
++    uint8_t argc;               /* received so far */
++    uint8_t args[SSD1351_MAX_ARGS];
++    bool writing;               /* after 5Ch: data goes to RAM */
++    uint8_t pix[3];
++    uint8_t npix;
++
++    uint8_t col_start, col_end, row_start, row_end, col, row;
++    uint8_t remap;
++    uint8_t start_line;
++    uint8_t offset;
++    uint8_t mode;
++    uint8_t mux;
++    bool display_on;
++    bool locked;                /* FDh 16h */
++    bool protected_cmds;        /* FDh B0h */
++
++    bool dc;
++    bool in_reset;
++    bool vcc;
++};
++
++/* Number of parameters of each command, -1 for unknown */
++static int ssd1351_nargs(uint8_t cmd)
++{
++    switch (cmd) {
++    case 0x15: case 0x75:
++        return 2;
++    case 0xA0: case 0xA1: case 0xA2: case 0xAB: case 0xB1: case 0xB3:
++    case 0xB5: case 0xB6: case 0xBB: case 0xBE: case 0xC7: case 0xCA:
++    case 0xFD:
++        return 1;
++    case 0xB2: case 0xB4: case 0xC1:
++        return 3;
++    case 0x96:
++        return 5;
++    case 0xB8:
++        return 63;
++    case 0x5C: case 0x5D: case 0x9E: case 0x9F: case 0xA4 ... 0xA7:
++    case 0xAD: case 0xAE: case 0xAF: case 0xB0: case 0xB9: case 0xD1:
++    case 0xE3:
++        return 0;
++    default:
++        return -1;
++    }
++}
++
++static bool ssd1351_protected(uint8_t cmd)
++{
++    return cmd == 0xA2 || cmd == 0xB1 || cmd == 0xB3 || cmd == 0xBB ||
++           cmd == 0xBE || cmd == 0xC1;
++}
++
++static void ssd1351_registers_reset(Ssd1351State *s)
++{
++    s->cmd = 0;
++    s->nargs = 0;
++    s->argc = 0;
++    s->writing = false;
++    s->npix = 0;
++    s->col_start = 0;
++    s->col_end = SSD1351_SIZE - 1;
++    s->row_start = 0;
++    s->row_end = SSD1351_SIZE - 1;
++    s->col = 0;
++    s->row = 0;
++    s->remap = REMAP_SPLIT;
++    s->start_line = 0;
++    s->offset = 0x60;
++    s->mode = MODE_NORMAL;
++    s->mux = SSD1351_SIZE - 1;
++    s->display_on = false;
++    s->locked = false;
++    s->protected_cmds = true;
++    pp_panel_changed(&s->panel);
++}
++
++static void ssd1351_put_pixel(Ssd1351State *s, unsigned c, unsigned b,
++                              unsigned a)
++{
++    if (s->remap & REMAP_SWAP) {
++        unsigned t = a;
++
++        a = c;
++        c = t;
++    }
++    s->ram[s->row * SSD1351_SIZE + s->col] = c << 12 | b << 6 | a;
++    pp_panel_changed(&s->panel);
++    if (s->remap & REMAP_VERTICAL) {
++        if (s->row++ >= s->row_end) {
++            s->row = s->row_start;
++            if (s->col++ >= s->col_end) {
++                s->col = s->col_start;
++            }
++        }
++    } else if (s->col++ >= s->col_end) {
++        s->col = s->col_start;
++        if (s->row++ >= s->row_end) {
++            s->row = s->row_start;
++        }
++    }
++}
++
++static void ssd1351_data(Ssd1351State *s, uint8_t v)
++{
++    unsigned depth = s->remap >> 6;
++
++    s->pix[s->npix++] = v;
++    if (depth < 2 && s->npix == 2) {
++        unsigned w = s->pix[0] << 8 | s->pix[1];
++        unsigned c5 = w >> 11, a5 = w & 0x1F;
++
++        /* 5-bit A and C to the 6-bit RAM: the MSB fills the LSB */
++        ssd1351_put_pixel(s, c5 << 1 | c5 >> 4, (w >> 5) & 0x3F,
++                          a5 << 1 | a5 >> 4);
++        s->npix = 0;
++    } else if (depth >= 2 && s->npix == 3) {
++        if (depth == 3) {
++            qemu_log_mask(LOG_UNIMP, "ssd1351: 262k format 2 is not "
++                          "modelled; taken as 262k\n");
++        }
++        ssd1351_put_pixel(s, s->pix[0] & 0x3F, s->pix[1] & 0x3F,
++                          s->pix[2] & 0x3F);
++        s->npix = 0;
++    }
++}
++
++static void ssd1351_execute(Ssd1351State *s)
++{
++    const uint8_t *a = s->args;
++
++    if (s->protected_cmds && ssd1351_protected(s->cmd)) {
++        return;                 /* inaccessible until FDh B1h */
++    }
++    switch (s->cmd) {
++    case 0x15:
++        s->col_start = a[0] & 0x7F;
++        s->col_end = a[1] & 0x7F;
++        s->col = s->col_start;
++        break;
++    case 0x75:
++        s->row_start = a[0] & 0x7F;
++        s->row_end = a[1] & 0x7F;
++        s->row = s->row_start;
++        break;
++    case 0x5C:
++        s->writing = true;
++        s->npix = 0;
++        break;
++    case 0x5D:
++        qemu_log_mask(LOG_GUEST_ERROR, "ssd1351: Read RAM over SPI\n");
++        break;
++    case 0xA0:
++        s->remap = a[0];
++        if (!(a[0] & REMAP_SPLIT)) {
++            qemu_log_mask(LOG_UNIMP, "ssd1351: COM split off is not "
++                          "modelled\n");
++        }
++        break;
++    case 0xA1:
++        s->start_line = a[0] & 0x7F;
++        break;
++    case 0xA2:
++        s->offset = a[0] & 0x7F;
++        break;
++    case MODE_OFF ... MODE_INVERSE:
++        s->mode = s->cmd;
++        break;
++    case 0xAE:
++        s->display_on = false;
++        break;
++    case 0xAF:
++        s->display_on = true;
++        break;
++    case 0xCA:
++        s->mux = MAX(a[0] & 0x7F, 15);
++        break;
++    case 0xFD:
++        if (a[0] == 0x12 || a[0] == 0x16) {
++            s->locked = a[0] == 0x16;
++        } else if (a[0] == 0xB0 || a[0] == 0xB1) {
++            s->protected_cmds = a[0] == 0xB0;
++        }
++        break;
++    case 0x96: case 0x9E: case 0x9F:
++        qemu_log_mask(LOG_UNIMP, "ssd1351: scrolling (%02Xh) is not "
++                      "modelled\n", s->cmd);
++        break;
++    default:
++        break;                  /* timing, grey scale, contrast */
++    }
++    pp_panel_changed(&s->panel);
++}
++
++static uint32_t ssd1351_transfer(SSIPeripheral *dev, uint32_t val)
++{
++    Ssd1351State *s = SSD1351(dev);
++    int n;
++
++    if (s->in_reset) {
++        return 0;
++    }
++    val &= 0xFF;
++    if (s->dc) {
++        if (s->locked && s->cmd != 0xFD) {
++            return 0;
++        }
++        if (s->argc < s->nargs) {
++            s->args[s->argc++] = val;
++            if (s->argc == s->nargs) {
++                ssd1351_execute(s);
++            }
++        } else if (s->writing) {
++            ssd1351_data(s, val);
++        }
++        return 0;
++    }
++    /* A command byte ends Write RAM */
++    s->writing = false;
++    s->cmd = val;
++    s->argc = 0;
++    s->nargs = 0;
++    if (s->locked && val != 0xFD) {
++        return 0;
++    }
++    n = ssd1351_nargs(val);
++    if (n < 0) {
++        qemu_log_mask(LOG_GUEST_ERROR, "ssd1351: unknown command %02Xh\n",
++                      val);
++        return 0;
++    }
++    s->nargs = n;
++    if (!n) {
++        ssd1351_execute(s);
++    }
++    return 0;
++}
++
++/* 6-bit channels of RAM pixel @v as RGB565, after the display mode */
++static uint16_t ssd1351_pixel(Ssd1351State *s, uint32_t v)
++{
++    unsigned c = (v >> 12) & 0x3F, b = (v >> 6) & 0x3F, a = v & 0x3F;
++
++    switch (s->mode) {
++    case MODE_OFF:
++        return 0;
++    case MODE_ON:
++        return 0xFFFF;
++    case MODE_INVERSE:
++        c ^= 0x3F;
++        b ^= 0x3F;
++        a ^= 0x3F;
++        break;
++    }
++    return (c >> 1) << 11 | b << 5 | a >> 1;
++}
++
++static void ssd1351_render(void *opaque, uint16_t *fb)
++{
++    Ssd1351State *s = opaque;
++
++    for (unsigned y = 0; y < s->height; y++) {
++        int com = (int)s->com_top - (int)y;
++        unsigned q = (unsigned)(com - s->offset) & 0x7F;
++        unsigned line, row;
++
++        for (unsigned x = 0; x < s->width; x++) {
++            fb[y * s->width + x] = 0;
++        }
++        if (!s->vcc || s->in_reset || !s->display_on || com < 0 ||
++            q > s->mux) {
++            continue;           /* dark: no supply, sleep, unscanned */
++        }
++        line = (s->remap & REMAP_COM_REVERSE) ? s->mux - q : q;
++        row = (s->start_line + line) & 0x7F;
++        for (unsigned x = 0; x < s->width; x++) {
++            int seg = (int)s->seg_left - (int)x;
++            unsigned col;
++
++            if (seg < 0) {
++                continue;
++            }
++            col = (s->remap & REMAP_COLUMNS) ? 127 - seg : seg;
++            fb[y * s->width + x] =
++                ssd1351_pixel(s, s->ram[row * SSD1351_SIZE + col]);
++        }
++    }
++}
++
++static void ssd1351_set_dc(void *opaque, int n, int level)
++{
++    SSD1351(opaque)->dc = level > 0;
++}
++
++static void ssd1351_set_reset(void *opaque, int n, int level)
++{
++    Ssd1351State *s = opaque;
++    bool low = level == 0;
++
++    if (low && !s->in_reset) {
++        ssd1351_registers_reset(s);
++    }
++    s->in_reset = low;
++    pp_panel_changed(&s->panel);
++}
++
++static void ssd1351_set_vcc(void *opaque, int n, int level)
++{
++    Ssd1351State *s = opaque;
++
++    s->vcc = level > 0;
++    pp_panel_changed(&s->panel);
++}
++
++static void ssd1351_realize(SSIPeripheral *dev, Error **errp)
++{
++    Ssd1351State *s = SSD1351(dev);
++
++    if (!s->width || !s->height || s->width > s->seg_left + 1 ||
++        s->height > s->com_top + 1 || s->seg_left >= SSD1351_SIZE ||
++        s->com_top >= SSD1351_SIZE) {
++        error_setg(errp, "the panel must lie within SEG0-127 and "
++                   "COM0-127");
++        return;
++    }
++    s->panel.width = s->width;
++    s->panel.height = s->height;
++    g_free(s->panel.fb);
++    s->panel.fb = g_new0(uint16_t, s->width * s->height);
++    qdev_init_gpio_in_named(DEVICE(dev), ssd1351_set_dc, SSD1351_DC, 1);
++    qdev_init_gpio_in_named(DEVICE(dev), ssd1351_set_reset,
++                            SSD1351_RESET, 1);
++    qdev_init_gpio_in_named(DEVICE(dev), ssd1351_set_vcc, SSD1351_VCC, 1);
++}
++
++static void ssd1351_reset(DeviceState *dev)
++{
++    Ssd1351State *s = SSD1351(dev);
++
++    ssd1351_registers_reset(s);
++    /* Power-on: RAM undefined (cleared here), CS high, RES# released */
++    memset(s->ram, 0, sizeof(s->ram));
++    s->parent_obj.cs = true;
++    s->in_reset = false;
++}
++
++static void ssd1351_init(Object *obj)
++{
++    Ssd1351State *s = SSD1351(obj);
++
++    pp_panel_init(&s->panel, obj, 1, 1, ssd1351_render, s);
++}
++
++static void ssd1351_finalize(Object *obj)
++{
++    g_free(SSD1351(obj)->panel.fb);
++}
++
++static int ssd1351_post_load(void *opaque, int version_id)
++{
++    pp_panel_changed(&SSD1351(opaque)->panel);
++    return 0;
++}
++
++static const Property ssd1351_properties[] = {
++    DEFINE_PROP_UINT32("width", Ssd1351State, width, 96),
++    DEFINE_PROP_UINT32("height", Ssd1351State, height, 96),
++    DEFINE_PROP_UINT32("seg-left", Ssd1351State, seg_left, 111),
++    DEFINE_PROP_UINT32("com-top", Ssd1351State, com_top, 127),
++};
++
++static const VMStateDescription vmstate_ssd1351 = {
++    .name = TYPE_SSD1351,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .post_load = ssd1351_post_load,
++    .fields = (const VMStateField[]) {
++        VMSTATE_SSI_PERIPHERAL(parent_obj, Ssd1351State),
++        VMSTATE_UINT32_ARRAY(ram, Ssd1351State,
++                             SSD1351_SIZE * SSD1351_SIZE),
++        VMSTATE_UINT8(cmd, Ssd1351State),
++        VMSTATE_UINT8(nargs, Ssd1351State),
++        VMSTATE_UINT8(argc, Ssd1351State),
++        VMSTATE_UINT8_ARRAY(args, Ssd1351State, SSD1351_MAX_ARGS),
++        VMSTATE_BOOL(writing, Ssd1351State),
++        VMSTATE_UINT8_ARRAY(pix, Ssd1351State, 3),
++        VMSTATE_UINT8(npix, Ssd1351State),
++        VMSTATE_UINT8(col_start, Ssd1351State),
++        VMSTATE_UINT8(col_end, Ssd1351State),
++        VMSTATE_UINT8(row_start, Ssd1351State),
++        VMSTATE_UINT8(row_end, Ssd1351State),
++        VMSTATE_UINT8(col, Ssd1351State),
++        VMSTATE_UINT8(row, Ssd1351State),
++        VMSTATE_UINT8(remap, Ssd1351State),
++        VMSTATE_UINT8(start_line, Ssd1351State),
++        VMSTATE_UINT8(offset, Ssd1351State),
++        VMSTATE_UINT8(mode, Ssd1351State),
++        VMSTATE_UINT8(mux, Ssd1351State),
++        VMSTATE_BOOL(display_on, Ssd1351State),
++        VMSTATE_BOOL(locked, Ssd1351State),
++        VMSTATE_BOOL(protected_cmds, Ssd1351State),
++        VMSTATE_BOOL(dc, Ssd1351State),
++        VMSTATE_BOOL(in_reset, Ssd1351State),
++        VMSTATE_BOOL(vcc, Ssd1351State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void ssd1351_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    SSIPeripheralClass *k = SSI_PERIPHERAL_CLASS(klass);
++
++    dc->desc = "SSD1351 128x128 RGB OLED driver";
++    dc->vmsd = &vmstate_ssd1351;
++    device_class_set_props(dc, ssd1351_properties);
++    device_class_set_legacy_reset(dc, ssd1351_reset);
++    k->realize = ssd1351_realize;
++    k->transfer = ssd1351_transfer;
++    k->cs_polarity = SSI_CS_LOW;
++}
++
++static const TypeInfo ssd1351_types[] = {
++    {
++        .name = TYPE_SSD1351,
++        .parent = TYPE_SSI_PERIPHERAL,
++        .instance_size = sizeof(Ssd1351State),
++        .instance_init = ssd1351_init,
++        .instance_finalize = ssd1351_finalize,
++        .class_init = ssd1351_class_init,
++    },
++};
++
++DEFINE_TYPES(ssd1351_types)
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index 44cb4ce..4085c19 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -20,6 +20,7 @@
+ #include "hw/misc/click_button.h"
+ #include "hw/misc/click_buzzer.h"
+ #include "hw/misc/mikrobus.h"
++#include "hw/display/ssd1351.h"
+ #include "hw/sensor/mchp_mcp9808.h"
+ #include "hw/ssi/max7219.h"
+ #include "hw/ssi/ti_74hc595.h"
+@@ -80,6 +81,16 @@ static const ClickInfo mikrobus_clicks[] = {
+       TYPE_CLICK_BUZZER, CLICK_GPIO, 0, 0,
+       .ins = { { CLICK_BUZZER_IN, MIKROBUS_PWM } },
+       .pulls = { { true, MIKROBUS_PWM, 0 } } },           /* R1 10k, Q1 */
++    { "oledc", "OLED C Click: SSD1351 with a 96x96 RGB OLED (PSP27801) on "
++      "SPI, D/C on PWM, RES# on RST, the 15 V supply's EN on INT",
++      TYPE_SSD1351, CLICK_SPI, 0, 0,
++      .ins = { { SSI_GPIO_CS, MIKROBUS_CS },
++               { SSD1351_DC, MIKROBUS_PWM },
++               { SSD1351_RESET, MIKROBUS_RST },
++               { SSD1351_VCC, MIKROBUS_INT } },
++      .pulls = { { true, MIKROBUS_CS, 1 },                /* R7 100k */
++                 { true, MIKROBUS_RST, 1 },               /* R8 10k */
++                 { true, MIKROBUS_INT, 0 } } },           /* R9 10k */
+ };
+ 
+ const char *mikrobus_click_names(void)
+diff --git a/include/hw/display/pp_panel.h b/include/hw/display/pp_panel.h
+new file mode 100644
+index 0000000..72692d9
+--- /dev/null
++++ b/include/hw/display/pp_panel.h
+@@ -0,0 +1,59 @@
++/*
++ * What a display panel on a board shows, for headless front ends
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * A display controller model (SSD1351 on the OLED C Click; later ST7789
++ * and other SPI or parallel controllers) owns a PpPanel: the panel's
++ * visible pixels, composed on demand by the controller's render callback
++ * from its RAM and settings. pp_panel_init() adds QOM properties to the
++ * controller for front ends such as the web board view:
++ *
++ *   "panel-width", "panel-height"   visible pixels (uint32)
++ *   "frame-gen"                     bumped on every visible change: poll
++ *                                   it, fetch "frame" only when it moves
++ *   "frame"                         the picture: base64 of width x height
++ *                                   RGB565 pixels, 2 bytes each, high byte
++ *                                   first, rows top to bottom
++ *
++ * The controller calls pp_panel_changed() whenever what the panel shows
++ * may have changed (a RAM write, a mapping or power change).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_DISPLAY_PP_PANEL_H
++#define HW_DISPLAY_PP_PANEL_H
++
++#include "qom/object.h"
++
++/* Fill @fb (width x height RGB565, rows top to bottom) */
++typedef void PpPanelRender(void *opaque, uint16_t *fb);
++
++typedef struct PpPanel {
++    uint32_t width;
++    uint32_t height;
++    uint32_t gen;
++    bool stale;                 /* fb older than gen */
++    uint16_t *fb;
++    PpPanelRender *render;
++    void *opaque;
++} PpPanel;
++
++void pp_panel_init(PpPanel *p, Object *owner, uint32_t width,
++                   uint32_t height, PpPanelRender *render, void *opaque);
++
++static inline void pp_panel_changed(PpPanel *p)
++{
++    p->gen++;
++    p->stale = true;
++}
++
++/* RGB565 from 8-bit channels */
++static inline uint16_t pp_panel_rgb565(unsigned r, unsigned g, unsigned b)
++{
++    return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
++}
++
++#endif /* HW_DISPLAY_PP_PANEL_H */
+diff --git a/include/hw/display/ssd1351.h b/include/hw/display/ssd1351.h
+new file mode 100644
+index 0000000..bc15164
+--- /dev/null
++++ b/include/hw/display/ssd1351.h
+@@ -0,0 +1,23 @@
++/*
++ * Solomon Systech SSD1351 128x128 RGB OLED driver on an SSI bus
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * GPIO inputs: "dc" (D/C#: 1 data, 0 command), "reset" (RES#, active
++ * low), "vcc" (the panel's 15 V supply: 1 on), plus the SSI chip select.
++ * The panel picture is a PpPanel ("frame", "frame-gen"; see pp_panel.h).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_DISPLAY_SSD1351_H
++#define HW_DISPLAY_SSD1351_H
++
++#define TYPE_SSD1351 "ssd1351"
++
++#define SSD1351_DC "dc"
++#define SSD1351_RESET "reset"
++#define SSD1351_VCC "vcc"
++
++#endif /* HW_DISPLAY_SSD1351_H */
+diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
+index f9fef81..17494d7 100644
+--- a/tests/qtest/avr64ea48-cnano-test.c
++++ b/tests/qtest/avr64ea48-cnano-test.c
+@@ -28,6 +28,8 @@
+ #define SIGROW          (DATA + 0x1100)
+ #define PORTA           (DATA + 0x0400)
+ #define PORTD           (DATA + 0x0460)
++#define PORTE           (DATA + 0x0480)
++#define PORTF           (DATA + 0x04A0)
+ #define SPI0            (DATA + 0x0940)
+ #define TCB0            (DATA + 0x0B00)
+ #define EEPROM          (DATA + 0x1400)
+@@ -254,6 +256,62 @@ static void test_buzz(const void *fw)
+     qtest_quit(qts);
+ }
+ 
++/* One SSD1351 command or data byte on mikroBUS 2: CS PE2, D/C on PWM PD1 */
++static void oled_byte(QTestState *qts, bool data, uint8_t v)
++{
++    qtest_writeb(qts, PORTD + (data ? 0x05 : 0x06), BIT(1));
++    qtest_writeb(qts, PORTE + 0x06, BIT(2));
++    qtest_writeb(qts, SPI0 + 4, v);
++    qtest_writeb(qts, PORTE + 0x05, BIT(2));
++}
++
++/* OLED C Click on mikroBUS 2: pulls, then one red pixel at the top left */
++static void test_oledc(const void *fw)
++{
++    QTestState *qts = qtest_initf("-M avr64ea48-cnano,mb2=oledc -kernel %s",
++                                  (const char *)fw);
++    static const uint8_t init[][2] = {
++        { 0xFD, 0x12 }, { 0xFD, 0xB1 }, { 0xA0, 0x32 }, { 0xCA, 95 },
++        { 0xA1, 0x00 }, { 0xA2, 0x20 },
++    };
++    g_autofree char *frame = NULL;
++    g_autofree guchar *fb = NULL;
++    gsize len;
++
++    g_assert_cmphex(qtest_readb(qts, PORTE + P_IN) & BIT(2), ==, BIT(2));
++    g_assert_cmphex(qtest_readb(qts, PORTF + P_IN) & BIT(3), ==, BIT(3));
++    g_assert_cmphex(qtest_readb(qts, PORTF + P_IN) & BIT(2), ==, 0);
++    g_assert_cmpuint(qom_uint(qts, "/machine/mb2-click", "panel-width"), ==,
++                     96);
++    qtest_writeb(qts, PORTF + 0x05, BIT(2));            /* EN: 15 V on */
++    qtest_writeb(qts, PORTF + P_DIRSET, BIT(2));
++    qtest_writeb(qts, PORTE + 0x05, BIT(2));
++    qtest_writeb(qts, PORTE + P_DIRSET, BIT(2));
++    qtest_writeb(qts, PORTD + P_DIRSET, BIT(1));
++    qtest_writeb(qts, PORTA + 0x01, BIT(4) | BIT(6));
++    qtest_writeb(qts, SPI0 + 0, 0x21);                  /* MASTER, ENABLE */
++    for (unsigned i = 0; i < ARRAY_SIZE(init); i++) {
++        oled_byte(qts, false, init[i][0]);
++        oled_byte(qts, true, init[i][1]);
++    }
++    oled_byte(qts, false, 0xAF);
++    oled_byte(qts, false, 0x15);
++    oled_byte(qts, true, 16);
++    oled_byte(qts, true, 16);
++    oled_byte(qts, false, 0x75);
++    oled_byte(qts, true, 0);
++    oled_byte(qts, true, 0);
++    oled_byte(qts, false, 0x5C);
++    oled_byte(qts, true, 0xF8);
++    oled_byte(qts, true, 0x00);
++    frame = qom_str(qts, "/machine/mb2-click", "frame");
++    fb = g_base64_decode(frame, &len);
++    g_assert_cmpuint(len, ==, 96 * 96 * 2);
++    g_assert_cmphex(fb[0] << 8 | fb[1], ==, 0xF800);
++    g_assert_cmphex(fb[2] << 8 | fb[3], ==, 0);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_autofree char *fw = write_firmware();
+@@ -268,6 +326,7 @@ int main(int argc, char **argv)
+     qtest_add_data_func("avr64ea48-cnano/spi-8x8g", fw, test_spi_8x8g);
+     qtest_add_data_func("avr64ea48-cnano/tcb", fw, test_tcb);
+     qtest_add_data_func("avr64ea48-cnano/buzz", fw, test_buzz);
++    qtest_add_data_func("avr64ea48-cnano/oledc", fw, test_oledc);
+     ret = g_test_run();
+     unlink(fw);
+     return ret;
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index 0f9e2a8..5ef5820 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -404,6 +404,143 @@ static void test_two_spi(void)
+     qtest_quit(qts);
+ }
+ 
++/* OLED C Click on EXT2: CS PA15, D/C on PWM PB22, RES# PA10, EN on INT PA28 */
++#define OLED_CS         15
++#define OLED_DC         22
++#define OLED_RST        10
++#define OLED_EN         28
++
++static void oled_bytes(QTestState *qts, bool data, const uint8_t *b,
++                       unsigned n)
++{
++    qtest_writel(qts, PB + (data ? P_OUTSET : P_OUTCLR), BIT(OLED_DC));
++    qtest_writel(qts, PA + P_OUTCLR, BIT(OLED_CS));
++    for (unsigned i = 0; i < n; i++) {
++        spi_byte(qts, b[i]);
++    }
++    qtest_writel(qts, PA + P_OUTSET, BIT(OLED_CS));
++}
++
++static void oled_cmd(QTestState *qts, uint8_t cmd, const uint8_t *args,
++                     unsigned n)
++{
++    oled_bytes(qts, false, &cmd, 1);
++    if (n) {
++        oled_bytes(qts, true, args, n);
++    }
++}
++
++/* Pixel (x, y) of the panel picture, RGB565 */
++static uint16_t oled_pixel(QTestState *qts, unsigned x, unsigned y)
++{
++    QDict *rsp = qtest_qmp(qts, "{ 'execute': 'qom-get', 'arguments': {"
++                           " 'path': '" CLICK2 "', 'property': 'frame' } }");
++    gsize len;
++    g_autofree guchar *fb = g_base64_decode(qdict_get_str(rsp, "return"),
++                                            &len);
++    uint16_t v;
++
++    g_assert_cmpuint(len, ==, 96 * 96 * 2);
++    v = fb[(y * 96 + x) * 2] << 8 | fb[(y * 96 + x) * 2 + 1];
++    qobject_unref(rsp);
++    return v;
++}
++
++/* MikroElektronika's oledc_default_cfg(), then red/green/blue/white 2x2 */
++static QTestState *oled_init(bool unlock)
++{
++    QTestState *qts = qtest_init("-M pic32cm-mc00-cpro,ext2=oledc ");
++    static const uint8_t px[] = { 0xF8, 0x00, 0x07, 0xE0, 0x00, 0x1F,
++                                  0xFF, 0xFF };
++
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16);
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16 | 0x02);
++    qtest_writel(qts, PA + P_OUTSET, BIT(OLED_CS) | BIT(OLED_RST) |
++                                     BIT(OLED_EN));
++    qtest_writel(qts, PA + P_DIRSET, BIT(OLED_CS) | BIT(OLED_RST) |
++                                     BIT(OLED_EN));
++    qtest_writel(qts, PB + P_DIRSET, BIT(OLED_DC));
++    qtest_writel(qts, PA + P_OUTCLR, BIT(OLED_RST));
++    qtest_writel(qts, PA + P_OUTSET, BIT(OLED_RST));
++    oled_cmd(qts, 0xFD, (const uint8_t[]){ 0x12 }, 1);
++    if (unlock) {
++        oled_cmd(qts, 0xFD, (const uint8_t[]){ 0xB1 }, 1);
++    }
++    oled_cmd(qts, 0xAE, NULL, 0);
++    oled_cmd(qts, 0xA0, (const uint8_t[]){ 0x32 }, 1);
++    oled_cmd(qts, 0xCA, (const uint8_t[]){ 95 }, 1);
++    oled_cmd(qts, 0xA1, (const uint8_t[]){ 0x80 }, 1);
++    oled_cmd(qts, 0xA2, (const uint8_t[]){ 0x20 }, 1);
++    oled_cmd(qts, 0xB8, (const uint8_t[63]){ 0 }, 63);  /* grey table */
++    oled_cmd(qts, 0xC1, (const uint8_t[]){ 0x8A, 0x51, 0x8A }, 3);
++    oled_cmd(qts, 0xA6, NULL, 0);
++    oled_cmd(qts, 0xAF, NULL, 0);
++    oled_cmd(qts, 0x15, (const uint8_t[]){ 16, 17 }, 2);
++    oled_cmd(qts, 0x75, (const uint8_t[]){ 0, 1 }, 2);
++    oled_cmd(qts, 0x5C, NULL, 0);
++    oled_bytes(qts, true, px, sizeof(px));
++    return qts;
++}
++
++static void test_oledc(void)
++{
++    QTestState *qts = qtest_init("-M pic32cm-mc00-cpro,ext2=oledc ");
++    uint32_t gen;
++
++    g_assert_cmpint(qom_int(qts, CLICK2, "panel-width"), ==, 96);
++    g_assert_cmpint(qom_int(qts, CLICK2, "panel-height"), ==, 96);
++    g_assert_cmphex(oled_pixel(qts, 0, 0), ==, 0);
++    /* Pull resistors: CS and RES# high (R7, R8), EN low (R9) */
++    g_assert_true(pin_high(qts, PA, OLED_CS));
++    g_assert_true(pin_high(qts, PA, OLED_RST));
++    g_assert_false(pin_high(qts, PA, OLED_EN));
++    qtest_quit(qts);
++
++    qts = oled_init(true);
++    g_assert_cmphex(oled_pixel(qts, 0, 0), ==, 0xF800);
++    g_assert_cmphex(oled_pixel(qts, 1, 0), ==, 0x07E0);
++    g_assert_cmphex(oled_pixel(qts, 0, 1), ==, 0x001F);
++    g_assert_cmphex(oled_pixel(qts, 1, 1), ==, 0xFFFF);
++    g_assert_cmphex(oled_pixel(qts, 2, 0), ==, 0);
++    oled_cmd(qts, 0xA7, NULL, 0);                       /* inverse */
++    g_assert_cmphex(oled_pixel(qts, 0, 0), ==, 0x07FF);
++    oled_cmd(qts, 0xA5, NULL, 0);                       /* all on */
++    g_assert_cmphex(oled_pixel(qts, 50, 50), ==, 0xFFFF);
++    oled_cmd(qts, 0xA6, NULL, 0);
++    /* BGR order: the same bytes land in A and C swapped */
++    oled_cmd(qts, 0xA0, (const uint8_t[]){ 0x36 }, 1);
++    oled_cmd(qts, 0x15, (const uint8_t[]){ 16, 16 }, 2);
++    oled_cmd(qts, 0x75, (const uint8_t[]){ 0, 0 }, 2);
++    oled_cmd(qts, 0x5C, NULL, 0);
++    oled_bytes(qts, true, (const uint8_t[]){ 0xF8, 0x00 }, 2);
++    g_assert_cmphex(oled_pixel(qts, 0, 0), ==, 0x001F);
++    /* Locked: commands are ignored until FDh 12h */
++    gen = qom_int(qts, CLICK2, "frame-gen");
++    oled_cmd(qts, 0xFD, (const uint8_t[]){ 0x16 }, 1);
++    oled_cmd(qts, 0xAE, NULL, 0);
++    g_assert_cmphex(oled_pixel(qts, 0, 0), ==, 0x001F);
++    oled_cmd(qts, 0xFD, (const uint8_t[]){ 0x12 }, 1);
++    oled_cmd(qts, 0xAE, NULL, 0);                       /* sleep */
++    g_assert_cmphex(oled_pixel(qts, 0, 0), ==, 0);
++    g_assert_cmpint(qom_int(qts, CLICK2, "frame-gen"), >, gen);
++    oled_cmd(qts, 0xAF, NULL, 0);
++    /* The 15 V supply (EN on INT) off: dark, RAM kept */
++    qtest_writel(qts, PA + P_OUTCLR, BIT(OLED_EN));
++    g_assert_cmphex(oled_pixel(qts, 0, 0), ==, 0);
++    qtest_writel(qts, PA + P_OUTSET, BIT(OLED_EN));
++    g_assert_cmphex(oled_pixel(qts, 1, 1), ==, 0xFFFF);
++    /* RES# low: registers to reset values (display off) */
++    qtest_writel(qts, PA + P_OUTCLR, BIT(OLED_RST));
++    qtest_writel(qts, PA + P_OUTSET, BIT(OLED_RST));
++    g_assert_cmphex(oled_pixel(qts, 1, 1), ==, 0);
++    qtest_quit(qts);
++
++    /* Without FDh B1h the display offset (A2h) stays 60h after reset */
++    qts = oled_init(false);
++    g_assert_cmphex(oled_pixel(qts, 0, 0), !=, 0xF800);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+@@ -412,6 +549,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/relay", test_relay);
+     qtest_add_func("pic32cm-click/buzz", test_buzz);
+     qtest_add_func("pic32cm-click/two-spi", test_two_spi);
++    qtest_add_func("pic32cm-click/oledc", test_oledc);
+     qtest_add_func("pic32cm-click/thermo8-identity", test_identity);
+     qtest_add_func("pic32cm-click/not-fitted", test_not_fitted);
+     qtest_add_func("pic32cm-click/thermo8-int-pullup", test_int_pullup);
+-- 
+2.53.0.windows.2
+

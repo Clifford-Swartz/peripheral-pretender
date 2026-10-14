@@ -33,6 +33,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0024 | regenerated AVR64EA48 tables: SPI and TCB overlays, CLKCTRL.MCLKSTATUS read-only by field |
 | 0025 | AVR8X SPI host and TCB (periodic interrupt); MAX7219 (8x8 G Click); shared mikroBUS Click catalog `hw/misc/mikrobus.c` (the MC00 board uses it too); `mb1=`..`mb3=` Click slots of a Curiosity Nano Base on `avr64ea48-cnano`; qtests, board docs |
 | 0026 | Buzz Click (`click-buzzer`: tone from the PWM pin's edges); each SPI Click gets its socket's CS index (two SPI Clicks on one board failed before); qtests |
+| 0027 | SSD1351 OLED driver and the OLED C Click (`oledc`); `pp_panel`, the panel picture (`frame`, `frame-gen`) that headless front ends poll, shared by future display controllers; qtests |
 
 ## Setting it up
 

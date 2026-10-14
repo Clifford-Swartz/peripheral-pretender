@@ -9,7 +9,7 @@
   "px_per_mm": 20,
   "origin_mm": [0.458, 99.626],
   "size_mm": [58.98, 99.026],
-  "view_mm": {"origin": [0.458, 99.626], "size": [130.2, 99.026]},
+  "view_mm": {"origin": [0.458, 99.626], "size": [132.0, 99.026]},
   "leds": [
     {"id": "LED0", "ref": "D700", "at_mm": [27.2258, 88.0858],
      "pin": "PA24", "active_low": true, "color": "#ffc400"}

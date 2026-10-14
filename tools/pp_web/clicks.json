@@ -347,5 +347,48 @@
       "size_mm": 12.4
     },
     "signals": []
+  },
+  "oledc": {
+    "name": "OLED C Click",
+    "vendor": "MikroElektronika",
+    "chip": "SSD1351 + PSP27801",
+    "bus": "SPI",
+    "description": "96x96 RGB OLED on an SSD1351: D/C on PWM, RES# on RST, the 15 V supply enabled by INT",
+    "image": "oledc/top.png",
+    "origin_mm": [
+      -1.27,
+      53.34
+    ],
+    "size_mm": [
+      25.4,
+      57.15
+    ],
+    "controls": [],
+    "leds": [
+      {
+        "id": "PWR1",
+        "at_mm": [
+          12.98,
+          0.99
+        ],
+        "color": "#5dff7a"
+      }
+    ],
+    "display": {
+      "type": "panel",
+      "property": "frame",
+      "gen_property": "frame-gen",
+      "width": 96,
+      "height": 96,
+      "at_mm": [
+        11.43,
+        41.2
+      ],
+      "size_mm": [
+        20.14,
+        20.14
+      ]
+    },
+    "signals": []
   }
 }
