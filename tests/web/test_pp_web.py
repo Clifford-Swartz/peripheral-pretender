@@ -8,13 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from tools.pp_web.server import BOARDS
+from tools.pp_web.server import BOARDS, CLICKS
 from tools.pp_web.session import Session
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "firmware" / "hello" / "build" / "pic32cm_mc00_cpro"
 BLINKY = BUILD / "blinky.elf"
 BREATHE = BUILD / "breathe.elf"
+THERMO = BUILD / "thermo.elf"
 
 
 def test_board_description():
@@ -27,6 +28,16 @@ def test_board_description():
         assert x0 <= x <= x0 + w and y0 - h <= y <= y0, part["id"]
     led = board["leds"][0]
     assert (led["id"], led["ref"], led["pin"]) == ("LED0", "D700", "PA24")
+    slots = {h["slot"]: h["int_pin"] for h in board["headers"]}
+    assert slots == {"ext1": "PB02", "ext2": "PA28"}
+
+
+def test_click_catalog():
+    for click in CLICKS.values():
+        for ctl in click["controls"]:
+            assert ctl["min"] <= ctl["default"] <= ctl["max"], ctl
+        for sig in click["signals"]:
+            assert sig["pin"] == "int", sig
 
 
 def _led0(pins: dict) -> float:
@@ -111,3 +122,42 @@ def test_session_pwm_brightness(qemu_path, qemu_machines):
     levels = asyncio.run(scenario())
     assert any(0.1 < f < 0.9 for f in levels), levels
     assert max(levels) > 0.8 and min(levels) < 0.1, levels
+
+
+@pytest.mark.qemu
+def test_session_thermo8(qemu_path, qemu_machines):
+    """thermo.elf with a Thermo 8 Click on EXT1: the temperature control
+    reaches the firmware, ALERT pulls PB02 low and LED0 follows it."""
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not THERMO.is_file():
+        pytest.skip("thermo.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=thermo)")
+
+    async def scenario():
+        uart, levels, pins = [], [], []
+
+        def emit(msg):
+            if msg["type"] == "uart":
+                uart.append(msg["data"])
+            elif msg["type"] == "levels":
+                levels.append(msg["levels"])
+            elif msg["type"] == "pins":
+                pins.append(msg["pins"])
+
+        s = Session("pic32cm-mc00-cpro,ext1=thermo8", THERMO, emit)
+        await s.start()
+        try:
+            await asyncio.sleep(1.0)
+            cool = (levels[-1]["b"] >> 2) & 1, _led0(pins[-1]) if pins else 0
+            await s.set_click("ext1", "temperature", 35500)
+            await asyncio.sleep(1.0)
+            hot = (levels[-1]["b"] >> 2) & 1, _led0(pins[-1])
+        finally:
+            await s.stop()
+        return "".join(uart), cool, hot
+
+    uart, cool, hot = asyncio.run(scenario())
+    assert "Thermo 8 Click found" in uart, uart
+    assert "T=+25.00 C" in uart and "T=+35.50 C HIGH alert" in uart, uart
+    assert cool == (1, 0) and hot[0] == 0 and hot[1] > 0.5, (cool, hot)

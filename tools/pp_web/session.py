@@ -93,6 +93,7 @@ class Session:
     uart_writer: asyncio.StreamWriter | None = None
     tasks: list[asyncio.Task] = field(default_factory=list)
     pins: dict[str, list[list[float]]] = field(default_factory=dict)
+    levels: dict[str, int] = field(default_factory=dict)
     _stats: dict[str, list[int]] = field(default_factory=dict)
 
     async def start(self) -> None:
@@ -131,10 +132,13 @@ class Session:
             self.emit({"type": "uart", "data": data.decode("latin-1")})
 
     async def _poll(self) -> None:
-        """Per-pad [driven-high, driven-low] fractions, sent on change."""
+        """Per-pad [driven-high, driven-low] fractions and every pad's
+        level (external drivers and pulls too), each sent on change."""
         while True:
-            pins = {}
+            pins, levels = {}, {}
             for g in self.groups:
+                levels[g] = int(await self.qmp.execute(
+                    "qom-get", path=PORT_PATH, property=f"p{g}-levels"))
                 text = await self.qmp.execute("qom-get", path=PORT_PATH,
                                               property=f"p{g}-stats")
                 stats = [int(v) for v in str(text).split()]
@@ -149,6 +153,9 @@ class Session:
             if pins and pins != self.pins:
                 self.pins = pins
                 self.emit({"type": "pins", "pins": pins})
+            if levels != self.levels:
+                self.levels = levels
+                self.emit({"type": "levels", "levels": levels})
             await asyncio.sleep(POLL_S)
 
     async def _watch(self) -> None:
@@ -163,6 +170,11 @@ class Session:
                                    property="sw0-pressed", value=pressed)
         elif button == "reset" and pressed:
             await self.qmp.execute("system_reset")
+
+    async def set_click(self, slot: str, prop: str, value: int) -> None:
+        """Set a QOM property of the Click board in @slot ("ext1")."""
+        await self.qmp.execute("qom-set", path=f"/machine/{slot}-click",
+                               property=prop, value=value)
 
     async def uart_send(self, text: str) -> None:
         if self.uart_writer:

@@ -1,0 +1,1032 @@
+From 9fc6318ce745391cdd20d6f82a15c91fa0e1c9fd Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 14 Oct 2026 01:08:42 -0700
+Subject: [PATCH] hw/sensor, hw/arm: Thermo 8 Click (MCP9808) on the MC00 board
+ headers
+
+The PIC32CM MC00 Curiosity Pro takes MikroElektronika Click boards on
+EXT1/EXT2. Machine options ext1=<click> and ext2=<click> plug one in:
+its I2C target goes on SERCOM2's bus and its INT output on the header's
+pin 9 (PB02 on EXT1, PA28 on EXT2); the device is /machine/extN-click.
+
+First Click: thermo8, an MCP9808 temperature sensor (mchp-mcp9808, data
+sheet DS25095) at 0x18. Register pointer, CONFIG, TUPPER/TLOWER/TCRIT,
+TA with its limit flags and resolution, IDs, shutdown, the limit locks,
+and the open-drain ALERT in comparator, interrupt and critical-only
+modes. The "temperature" property (milli-degrees C) sets the reading,
+also at run time. Modelled from the data sheet; no physical Click has
+been checked.
+
+PORT gains "pa-levels"/"pb-levels": every pad's level, external
+drivers and pulls included, so a board view can show signals the chip
+does not drive.
+
+Peripheral Pretender: AI-assisted, not for upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst |   5 +-
+ docs/system/arm/pic32cm-mc00-cpro.rst |  22 ++
+ hw/arm/Kconfig                        |   1 +
+ hw/arm/pic32cm_mc00_cpro.c            | 121 +++++++++
+ hw/gpio/mchp_port.c                   |  12 +
+ hw/sensor/mchp_mcp9808.c              | 356 ++++++++++++++++++++++++++
+ hw/sensor/meson.build                 |   1 +
+ hw/sensor/trace-events                |   4 +
+ include/hw/gpio/mchp_port.h           |   2 +
+ include/hw/sensor/mchp_mcp9808.h      |  21 ++
+ tests/qtest/meson.build               |   2 +-
+ tests/qtest/pic32cm-click-test.c      | 266 +++++++++++++++++++
+ 12 files changed, 810 insertions(+), 3 deletions(-)
+ create mode 100644 hw/sensor/mchp_mcp9808.c
+ create mode 100644 include/hw/sensor/mchp_mcp9808.h
+ create mode 100644 tests/qtest/pic32cm-click-test.c
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index 2e21703..8252bdc 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -71,8 +71,9 @@ Supported devices
+   ``pc-``) of ``/machine/soc/port`` show and drive the pads. Event inputs
+   (EVCTRL) set, clear, toggle or drive OUT. A pin muxed to a peripheral is
+   driven by that peripheral's output (TCC waveform outputs today); the
+-  GPIO output ``pad[n]`` gives every driven pad, and ``pa-stats`` each
+-  pad's total driven-high and driven-low time (duty cycles).
++  GPIO output ``pad[n]`` gives every driven pad, ``pa-stats`` each
++  pad's total driven-high and driven-low time (duty cycles), and
++  ``pa-levels`` every pad's level, external drivers and pulls included.
+ - EIC: edge and level detection on the EXTINT inputs that PORT routes to
+   it (pins muxed to function A) and NMI, synchronous edges only with the
+   EIC clock, event outputs.
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 2c4e6ed..9fbe73d 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -41,6 +41,28 @@ shows it. User switch SW0 (PA25, to ground, no external pull-up) is the
+ machine property ``sw0-pressed``, also settable at run time with
+ ``qom-set /machine sw0-pressed true``.
+ 
++Click boards
++""""""""""""
++
++The machine options ``ext1=<click>`` and ``ext2=<click>`` plug a
++MikroElektronika Click board into the EXT1 or EXT2 header (as through a
++Curiosity Pro to mikroBUS adapter): I2C on SERCOM2 (PA12 SDA, PA13 SCL),
++INT on the header's pin 9 (PB02 on EXT1, PA28 on EXT2). The Click's device
++is ``/machine/ext1-click`` or ``/machine/ext2-click``.
++
++``thermo8``
++  Thermo 8 Click: an MCP9808 temperature sensor (``mchp-mcp9808``) at I2C
++  address 0x18, its open-drain ALERT output on INT (no pull-up: firmware
++  enables the pad's). The registers follow the MCP9808 data sheet
++  (DS25095); conversion time and hysteresis are not modelled. The QOM
++  property ``temperature`` (milli-degrees C, -40000 to 125000, default
++  25000) sets the temperature, also at run time:
++  ``qom-set /machine/ext1-click temperature 31500``.
++
++.. code-block:: bash
++
++  $ qemu-system-arm -M pic32cm-mc00-cpro,ext1=thermo8 -kernel thermo.elf       -display none -serial stdio
++
+ .. code-block:: bash
+ 
+   $ qemu-system-arm -M pic32cm-mc00-cpro -kernel app.elf \
+diff --git a/hw/arm/Kconfig b/hw/arm/Kconfig
+index ebad213..4cf9306 100644
+--- a/hw/arm/Kconfig
++++ b/hw/arm/Kconfig
+@@ -700,6 +700,7 @@ config PIC32CM_MC00_CPRO
+ config PIC32CM_SOC
+     bool
+     select ARM_V7M
++    select I2C
+     select MCHP_PORT
+     select MCHP_REGFILE
+     select MCHP_SERCOM
+diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
+index 86c4177..4fed807 100644
+--- a/hw/arm/pic32cm_mc00_cpro.c
++++ b/hw/arm/pic32cm_mc00_cpro.c
+@@ -8,11 +8,18 @@
+  * 32.768 kHz MEMS oscillator on XIN32 (PA00), both external clocks (board
+  * user guide DS70005440A). VDD defaults to 3.3 V.
+  *
++ * Machine options ext1=<click> and ext2=<click> plug a MikroElektronika
++ * Click board into the EXT1/EXT2 mikroBUS headers (through a Curiosity Pro
++ * to mikroBUS adapter: I2C on SERCOM2 PA12/PA13, INT on the header's
++ * pin 9, PB02 on EXT1 and PA28 on EXT2). The Click's device is
++ * /machine/extN-click.
++ *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+ 
+ #include "qemu/osdep.h"
+ #include "qapi/error.h"
++#include "qemu/error-report.h"
+ #include "hw/arm/boot.h"
+ #include "hw/arm/machines-qom.h"
+ #include "hw/arm/pic32cm_soc.h"
+@@ -23,6 +30,7 @@
+ #include "hw/i2c/i2c.h"
+ #include "hw/misc/led.h"
+ #include "hw/misc/mchp_edbg_dgi.h"
++#include "hw/sensor/mchp_mcp9808.h"
+ #include "system/system.h"
+ 
+ #define CPRO_XOSC_HZ        12000000
+@@ -32,6 +40,27 @@
+ #define CPRO_LED0_PIN       MCHP_PORT_PIN('A', 24)
+ #define CPRO_SW0_PIN        MCHP_PORT_PIN('A', 25)
+ #define CPRO_EDBG_DGI_ADDR  0x28    /* on the I2C bus, SERCOM2 */
++#define CPRO_EXT_I2C        "SERCOM2"
++#define CPRO_EXT_NUM        2
++
++/* The INT pin (header pin 9) of each extension header */
++static const unsigned pic32cm_mc00_cpro_ext_int[CPRO_EXT_NUM] = {
++    MCHP_PORT_PIN('B', 2),
++    MCHP_PORT_PIN('A', 28),
++};
++
++typedef struct CproClick {
++    const char *name;
++    const char *desc;
++    const char *type;           /* an I2C target */
++    uint8_t addr;
++    const char *int_out;        /* its GPIO output on the INT pin */
++} CproClick;
++
++static const CproClick pic32cm_mc00_cpro_clicks[] = {
++    { "thermo8", "Thermo 8 Click (MCP9808 temperature sensor, ALERT on INT)",
++      TYPE_MCHP_MCP9808, 0x18, MCHP_MCP9808_ALERT },
++};
+ 
+ /* serial_hd(i) is wired to SERCOM pic32cm_mc00_cpro_serial[i] */
+ static const unsigned pic32cm_mc00_cpro_serial[] = {
+@@ -51,6 +80,7 @@ struct Pic32cmMc00CproState {
+     LEDState *led0;
+     qemu_irq sw0;
+     bool sw0_pressed;
++    char *ext[CPRO_EXT_NUM];
+ };
+ 
+ /* A pressed SW0 pulls PA25 low; a released one leaves the pad undriven. */
+@@ -74,6 +104,88 @@ static void pic32cm_mc00_cpro_set_sw0(Object *obj, bool value, Error **errp)
+     pic32cm_mc00_cpro_update_sw0(s);
+ }
+ 
++static char *pic32cm_mc00_cpro_get_ext(Object *obj, unsigned n)
++{
++    return g_strdup(PIC32CM_MC00_CPRO_MACHINE(obj)->ext[n]);
++}
++
++static void pic32cm_mc00_cpro_set_ext(Object *obj, unsigned n,
++                                      const char *value, Error **errp)
++{
++    Pic32cmMc00CproState *s = PIC32CM_MC00_CPRO_MACHINE(obj);
++
++    g_free(s->ext[n]);
++    s->ext[n] = g_strdup(value);
++}
++
++static char *pic32cm_mc00_cpro_get_ext1(Object *obj, Error **errp)
++{
++    return pic32cm_mc00_cpro_get_ext(obj, 0);
++}
++
++static void pic32cm_mc00_cpro_set_ext1(Object *obj, const char *value,
++                                       Error **errp)
++{
++    pic32cm_mc00_cpro_set_ext(obj, 0, value, errp);
++}
++
++static char *pic32cm_mc00_cpro_get_ext2(Object *obj, Error **errp)
++{
++    return pic32cm_mc00_cpro_get_ext(obj, 1);
++}
++
++static void pic32cm_mc00_cpro_set_ext2(Object *obj, const char *value,
++                                       Error **errp)
++{
++    pic32cm_mc00_cpro_set_ext(obj, 1, value, errp);
++}
++
++/* Plug the Click boards named by ext1= and ext2= into their headers. */
++static void pic32cm_mc00_cpro_add_clicks(Pic32cmMc00CproState *s)
++{
++    DeviceState *port = pic32cm_soc_periph(&s->soc, "PORT");
++    I2CBus *i2c = I2C_BUS(qdev_get_child_bus(
++        pic32cm_soc_periph(&s->soc, CPRO_EXT_I2C), "sercom2.i2c"));
++    uint8_t used[CPRO_EXT_NUM] = { 0 };
++
++    for (unsigned n = 0; n < CPRO_EXT_NUM; n++) {
++        const CproClick *c = NULL;
++        g_autofree char *child = NULL;
++        I2CSlave *dev;
++
++        if (!s->ext[n] || !*s->ext[n] || !strcmp(s->ext[n], "none")) {
++            continue;
++        }
++        for (unsigned i = 0; i < ARRAY_SIZE(pic32cm_mc00_cpro_clicks); i++) {
++            if (!strcmp(s->ext[n], pic32cm_mc00_cpro_clicks[i].name)) {
++                c = &pic32cm_mc00_cpro_clicks[i];
++            }
++        }
++        if (!c) {
++            error_report("ext%u: unknown Click board '%s' (known: thermo8)",
++                         n + 1, s->ext[n]);
++            exit(1);
++        }
++        for (unsigned m = 0; m < n; m++) {
++            if (used[m] == c->addr) {
++                error_report("ext%u: I2C address 0x%02x is taken by ext%u",
++                             n + 1, c->addr, m + 1);
++                exit(1);
++            }
++        }
++        used[n] = c->addr;
++        dev = i2c_slave_new(c->type, c->addr);
++        child = g_strdup_printf("ext%u-click", n + 1);
++        object_property_add_child(OBJECT(s), child, OBJECT(dev));
++        i2c_slave_realize_and_unref(dev, i2c, &error_fatal);
++        if (c->int_out) {
++            qdev_connect_gpio_out_named(DEVICE(dev), c->int_out, 0,
++                qdev_get_gpio_in_named(port, MCHP_PORT_IN,
++                                       pic32cm_mc00_cpro_ext_int[n]));
++        }
++    }
++}
++
+ static void pic32cm_mc00_cpro_init(MachineState *machine)
+ {
+     Pic32cmMc00CproState *s = PIC32CM_MC00_CPRO_MACHINE(machine);
+@@ -108,6 +220,7 @@ static void pic32cm_mc00_cpro_init(MachineState *machine)
+         I2C_BUS(qdev_get_child_bus(pic32cm_soc_periph(&s->soc, "SERCOM2"),
+                                    "sercom2.i2c")),
+         TYPE_MCHP_EDBG_DGI, CPRO_EDBG_DGI_ADDR);
++    pic32cm_mc00_cpro_add_clicks(s);
+     pic32cm_mc00_cpro_update_sw0(s);
+ 
+     armv7m_load_kernel(s->soc.armv7m.cpu, machine->kernel_filename,
+@@ -133,6 +246,14 @@ static void pic32cm_mc00_cpro_class_init(ObjectClass *oc, const void *data)
+                                    pic32cm_mc00_cpro_set_sw0);
+     object_class_property_set_description(oc, "sw0-pressed",
+                                           "Hold user switch SW0 (PA25) down");
++    object_class_property_add_str(oc, "ext1", pic32cm_mc00_cpro_get_ext1,
++                                  pic32cm_mc00_cpro_set_ext1);
++    object_class_property_set_description(oc, "ext1",
++        "Click board on EXT1 (thermo8 or none)");
++    object_class_property_add_str(oc, "ext2", pic32cm_mc00_cpro_get_ext2,
++                                  pic32cm_mc00_cpro_set_ext2);
++    object_class_property_set_description(oc, "ext2",
++        "Click board on EXT2 (thermo8 or none)");
+ }
+ 
+ static const TypeInfo pic32cm_mc00_cpro_types[] = {
+diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
+index 0aeb026..ad6b5fd 100644
+--- a/hw/gpio/mchp_port.c
++++ b/hw/gpio/mchp_port.c
+@@ -517,6 +517,15 @@ static void mchp_port_get_out_mask(Object *obj, Visitor *v, const char *name,
+     visit_type_uint32(v, name, &value, errp);
+ }
+ 
++static void mchp_port_get_levels(Object *obj, Visitor *v, const char *name,
++                                 void *opaque, Error **errp)
++{
++    uint32_t value = mchp_port_pads(MCHP_PORT(obj),
++                                    GPOINTER_TO_UINT(opaque));
++
++    visit_type_uint32(v, name, &value, errp);
++}
++
+ /* After a reset every pin is an input again: release the pads. */
+ /*
+  * "pa-stats": "<ns> <high0> <low0> ... <high31> <low31>", the virtual time
+@@ -589,6 +598,7 @@ static bool mchp_port_realize(MchpRegBlock *rb, Error **errp)
+         g_autofree char *out = g_strdup_printf("p%c-out", p);
+         g_autofree char *out_mask = g_strdup_printf("p%c-out-mask", p);
+         g_autofree char *stats = g_strdup_printf("p%c-stats", p);
++        g_autofree char *levels = g_strdup_printf("p%c-levels", p);
+ 
+         object_property_add(obj, in, "uint32", mchp_port_get_in,
+                             mchp_port_set_in, NULL, group);
+@@ -600,6 +610,8 @@ static bool mchp_port_realize(MchpRegBlock *rb, Error **errp)
+                             NULL, NULL, group);
+         object_property_add(obj, stats, "str", mchp_port_get_stats,
+                             NULL, NULL, group);
++        object_property_add(obj, levels, "uint32", mchp_port_get_levels,
++                            NULL, NULL, group);
+     }
+     return true;
+ }
+diff --git a/hw/sensor/mchp_mcp9808.c b/hw/sensor/mchp_mcp9808.c
+new file mode 100644
+index 0000000..1d8bd40
+--- /dev/null
++++ b/hw/sensor/mchp_mcp9808.c
+@@ -0,0 +1,356 @@
++/*
++ * Microchip MCP9808 digital temperature sensor (I2C)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Follows the MCP9808 data sheet (DS25095) chapter 5: a register pointer,
++ * then 16-bit registers MSB first (the resolution register is 8-bit):
++ * CONFIG, the TUPPER/TLOWER/TCRIT limits (0.25 C), the ambient temperature
++ * TA (13-bit two's complement in 1/16 C, rounded down to the selected
++ * resolution, with the TCRIT/TUPPER/TLOWER comparison flags in bits
++ * 15:13), the manufacturer ID 0x0054 and the device ID 0x0400. Shutdown
++ * (CONFIG.SHDN) holds TA; the lock bits protect the limits; the Alert
++ * output (open drain: driven or released) follows CONFIG in comparator and
++ * interrupt modes, critical temperature always in comparator mode.
++ * Conversion time and hysteresis are not modelled: TA follows the
++ * "temperature" property (milli-degrees C) at once.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "hw/core/irq.h"
++#include "hw/i2c/i2c.h"
++#include "hw/sensor/mchp_mcp9808.h"
++#include "migration/vmstate.h"
++#include "trace.h"
++
++enum {
++    REG_RFU,
++    REG_CONFIG,
++    REG_TUPPER,
++    REG_TLOWER,
++    REG_TCRIT,
++    REG_TA,
++    REG_MANUF,
++    REG_DEVID,
++    REG_RES,
++};
++
++#define CFG_ALERT_MODE      BIT(0)      /* interrupt output */
++#define CFG_ALERT_POL       BIT(1)      /* active high */
++#define CFG_ALERT_SEL       BIT(2)      /* TCRIT only */
++#define CFG_ALERT_CNT       BIT(3)      /* enabled */
++#define CFG_ALERT_STAT      BIT(4)
++#define CFG_INT_CLEAR       BIT(5)
++#define CFG_WIN_LOCK        BIT(6)
++#define CFG_CRIT_LOCK       BIT(7)
++#define CFG_SHDN            BIT(8)
++#define CFG_WRITABLE        0x07FF
++
++#define LIMIT_MASK          0x1FFC
++#define MANUF_ID            0x0054
++#define DEVICE_ID           0x0400
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpMcp9808State, MCHP_MCP9808)
++
++struct MchpMcp9808State {
++    I2CSlave parent_obj;
++
++    qemu_irq alert;
++    int32_t temperature;        /* milli-degrees C */
++    int16_t held;               /* TA in 1/16 C while shut down */
++    uint8_t pointer;
++    uint8_t len;                /* bytes received since the address */
++    uint8_t rd;                 /* bytes read since the address */
++    uint8_t buf[2];
++    uint16_t config;
++    uint16_t limit[3];          /* TUPPER, TLOWER, TCRIT */
++    uint8_t resolution;
++    bool latched;               /* interrupt-mode alert, until cleared */
++};
++
++/* 13-bit two's complement to int */
++static int sext13(uint16_t v)
++{
++    return (int16_t)(v << 3) >> 3;
++}
++
++/* The temperature in 1/16 C, rounded down to the resolution */
++static int mcp9808_t16(MchpMcp9808State *s)
++{
++    int t;
++
++    if (s->config & CFG_SHDN) {
++        return s->held;
++    }
++    t = s->temperature >= 0 ? s->temperature * 16 / 1000
++                            : -((-s->temperature * 16 + 999) / 1000);
++    t = MAX(-4096, MIN(4095, t));
++    return t & ~((1 << (3 - s->resolution)) - 1);
++}
++
++static bool mcp9808_crit(MchpMcp9808State *s, int t)
++{
++    return t >= sext13(s->limit[2] & LIMIT_MASK);
++}
++
++static bool mcp9808_window(MchpMcp9808State *s, int t)
++{
++    return t > sext13(s->limit[0] & LIMIT_MASK) ||
++           t < sext13(s->limit[1] & LIMIT_MASK);
++}
++
++static uint16_t mcp9808_ta(MchpMcp9808State *s)
++{
++    int t = mcp9808_t16(s);
++
++    return (mcp9808_crit(s, t) ? BIT(15) : 0) |
++           (t > sext13(s->limit[0] & LIMIT_MASK) ? BIT(14) : 0) |
++           (t < sext13(s->limit[1] & LIMIT_MASK) ? BIT(13) : 0) |
++           (t & 0x1FFF);
++}
++
++/* Re-evaluate the Alert output and CONFIG.Alert Stat. */
++static void mcp9808_update(MchpMcp9808State *s)
++{
++    int t = mcp9808_t16(s);
++    bool crit = mcp9808_crit(s, t), on = false;
++
++    if ((s->config & CFG_ALERT_CNT) && !(s->config & CFG_SHDN)) {
++        if (s->config & CFG_ALERT_SEL) {
++            on = crit;
++        } else if (crit) {
++            on = true;              /* always a comparator output */
++        } else if (s->config & CFG_ALERT_MODE) {
++            s->latched |= mcp9808_window(s, t);
++            on = s->latched;
++        } else {
++            on = mcp9808_window(s, t);
++        }
++    }
++    s->config = (s->config & ~CFG_ALERT_STAT) | (on ? CFG_ALERT_STAT : 0);
++    /* Open drain: the asserted level is driven, the other one released */
++    if (s->config & CFG_ALERT_POL) {
++        qemu_set_irq(s->alert, on ? -1 : 0);
++    } else {
++        qemu_set_irq(s->alert, on ? 0 : -1);
++    }
++}
++
++static uint16_t mcp9808_read(MchpMcp9808State *s, unsigned reg)
++{
++    switch (reg) {
++    case REG_CONFIG:
++        return s->config;
++    case REG_TUPPER:
++    case REG_TLOWER:
++    case REG_TCRIT:
++        return s->limit[reg - REG_TUPPER] & LIMIT_MASK;
++    case REG_TA:
++        return mcp9808_ta(s);
++    case REG_MANUF:
++        return MANUF_ID;
++    case REG_DEVID:
++        return DEVICE_ID;
++    case REG_RES:
++        return s->resolution;
++    default:
++        return 0;
++    }
++}
++
++static void mcp9808_write(MchpMcp9808State *s, unsigned reg, uint16_t val)
++{
++    switch (reg) {
++    case REG_CONFIG: {
++        uint16_t keep = CFG_ALERT_STAT, old = s->config;
++
++        /* Locks protect themselves and the alert settings (DS Table 5-3) */
++        if (old & (CFG_WIN_LOCK | CFG_CRIT_LOCK)) {
++            keep |= CFG_ALERT_CNT;
++        }
++        if (old & CFG_WIN_LOCK) {
++            keep |= CFG_WIN_LOCK | CFG_ALERT_SEL;
++        }
++        if (old & CFG_CRIT_LOCK) {
++            keep |= CFG_CRIT_LOCK;
++        }
++        s->config = (old & keep) | (val & CFG_WRITABLE & ~keep);
++        if (val & CFG_INT_CLEAR) {
++            s->latched = false;
++        }
++        s->config &= ~CFG_INT_CLEAR;            /* reads back 0 */
++        if ((s->config & CFG_SHDN) && !(old & CFG_SHDN)) {
++            s->config &= ~CFG_SHDN;
++            s->held = mcp9808_t16(s);
++            s->config |= CFG_SHDN;
++        }
++        break;
++    }
++    case REG_TUPPER:
++    case REG_TLOWER:
++        if (!(s->config & CFG_WIN_LOCK)) {
++            s->limit[reg - REG_TUPPER] = val & LIMIT_MASK;
++        }
++        break;
++    case REG_TCRIT:
++        if (!(s->config & CFG_CRIT_LOCK)) {
++            s->limit[2] = val & LIMIT_MASK;
++        }
++        break;
++    case REG_RES:
++        s->resolution = val & 3;
++        break;
++    }
++    trace_mchp_mcp9808_write(reg, val);
++    mcp9808_update(s);
++}
++
++static int mcp9808_event(I2CSlave *i2c, enum i2c_event event)
++{
++    MchpMcp9808State *s = MCHP_MCP9808(i2c);
++
++    switch (event) {
++    case I2C_START_SEND:
++        s->len = 0;
++        break;
++    case I2C_START_RECV:
++        s->rd = 0;
++        break;
++    default:
++        break;
++    }
++    return 0;
++}
++
++/* The pointer, then MSB and LSB (one byte for the resolution register) */
++static int mcp9808_send(I2CSlave *i2c, uint8_t data)
++{
++    MchpMcp9808State *s = MCHP_MCP9808(i2c);
++
++    if (s->len == 0) {
++        s->pointer = data & 0x0F;
++    } else if (s->pointer == REG_RES) {
++        if (s->len == 1) {
++            mcp9808_write(s, REG_RES, data);
++        }
++    } else if (s->len <= 2) {
++        s->buf[s->len - 1] = data;
++        if (s->len == 2) {
++            mcp9808_write(s, s->pointer, s->buf[0] << 8 | s->buf[1]);
++        }
++    }
++    s->len++;
++    return 0;
++}
++
++static uint8_t mcp9808_recv(I2CSlave *i2c)
++{
++    MchpMcp9808State *s = MCHP_MCP9808(i2c);
++    uint16_t val = mcp9808_read(s, s->pointer);
++
++    if (s->pointer == REG_RES) {
++        return val;
++    }
++    return (s->rd++ & 1) ? val & 0xFF : val >> 8;
++}
++
++static void mcp9808_get_temperature(Object *obj, Visitor *v, const char *name,
++                                    void *opaque, Error **errp)
++{
++    int64_t value = MCHP_MCP9808(obj)->temperature;
++
++    visit_type_int(v, name, &value, errp);
++}
++
++static void mcp9808_set_temperature(Object *obj, Visitor *v, const char *name,
++                                    void *opaque, Error **errp)
++{
++    MchpMcp9808State *s = MCHP_MCP9808(obj);
++    int64_t value;
++
++    if (!visit_type_int(v, name, &value, errp)) {
++        return;
++    }
++    if (value < -40000 || value > 125000) {
++        error_setg(errp, "temperature %" PRId64 " out of range "
++                   "(-40000 to 125000 milli-degrees C)", value);
++        return;
++    }
++    s->temperature = value;
++    trace_mchp_mcp9808_temperature(value);
++    mcp9808_update(s);
++}
++
++static void mcp9808_reset(DeviceState *dev)
++{
++    MchpMcp9808State *s = MCHP_MCP9808(dev);
++
++    s->pointer = 0;
++    s->len = 0;
++    s->rd = 0;
++    s->config = 0;
++    memset(s->limit, 0, sizeof(s->limit));
++    s->resolution = 3;
++    s->latched = false;
++    mcp9808_update(s);
++}
++
++static void mcp9808_init(Object *obj)
++{
++    MchpMcp9808State *s = MCHP_MCP9808(obj);
++
++    s->temperature = 25000;
++    qdev_init_gpio_out_named(DEVICE(obj), &s->alert, MCHP_MCP9808_ALERT, 1);
++    object_property_add(obj, "temperature", "int", mcp9808_get_temperature,
++                        mcp9808_set_temperature, NULL, NULL);
++}
++
++static const VMStateDescription vmstate_mcp9808 = {
++    .name = TYPE_MCHP_MCP9808,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, MchpMcp9808State),
++        VMSTATE_INT32(temperature, MchpMcp9808State),
++        VMSTATE_INT16(held, MchpMcp9808State),
++        VMSTATE_UINT8(pointer, MchpMcp9808State),
++        VMSTATE_UINT8(len, MchpMcp9808State),
++        VMSTATE_UINT8(rd, MchpMcp9808State),
++        VMSTATE_UINT8_ARRAY(buf, MchpMcp9808State, 2),
++        VMSTATE_UINT16(config, MchpMcp9808State),
++        VMSTATE_UINT16_ARRAY(limit, MchpMcp9808State, 3),
++        VMSTATE_UINT8(resolution, MchpMcp9808State),
++        VMSTATE_BOOL(latched, MchpMcp9808State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void mcp9808_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
++
++    dc->desc = "Microchip MCP9808 temperature sensor";
++    dc->vmsd = &vmstate_mcp9808;
++    device_class_set_legacy_reset(dc, mcp9808_reset);
++    k->event = mcp9808_event;
++    k->send = mcp9808_send;
++    k->recv = mcp9808_recv;
++}
++
++static const TypeInfo mcp9808_types[] = {
++    {
++        .name = TYPE_MCHP_MCP9808,
++        .parent = TYPE_I2C_SLAVE,
++        .instance_size = sizeof(MchpMcp9808State),
++        .instance_init = mcp9808_init,
++        .class_init = mcp9808_class_init,
++    },
++};
++
++DEFINE_TYPES(mcp9808_types)
+diff --git a/hw/sensor/meson.build b/hw/sensor/meson.build
+index 420fdc3..c23ea2a 100644
+--- a/hw/sensor/meson.build
++++ b/hw/sensor/meson.build
+@@ -8,3 +8,4 @@ system_ss.add(when: 'CONFIG_MAX34451', if_true: files('max34451.c'))
+ system_ss.add(when: 'CONFIG_LSM303DLHC_MAG', if_true: files('lsm303dlhc_mag.c'))
+ system_ss.add(when: 'CONFIG_ISL_PMBUS_VR', if_true: files('isl_pmbus_vr.c'))
+ system_ss.add(when: 'CONFIG_MAX31785', if_true: files('max31785.c'))
++system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_mcp9808.c'))
+diff --git a/hw/sensor/trace-events b/hw/sensor/trace-events
+index a3fe54f..210488b 100644
+--- a/hw/sensor/trace-events
++++ b/hw/sensor/trace-events
+@@ -4,3 +4,7 @@
+ tmp105_read(uint8_t dev, uint8_t addr) "device: 0x%02x, addr: 0x%02x"
+ tmp105_write(uint8_t dev, uint8_t addr) "device: 0x%02x, addr 0x%02x"
+ tmp105_write_shutdown(uint8_t dev) "device: 0x%02x"
++
++# mchp_mcp9808.c
++mchp_mcp9808_write(unsigned reg, uint16_t val) "reg %u = 0x%04x"
++mchp_mcp9808_temperature(int64_t mdeg) "%" PRId64 " mC"
+diff --git a/include/hw/gpio/mchp_port.h b/include/hw/gpio/mchp_port.h
+index efc8689..6ae18ef 100644
+--- a/include/hw/gpio/mchp_port.h
++++ b/include/hw/gpio/mchp_port.h
+@@ -37,6 +37,8 @@
+  *   "pa-out"       uint32, read-only: levels the PORT drives (0 where it
+  *                  does not drive)
+  *   "pa-out-mask"  uint32, read-only: pads the PORT drives
++ *   "pa-levels"    uint32, read-only: every pad's level, whoever sets it
++ *                  (PORT, a peripheral, an external driver, the pull)
+  *   "pa-stats"     str, read-only: "<ns> <high0> <low0> ... <high31>
+  *                  <low31>", virtual time and each pad's total driven-high
+  *                  and driven-low time in ns (duty = difference of totals)
+diff --git a/include/hw/sensor/mchp_mcp9808.h b/include/hw/sensor/mchp_mcp9808.h
+new file mode 100644
+index 0000000..07ad056
+--- /dev/null
++++ b/include/hw/sensor/mchp_mcp9808.h
+@@ -0,0 +1,21 @@
++/*
++ * Microchip MCP9808 digital temperature sensor (I2C)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * An I2C target (address 0x18-0x1F, set with the "address" property).
++ * QOM property "temperature": the ambient temperature in milli-degrees C
++ * (-40000 to 125000, default 25000), settable while running. GPIO output
++ * "alert": the open-drain Alert pin, 0 while driven low, -1 while released.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_SENSOR_MCHP_MCP9808_H
++#define HW_SENSOR_MCHP_MCP9808_H
++
++#define TYPE_MCHP_MCP9808 "mchp-mcp9808"
++#define MCHP_MCP9808_ALERT "alert"
++
++#endif /* HW_SENSOR_MCHP_MCP9808_H */
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index 95a96ca..074bb52 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -252,7 +252,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-click-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+new file mode 100644
+index 0000000..5c95e87
+--- /dev/null
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -0,0 +1,266 @@
++/*
++ * QTest for Click boards on the PIC32CM MC00 Curiosity Pro extension headers
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Thermo 8 Click (MCP9808, data sheet DS25095) on EXT1 through the SERCOM2
++ * I2C host: identity registers, the TA encoding and its limit flags, the
++ * resolution, shutdown, the limit locks, and the open-drain Alert output
++ * on the INT pin (PB02) in comparator and interrupt modes.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++#include "qobject/qdict.h"
++
++#define MACHINE         "-M pic32cm-mc00-cpro,ext1=thermo8 "
++#define CLICK1          "/machine/ext1-click"
++
++#define PORT            0x41000000
++#define PB              (PORT + 0x80)
++#define P_IN            0x20
++#define P_PINCFG        0x40
++#define INT1_PIN        2       /* PB02, EXT1 pin 9 */
++
++#define SERCOM2         0x42000C00
++#define I2CM_CTRLA      (5 << 2)
++#define I2CM_SMEN       BIT(8)
++#define I2CM_ACKACT     BIT(18)
++#define I2CM_STOP       (3 << 16)
++
++#define MCP9808         0x18
++
++static QTestState *click_init(const char *extra)
++{
++    QTestState *qts = qtest_initf(MACHINE "%s", extra);
++
++    qtest_writel(qts, SERCOM2 + 0x00, I2CM_CTRLA);
++    qtest_writel(qts, SERCOM2 + 0x04, I2CM_SMEN);
++    qtest_writel(qts, SERCOM2 + 0x00, I2CM_CTRLA | 0x02);  /* ENABLE */
++    qtest_writew(qts, SERCOM2 + 0x1A, 0x10);               /* force IDLE */
++    /* INT: input with the internal pull-up (open-drain Alert) */
++    qtest_writeb(qts, PB + P_PINCFG + INT1_PIN, 0x06);
++    qtest_writel(qts, PB + 0x18, BIT(INT1_PIN));           /* OUTSET */
++    return qts;
++}
++
++static void i2c_stop(QTestState *qts)
++{
++    qtest_writel(qts, SERCOM2 + 0x04, I2CM_SMEN | I2CM_ACKACT | I2CM_STOP);
++    qtest_clock_step(qts, 20000);
++    qtest_writel(qts, SERCOM2 + 0x04, I2CM_SMEN);           /* ACK next */
++}
++
++/* Write the register pointer and n data bytes; false on a NACK */
++static bool mcp_write(QTestState *qts, uint8_t reg, const uint8_t *d,
++                      unsigned n)
++{
++    bool ack;
++
++    qtest_writel(qts, SERCOM2 + 0x24, MCP9808 << 1);
++    ack = !(qtest_readw(qts, SERCOM2 + 0x1A) & BIT(2));    /* RXNACK */
++    qtest_writel(qts, SERCOM2 + 0x28, reg);
++    for (unsigned i = 0; i < n; i++) {
++        qtest_writel(qts, SERCOM2 + 0x28, d[i]);
++    }
++    i2c_stop(qts);
++    return ack;
++}
++
++static void mcp_write16(QTestState *qts, uint8_t reg, uint16_t val)
++{
++    uint8_t d[2] = { val >> 8, val & 0xFF };
++
++    g_assert_true(mcp_write(qts, reg, d, 2));
++}
++
++/* Point at reg, then read n (1 or 2) bytes MSB first */
++static uint16_t mcp_read(QTestState *qts, uint8_t reg, unsigned n)
++{
++    uint16_t val = 0;
++
++    mcp_write(qts, reg, NULL, 0);
++    qtest_writel(qts, SERCOM2 + 0x24, MCP9808 << 1 | 1);
++    g_assert_cmphex(qtest_readb(qts, SERCOM2 + 0x18), ==, 0x02);    /* SB */
++    for (unsigned i = 0; i < n; i++) {
++        if (i == n - 1) {
++            qtest_writel(qts, SERCOM2 + 0x04, I2CM_SMEN | I2CM_ACKACT);
++        }
++        val = val << 8 | qtest_readb(qts, SERCOM2 + 0x28);
++    }
++    i2c_stop(qts);
++    return val;
++}
++
++static bool int_high(QTestState *qts)
++{
++    return qtest_readl(qts, PB + P_IN) & BIT(INT1_PIN);
++}
++
++static void set_temp(QTestState *qts, int64_t mdeg)
++{
++    qtest_qmp_assert_success(qts,
++        "{ 'execute': 'qom-set', 'arguments': { 'path': '" CLICK1 "',"
++        " 'property': 'temperature', 'value': %" PRId64 " } }", mdeg);
++}
++
++static int64_t qom_int(QTestState *qts, const char *path, const char *prop)
++{
++    QDict *rsp = qtest_qmp(qts, "{ 'execute': 'qom-get', 'arguments': {"
++                           " 'path': %s, 'property': %s } }", path, prop);
++    int64_t v = qdict_get_int(rsp, "return");
++
++    qobject_unref(rsp);
++    return v;
++}
++
++static void test_identity(void)
++{
++    QTestState *qts = click_init("");
++
++    g_assert_cmphex(mcp_read(qts, 6, 2), ==, 0x0054);      /* manufacturer */
++    g_assert_cmphex(mcp_read(qts, 7, 2), ==, 0x0400);      /* device, rev */
++    g_assert_cmphex(mcp_read(qts, 1, 2), ==, 0x0000);      /* CONFIG */
++    g_assert_cmphex(mcp_read(qts, 8, 1), ==, 0x03);        /* 0.0625 C */
++    /* TA, 25 C: above TUPPER and TCRIT, both 0 after reset */
++    g_assert_cmphex(mcp_read(qts, 5, 2), ==, 0xC000 | 25 * 16);
++    g_assert_cmpint(qom_int(qts, CLICK1, "temperature"), ==, 25000);
++    qtest_quit(qts);
++}
++
++static void test_not_fitted(void)
++{
++    QTestState *qts = qtest_init("-M pic32cm-mc00-cpro ");
++
++    qtest_writel(qts, SERCOM2 + 0x00, I2CM_CTRLA);
++    qtest_writel(qts, SERCOM2 + 0x04, I2CM_SMEN);
++    qtest_writel(qts, SERCOM2 + 0x00, I2CM_CTRLA | 0x02);
++    qtest_writew(qts, SERCOM2 + 0x1A, 0x10);
++    g_assert_false(mcp_write(qts, 5, NULL, 0));
++    qtest_quit(qts);
++}
++
++/* TA: 13-bit two's complement in 1/16 C, truncated to the resolution */
++static void test_ta_encoding(void)
++{
++    QTestState *qts = click_init("");
++
++    set_temp(qts, 23437);                   /* 23.437 C -> 374/16 */
++    g_assert_cmphex(mcp_read(qts, 5, 2), ==, 0xC000 | 0x0176);
++    set_temp(qts, -10500);                  /* below TLOWER (0 C) */
++    g_assert_cmphex(mcp_read(qts, 5, 2), ==, 0x2000 | 0x1F58);
++    set_temp(qts, -40000);
++    g_assert_cmphex(mcp_read(qts, 5, 2), ==, 0x2000 | 0x1D80);
++    set_temp(qts, 125000);
++    g_assert_cmphex(mcp_read(qts, 5, 2), ==, 0xC000 | 0x07D0);
++
++    set_temp(qts, 23437);
++    mcp_write(qts, 8, (const uint8_t[]){ 0 }, 1);          /* 0.5 C */
++    g_assert_cmphex(mcp_read(qts, 8, 1), ==, 0x00);
++    g_assert_cmphex(mcp_read(qts, 5, 2) & 0x1FFF, ==, 0x0170);
++    mcp_write(qts, 8, (const uint8_t[]){ 1 }, 1);          /* 0.25 C */
++    g_assert_cmphex(mcp_read(qts, 5, 2) & 0x1FFF, ==, 0x0174);
++    qtest_quit(qts);
++}
++
++/* TA bits 15:13 compare against TCRIT, TUPPER and TLOWER (0.25 C) */
++static void test_limit_flags(void)
++{
++    QTestState *qts = click_init("");
++
++    mcp_write16(qts, 2, 30 * 16 | 0x3);     /* TUPPER 30 C, LSBs ignored */
++    g_assert_cmphex(mcp_read(qts, 2, 2), ==, 30 * 16);
++    mcp_write16(qts, 3, 10 * 16);           /* TLOWER */
++    mcp_write16(qts, 4, 80 * 16);           /* TCRIT */
++    g_assert_cmphex(mcp_read(qts, 5, 2) >> 13, ==, 0);
++    set_temp(qts, 30000);                   /* equal: not above */
++    g_assert_cmphex(mcp_read(qts, 5, 2) >> 13, ==, 0);
++    set_temp(qts, 30250);
++    g_assert_cmphex(mcp_read(qts, 5, 2) >> 13, ==, 2);
++    set_temp(qts, 80000);                   /* at TCRIT */
++    g_assert_cmphex(mcp_read(qts, 5, 2) >> 13, ==, 6);
++    set_temp(qts, 9750);
++    g_assert_cmphex(mcp_read(qts, 5, 2) >> 13, ==, 1);
++    mcp_write16(qts, 3, (uint16_t)(-20 * 16) & 0x1FFC);    /* -20 C */
++    g_assert_cmphex(mcp_read(qts, 5, 2) >> 13, ==, 0);
++    set_temp(qts, -20250);
++    g_assert_cmphex(mcp_read(qts, 5, 2), ==, 0x2000 | 0x1EBC);
++    qtest_quit(qts);
++}
++
++/* Comparator mode follows the window; interrupt mode latches until cleared */
++static void test_alert(void)
++{
++    QTestState *qts = click_init("");
++
++    mcp_write16(qts, 2, 30 * 16);
++    mcp_write16(qts, 3, 10 * 16);
++    mcp_write16(qts, 4, 80 * 16);
++    set_temp(qts, 35000);
++    g_assert_true(int_high(qts));           /* alert output disabled */
++
++    mcp_write16(qts, 1, 0x0008);            /* enabled, comparator, low */
++    g_assert_false(int_high(qts));
++    g_assert_cmphex(qom_int(qts, "/machine/soc/port", "pb-levels")
++                    & BIT(INT1_PIN), ==, 0);
++    g_assert_cmphex(mcp_read(qts, 1, 2), ==, 0x0018);      /* Alert Stat */
++    set_temp(qts, 25000);
++    g_assert_true(int_high(qts));
++    g_assert_cmphex(mcp_read(qts, 1, 2), ==, 0x0008);
++
++    mcp_write16(qts, 1, 0x0009);            /* interrupt mode */
++    set_temp(qts, 35000);
++    set_temp(qts, 25000);
++    g_assert_false(int_high(qts));          /* latched */
++    mcp_write16(qts, 1, 0x0029);            /* interrupt clear */
++    g_assert_true(int_high(qts));
++    g_assert_cmphex(mcp_read(qts, 1, 2), ==, 0x0009);      /* reads 0 */
++
++    mcp_write16(qts, 1, 0x000C);            /* TCRIT only */
++    set_temp(qts, 35000);
++    g_assert_true(int_high(qts));
++    set_temp(qts, 85000);
++    g_assert_false(int_high(qts));
++
++    mcp_write16(qts, 1, 0x000A);            /* active high: released */
++    g_assert_true(int_high(qts));
++    qtest_quit(qts);
++}
++
++/* Shutdown holds TA; the window lock protects TUPPER/TLOWER */
++static void test_shutdown_lock(void)
++{
++    QTestState *qts = click_init("");
++
++    mcp_write16(qts, 1, 0x0100);
++    set_temp(qts, 40000);
++    g_assert_cmphex(mcp_read(qts, 5, 2) & 0x1FFF, ==, 25 * 16);
++    mcp_write16(qts, 1, 0x0000);
++    g_assert_cmphex(mcp_read(qts, 5, 2) & 0x1FFF, ==, 40 * 16);
++
++    mcp_write16(qts, 2, 50 * 16);
++    mcp_write16(qts, 1, 0x0040);            /* window lock */
++    mcp_write16(qts, 2, 60 * 16);
++    g_assert_cmphex(mcp_read(qts, 2, 2), ==, 50 * 16);
++    mcp_write16(qts, 1, 0x0000);            /* lock stays until reset */
++    g_assert_cmphex(mcp_read(qts, 1, 2), ==, 0x0040);
++    mcp_write16(qts, 4, 70 * 16);           /* TCRIT is not locked */
++    g_assert_cmphex(mcp_read(qts, 4, 2), ==, 70 * 16);
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++    qtest_add_func("pic32cm-click/thermo8-identity", test_identity);
++    qtest_add_func("pic32cm-click/not-fitted", test_not_fitted);
++    qtest_add_func("pic32cm-click/thermo8-ta", test_ta_encoding);
++    qtest_add_func("pic32cm-click/thermo8-limits", test_limit_flags);
++    qtest_add_func("pic32cm-click/thermo8-alert", test_alert);
++    qtest_add_func("pic32cm-click/thermo8-shutdown-lock", test_shutdown_lock);
++    return g_test_run();
++}
+-- 
+2.53.0.windows.2
+

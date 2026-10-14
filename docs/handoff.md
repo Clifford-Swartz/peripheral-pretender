@@ -153,7 +153,10 @@ PA24, clickable SW0/RESET, the VCOM console and ELF upload (`py -m tools.pp_web 
 PWM brightness is done too (patch 0016): peripheral outputs drive pads through the pin mux,
 PORT accounts the duty cycle per pad, and the `breathe` demo dims LED0 with TCC1. Next in that
 roadmap: SERCOM SPI/I2C, done too (patch 0017: host modes, checked on silicon against the
-EDBG data gateway at 0x28 and an SPI pad loopback), then the first Click boards.
+EDBG data gateway at 0x28 and an SPI pad loopback). The first Click board is in too (patch
+0018): a Thermo 8 Click (MCP9808) on EXT1/EXT2 via `-M pic32cm-mc00-cpro,ext1=thermo8`, with a
+Click picker and a live temperature slider on the page and the `thermo` demo. It is modelled
+from the data sheet only; no physical Click has been checked.
 
 ## Next steps, in order
 

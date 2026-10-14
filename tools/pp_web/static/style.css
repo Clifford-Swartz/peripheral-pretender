@@ -75,6 +75,25 @@ h2 small { color: var(--muted); font-weight: normal; }
   border-radius: 6px; padding: 6px 8px; font: inherit; }
 #send button { background: #2c333c; color: var(--text); border: 0; border-radius: 6px;
   padding: 6px 12px; cursor: pointer; }
+#clicks { display: flex; flex-direction: column; gap: 8px; }
+.slot { background: #0f1317; border: 1px solid #262c34; border-radius: 8px; padding: 8px 10px; }
+.slot-head { display: flex; align-items: center; gap: 10px; }
+.slot-head select { flex: 1; background: #1a1f25; color: var(--text); border: 1px solid #2c333c;
+  border-radius: 6px; padding: 4px 6px; font: inherit; }
+.slot-body:not(:empty) { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.click-desc { color: var(--muted); font-size: 12px; }
+.control { display: grid; grid-template-columns: 90px 1fr 80px; align-items: center; gap: 8px; }
+.control input { width: 100%; accent-color: var(--accent); }
+.control output { text-align: right; font-variant-numeric: tabular-nums; }
+.signal { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.signal small { color: var(--muted); }
+.signal i { width: 10px; height: 10px; border-radius: 50%; background: #2a3038; }
+.signal.active i { background: #ff5252; box-shadow: 0 0 8px #ff5252; }
+.click-tag {
+  position: absolute; transform: translate(-50%, -50%) rotate(-90deg);
+  padding: 2px 8px; border-radius: 4px; color: #fff; font-size: 11px; font-weight: 600;
+  white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.6); pointer-events: none;
+}
 @media (max-width: 800px) {
   main { flex-direction: column; }
   #side { width: auto; max-width: none; border-left: 0; }

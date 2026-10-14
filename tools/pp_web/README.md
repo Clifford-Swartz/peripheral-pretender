@@ -25,6 +25,17 @@ You need a pp-qemu build (`PP_QEMU`, as for `tools.pp`) and `aiohttp`.
 - `server.py` (aiohttp) serves the page, accepts `POST /api/firmware` with an ELF, and relays
   messages over `/ws`.
 - `static/` is the page. It places the board's LEDs and buttons from `board.json`.
+- Click boards: `clicks.json` is the catalog (today the Thermo 8 Click). Picking one for a
+  header restarts the twin with `-M <machine>,ext1=<click>`, like plugging it in with the power
+  off. Its controls (the temperature) are `qom-set`s on `/machine/ext1-click` while it runs.
+  Its signals (ALERT on INT) light from the PORT's `pa-levels`/`pb-levels`, which include
+  external drivers and pulls.
+
+  ```
+  make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=thermo
+  py -m tools.pp_web --elf firmware/hello/build/pic32cm_mc00_cpro/thermo.elf
+  # pick "Thermo 8 Click" for EXT1, then move the temperature above 30 C
+  ```
 
 It is a local, single-user prototype: one twin is shared by every open page. Hosting
 (one sandboxed twin per visitor) is a later step.

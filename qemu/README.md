@@ -24,6 +24,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0015 | TCC model (single/dual-slope waveform modes, flags, STATUS.CMPx, one-shot, commands, buffers with silicon SYNCBUSY behaviour, CNTSEL, event inputs/outputs), checked against MC00 silicon; TCC qtest; board docs |
 | 0016 | Peripheral outputs on pads: PORT `pmux-in`/`pmux-active`/`pad` lines and per-pad duty accounting (`pX-stats`); TCC waveform outputs WO[x] (pin level checked on silicon); SoC wiring from the signal table; LED pull-up on the boards; TC/TCC keep scheduling after a catch-up jump |
 | 0017 | SERCOM SPI host and I2C host (on the QEMU SSI and I2C buses), checked against MC00 silicon; EDBG data gateway I2C target (0x28) on the MC00 board; qtests |
+| 0018 | Click boards on the MC00 board (`ext1=`/`ext2=` machine options); the Thermo 8 Click (`mchp-mcp9808` I2C temperature sensor with a live `temperature` property and an open-drain ALERT on INT); PORT `pX-levels`; qtests |
 
 ## Setting it up
 

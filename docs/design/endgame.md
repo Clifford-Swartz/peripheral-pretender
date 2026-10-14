@@ -43,8 +43,13 @@ Decisions so far:
    after STOP.
 3. ~~SERCOM SPI and I2C~~ (2026-10-14). Host modes on QEMU's SSI and I2C buses, checked on
    silicon. On the board that means the EDBG data gateway at 0x28 (the ATECC608A footprint is
-   not fitted) and an SPI loopback through the MOSI pad. **Next: the first Click boards**: an
-   I2C sensor on EXT1, an LED/button Click, a potentiometer on the ADC.
+   not fitted) and an SPI loopback through the MOSI pad.
+3a. ~~First Click board~~ (2026-10-14). Thermo 8 Click (MCP9808) on EXT1 or EXT2
+   (`-M pic32cm-mc00-cpro,ext1=thermo8`). The page has a Click picker per header and a live
+   temperature slider; ALERT on the INT pin shows as a signal light, and the `thermo` demo
+   lights LED0 from it. Modelled from the data sheet only (no physical Click to check against).
+   **Next:** an LED/button Click (GPIO), a potentiometer Click (needs an ADC model), an SPI
+   Click.
 4. **3D board.** A glTF slab with top and bottom textures, components from the pick-and-place
    heights, and later models from the Altium design.
 5. **Hosted demo.** A containerized twin per session, a firmware build service, and the

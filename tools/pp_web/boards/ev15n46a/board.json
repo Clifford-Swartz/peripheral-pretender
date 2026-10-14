@@ -18,7 +18,9 @@
      "size_mm": [6.2, 6.4], "action": "reset"}
   ],
   "headers": [
-    {"id": "EXT1", "ref": "J200", "at_mm": [54.3, 59.84], "pins": 20},
-    {"id": "EXT2", "ref": "J201", "at_mm": [54.3, 24.28], "pins": 20}
+    {"id": "EXT1", "ref": "J200", "at_mm": [54.3, 59.84], "pins": 20,
+     "slot": "ext1", "int_pin": "PB02"},
+    {"id": "EXT2", "ref": "J201", "at_mm": [54.3, 24.28], "pins": 20,
+     "slot": "ext2", "int_pin": "PA28"}
   ]
 }

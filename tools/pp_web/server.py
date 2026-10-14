@@ -4,12 +4,18 @@ state over a WebSocket.
 
     py -m tools.pp_web [--port 8080] [--elf firmware.elf] [--board ev15n46a]
 
-Messages to the page: {"type": "status"|"pins"|"uart"|"board", ...};
-"pins" maps a PORT group ("a", "b") to 32 [driven-high, driven-low]
-fractions of the last frame.
+Messages to the page: {"type": "status"|"pins"|"uart"|"board"|"clicks",
+...}; "pins" maps a PORT group ("a", "b") to 32 [driven-high, driven-low]
+fractions of the last frame, "levels" each group's pad levels as a
+32-bit mask (whoever drives them); "board" carries the board and the Click
+catalog; "clicks" maps each header slot ("ext1") to its Click and control
+values, or null.
 Messages from the page: {"type": "button", "id": "sw0"|"reset",
-"pressed": bool} and {"type": "uart", "data": str}. POST /api/firmware
-with the ELF as the body (re)starts the twin.
+"pressed": bool}, {"type": "uart", "data": str}, {"type": "click",
+"slot": "ext1", "click": "thermo8"|null} (plugs or unplugs a Click: the
+twin restarts with it, like a power cycle) and {"type": "control",
+"slot": "ext1", "id": "temperature", "value": 31.5} (live). POST
+/api/firmware with the ELF as the body (re)starts the twin.
 
 Local, single-user prototype: one twin shared by every open page.
 """
@@ -30,18 +36,52 @@ HERE = Path(__file__).resolve().parent
 STATIC = HERE / "static"
 BOARDS = HERE / "boards"
 MAX_ELF = 4 * 1024 * 1024
+CLICKS = json.loads((HERE / "clicks.json").read_text(encoding="utf-8"))
 
 
 class App:
     def __init__(self, board: str, elf: Path | None):
         self.board_dir = BOARDS / board
-        self.board = json.loads((self.board_dir / "board.json").read_text())
+        self.board = json.loads((self.board_dir / "board.json").read_text(encoding="utf-8"))
         self.clients: set[web.WebSocketResponse] = set()
         self.session: Session | None = None
         self.elf = elf
         self.tmp = Path(tempfile.mkdtemp(prefix="pp_web_"))
         self.uart_log = ""
         self.lock = asyncio.Lock()
+        self.slots = [h["slot"] for h in self.board["headers"] if "slot" in h]
+        # slot -> {"id": click, "values": {control: value}} or None
+        self.clicks: dict[str, dict | None] = {s: None for s in self.slots}
+
+    def machine(self) -> str:
+        opts = [f"{slot}={c['id']}" for slot, c in self.clicks.items() if c]
+        return ",".join([self.board["machine"], *opts])
+
+    async def plug(self, slot: str, click: str | None) -> None:
+        if slot not in self.clicks or (click and click not in CLICKS):
+            return
+        self.clicks[slot] = click and {
+            "id": click,
+            "values": {c["id"]: c["default"] for c in CLICKS[click]["controls"]}}
+        self.emit({"type": "clicks", "clicks": self.clicks})
+        if self.elf:
+            await self.run(self.elf)
+
+    async def control(self, slot: str, cid: str, value: float) -> None:
+        c = self.clicks.get(slot)
+        ctl = c and next((x for x in CLICKS[c["id"]]["controls"]
+                          if x["id"] == cid), None)
+        if not ctl:
+            return
+        value = min(max(float(value), ctl["min"]), ctl["max"])
+        c["values"][cid] = value
+        self.emit({"type": "clicks", "clicks": self.clicks})
+        if self.session and self.session.qmp:
+            try:
+                await self.session.set_click(slot, ctl["property"],
+                                             round(value * ctl["scale"]))
+            except (RuntimeError, ConnectionError):
+                pass                    # restarting; run() applies it
 
     def emit(self, msg: dict) -> None:
         if msg["type"] == "uart":
@@ -62,9 +102,15 @@ class App:
                 await self.session.stop()
             self.uart_log = ""
             self.emit({"type": "reset"})
-            self.session = Session(self.board["machine"], elf, self.emit)
+            self.elf = elf
+            self.session = Session(self.machine(), elf, self.emit)
             try:
                 await self.session.start()
+                for slot, c in self.clicks.items():
+                    for ctl in CLICKS[c["id"]]["controls"] if c else ():
+                        await self.session.set_click(
+                            slot, ctl["property"],
+                            round(c["values"][ctl["id"]] * ctl["scale"]))
             except Exception as e:      # report to the page, keep serving
                 self.emit({"type": "status", "state": "error", "error": str(e)})
 
@@ -93,17 +139,28 @@ class App:
         ws = web.WebSocketResponse(heartbeat=20)
         await ws.prepare(request)
         self.clients.add(ws)
-        await ws.send_str(json.dumps({"type": "board", "board": self.board}))
+        await ws.send_str(json.dumps({"type": "board", "board": self.board,
+                                      "catalog": CLICKS}))
+        await ws.send_str(json.dumps({"type": "clicks", "clicks": self.clicks}))
         if self.session:
             await ws.send_str(json.dumps({"type": "status", "state": "running",
                                           "elf": self.session.elf.name}))
             await ws.send_str(json.dumps({"type": "uart", "data": self.uart_log}))
             await ws.send_str(json.dumps({"type": "pins",
                                           "pins": self.session.pins}))
+            await ws.send_str(json.dumps({"type": "levels",
+                                          "levels": self.session.levels}))
         async for msg in ws:
             if msg.type != WSMsgType.TEXT:
                 continue
             req = json.loads(msg.data)
+            if req.get("type") == "click":
+                await self.plug(str(req.get("slot")), req.get("click"))
+                continue
+            if req.get("type") == "control":
+                await self.control(str(req.get("slot")), str(req.get("id")),
+                                   req.get("value", 0))
+                continue
             if not self.session:
                 continue
             if req.get("type") == "button":

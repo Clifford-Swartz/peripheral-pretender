@@ -22,6 +22,7 @@ BOARD=<board>` builds `tests/<test>.c` into `build/<board>/<test>.elf`.
 | `tccprobe` | raw TCC observations, in rounds (`-DPROBE_ROUNDS=`): waveform modes, CNTSEL/STOP/buffers, register writes, event actions, the waveform pin (duty and drive) |
 | `sercom` | SERCOM I2C host (bus states, ACK/NACK flags, stop, scan, general call, the EDBG data gateway at 0x28) and SPI host (pad loopback, open MISO, overflow, receiver off) |
 | `sercomprobe` | raw SERCOM I2C/SPI observations (prints, checks nothing) |
+| `thermo` | demo for a Thermo 8 Click on EXT1 (`-M pic32cm-mc00-cpro,ext1=thermo8`): MCP9808 over I2C (SERCOM2), temperature printed on change, LED0 on while ALERT (PB02) is active (above 30 C or below 10 C) |
 | `breathe` | demo for the web board view: LED0 dimmed by a TCC1 PWM on PA24 (function F), duty rising and falling every 2 s; SW0 held for full brightness |
 | `blinky` | demo for the web board view (`tools/pp_web`): LED0 at 2 Hz, 8 Hz while SW0 is held, presses logged on VCOM; runs forever |
 | `mpu` | Cortex-M0+ MPU: MPU_TYPE, register read-back, read-only, XN, subregion and background faults (HardFault on ARMv6-M), unprivileged mode against a privileged-only region |
