@@ -46,12 +46,6 @@ EXPECTED = {
     "MTB.FLOW": "trace state, UNKNOWN at reset",
     "SUPC.INTFLAG": "open: undocumented bit 3",
     "SUPC.STATUS": "open: undocumented bits 3 and 5",
-    "TCC0.PER": "open: 24-bit counter; per-instance widths not modelled",
-    "TCC0.PERBUF": "open: 24-bit counter; per-instance widths not modelled",
-    "TCC1.PER": "open: 24-bit counter; per-instance widths not modelled",
-    "TCC1.PERBUF": "open: 24-bit counter; per-instance widths not modelled",
-    "TCC2.PER": "open: 16-bit counter; per-instance widths not modelled",
-    "TCC2.PERBUF": "open: 16-bit counter; per-instance widths not modelled",
 }
 
 

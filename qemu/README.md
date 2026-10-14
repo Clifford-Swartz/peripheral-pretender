@@ -18,6 +18,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0009 | EIC model (edges, levels, NMI, clock-dependent synchronization as on silicon); PORT routes pads muxed to function A to the EIC; EIC qtest |
 | 0010 | TC model (COUNT8/16/32, commands, one-shot, buffering, pairing), behaviour checked on silicon; regblock gclk_update hook; TC qtest |
 | 0011 | RTC model for the MC00 (three modes, PER flags, calendar, alarm); OSC32KCTRL CLK_RTC_OSC output; power-on-only reset for RTC and OSC32KCTRL (as on silicon); RTC qtest |
+| 0012 | Per-instance counter width for TCC registers (TCC0/1 24-bit, TCC2 16-bit; ATDF SIZE), matching silicon reset values |
 
 ## Setting it up
 

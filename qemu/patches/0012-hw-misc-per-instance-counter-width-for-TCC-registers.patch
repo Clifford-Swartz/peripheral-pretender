@@ -1,0 +1,188 @@
+From f9daa309e8846c43b46ee16cbbf8bc427dd77e3b Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Tue, 13 Oct 2026 18:28:32 -0700
+Subject: [PATCH] hw/misc: per-instance counter width for TCC registers
+
+The TCC instances of the PIC32CM MC00 have different counter widths
+(ATDF parameter SIZE: TCC0/1 24 bits, TCC2 16 bits); the register table
+is shared, so COUNT/PER/PERBUF/CC/CCBUF reset values and masks are
+narrowed per instance at realize. Checked against reset values read
+from silicon.
+
+Peripheral Pretender: a personal project; not for upstream.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/misc/mchp_regblock.c                 | 45 ++++++++++++++++++++++---
+ include/hw/arm/pic32cm1216mc00048_gen.h |  6 ++--
+ include/hw/arm/pic32cm5164jh01100_gen.h |  6 ++--
+ include/hw/mchp/mchp_device.h           |  1 +
+ include/hw/misc/mchp_regblock.h         |  1 +
+ 5 files changed, 49 insertions(+), 10 deletions(-)
+
+diff --git a/hw/misc/mchp_regblock.c b/hw/misc/mchp_regblock.c
+index ddff619..6546526 100644
+--- a/hw/misc/mchp_regblock.c
++++ b/hw/misc/mchp_regblock.c
+@@ -68,6 +68,42 @@ static const MchpRegInfo *mchp_regblock_find_ctrl(MchpRegBlock *s)
+     return NULL;
+ }
+ 
++/*
++ * The reset-view table of this instance: the generated one, or a copy
++ * whose counter registers are narrowed to the instance's counter width
++ * (TCC SIZE: TCC0/1 count 24 bits, TCC2 16; silicon PER resets to MAX).
++ */
++static const MchpRegInfo *mchp_regblock_default_regs(MchpRegBlock *s)
++{
++    static const char *const counters[] = {
++        "COUNT", "PER", "PERBUF", "CC", "CCBUF",
++    };
++    const MchpInstanceInfo *info = s->info;
++
++    if (!info->counter_bits || info->counter_bits >= 32) {
++        return info->regs;
++    }
++    if (!s->own_regs) {
++        uint32_t mask = MAKE_64BIT_MASK(0, info->counter_bits);
++
++        s->own_regs = g_memdup2(info->regs, info->nregs * sizeof(MchpRegInfo));
++        for (unsigned i = 0; i < info->nregs; i++) {
++            MchpRegInfo *ri = &s->own_regs[i];
++
++            for (unsigned c = 0; c < ARRAY_SIZE(counters); c++) {
++                if (!strcmp(ri->name, counters[c])) {
++                    ri->reset &= mask;
++                    ri->impl &= mask;
++                    ri->wmask &= mask;
++                    ri->w1c &= mask;
++                    ri->rdz &= mask;
++                }
++            }
++        }
++    }
++    return s->own_regs;
++}
++
+ static void mchp_regblock_bind_table(MchpRegBlock *s,
+                                      const MchpRegInfo *regs, unsigned nregs,
+                                      const MchpResetOverride *ovr,
+@@ -145,8 +181,8 @@ static void mchp_regblock_reset_registers(MchpRegBlock *s)
+ {
+     const MchpInstanceInfo *info = s->info;
+ 
+-    mchp_regblock_bind_table(s, info->regs, info->nregs, info->ovr,
+-                             info->novr);
++    mchp_regblock_bind_table(s, mchp_regblock_default_regs(s), info->nregs,
++                             info->ovr, info->novr);
+     mchp_regfile_reset(&s->rf);
+     mchp_regblock_apply_fuses(s);
+     if (info->nviews) {
+@@ -367,8 +403,8 @@ static void mchp_regblock_realize(DeviceState *dev, Error **errp)
+     s->rf.post_write = c->post_write;
+     s->rf.is_enabled = c->is_enabled ? c->is_enabled
+                                      : mchp_regblock_ctrl_enabled;
+-    mchp_regblock_bind_table(s, info->regs, info->nregs, info->ovr,
+-                             info->novr);
++    mchp_regblock_bind_table(s, mchp_regblock_default_regs(s), info->nregs,
++                             info->ovr, info->novr);
+ 
+     memory_region_init_io(&s->iomem, OBJECT(s), &mchp_regblock_ops, s,
+                           s->name, info->slot_size);
+@@ -411,6 +447,7 @@ static void mchp_regblock_finalize(Object *obj)
+ 
+     g_free(s->rf.storage);
+     g_free(s->name);
++    g_free(s->own_regs);
+     g_clear_pointer(&s->unimp_writes, g_hash_table_destroy);
+ }
+ 
+diff --git a/include/hw/arm/pic32cm1216mc00048_gen.h b/include/hw/arm/pic32cm1216mc00048_gen.h
+index 818991b..69e3b2b 100644
+--- a/include/hw/arm/pic32cm1216mc00048_gen.h
++++ b/include/hw/arm/pic32cm1216mc00048_gen.h
+@@ -448,7 +448,7 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .ip_version = "3.0.0", .base = 0x42002400, .slot_size = 0x400,
+         .irq = 13, .irq_input = 0, .pac_id = 73, .gclk_core = 23,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
+-        .regs_size = PIC32CM1216MC00048_TCC_REGS_SIZE,
++        .counter_bits = 24, .regs_size = PIC32CM1216MC00048_TCC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_tcc_regs,
+         .nregs = PIC32CM1216MC00048_TCC_NREGS,
+     },
+@@ -457,7 +457,7 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .ip_version = "3.0.0", .base = 0x42002800, .slot_size = 0x400,
+         .irq = 14, .irq_input = 0, .pac_id = 74, .gclk_core = 23,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
+-        .regs_size = PIC32CM1216MC00048_TCC_REGS_SIZE,
++        .counter_bits = 24, .regs_size = PIC32CM1216MC00048_TCC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_tcc_regs,
+         .nregs = PIC32CM1216MC00048_TCC_NREGS,
+     },
+@@ -466,7 +466,7 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .ip_version = "3.0.0", .base = 0x42002C00, .slot_size = 0x400,
+         .irq = 15, .irq_input = 0, .pac_id = 75, .gclk_core = 24,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
+-        .regs_size = PIC32CM1216MC00048_TCC_REGS_SIZE,
++        .counter_bits = 16, .regs_size = PIC32CM1216MC00048_TCC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_tcc_regs,
+         .nregs = PIC32CM1216MC00048_TCC_NREGS,
+     },
+diff --git a/include/hw/arm/pic32cm5164jh01100_gen.h b/include/hw/arm/pic32cm5164jh01100_gen.h
+index 799885b..df8ca81 100644
+--- a/include/hw/arm/pic32cm5164jh01100_gen.h
++++ b/include/hw/arm/pic32cm5164jh01100_gen.h
+@@ -525,7 +525,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .name = "TCC0", .module = "TCC", .ip_id = "U2213", .ip_version = "4a0",
+         .base = 0x42002400, .slot_size = 0x400, .irq = 17, .irq_input = 0,
+         .pac_id = 73, .gclk_core = 28, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0,
++        .dmac_tx = -1, .flags = 0, .counter_bits = 24,
+         .regs_size = PIC32CM5164JH01100_TCC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tcc_regs,
+         .nregs = PIC32CM5164JH01100_TCC_NREGS,
+@@ -534,7 +534,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .name = "TCC1", .module = "TCC", .ip_id = "U2213", .ip_version = "4a0",
+         .base = 0x42002800, .slot_size = 0x400, .irq = 18, .irq_input = 0,
+         .pac_id = 74, .gclk_core = 28, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0,
++        .dmac_tx = -1, .flags = 0, .counter_bits = 24,
+         .regs_size = PIC32CM5164JH01100_TCC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tcc_regs,
+         .nregs = PIC32CM5164JH01100_TCC_NREGS,
+@@ -543,7 +543,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .name = "TCC2", .module = "TCC", .ip_id = "U2213", .ip_version = "4a0",
+         .base = 0x42002C00, .slot_size = 0x400, .irq = 19, .irq_input = 0,
+         .pac_id = 75, .gclk_core = 29, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0,
++        .dmac_tx = -1, .flags = 0, .counter_bits = 16,
+         .regs_size = PIC32CM5164JH01100_TCC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tcc_regs,
+         .nregs = PIC32CM5164JH01100_TCC_NREGS,
+diff --git a/include/hw/mchp/mchp_device.h b/include/hw/mchp/mchp_device.h
+index 0bde9a0..e12b295 100644
+--- a/include/hw/mchp/mchp_device.h
++++ b/include/hw/mchp/mchp_device.h
+@@ -68,6 +68,7 @@ typedef struct MchpInstanceInfo {
+     int16_t dmac_rx;                /* DMAC_ID_RX, -1: none */
+     int16_t dmac_tx;                /* DMAC_ID_TX, -1: none */
+     uint32_t flags;                 /* MCHP_INST_* */
++    uint8_t counter_bits;           /* TCC SIZE: width of COUNT/PER/CC; 0 */
+     uint32_t regs_size;             /* register file bytes (MCHP_<IP>_SIZE) */
+     const MchpRegInfo *regs;        /* view at reset; NULL: no table */
+     unsigned nregs;
+diff --git a/include/hw/misc/mchp_regblock.h b/include/hw/misc/mchp_regblock.h
+index 4cbb501..817bd00 100644
+--- a/include/hw/misc/mchp_regblock.h
++++ b/include/hw/misc/mchp_regblock.h
+@@ -56,6 +56,7 @@ struct MchpRegBlock {
+     const MchpRegInfo *intenset;
+     uint32_t view_sel;                  /* mode selector of the active view */
+     bool powered;                       /* past the power-on reset */
++    MchpRegInfo *own_regs;              /* instance-narrowed table, or NULL */
+     GHashTable *unimp_writes;           /* writes logged per register offset */
+ };
+ 
+-- 
+2.53.0.windows.2
+

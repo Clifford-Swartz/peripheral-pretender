@@ -434,6 +434,9 @@ def _inst_entry(ds: DeviceSem, i: InstanceSem) -> list[str]:
               f".gclk_slow = {i.gclk_slow}", f".dmac_rx = {i.dmac_rx}",
               f".dmac_tx = {i.dmac_tx}",
               ".flags = " + (" | ".join(f"MCHP_INST_{f}" for f in i.flags) or "0")]
+    if i.module == "TCC" and "SIZE" in i.params:
+        # Counter width of this instance (ATDF parameter SIZE)
+        items.append(f".counter_bits = {int(i.params['SIZE'])}")
     ip = i.ip
     if ip.views and not ip.core:
         view = ip.view(ip.default_view)
