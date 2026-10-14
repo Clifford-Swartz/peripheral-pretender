@@ -7,3 +7,4 @@ tests/assets/*/build/
 generator/out/
 *.log
 .venv/
+.playwright-mcp/

@@ -1,0 +1,40 @@
+<!doctype html>
+<!--
+  Peripheral Pretender web board view.
+  Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Peripheral Pretender</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231b5e20'/%3E%3Ccircle cx='8' cy='8' r='3.5' fill='%23ffc400'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>Peripheral Pretender</h1>
+    <span id="board-name"></span>
+    <span id="status" class="status idle">no firmware</span>
+  </header>
+  <main>
+    <section id="board-pane">
+      <div id="board">
+        <img id="board-img" alt="Board">
+        <div id="overlays"></div>
+      </div>
+    </section>
+    <section id="side">
+      <div id="drop" tabindex="0">
+        <strong>Drop a firmware ELF here</strong>
+        <span>or <label class="link">choose a file<input type="file" id="file" accept=".elf"></label></span>
+      </div>
+      <div class="hint">Click <b>SW0</b> (hold to keep it pressed) and <b>RESET</b> on the board.</div>
+      <h2>VCOM <small>SERCOM0, EDBG virtual COM port</small></h2>
+      <pre id="console"></pre>
+      <form id="send"><input id="send-text" placeholder="send to the UART" autocomplete="off"><button>Send</button></form>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

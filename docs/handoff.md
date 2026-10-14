@@ -143,6 +143,16 @@ Open MC00 items:
 - DS SERIES field inconsistency for DSU.DID (6 in the header and bit drawing, 7 in text, errata
   and signature); the twin uses 7.
 
+## Endgame and the web board view
+
+The owner's target (2026-10-14) is a web page, later also a VS Code extension, showing the
+real board in 3D. Users plug in Mikroe Click boards and run their own (or AI-written) firmware
+on the twin, live. See `docs/design/endgame.md` for the layers and roadmap. First slice done:
+`tools/pp_web`. It shows the EV15N46A rendered from Microchip's Gerbers, with LED0 following
+PA24, clickable SW0/RESET, the VCOM console and ELF upload (`py -m tools.pp_web --elf ...`).
+Next in that roadmap: PWM brightness (per-pin high time from the engine, TCC outputs on pads),
+SERCOM SPI/I2C and the first Click boards.
+
 ## Next steps, in order
 
 1. ~~Independent review~~ **done 2026-10-13** (three lenses). Fixed: clock state lost on

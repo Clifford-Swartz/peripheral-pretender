@@ -1,0 +1,148 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+"""Web board view: serves the page, runs a twin per upload, and streams its
+state over a WebSocket.
+
+    py -m tools.pp_web [--port 8080] [--elf firmware.elf] [--board ev15n46a]
+
+Messages to the page: {"type": "status"|"pads"|"uart"|"board", ...}.
+Messages from the page: {"type": "button", "id": "sw0"|"reset",
+"pressed": bool} and {"type": "uart", "data": str}. POST /api/firmware
+with the ELF as the body (re)starts the twin.
+
+Local, single-user prototype: one twin shared by every open page.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import tempfile
+from pathlib import Path
+
+from aiohttp import WSMsgType, web
+
+from .session import Session
+
+HERE = Path(__file__).resolve().parent
+STATIC = HERE / "static"
+BOARDS = HERE / "boards"
+MAX_ELF = 4 * 1024 * 1024
+
+
+class App:
+    def __init__(self, board: str, elf: Path | None):
+        self.board_dir = BOARDS / board
+        self.board = json.loads((self.board_dir / "board.json").read_text())
+        self.clients: set[web.WebSocketResponse] = set()
+        self.session: Session | None = None
+        self.elf = elf
+        self.tmp = Path(tempfile.mkdtemp(prefix="pp_web_"))
+        self.uart_log = ""
+        self.lock = asyncio.Lock()
+
+    def emit(self, msg: dict) -> None:
+        if msg["type"] == "uart":
+            self.uart_log = (self.uart_log + msg["data"])[-20000:]
+        data = json.dumps(msg)
+        for ws in list(self.clients):
+            asyncio.create_task(self._send(ws, data))
+
+    async def _send(self, ws: web.WebSocketResponse, data: str) -> None:
+        try:
+            await ws.send_str(data)
+        except ConnectionError:
+            self.clients.discard(ws)
+
+    async def run(self, elf: Path) -> None:
+        async with self.lock:
+            if self.session:
+                await self.session.stop()
+            self.uart_log = ""
+            self.emit({"type": "reset"})
+            self.session = Session(self.board["machine"], elf, self.emit)
+            try:
+                await self.session.start()
+            except Exception as e:      # report to the page, keep serving
+                self.emit({"type": "status", "state": "error", "error": str(e)})
+
+    # -- handlers ------------------------------------------------------
+
+    async def index(self, request: web.Request) -> web.StreamResponse:
+        return web.FileResponse(STATIC / "index.html")
+
+    async def board_file(self, request: web.Request) -> web.StreamResponse:
+        name = request.match_info["name"]
+        path = (self.board_dir / name).resolve()
+        if path.parent != self.board_dir.resolve() or not path.is_file():
+            raise web.HTTPNotFound()
+        return web.FileResponse(path)
+
+    async def firmware(self, request: web.Request) -> web.Response:
+        data = await request.content.read(MAX_ELF + 1)
+        if len(data) > MAX_ELF or data[:4] != b"\x7fELF":
+            raise web.HTTPBadRequest(text="expected an ELF file up to 4 MiB")
+        elf = self.tmp / "firmware.elf"
+        elf.write_bytes(data)
+        await self.run(elf)
+        return web.json_response({"ok": True})
+
+    async def ws(self, request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse(heartbeat=20)
+        await ws.prepare(request)
+        self.clients.add(ws)
+        await ws.send_str(json.dumps({"type": "board", "board": self.board}))
+        if self.session:
+            await ws.send_str(json.dumps({"type": "status", "state": "running",
+                                          "elf": self.session.elf.name}))
+            await ws.send_str(json.dumps({"type": "uart", "data": self.uart_log}))
+            await ws.send_str(json.dumps({"type": "pads",
+                                          "pads": self.session.pads}))
+        async for msg in ws:
+            if msg.type != WSMsgType.TEXT:
+                continue
+            req = json.loads(msg.data)
+            if not self.session:
+                continue
+            if req.get("type") == "button":
+                await self.session.press(str(req.get("id")),
+                                         bool(req.get("pressed")))
+            elif req.get("type") == "uart":
+                await self.session.uart_send(str(req.get("data", "")))
+        self.clients.discard(ws)
+        return ws
+
+    async def on_startup(self, app: web.Application) -> None:
+        if self.elf:
+            await self.run(self.elf)
+
+    async def on_cleanup(self, app: web.Application) -> None:
+        if self.session:
+            await self.session.stop()
+
+
+def make_app(board: str = "ev15n46a", elf: Path | None = None) -> web.Application:
+    state = App(board, elf)
+    app = web.Application(client_max_size=MAX_ELF + 1024)
+    app.add_routes([
+        web.get("/", state.index),
+        web.get("/board/{name}", state.board_file),
+        web.post("/api/firmware", state.firmware),
+        web.get("/ws", state.ws),
+        web.static("/static", STATIC),
+    ])
+    app.on_startup.append(state.on_startup)
+    app.on_cleanup.append(state.on_cleanup)
+    app["state"] = state
+    return app
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="pp_web", description=__doc__.split("\n")[0])
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=8080)
+    ap.add_argument("--board", default="ev15n46a")
+    ap.add_argument("--elf", type=Path, help="firmware to start with")
+    args = ap.parse_args(argv)
+    web.run_app(make_app(args.board, args.elf), host=args.host, port=args.port)
+    return 0

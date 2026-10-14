@@ -1,0 +1,24 @@
+{
+  "id": "ev15n46a",
+  "name": "PIC32CM MC00 Curiosity Pro (EV15N46A)",
+  "machine": "pic32cm-mc00-cpro",
+  "source": "Microchip board design files R3 (Gerbers, pick and place); see README.md",
+  "image": "top.png",
+  "px_per_mm": 20,
+  "origin_mm": [0.458, 99.626],
+  "size_mm": [58.98, 99.026],
+  "leds": [
+    {"id": "LED0", "ref": "D700", "at_mm": [27.2258, 88.0858],
+     "pin": "PA24", "active_low": true, "color": "#ffc400"}
+  ],
+  "buttons": [
+    {"id": "SW0", "ref": "SW700", "at_mm": [22.8485, 95.1],
+     "size_mm": [6.2, 6.4], "action": "sw0"},
+    {"id": "RESET", "ref": "SW301", "at_mm": [34.0, 95.1],
+     "size_mm": [6.2, 6.4], "action": "reset"}
+  ],
+  "headers": [
+    {"id": "EXT1", "ref": "J200", "at_mm": [54.3, 59.84], "pins": 20},
+    {"id": "EXT2", "ref": "J201", "at_mm": [54.3, 24.28], "pins": 20}
+  ]
+}
