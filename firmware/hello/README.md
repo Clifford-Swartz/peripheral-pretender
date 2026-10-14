@@ -18,6 +18,8 @@ BOARD=<board>` builds `tests/<test>.c` into `build/<board>/<test>.elf`.
 | `tcprobe` | raw TC observations for behaviour the data sheet leaves open (prints, checks nothing) |
 | `rtc` | RTC (MC00) counting rate, periodic flags, compare with clear-on-match, MODE1, calendar across a leap day, alarm, interrupt, synchronization without the RTC clock |
 | `evsys` | EVSYS (MC00) paths with software events and generators (TC0, EIC, RTC), edge selection, the channel clock rule, CHSTATUS and OVR/EVD with and without ready users, the interrupt, register masks, TC1 event actions (COUNT, RETRIGGER, START, TCINV) and PORT event actions |
+| `tcc` | TCC (MC00): output state and flags in NPWM, NFRQ and dual slope, one-shot, STOP/RETRIGGER, buffers and LUPD, CNTSEL, events in and out through EVSYS, counter width, interrupt, synchronization without the clock |
+| `tccprobe` | raw TCC observations, in rounds (`-DPROBE_ROUNDS=`): waveform modes, CNTSEL/STOP/buffers, register writes, event actions |
 | `mpu` | Cortex-M0+ MPU: MPU_TYPE, register read-back, read-only, XN, subregion and background faults (HardFault on ARMv6-M), unprivileged mode against a privileged-only region |
 | `evprobe` | raw EVSYS observations for behaviour the data sheet leaves open (prints, checks nothing) |
 

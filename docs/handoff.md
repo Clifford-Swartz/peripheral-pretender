@@ -164,6 +164,14 @@ Open MC00 items:
    unprivileged mode, checked on silicon with the `mpu` app (MPU_TYPE 0x800; no TEX field;
    RBAR.ADDR [31:8]). Also fixes a QEMU PMSAv7 bug where a disabled subregion cached a whole
    TLB page.
+5. **TCC** done 2026-10-13 (patch 0015), checked on silicon with the `tcc` app (byte-identical)
+   after four `tccprobe` rounds. Datasheet sections came from Microchip's MCP server
+   (`claude mcp add --transport http microchip https://api.microchip.com/mcp/resources`,
+   tool `search_microchip_product_documents`). Silicon facts the data sheet does not give: a
+   buffer write keeps SYNCBUSY set until it is copied (so a SYNCBUSY wait lasts to the end of
+   the period, forever with LUPD); STOP clears COUNT; COUNTEV/INC stop the clock from moving
+   the counter; the CNT rules per CNTSEL. Open: DSCRITICAL waveform, faults, dead time,
+   pattern generation, dithering, capture, pins. Next candidates: ADC, then DMAC.
 
 ## Known issues
 

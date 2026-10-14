@@ -27,6 +27,22 @@ def wrap_items(items: list[str], indent: str) -> list[str]:
     lines, cur = [], ""
     for item in items:
         piece = item + ","
+        if len(indent) + len(piece) > WIDTH and " | " in piece:
+            # An OR of flags too long for one line: break after a '|'
+            if cur:
+                lines.append(indent + cur)
+                cur = ""
+            terms = piece.split(" | ")
+            line, pad = "", indent
+            for i, term in enumerate(terms):
+                term += "" if i == len(terms) - 1 else " |"
+                if line and len(pad) + len(line) + 1 + len(term) > WIDTH:
+                    lines.append(pad + line)
+                    line, pad = term, indent + "    "
+                else:
+                    line = f"{line} {term}" if line else term
+            lines.append(pad + line)
+            continue
         if cur and len(indent) + len(cur) + 1 + len(piece) > WIDTH:
             lines.append(indent + cur)
             cur = piece

@@ -1,0 +1,1961 @@
+From a097ceada709b6b6d6c26da9358d26fe7e34ef81 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Tue, 13 Oct 2026 22:28:08 -0700
+Subject: [PATCH] hw/timer: TCC model, checked against PIC32CM MC00 silicon
+
+TCC U2213: counting from GCLK_TCC through the prescaler in the single-
+slope (NFRQ, MFRQ, NPWM) and dual-slope waveform modes with the
+instance's counter width, overflow and compare-match flags, the waveform
+output state in STATUS.CMPx, one-shot, the commands, double buffering,
+the counter event selection (CNTSEL) and the events: OVF, TRG, CNT, MCx
+out; RETRIGGER, COUNTEV, START, INC, COUNT, DIR, STOP, DEC in. Event
+driven on QEMU_CLOCK_VIRTUAL with closed-form jumps over ticks that
+change nothing.
+
+Behaviour the data sheet leaves open or gets wrong follows silicon
+(firmware/hello/tests/tccprobe.c): where MCx and CMPx change, the dual-
+slope direction, buffer writes holding SYNCBUSY until the copy, STOP
+clearing COUNT, COUNTEV/INC replacing the clock, the CNT rules.
+
+New qtest pic32cm-tcc-test; board docs list the TCC.
+
+Peripheral Pretender: a personal project; not for upstream.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst         |   11 +-
+ hw/arm/pic32cm_soc.c                          |    2 +
+ hw/timer/mchp_tcc.c                           | 1137 +++++++++++++++++
+ hw/timer/meson.build                          |    2 +-
+ hw/timer/trace-events                         |    4 +
+ .../mchp/gen/pic32cm1216mc00048/tcc_u2213.h   |   58 +-
+ .../mchp/gen/pic32cm5164jh01100/tcc_u2213.h   |   57 +-
+ include/hw/mchp/gen/tcc_u2213.h               |    2 +-
+ include/hw/timer/mchp_tcc.h                   |   32 +
+ tests/qtest/meson.build                       |    2 +-
+ tests/qtest/pic32cm-tcc-test.c                |  306 +++++
+ 11 files changed, 1560 insertions(+), 53 deletions(-)
+ create mode 100644 hw/timer/mchp_tcc.c
+ create mode 100644 include/hw/timer/mchp_tcc.h
+ create mode 100644 tests/qtest/pic32cm-tcc-test.c
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index 65cfee4..4dc6dc6 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -75,6 +75,11 @@ Supported devices
+   one-shot, commands, double buffering, COUNT32 pairs, event outputs and
+   the COUNT, RETRIGGER and START event actions. COUNT reads need
+   READSYNC, as on silicon.
++- TCC: counting in the single- and dual-slope waveform modes with the
++  instance's counter width, overflow and match flags, the waveform output
++  state in STATUS.CMPx, one-shot, commands, double buffering (a buffer
++  write keeps SYNCBUSY set until it is copied, as on silicon), the counter
++  event selection and the event inputs and outputs.
+ - RTC (U2250, PIC32CM MC00 only): the three modes, periodic flags,
+   calendar with alarm, event outputs; reset only at power-on.
+ - EVSYS: channels on the three paths, software events, the users that
+@@ -97,10 +102,12 @@ Missing devices
+ - SERCOM: SPI and I2C transfers, the external clock (XCK), synchronous
+   mode, LIN and auto-baud frames, IrDA, 9-bit characters and receive
+   errors. PORT: the sampling mode (CTRL).
+-- TC capture, waveform outputs on pins; the JH01 RTC (03608).
++- TC capture, waveform outputs on pins; the JH01 RTC (03608). TCC faults,
++  dead time, pattern generation, dithering, capture, circular buffers,
++  waveform pins and the DSCRITICAL waveform.
+ - Watchdog time-out, PAC write protection, flash programming through
+   NVMCTRL, DSU CRC32 and chip erase, sleep modes and every other
+-  peripheral behaviour (DMAC, TCC, ADC, DAC, AC, CAN, ...).
++  peripheral behaviour (DMAC, ADC, DAC, AC, CAN, ...).
+ 
+ Board and SoC properties
+ """"""""""""""""""""""""
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index c0a52c5..89751df 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -27,6 +27,7 @@
+ #include "hw/misc/mchp_evsys.h"
+ #include "hw/rtc/mchp_rtc.h"
+ #include "hw/timer/mchp_tc.h"
++#include "hw/timer/mchp_tcc.h"
+ #include "hw/mchp/gen/rstc_u2239.h"
+ #include "hw/misc/mchp_sysctrl.h"
+ #include "hw/misc/unimp.h"
+@@ -60,6 +61,7 @@ static const struct {
+     { "SERCOM", TYPE_MCHP_SERCOM },
+     { "SUPC", TYPE_MCHP_SUPC },
+     { "TC", TYPE_MCHP_TC },
++    { "TCC", TYPE_MCHP_TCC },
+     { "WDT", TYPE_MCHP_WDT },
+ };
+ 
+diff --git a/hw/timer/mchp_tcc.c b/hw/timer/mchp_tcc.c
+new file mode 100644
+index 0000000..c3b89e7
+--- /dev/null
++++ b/hw/timer/mchp_tcc.c
+@@ -0,0 +1,1137 @@
++/*
++ * Microchip SAM/PIC32CM Timer/Counter for Control (TCC U2213)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Follows DS60001638E chapter 31 (PIC32CM MC00): counting from GCLK_TCC
++ * through the prescaler, up or down, in the single-slope (NFRQ, MFRQ,
++ * NPWM) and dual-slope (DSCRITICAL, DSBOTTOM, DSBOTH, DSTOP) waveform
++ * modes, TOP from PER (CC0 in MFRQ), the overflow and compare-match flags,
++ * one-shot, the RETRIGGER/STOP/UPDATE/READSYNC commands, double buffering
++ * of PER and CCx (updated at the wrap, or at ZERO in dual slope), the
++ * waveform output state in STATUS.CMPx, and the events: OVF, TRG, CNT and
++ * MCx out; RETRIGGER, COUNTEV, START, INC, COUNT, DIR, STOP and DEC in.
++ * COUNT reads return the last synchronized value (READSYNC first).
++ *
++ * Behaviour the data sheet leaves open follows PIC32CM MC00 silicon
++ * (firmware/hello/tests/tccprobe.c):
++ *  - MCx is set on the tick the counter becomes CCx; NPWM never flags
++ *    CCx = 0, dual slope flags only on the up-count for 0 < CCx < TOP.
++ *  - STATUS.CMPx changes on the tick the counter leaves the value of the
++ *    event (one tick after the waveform event of the data sheet), and reads
++ *    0 until the first tick after a start and while stopped.
++ *  - The dual-slope direction (CTRLBSET.DIR) and the OVF at TOP or ZERO
++ *    change on the tick that leaves TOP or ZERO.
++ *  - A PERBUF or CCBUFx write keeps SYNCBUSY.PER or SYNCBUSY.CCx set until
++ *    the buffer is copied (UPDATE condition or command); with CTRLB.LUPD
++ *    set it stays set. PERBUF written in NFRQ/MFRQ or when counting down
++ *    in PWM goes to PER at once (DS 31.6.2.6).
++ *  - STOP clears COUNT (TOP when counting down) and keeps the outputs;
++ *    one-shot stops with the outputs cleared.
++ *  - CNT (EVCTRL.CNTSEL): START at the first tick after a start (single
++ *    slope only) and at each new cycle; END at each cycle end; BETWEEN at
++ *    each cycle end but the last (one-shot); BOUNDARY at the first tick
++ *    and at a stop.
++ *  - With EVACT0 COUNTEV or INC the prescaled clock never moves the
++ *    counter, whatever TCEI0 says. INC counts up from COUNT without the
++ *    TOP wrap when CTRLB.DIR is set, except that from ZERO it loads TOP.
++ *    The EV1 STOP action sets STATUS.STOP. The start's CNT comes at
++ *    once in NFRQ, MFRQ and NPWM counting down.
++ * Not modelled: faults, dead-time insertion, pattern generation, output
++ * matrix, swap, dithering (CTRLA.RESOLUTION), circular buffers, capture,
++ * waveform pins, the DSCRITICAL waveform (counted as DSBOTTOM), sleep.
++ *
++ * Counting is event driven on QEMU_CLOCK_VIRTUAL: the timer fires at the
++ * next tick that can change something and jumps over the rest.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/core/clock.h"
++#include "hw/core/irq.h"
++#include "hw/timer/mchp_tcc.h"
++#include "hw/mchp/gen/tcc_u2213.h"
++#include "migration/vmstate.h"
++#include "trace.h"
++
++#define A_CTRLA         A_MCHP_TCC_CTRLA
++#define A_CTRLBCLR      A_MCHP_TCC_CTRLBCLR
++#define A_CTRLBSET      A_MCHP_TCC_CTRLBSET
++#define A_SYNCBUSY      A_MCHP_TCC_SYNCBUSY
++#define A_FCTRLA        A_MCHP_TCC_FCTRLA
++#define A_FCTRLB        A_MCHP_TCC_FCTRLB
++#define A_WEXCTRL       A_MCHP_TCC_WEXCTRL
++#define A_DRVCTRL       A_MCHP_TCC_DRVCTRL
++#define A_EVCTRL        A_MCHP_TCC_EVCTRL
++#define A_INTFLAG       A_MCHP_TCC_INTFLAG
++#define A_STATUS        A_MCHP_TCC_STATUS
++#define A_COUNT         A_MCHP_TCC_COUNT
++#define A_PATT          A_MCHP_TCC_PATT
++#define A_WAVE          A_MCHP_TCC_WAVE
++#define A_PER           A_MCHP_TCC_PER
++#define A_CC            A_MCHP_TCC_CC
++#define A_PERBUF        A_MCHP_TCC_PERBUF
++#define A_CCBUF         A_MCHP_TCC_CCBUF
++
++#define F(reg, field)   R_MCHP_TCC_##reg##_##field##_MASK
++
++#define MCHP_TCC_CHANNELS   4
++#define MCHP_TCC_MAX_STEPS  64
++#define NEVER               UINT64_MAX
++
++enum {
++    NFRQ = MCHP_TCC_WAVE_WAVEGEN_NFRQ,
++    MFRQ = MCHP_TCC_WAVE_WAVEGEN_MFRQ,
++    NPWM = MCHP_TCC_WAVE_WAVEGEN_NPWM,
++    DSCRITICAL = MCHP_TCC_WAVE_WAVEGEN_DSCRITICAL,
++    DSBOTTOM = MCHP_TCC_WAVE_WAVEGEN_DSBOTTOM,
++    DSBOTH = MCHP_TCC_WAVE_WAVEGEN_DSBOTH,
++    DSTOP = MCHP_TCC_WAVE_WAVEGEN_DSTOP,
++};
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpTccState, MCHP_TCC)
++
++struct MchpTccState {
++    MchpRegBlock parent_obj;
++
++    QEMUTimer *timer;
++    qemu_irq ovf_event;
++    qemu_irq trg_event;
++    qemu_irq cnt_event;
++    qemu_irq mc_event[MCHP_TCC_CHANNELS];
++    qemu_irq ev_busy[2];
++
++    bool running;               /* counting (started, not stopped) */
++    bool moved;                 /* ticked since the start */
++    bool cnt_pending;           /* the start's CNT comes with the 1st tick */
++    uint8_t frozen_cmp;         /* STATUS.CMPx while stopped */
++    uint32_t buf_busy;          /* SYNCBUSY bits of buffers not yet copied */
++    bool down;                  /* direction of the last tick */
++    bool ev_level[2];           /* event inputs */
++    uint8_t toggle;             /* NFRQ/MFRQ outputs, per channel */
++    uint32_t count;             /* counter value at t_base */
++    uint32_t prev;              /* counter value before the last tick */
++    uint32_t sync_pending;      /* SYNCBUSY bits waiting for GCLK_TCC */
++    int64_t t_base;             /* QEMU_CLOCK_VIRTUAL ns */
++
++    /* Counting geometry, refreshed from the registers after each change */
++    uint8_t wavegen;
++    bool dir;                   /* CTRLB.DIR */
++    uint32_t top;
++    uint32_t cc[MCHP_TCC_CHANNELS];
++};
++
++static const uint16_t mchp_tcc_prescale[] = { 1, 2, 4, 8, 16, 64, 256, 1024 };
++
++static uint32_t tcc_reg(MchpTccState *s, hwaddr offset, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, offset, size);
++}
++
++static void tcc_set_reg(MchpTccState *s, hwaddr offset, unsigned size,
++                        uint32_t val)
++{
++    mchp_regfile_poke(&MCHP_REGBLOCK(s)->rf, offset, size, val);
++}
++
++static void tcc_mod_reg(MchpTccState *s, hwaddr offset, unsigned size,
++                        uint32_t clear, uint32_t set)
++{
++    tcc_set_reg(s, offset, size, (tcc_reg(s, offset, size) & ~clear) | set);
++}
++
++static uint32_t tcc_max(MchpTccState *s)
++{
++    unsigned bits = MCHP_REGBLOCK(s)->info->counter_bits;
++
++    return MAKE_64BIT_MASK(0, bits ? bits : 32);
++}
++
++static bool tcc_enabled(MchpTccState *s)
++{
++    return tcc_reg(s, A_CTRLA, 4) & F(CTRLA, ENABLE);
++}
++
++static bool tcc_ds(MchpTccState *s)
++{
++    return s->wavegen >= DSCRITICAL;
++}
++
++/* The direction the clock counts in now */
++static bool tcc_counting_down(MchpTccState *s)
++{
++    return tcc_ds(s) ? s->down : s->dir;
++}
++
++static void tcc_refresh(MchpTccState *s)
++{
++    uint32_t max = tcc_max(s);
++
++    s->wavegen = FIELD_EX32(tcc_reg(s, A_WAVE, 4), MCHP_TCC_WAVE, WAVEGEN);
++    s->dir = tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, DIR);
++    for (unsigned ch = 0; ch < MCHP_TCC_CHANNELS; ch++) {
++        s->cc[ch] = tcc_reg(s, A_CC + 4 * ch, 4) & max;
++    }
++    s->top = s->wavegen == MFRQ ? s->cc[0] : tcc_reg(s, A_PER, 4) & max;
++}
++
++static unsigned tcc_evact(MchpTccState *s, unsigned n)
++{
++    uint32_t ev = tcc_reg(s, A_EVCTRL, 4);
++
++    return n ? FIELD_EX32(ev, MCHP_TCC_EVCTRL, EVACT1)
++             : FIELD_EX32(ev, MCHP_TCC_EVCTRL, EVACT0);
++}
++
++static bool tcc_ev_enabled(MchpTccState *s, unsigned n)
++{
++    return tcc_reg(s, A_EVCTRL, 4) & (F(EVCTRL, TCEI0) << n);
++}
++
++/* The event input level after TCINVn */
++static bool tcc_ev_active(MchpTccState *s, unsigned n)
++{
++    return s->ev_level[n] ^
++           !!(tcc_reg(s, A_EVCTRL, 4) & (F(EVCTRL, TCINV0) << n));
++}
++
++static uint64_t tcc_hz(MchpTccState *s)
++{
++    return clock_get_hz(MCHP_REGBLOCK(s)->gclk);
++}
++
++/* The prescaled clock moves the counter (not events) */
++static bool tcc_clock_counts(MchpTccState *s)
++{
++    if (!s->running || !tcc_hz(s)) {
++        return false;
++    }
++    switch (tcc_evact(s, 0)) {
++    case MCHP_TCC_EVCTRL_EVACT0_COUNTEV:
++    case MCHP_TCC_EVCTRL_EVACT0_INC:
++        return false;           /* events are the clock (silicon) */
++    case MCHP_TCC_EVCTRL_EVACT0_COUNT:
++        return tcc_ev_enabled(s, 0) && tcc_ev_active(s, 0);
++    }
++    return true;
++}
++
++static uint64_t tcc_prescaler(MchpTccState *s)
++{
++    return mchp_tcc_prescale[FIELD_EX32(tcc_reg(s, A_CTRLA, 4),
++                                        MCHP_TCC_CTRLA, PRESCALER)];
++}
++
++/* Whole counter ticks between t_base and @now */
++static uint64_t tcc_ticks(MchpTccState *s, int64_t now)
++{
++    if (!tcc_clock_counts(s) || now <= s->t_base) {
++        return 0;
++    }
++    return clock_ns_to_ticks(MCHP_REGBLOCK(s)->gclk, now - s->t_base) /
++           tcc_prescaler(s);
++}
++
++/* A time by which tick @n after t_base has happened */
++static int64_t tcc_tick_time(MchpTccState *s, uint64_t n)
++{
++    if (!n) {
++        return s->t_base;
++    }
++    return s->t_base + clock_ticks_to_ns(MCHP_REGBLOCK(s)->gclk,
++                                         n * tcc_prescaler(s)) + 1;
++}
++
++/* -- Counter position ------------------------------------------------- */
++
++/*
++ * Dual slope: the phase in a period of 2 * TOP ticks (0..TOP counting up,
++ * then down), after first coming down from above TOP (*excess ticks)
++ */
++static uint64_t tcc_ds_phase(MchpTccState *s, uint64_t *excess)
++{
++    uint64_t top = s->top;
++
++    *excess = 0;
++    if (s->count > top) {
++        *excess = s->count - top;
++        return top;
++    }
++    return s->down && s->count ? 2 * top - s->count : s->count;
++}
++
++/* The value @k ticks after t_base, and whether the last tick went down */
++static uint32_t tcc_after(MchpTccState *s, uint64_t k, bool *down)
++{
++    uint64_t top = s->top, count = s->count, excess, period, p;
++
++    *down = tcc_counting_down(s);
++    if (!k) {
++        *down = s->down;
++        return count;
++    }
++    if (!tcc_ds(s)) {
++        period = top + 1;
++        if (*down) {
++            return k <= count ? count - k : top - (k - count - 1) % period;
++        }
++        if (count <= top) {
++            return (count + k) % period;
++        } else {
++            uint64_t wrap = (uint64_t)tcc_max(s) - count + 1;
++
++            return k < wrap ? count + k : (k - wrap) % period;
++        }
++    }
++    if (!top) {
++        *down = false;
++        return 0;
++    }
++    p = tcc_ds_phase(s, &excess);
++    if (k <= excess) {
++        *down = true;
++        return count - k;
++    }
++    period = 2 * top;
++    p = (p + k - excess) % period;
++    *down = p == 0 || p > top;
++    return p <= top ? p : period - p;
++}
++
++/* Ticks from t_base until the counter becomes @v, or NEVER */
++static uint64_t tcc_ticks_to(MchpTccState *s, uint32_t v)
++{
++    uint64_t top = s->top, count = s->count, max = tcc_max(s);
++    uint64_t excess, p0, period, best = NEVER;
++
++    if (!tcc_ds(s)) {
++        period = top + 1;
++        if (tcc_counting_down(s)) {
++            if (v < count) {
++                return count - v;
++            }
++            return v <= top ? count + 1 + top - v : NEVER;
++        }
++        if (count <= top) {
++            return v <= top ? (v + period - count - 1) % period + 1 : NEVER;
++        }
++        if (v > count) {
++            return v <= max ? v - count : NEVER;
++        }
++        return v <= top ? max - count + 1 + v : NEVER;
++    }
++    if (!top) {
++        return v == 0 ? 1 : NEVER;
++    }
++    p0 = tcc_ds_phase(s, &excess);
++    if (v > top) {
++        return excess && v < count ? count - v : NEVER;
++    }
++    if (excess && v == top) {
++        return excess;
++    }
++    period = 2 * top;
++    for (int i = 0; i < 2; i++) {
++        uint64_t tp = i ? period - v : v, d;
++
++        if (i && (v == 0 || v == top)) {
++            break;
++        }
++        d = (tp + period - p0) % period;
++        best = MIN(best, excess + (d ? d : period));
++    }
++    return best;
++}
++
++/* Ticks until the counter leaves @v (the tick after it becomes @v) */
++static uint64_t tcc_ticks_to_leave(MchpTccState *s, uint32_t v)
++{
++    uint64_t n;
++
++    if (s->count == v) {
++        return 1;
++    }
++    n = tcc_ticks_to(s, v);
++    return n == NEVER ? NEVER : n + 1;
++}
++
++/* The next tick that can set a flag or change an output */
++static uint64_t tcc_next(MchpTccState *s)
++{
++    uint64_t n = NEVER;
++    uint32_t vals[2 + MCHP_TCC_CHANNELS] = { 0, s->top };
++
++    for (unsigned ch = 0; ch < MCHP_TCC_CHANNELS; ch++) {
++        vals[2 + ch] = s->cc[ch];
++    }
++    for (unsigned i = 0; i < ARRAY_SIZE(vals); i++) {
++        n = MIN(n, tcc_ticks_to(s, vals[i]));
++        n = MIN(n, tcc_ticks_to_leave(s, vals[i]));
++    }
++    return n;
++}
++
++/* -- Ticks -------------------------------------------------------------- */
++
++/* Whether a tick onto @b from @a sets MCx for compare value @c */
++static bool tcc_match(MchpTccState *s, uint32_t a, uint32_t b, uint32_t c)
++{
++    if (b != c) {
++        return false;
++    }
++    if (tcc_ds(s)) {
++        return b > a && c > 0 && c < s->top;
++    }
++    return !(s->wavegen == NPWM && c == 0);
++}
++
++/* Whether MCx can ever be set in the current geometry */
++static bool tcc_match_possible(MchpTccState *s, uint32_t c)
++{
++    if (tcc_ds(s)) {
++        return c > 0 && c < s->top;
++    }
++    return c <= MAX(s->top, s->count) && !(s->wavegen == NPWM && c == 0);
++}
++
++/* Copy the valid buffers into PER/CCx (UPDATE condition or command) */
++static void tcc_update_buffers(MchpTccState *s)
++{
++    uint32_t status = tcc_reg(s, A_STATUS, 4);
++
++    if (status & F(STATUS, PERBUFV)) {
++        tcc_set_reg(s, A_PER, 4, tcc_reg(s, A_PERBUF, 4));
++    }
++    for (unsigned ch = 0; ch < MCHP_TCC_CHANNELS; ch++) {
++        if (status & (F(STATUS, CCBUFV0) << ch)) {
++            tcc_set_reg(s, A_CC + 4 * ch, 4, tcc_reg(s, A_CCBUF + 4 * ch, 4));
++        }
++    }
++    tcc_mod_reg(s, A_STATUS, 4, F(STATUS, PERBUFV) | (0xF << 16), 0);
++    s->buf_busy = 0;
++    tcc_refresh(s);
++}
++
++static void tcc_flag(MchpTccState *s, uint32_t flags)
++{
++    uint32_t ev = tcc_reg(s, A_EVCTRL, 4);
++
++    if ((flags & F(INTFLAG, OVF)) && (ev & F(EVCTRL, OVFEO))) {
++        qemu_irq_pulse(s->ovf_event);
++    }
++    if ((flags & F(INTFLAG, TRG)) && (ev & F(EVCTRL, TRGEO))) {
++        qemu_irq_pulse(s->trg_event);
++    }
++    if ((flags & F(INTFLAG, CNT)) && (ev & F(EVCTRL, CNTEO))) {
++        qemu_irq_pulse(s->cnt_event);
++    }
++    for (unsigned ch = 0; ch < MCHP_TCC_CHANNELS; ch++) {
++        if ((flags & (F(INTFLAG, MC0) << ch)) &&
++            (ev & (F(EVCTRL, MCEO0) << ch))) {
++            qemu_irq_pulse(s->mc_event[ch]);
++        }
++    }
++    tcc_mod_reg(s, A_INTFLAG, 4, 0, flags);
++}
++
++static unsigned tcc_cntsel(MchpTccState *s)
++{
++    return FIELD_EX32(tcc_reg(s, A_EVCTRL, 4), MCHP_TCC_EVCTRL, CNTSEL);
++}
++
++/* CNT at a start (first tick), a new cycle, or a stop (silicon) */
++static uint32_t tcc_cnt_start(MchpTccState *s)
++{
++    unsigned sel = tcc_cntsel(s);
++
++    return sel == MCHP_TCC_EVCTRL_CNTSEL_BOUNDARY ||
++           (sel == MCHP_TCC_EVCTRL_CNTSEL_START && !tcc_ds(s)) ?
++           F(INTFLAG, CNT) : 0;
++}
++
++/* At the end of the last cycle (one-shot) only END: no new cycle starts */
++static uint32_t tcc_cnt_cycle(MchpTccState *s, bool last)
++{
++    unsigned sel = tcc_cntsel(s);
++
++    if (sel == MCHP_TCC_EVCTRL_CNTSEL_BOUNDARY ||
++        (last && sel != MCHP_TCC_EVCTRL_CNTSEL_END)) {
++        return 0;
++    }
++    return F(INTFLAG, CNT);
++}
++
++static uint32_t tcc_cnt_stop(MchpTccState *s)
++{
++    return tcc_cntsel(s) == MCHP_TCC_EVCTRL_CNTSEL_BOUNDARY ?
++           F(INTFLAG, CNT) : 0;
++}
++
++static uint32_t tcc_cmp(MchpTccState *s, int64_t now);
++
++/* Stop counting; the outputs keep their state, or clear for one-shot */
++static void tcc_stop(MchpTccState *s, bool oneshot)
++{
++    s->frozen_cmp = oneshot ? 0 : tcc_cmp(s, s->t_base);
++    s->running = false;
++    timer_del(s->timer);
++    tcc_mod_reg(s, A_STATUS, 4, 0, F(STATUS, STOP));
++    tcc_flag(s, tcc_cnt_stop(s));
++}
++
++/* Jump @k ticks without flags or output events (none can happen) */
++static void tcc_jump(MchpTccState *s, uint64_t k)
++{
++    bool down;
++
++    if (!k) {
++        return;
++    }
++    s->prev = tcc_after(s, k - 1, &down);
++    s->count = tcc_after(s, k, &down);
++    s->down = down;
++    s->moved = true;
++    s->t_base = tcc_tick_time(s, k);
++}
++
++/* One tick, in the current direction or @force_down when 0/1 */
++static void tcc_tick(MchpTccState *s, int force_down)
++{
++    uint32_t a = s->count, b, flags = 0;
++    bool down, ovf = false, update = false;
++
++    if (force_down >= 0 && !tcc_ds(s)) {
++        bool save = s->dir;
++
++        s->dir = force_down;
++        b = tcc_after(s, 1, &down);
++        s->dir = save;
++    } else {
++        b = tcc_after(s, 1, &down);
++    }
++    if (tcc_ds(s)) {
++        bool leave_top = a == s->top && b < a;
++        bool leave_zero = a == 0 && b > a;
++
++        /* Not when leaving ZERO on the first tick after a start (silicon) */
++        leave_zero &= s->moved;
++        ovf = (leave_top && (s->wavegen == DSTOP || s->wavegen == DSBOTH)) ||
++              (leave_zero && s->wavegen != DSTOP);
++        update = leave_zero;
++    } else {
++        ovf = down ? a == 0 : b == 0 && (a == s->top || a == tcc_max(s));
++        update = ovf;
++    }
++    for (unsigned ch = 0; ch < MCHP_TCC_CHANNELS; ch++) {
++        if (tcc_match(s, a, b, s->cc[ch])) {
++            flags |= F(INTFLAG, MC0) << ch;
++        }
++        if ((s->wavegen == NFRQ || s->wavegen == MFRQ) && a == s->cc[ch]) {
++            s->toggle ^= BIT(ch);
++        }
++    }
++    s->prev = a;
++    s->count = b;
++    s->down = down;
++    s->moved = true;
++    if (s->cnt_pending) {
++        s->cnt_pending = false;
++        flags |= tcc_cnt_start(s);
++    }
++    if (update) {
++        flags |= tcc_cnt_cycle(s, ovf && (tcc_reg(s, A_CTRLBSET, 1) &
++                                          F(CTRLBSET, ONESHOT)));
++    }
++    if (ovf) {
++        flags |= F(INTFLAG, OVF);
++    }
++    trace_mchp_tcc_tick(MCHP_REGBLOCK(s)->name, b, flags);
++    tcc_flag(s, flags);
++    if (update && !(tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, LUPD))) {
++        tcc_update_buffers(s);
++    }
++    if (ovf && (tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, ONESHOT))) {
++        tcc_stop(s, true);
++    }
++}
++
++/*
++ * Firing the timer changes nothing: every flag it would set is set, and
++ * there is no one-shot, pending buffer, toggling output or event output
++ */
++static bool tcc_quiet(MchpTccState *s)
++{
++    uint32_t flags = tcc_reg(s, A_INTFLAG, 4), want = F(INTFLAG, OVF);
++    uint32_t ev = tcc_reg(s, A_EVCTRL, 4);
++
++    for (unsigned ch = 0; ch < MCHP_TCC_CHANNELS; ch++) {
++        if (tcc_match_possible(s, s->cc[ch])) {
++            want |= F(INTFLAG, MC0) << ch;
++        }
++    }
++    return (flags & want) == want && !s->cnt_pending &&
++           s->wavegen != NFRQ && s->wavegen != MFRQ &&
++           !(tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, ONESHOT)) &&
++           !(tcc_reg(s, A_STATUS, 4) & (F(STATUS, PERBUFV) | (0xF << 16))) &&
++           !(ev & (F(EVCTRL, OVFEO) | (0xF << 24)));
++}
++
++/* Bring the counter up to @now and schedule the next tick that matters */
++static void tcc_advance(MchpTccState *s, int64_t now)
++{
++    for (unsigned steps = 0; tcc_clock_counts(s); steps++) {
++        uint64_t n;
++
++        if (tcc_quiet(s) || steps >= MCHP_TCC_MAX_STEPS) {
++            tcc_jump(s, tcc_ticks(s, now));
++            if (steps >= MCHP_TCC_MAX_STEPS) {
++                /* Flags that a long gap set at least once */
++                tcc_mod_reg(s, A_INTFLAG, 4, 0, F(INTFLAG, OVF));
++            }
++            break;
++        }
++        n = tcc_next(s);
++        if (n == NEVER) {
++            tcc_jump(s, tcc_ticks(s, now));
++            break;
++        }
++        if (tcc_tick_time(s, n) > now) {
++            timer_mod(s->timer, tcc_tick_time(s, n));
++            return;
++        }
++        tcc_jump(s, n - 1);
++        s->t_base = tcc_tick_time(s, 1);
++        tcc_tick(s, -1);
++    }
++    timer_del(s->timer);
++}
++
++static void tcc_sync(MchpTccState *s)
++{
++    tcc_advance(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++static void tcc_timer_cb(void *opaque)
++{
++    tcc_sync(opaque);
++}
++
++/* -- Starting, stopping, commands --------------------------------------- */
++
++static uint32_t tcc_start_value(MchpTccState *s)
++{
++    return !tcc_ds(s) && s->dir ? s->top : 0;
++}
++
++/*
++ * The start's CNT flag: at once, or with the first tick in NPWM counting
++ * up and in dual slope (silicon)
++ */
++static uint32_t tcc_start_cnt(MchpTccState *s)
++{
++    s->cnt_pending = tcc_ds(s) || (s->wavegen == NPWM && !s->dir);
++    return s->cnt_pending ? 0 : tcc_cnt_start(s);
++}
++
++/* Count on from COUNT; starting is an UPDATE condition */
++static void tcc_start(MchpTccState *s)
++{
++    uint32_t flags = tcc_start_cnt(s);
++
++    tcc_mod_reg(s, A_STATUS, 4, F(STATUS, STOP), 0);
++    if (!(tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, LUPD))) {
++        tcc_update_buffers(s);
++    }
++    s->running = true;
++    s->moved = false;
++    s->down = s->dir;
++    s->t_base = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    /* NFRQ/MFRQ: a start on CCx is a match (silicon) */
++    for (unsigned ch = 0; ch < MCHP_TCC_CHANNELS; ch++) {
++        if ((s->wavegen == NFRQ || s->wavegen == MFRQ) &&
++            s->count == s->cc[ch]) {
++            flags |= F(INTFLAG, MC0) << ch;
++        }
++    }
++    tcc_flag(s, flags);
++}
++
++static void tcc_retrigger(MchpTccState *s)
++{
++    if (!s->running) {
++        tcc_start(s);           /* resume from COUNT */
++        return;
++    }
++    s->count = tcc_start_value(s);
++    s->down = s->dir;
++    s->moved = false;
++    s->t_base = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    if (!(tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, LUPD))) {
++        tcc_update_buffers(s);
++    }
++    tcc_flag(s, F(INTFLAG, TRG));
++}
++
++static void tcc_command(MchpTccState *s, unsigned cmd)
++{
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    if (!tcc_enabled(s)) {
++        return;                 /* commands need the TCC enabled */
++    }
++    tcc_advance(s, now);
++    switch (cmd) {
++    case MCHP_TCC_CTRLBSET_CMD_RETRIGGER:
++        tcc_retrigger(s);
++        break;
++    case MCHP_TCC_CTRLBSET_CMD_STOP:
++        if (s->running) {
++            tcc_jump(s, tcc_ticks(s, now));
++            tcc_stop(s, false);
++            s->count = tcc_start_value(s);  /* silicon: not kept */
++        }
++        break;
++    case MCHP_TCC_CTRLBSET_CMD_UPDATE:
++        tcc_update_buffers(s);
++        break;
++    case MCHP_TCC_CTRLBSET_CMD_READSYNC: {
++        bool down;
++
++        tcc_set_reg(s, A_COUNT, 4, tcc_after(s, tcc_ticks(s, now), &down));
++        break;
++    }
++    default:
++        qemu_log_mask(LOG_UNIMP, "%s.CTRLBSET: command %u not modelled\n",
++                      MCHP_REGBLOCK(s)->name, cmd);
++        break;
++    }
++}
++
++static void tcc_report_unimp(MchpTccState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint32_t ctrla = tcc_reg(s, A_CTRLA, 4);
++    static const struct {
++        hwaddr offset;
++        const char *name;
++    } unimp[] = {
++        { A_FCTRLA, "FCTRLA: faults" }, { A_FCTRLB, "FCTRLB: faults" },
++        { A_WEXCTRL, "WEXCTRL: output matrix and dead time" },
++        { A_PATT, "PATT: pattern generation" },
++    };
++
++    for (unsigned i = 0; i < ARRAY_SIZE(unimp); i++) {
++        if (tcc_reg(s, unimp[i].offset, 4) & (i == 3 ? 0xFFFF : ~0u)) {
++            qemu_log_mask(LOG_UNIMP, "%s.%s not modelled\n", rb->name,
++                          unimp[i].name);
++        }
++    }
++    if (FIELD_EX32(ctrla, MCHP_TCC_CTRLA, RESOLUTION) || (ctrla & 0x0F000000)) {
++        qemu_log_mask(LOG_UNIMP, "%s.CTRLA: dithering and capture not "
++                      "modelled\n", rb->name);
++    }
++    if (tcc_evact(s, 0) > MCHP_TCC_EVCTRL_EVACT0_COUNT ||
++        tcc_evact(s, 1) > MCHP_TCC_EVCTRL_EVACT1_DEC) {
++        qemu_log_mask(LOG_UNIMP, "%s.EVCTRL: capture and fault event "
++                      "actions not modelled\n", rb->name);
++    }
++}
++
++/* -- Events in ---------------------------------------------------------- */
++
++static void tcc_update_busy(MchpTccState *s)
++{
++    for (unsigned n = 0; n < 2; n++) {
++        qemu_set_irq(s->ev_busy[n], !tcc_enabled(s));
++    }
++}
++
++/* "ev-event-in": TCCx_EV0 and TCCx_EV1 */
++static void tcc_set_event(void *opaque, int n, int level)
++{
++    MchpTccState *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    bool was;
++
++    if (s->ev_level[n] == (level > 0)) {
++        return;
++    }
++    was = tcc_ev_active(s, n);
++    tcc_advance(s, now);
++    s->ev_level[n] = level > 0;
++    if (!tcc_ev_enabled(s, n) || !tcc_enabled(s)) {
++        return;
++    }
++    if (!n) {
++        switch (tcc_evact(s, 0)) {
++        case MCHP_TCC_EVCTRL_EVACT0_RETRIGGER:
++            if (!was && tcc_ev_active(s, 0)) {
++                tcc_retrigger(s);
++            }
++            break;
++        case MCHP_TCC_EVCTRL_EVACT0_COUNTEV:
++            if (!was && tcc_ev_active(s, 0) && s->running && tcc_hz(s)) {
++                tcc_tick(s, -1);
++                s->t_base = now;
++            }
++            break;
++        case MCHP_TCC_EVCTRL_EVACT0_START:
++            if (!was && tcc_ev_active(s, 0) && !s->running) {
++                tcc_start(s);
++            }
++            break;
++        case MCHP_TCC_EVCTRL_EVACT0_INC:
++            if (!was && tcc_ev_active(s, 0) && s->running) {
++                if (!s->dir || tcc_ds(s)) {
++                    tcc_tick(s, 0);
++                } else {
++                    /* Counting down: up without the TOP wrap (silicon) */
++                    s->prev = s->count;
++                    s->count = s->count ? (s->count + 1) & tcc_max(s)
++                                        : s->top;
++                    s->moved = true;
++                }
++                s->t_base = now;
++            }
++            break;
++        case MCHP_TCC_EVCTRL_EVACT0_COUNT:
++            s->t_base = now;    /* counts while the event is active */
++            break;
++        }
++    } else {
++        switch (tcc_evact(s, 1)) {
++        case MCHP_TCC_EVCTRL_EVACT1_RETRIGGER:
++            if (!was && tcc_ev_active(s, 1)) {
++                tcc_retrigger(s);
++            }
++            break;
++        case MCHP_TCC_EVCTRL_EVACT1_DIR:
++            /* The event level overrides CTRLB.DIR */
++            tcc_mod_reg(s, A_CTRLBSET, 1, F(CTRLBSET, DIR),
++                        tcc_ev_active(s, 1) ? F(CTRLBSET, DIR) : 0);
++            tcc_refresh(s);
++            s->t_base = now;
++            break;
++        case MCHP_TCC_EVCTRL_EVACT1_STOP:
++            /* Pause: the count and the outputs stay until a START */
++            if (!was && tcc_ev_active(s, 1) && s->running) {
++                s->frozen_cmp = tcc_cmp(s, now);
++                s->running = false;
++                timer_del(s->timer);
++                tcc_mod_reg(s, A_STATUS, 4, 0, F(STATUS, STOP));
++            }
++            break;
++        case MCHP_TCC_EVCTRL_EVACT1_DEC:
++            if (!was && tcc_ev_active(s, 1) && s->running) {
++                tcc_tick(s, 1);
++                s->t_base = now;
++            }
++            break;
++        }
++    }
++    trace_mchp_tcc_event_in(MCHP_REGBLOCK(s)->name, n, level, s->count);
++    tcc_advance(s, now);
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++/* -- Registers ---------------------------------------------------------- */
++
++/* STATUS.CMPx: the waveform output state of each channel */
++static uint32_t tcc_cmp(MchpTccState *s, int64_t now)
++{
++    uint32_t drv = tcc_reg(s, A_DRVCTRL, 4);
++    uint32_t pol = extract32(tcc_reg(s, A_WAVE, 4),
++                             R_MCHP_TCC_WAVE_POL0_SHIFT, 4);
++    uint64_t k = tcc_ticks(s, now);
++    uint32_t a, out = 0;
++    bool down;
++
++    if (tcc_reg(s, A_STATUS, 4) & F(STATUS, STOP)) {
++        /* Kept, or the non-recoverable state (DRVCTRL.NREx/NRVx) */
++        uint32_t nre = extract32(drv, 0, 4);
++
++        return (s->frozen_cmp & ~nre) | (extract32(drv, 8, 4) & nre);
++    }
++    if (!s->moved && !k) {
++        return 0;
++    }
++    if (k) {
++        a = tcc_after(s, k - 1, &down);
++        tcc_after(s, k, &down);
++    } else {
++        a = s->prev;
++        down = s->down;
++    }
++    for (unsigned ch = 0; ch < MCHP_TCC_CHANNELS; ch++) {
++        uint32_t c = s->cc[ch];
++        bool on;
++
++        switch (s->wavegen) {
++        case NFRQ:
++        case MFRQ:
++            on = s->toggle & BIT(ch);
++            break;
++        case NPWM:
++            /* Counting down, a CCx above TOP never sets (silicon) */
++            on = s->dir ? a > 0 && a <= c && c <= s->top : a < c;
++            break;
++        default:
++            on = down ? a > c : a >= c;
++            break;
++        }
++        out |= (on ^ extract32(pol, ch, 1)) << ch;
++    }
++    return out;
++}
++
++static uint32_t tcc_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                             unsigned idx, uint32_t stored, bool side_effects)
++{
++    MchpTccState *s = MCHP_TCC(rf->opaque);
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    if (side_effects) {
++        tcc_sync(s);            /* flags due by now */
++    }
++    switch (ri->offset) {
++    case A_CTRLBCLR:
++    case A_CTRLBSET:
++        /* In dual slope DIR shows the counting direction (silicon) */
++        if (tcc_ds(s) && s->running) {
++            bool down;
++
++            tcc_after(s, tcc_ticks(s, now), &down);
++            return deposit32(stored, R_MCHP_TCC_CTRLBSET_DIR_SHIFT, 1, down);
++        }
++        return stored;
++    case A_SYNCBUSY:
++        /* Synchronization is instant once GCLK_TCC runs */
++        if (tcc_hz(s)) {
++            s->sync_pending = 0;
++        }
++        return s->sync_pending | s->buf_busy;
++    case A_STATUS:
++        return deposit32(stored, R_MCHP_TCC_STATUS_CMP0_SHIFT, 4,
++                         tcc_cmp(s, now));
++    case A_COUNT:
++        return stored;          /* the last synchronized value */
++    case A_PER:
++        /* While PERBUFV is set, PER reads show PERBUF (silicon) */
++        if (tcc_reg(s, A_STATUS, 4) & F(STATUS, PERBUFV)) {
++            return tcc_reg(s, A_PERBUF, 4);
++        }
++        return stored;
++    case A_CC:
++        if (tcc_reg(s, A_STATUS, 4) & (F(STATUS, CCBUFV0) << idx)) {
++            return tcc_reg(s, A_CCBUF + 4 * idx, 4);
++        }
++        return stored;
++    default:
++        return stored;
++    }
++}
++
++static void tcc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                           unsigned idx, uint32_t old, uint32_t written,
++                           uint32_t we)
++{
++    MchpTccState *s = MCHP_TCC(rf->opaque);
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    uint32_t val = mchp_regfile_get(rf, ri, idx);
++    uint32_t ctrlb = tcc_reg(s, A_CTRLBSET, 1);
++
++    if (ri->syncbusy && !tcc_hz(s)) {
++        /* CTRLA.SWRST/ENABLE sit at their SYNCBUSY bits; only written ones */
++        s->sync_pending |= ri->offset == A_CTRLA ?
++                           written & we & ri->syncbusy :
++                           ri->syncbusy << (ri->count > 1 ? idx : 0);
++    }
++    /* Count up to now with the geometry before the write */
++    tcc_advance(s, now);
++    switch (ri->offset) {
++    case A_CTRLA:
++        if (written & we & F(CTRLA, SWRST)) {
++            return;             /* mchp-regblock resets the TCC next */
++        }
++        if (val & ~old & F(CTRLA, ENABLE)) {
++            unsigned ev0 = tcc_evact(s, 0), ev1 = tcc_evact(s, 1);
++
++            tcc_report_unimp(s);
++            tcc_refresh(s);
++            s->toggle = 0;
++            /* RETRIGGER/START event actions wait for an event */
++            if (ev0 != MCHP_TCC_EVCTRL_EVACT0_RETRIGGER &&
++                ev0 != MCHP_TCC_EVCTRL_EVACT0_START &&
++                ev1 != MCHP_TCC_EVCTRL_EVACT1_RETRIGGER) {
++                tcc_start(s);
++            }
++        } else if (old & ~val & F(CTRLA, ENABLE)) {
++            tcc_jump(s, tcc_ticks(s, now));
++            s->running = false;
++            timer_del(s->timer);
++        }
++        tcc_update_busy(s);
++        break;
++    case A_CTRLBSET:
++    case A_CTRLBCLR: {
++        unsigned cmd = FIELD_EX32(ctrlb, MCHP_TCC_CTRLBSET, CMD);
++
++        tcc_jump(s, tcc_ticks(s, now));
++        tcc_mod_reg(s, A_CTRLBSET, 1, F(CTRLBSET, CMD), 0);
++        if (tcc_ds(s) && (written & we & F(CTRLBSET, DIR))) {
++            s->down = ri->offset == A_CTRLBSET;
++        }
++        tcc_refresh(s);
++        if (cmd) {
++            tcc_command(s, cmd);
++        }
++        break;
++    }
++    case A_COUNT:
++        s->count = val & tcc_max(s);
++        s->t_base = now;
++        break;
++    case A_PERBUF:
++    case A_CCBUF:
++        tcc_mod_reg(s, A_STATUS, 4, 0, ri->offset == A_PERBUF ?
++                    F(STATUS, PERBUFV) : F(STATUS, CCBUFV0) << idx);
++        /* Synchronized when copied (silicon) */
++        s->buf_busy |= ri->offset == A_PERBUF ?
++                       R_MCHP_TCC_SYNCBUSY_PER_MASK :
++                       R_MCHP_TCC_SYNCBUSY_CC0_MASK << idx;
++        /* NFRQ, MFRQ and PWM counting down: copied at once (DS 31.6.2.6) */
++        if (ri->offset == A_PERBUF && !(ctrlb & F(CTRLBSET, LUPD)) &&
++            (s->wavegen == NFRQ || s->wavegen == MFRQ ||
++             (s->wavegen == NPWM && s->dir))) {
++            tcc_set_reg(s, A_PER, 4, val);
++            tcc_mod_reg(s, A_STATUS, 4, F(STATUS, PERBUFV), 0);
++            s->buf_busy &= ~R_MCHP_TCC_SYNCBUSY_PER_MASK;
++        }
++        /* fall through */
++    case A_WAVE:
++    case A_PER:
++    case A_CC:
++        /* Whole ticks so far: the phase of the current tick is kept */
++        tcc_jump(s, tcc_ticks(s, now));
++        tcc_refresh(s);
++        break;
++    }
++    tcc_advance(s, now);
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++static void tcc_gclk_update(MchpRegBlock *rb, ClockEvent event)
++{
++    MchpTccState *s = MCHP_TCC(rb);
++
++    /* Count at the old rate up to now, then reschedule at the new one */
++    tcc_advance(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
++}
++
++static void tcc_reset_hold(MchpRegBlock *rb)
++{
++    MchpTccState *s = MCHP_TCC(rb);
++
++    timer_del(s->timer);
++    s->running = false;
++    s->moved = false;
++    s->cnt_pending = false;
++    s->frozen_cmp = 0;
++    s->buf_busy = 0;
++    s->down = false;
++    s->toggle = 0;
++    s->count = 0;
++    s->prev = 0;
++    s->sync_pending = 0;
++    tcc_refresh(s);
++    tcc_update_busy(s);
++}
++
++static bool tcc_realize(MchpRegBlock *rb, Error **errp)
++{
++    MchpTccState *s = MCHP_TCC(rb);
++
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, tcc_timer_cb, s);
++    return true;
++}
++
++static void tcc_init(Object *obj)
++{
++    MchpTccState *s = MCHP_TCC(obj);
++    DeviceState *dev = DEVICE(obj);
++
++    qdev_init_gpio_out_named(dev, &s->ovf_event, MCHP_TCC_OVF_EVENT, 1);
++    qdev_init_gpio_out_named(dev, &s->trg_event, MCHP_TCC_TRG_EVENT, 1);
++    qdev_init_gpio_out_named(dev, &s->cnt_event, MCHP_TCC_CNT_EVENT, 1);
++    qdev_init_gpio_out_named(dev, s->mc_event, MCHP_TCC_MC_EVENT,
++                             MCHP_TCC_CHANNELS);
++    qdev_init_gpio_in_named(dev, tcc_set_event, MCHP_TCC_EV_EVENT_IN, 2);
++    qdev_init_gpio_out_named(dev, s->ev_busy, MCHP_TCC_EV_BUSY, 2);
++}
++
++static void tcc_finalize(Object *obj)
++{
++    timer_free(MCHP_TCC(obj)->timer);
++}
++
++static int tcc_post_load(void *opaque, int version_id)
++{
++    tcc_refresh(opaque);
++    return 0;
++}
++
++static const VMStateDescription vmstate_mchp_tcc = {
++    .name = TYPE_MCHP_TCC,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .post_load = tcc_post_load,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpTccState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_TIMER_PTR(timer, MchpTccState),
++        VMSTATE_BOOL(running, MchpTccState),
++        VMSTATE_BOOL(moved, MchpTccState),
++        VMSTATE_BOOL(cnt_pending, MchpTccState),
++        VMSTATE_UINT8(frozen_cmp, MchpTccState),
++        VMSTATE_UINT32(buf_busy, MchpTccState),
++        VMSTATE_BOOL(down, MchpTccState),
++        VMSTATE_BOOL_ARRAY(ev_level, MchpTccState, 2),
++        VMSTATE_UINT8(toggle, MchpTccState),
++        VMSTATE_UINT32(count, MchpTccState),
++        VMSTATE_UINT32(prev, MchpTccState),
++        VMSTATE_UINT32(sync_pending, MchpTccState),
++        VMSTATE_INT64(t_base, MchpTccState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void tcc_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_tcc;
++    c->realize = tcc_realize;
++    c->pre_read = tcc_pre_read;
++    c->post_write = tcc_post_write;
++    c->reset_hold = tcc_reset_hold;
++    c->gclk_update = tcc_gclk_update;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_tcc_types[] = {
++    {
++        .name = TYPE_MCHP_TCC,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpTccState),
++        .instance_init = tcc_init,
++        .instance_finalize = tcc_finalize,
++        .class_init = tcc_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_tcc_types)
+diff --git a/hw/timer/meson.build b/hw/timer/meson.build
+index 069bb2f..4728faa 100644
+--- a/hw/timer/meson.build
++++ b/hw/timer/meson.build
+@@ -21,7 +21,7 @@ system_ss.add(when: 'CONFIG_MIPS_CPS', if_true: files('mips_gictimer.c'))
+ system_ss.add(when: 'CONFIG_MSF2', if_true: files('mss-timer.c'))
+ system_ss.add(when: 'CONFIG_NPCM7XX', if_true: files('npcm7xx_timer.c'))
+ system_ss.add(when: 'CONFIG_NRF51_SOC', if_true: files('nrf51_timer.c'))
+-system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_tc.c'))
++system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_tc.c', 'mchp_tcc.c'))
+ system_ss.add(when: 'CONFIG_PXA2XX_TIMER', if_true: files('pxa2xx_timer.c'))
+ system_ss.add(when: 'CONFIG_RASPI', if_true: files('bcm2835_systmr.c'))
+ system_ss.add(when: 'CONFIG_SH_TIMER', if_true: files('sh_timer.c'))
+diff --git a/hw/timer/trace-events b/hw/timer/trace-events
+index 8614bc7..f4b94ac 100644
+--- a/hw/timer/trace-events
++++ b/hw/timer/trace-events
+@@ -132,3 +132,7 @@ imx_epit_cmp(uint32_t sr) "sr was %d"
+ # mchp_tc.c
+ mchp_tc_event(const char *name, uint32_t count, uint32_t flags) "%s: count 0x%x, flags 0x%x"
+ mchp_tc_event_in(const char *name, unsigned evact, uint32_t count) "%s: event action %u, count 0x%x"
++
++# mchp_tcc.c
++mchp_tcc_tick(const char *name, uint32_t count, uint32_t flags) "%s: count 0x%x, flags 0x%x"
++mchp_tcc_event_in(const char *name, int n, int level, uint32_t count) "%s: EV%d level %d, count 0x%x"
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h b/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
+index 02bec9b..80e9c3f 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/tcc_u2213.yaml (sha1 93a16f655f82)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,114 +23,124 @@ static const MchpRegInfo pic32cm1216mc00048_tcc_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0F80BF63,
+-        .wmask = 0x0F80BF63, .rdz = 0x00000001,
+-        .syncbusy = 0x00000003 /* SYNCBUSY */, .flags = 0,
++        .wmask = 0x0F80BF63, .rdz = 0x00000001, .enprot = 0x0F80BF60,
++        .syncbusy = 0x00000003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLBCLR", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 2 /* CTRLBSET */, .reset = 0x00, .impl = 0xFF,
+         .wmask = 0xFF, .rdz = 0xE0, .syncbusy = 0x00000004 /* SYNCBUSY */,
+-        .flags = MCHP_F_ALIAS_CLEAR,
++        .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_PRE_READ |
++            MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLBSET", .offset = 0x05, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 2 /* CTRLBSET */, .reset = 0x00, .impl = 0xFF,
+         .wmask = 0xFF, .rdz = 0xE0, .syncbusy = 0x00000004 /* SYNCBUSY */,
+-        .flags = MCHP_F_ALIAS_SET,
++        .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET | MCHP_F_HOOK_PRE_READ |
++            MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x08, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00000FFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
++        .wmask = 0x00000000,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_HOOK_PRE_READ | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "FCTRLA", .offset = 0x0C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0FFFFFFB,
+-        .wmask = 0x0FFFFFFB, .flags = 0,
++        .wmask = 0x0FFFFFFB, .enprot = 0x0FFFFFFB, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "FCTRLB", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0FFFFFFB,
+-        .wmask = 0x0FFFFFFB, .flags = 0,
++        .wmask = 0x0FFFFFFB, .enprot = 0x0FFFFFFB, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "WEXCTRL", .offset = 0x14, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFF0F03,
+-        .wmask = 0xFFFF0F03, .flags = 0,
++        .wmask = 0xFFFF0F03, .enprot = 0xFFFF0F03, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "DRVCTRL", .offset = 0x18, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .enprot = 0xFFFFFFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x1E, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x05, .wmask = 0x05, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x05, .wmask = 0x05,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x20, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0F0FF7FF,
+-        .wmask = 0x0F0FF7FF, .flags = 0,
++        .wmask = 0x0F0FF7FF, .enprot = 0x0F0FF7FF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x24, .size = 4, .count = 1, .stride = 4,
+         .alias_of = 11 /* INTENSET */, .reset = 0x00000000, .impl = 0x000FFC0F,
+-        .wmask = 0x000FFC0F, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x000FFC0F, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x28, .size = 4, .count = 1, .stride = 4,
+         .alias_of = 11 /* INTENSET */, .reset = 0x00000000, .impl = 0x000FFC0F,
+-        .wmask = 0x000FFC0F, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x000FFC0F, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x2C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x000FFC0F,
+-        .wmask = 0x00000000, .w1c = 0x000FFC0F, .flags = 0,
++        .wmask = 0x00000000, .w1c = 0x000FFC0F, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "STATUS", .offset = 0x30, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000001, .impl = 0x0F0FFFBF,
+-        .wmask = 0x0F0FFFBF, .flags = 0,
++        .wmask = 0x0000FF10, .w1c = 0x000F00AC,
++        .syncbusy = 0x00000008 /* SYNCBUSY */, .flags = MCHP_F_HOOK_PRE_READ,
+     },
+     {
+         .name = "COUNT", .offset = 0x34, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00FFFFFF,
+-        .wmask = 0x00FFFFFF, .syncbusy = 0x00000010 /* SYNCBUSY */, .flags = 0,
++        .wmask = 0x00FFFFFF, .syncbusy = 0x00000010 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "PATT", .offset = 0x38, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFFFF, .wmask = 0xFFFF,
+-        .syncbusy = 0x00000020 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000020 /* SYNCBUSY */, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "WAVE", .offset = 0x3C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0F0F0FB7,
+-        .wmask = 0x0F0F0FB7, .syncbusy = 0x00000040 /* SYNCBUSY */, .flags = 0,
++        .wmask = 0x0F0F0FB7, .syncbusy = 0x00000040 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "PER", .offset = 0x40, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0xFFFFFFFF, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .syncbusy = 0x00000080 /* SYNCBUSY */, .flags = 0,
++        .wmask = 0xFFFFFFFF, .syncbusy = 0x00000080 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CC", .offset = 0x44, .size = 4, .count = 4, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00FFFFFF,
+-        .wmask = 0x00FFFFFF, .flags = 0,
++        .wmask = 0x00FFFFFF, .syncbusy = 0x00000100 /* SYNCBUSY, << element */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "PATTBUF", .offset = 0x64, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFFFF, .wmask = 0xFFFF,
+-        .flags = 0,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "PERBUF", .offset = 0x6C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0xFFFFFFFF, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CCBUF", .offset = 0x70, .size = 4, .count = 4, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00FFFFFF,
+-        .wmask = 0x00FFFFFF, .flags = 0,
++        .wmask = 0x00FFFFFF, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+ };
+ #define PIC32CM1216MC00048_TCC_NREGS 22
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h b/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
+index 922aa78..f928654 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/tcc_u2213.yaml (sha1 93a16f655f82)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,115 +23,124 @@ static const MchpRegInfo pic32cm5164jh01100_tcc_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0F817F63,
+-        .wmask = 0x0F817F63, .rdz = 0x00000001,
+-        .syncbusy = 0x00000003 /* SYNCBUSY */, .flags = 0,
++        .wmask = 0x0F817F63, .rdz = 0x00000001, .enprot = 0x0F817F60,
++        .syncbusy = 0x00000003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLBCLR", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 2 /* CTRLBSET */, .reset = 0x00, .impl = 0xFF,
+         .wmask = 0xFF, .rdz = 0xE0, .syncbusy = 0x00000004 /* SYNCBUSY */,
+-        .flags = MCHP_F_ALIAS_CLEAR,
++        .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_PRE_READ |
++            MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLBSET", .offset = 0x05, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 2 /* CTRLBSET */, .reset = 0x00, .impl = 0xFF,
+         .wmask = 0xFF, .rdz = 0xE0, .syncbusy = 0x00000004 /* SYNCBUSY */,
+-        .flags = MCHP_F_ALIAS_SET,
++        .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET | MCHP_F_HOOK_PRE_READ |
++            MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x08, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00000FFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
++        .wmask = 0x00000000,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_HOOK_PRE_READ | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "FCTRLA", .offset = 0x0C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0FFFFFFB,
+-        .wmask = 0x0FFFFFFB, .flags = 0,
++        .wmask = 0x0FFFFFFB, .enprot = 0x0FFFFFFB, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "FCTRLB", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0FFFFFFB,
+-        .wmask = 0x0FFFFFFB, .flags = 0,
++        .wmask = 0x0FFFFFFB, .enprot = 0x0FFFFFFB, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "WEXCTRL", .offset = 0x14, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFF0F03,
+-        .wmask = 0xFFFF0F03, .flags = 0,
++        .wmask = 0xFFFF0F03, .enprot = 0xFFFF0F03, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "DRVCTRL", .offset = 0x18, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .enprot = 0xFFFFFFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x1E, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x05, .wmask = 0x05, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x05, .wmask = 0x05,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x20, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0F0FF7FF,
+-        .wmask = 0x0F0FF7FF, .flags = 0,
++        .wmask = 0x0F0FF7FF, .enprot = 0x0F0FF7FF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x24, .size = 4, .count = 1, .stride = 4,
+         .alias_of = 11 /* INTENSET */, .reset = 0x00000000, .impl = 0x000FFC0F,
+-        .wmask = 0x000FFC0F, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x000FFC0F, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x28, .size = 4, .count = 1, .stride = 4,
+         .alias_of = 11 /* INTENSET */, .reset = 0x00000000, .impl = 0x000FFC0F,
+-        .wmask = 0x000FFC0F, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x000FFC0F, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x2C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x000FFC0F,
+-        .wmask = 0x00000000, .w1c = 0x000FFC0F, .flags = 0,
++        .wmask = 0x00000000, .w1c = 0x000FFC0F, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "STATUS", .offset = 0x30, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000001, .impl = 0x0F0FFFAF,
+-        .wmask = 0x0F0FFFAF, .syncbusy = 0x00000008 /* SYNCBUSY */, .flags = 0,
++        .wmask = 0x0000FF00, .w1c = 0x000F00AC,
++        .syncbusy = 0x00000008 /* SYNCBUSY */, .flags = MCHP_F_HOOK_PRE_READ,
+     },
+     {
+         .name = "COUNT", .offset = 0x34, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00FFFFFF,
+-        .wmask = 0x00FFFFFF, .syncbusy = 0x00000010 /* SYNCBUSY */, .flags = 0,
++        .wmask = 0x00FFFFFF, .syncbusy = 0x00000010 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "PATT", .offset = 0x38, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFFFF, .wmask = 0xFFFF,
+-        .syncbusy = 0x00000020 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000020 /* SYNCBUSY */, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "WAVE", .offset = 0x3C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0F0F0FF7,
+-        .wmask = 0x0F0F0FF7, .syncbusy = 0x00000040 /* SYNCBUSY */, .flags = 0,
++        .wmask = 0x0F0F0FF7, .syncbusy = 0x00000040 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "PER", .offset = 0x40, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0xFFFFFFFF, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .syncbusy = 0x00000080 /* SYNCBUSY */, .flags = 0,
++        .wmask = 0xFFFFFFFF, .syncbusy = 0x00000080 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CC", .offset = 0x44, .size = 4, .count = 4, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00FFFFFF,
+         .wmask = 0x00FFFFFF, .syncbusy = 0x00000100 /* SYNCBUSY, << element */,
+-        .flags = 0,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "PATTBUF", .offset = 0x64, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFFFF, .wmask = 0xFFFF,
+-        .flags = 0,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "PERBUF", .offset = 0x6C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0xFFFFFFFF, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CCBUF", .offset = 0x70, .size = 4, .count = 4, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00FFFFFF,
+-        .wmask = 0x00FFFFFF, .flags = 0,
++        .wmask = 0x00FFFFFF, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+ };
+ #define PIC32CM5164JH01100_TCC_NREGS 22
+diff --git a/include/hw/mchp/gen/tcc_u2213.h b/include/hw/mchp/gen/tcc_u2213.h
+index 000a3a5..c71a186 100644
+--- a/include/hw/mchp/gen/tcc_u2213.h
++++ b/include/hw/mchp/gen/tcc_u2213.h
+@@ -10,7 +10,7 @@
+  * Do not edit.
+  * Timer Counter for Control Applications
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/tcc_u2213.yaml (sha1 93a16f655f82)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/timer/mchp_tcc.h b/include/hw/timer/mchp_tcc.h
+new file mode 100644
+index 0000000..06fb9ec
+--- /dev/null
++++ b/include/hw/timer/mchp_tcc.h
+@@ -0,0 +1,32 @@
++/*
++ * Microchip SAM/PIC32CM Timer/Counter for Control (TCC U2213)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * A TYPE_MCHP_REGBLOCK subclass configured with mchp_regblock_set_info();
++ * the counter width comes from MchpInstanceInfo.counter_bits. GPIO lines:
++ *   "ovf-event", "trg-event", "cnt-event", "mc-event"[4]   out: a pulse per
++ *                  event with its EVCTRL output enable set
++ *   "ev-event-in"[2]       in: the event inputs TCCx_EV0 and TCCx_EV1
++ *   "ev-event-busy"[2]     out: 1 while the TCC cannot take events
++ * sysbus IRQ 0 is the TCC interrupt (INTFLAG & INTENSET).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_TIMER_MCHP_TCC_H
++#define HW_TIMER_MCHP_TCC_H
++
++#include "hw/misc/mchp_regblock.h"
++
++#define TYPE_MCHP_TCC "mchp-tcc"
++
++#define MCHP_TCC_OVF_EVENT "ovf-event"
++#define MCHP_TCC_TRG_EVENT "trg-event"
++#define MCHP_TCC_CNT_EVENT "cnt-event"
++#define MCHP_TCC_MC_EVENT "mc-event"
++#define MCHP_TCC_EV_EVENT_IN "ev-event-in"
++#define MCHP_TCC_EV_BUSY "ev-event-busy"
++
++#endif /* HW_TIMER_MCHP_TCC_H */
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index c795495..95a96ca 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -252,7 +252,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-tcc-test.c b/tests/qtest/pic32cm-tcc-test.c
+new file mode 100644
+index 0000000..420279c
+--- /dev/null
++++ b/tests/qtest/pic32cm-tcc-test.c
+@@ -0,0 +1,306 @@
++/*
++ * QTest for the TCC of the PIC32CM MC00 (pic32cm-mc00-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * GCLK0 runs at 4 MHz out of reset (OSC48M / 12); with the /1024
++ * prescaler a TCC tick is 256 us. Virtual time is stepped explicitly.
++ * Behaviour the data sheet leaves open follows PIC32CM MC00 silicon
++ * (firmware/hello/tests/tccprobe.c and tcc.c).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++
++#define MACHINE         "-M pic32cm-mc00-cpro "
++
++#define GCLK_PCHCTRL    0x40001C80
++#define TCC0            0x42002400
++#define TCC2            0x42002C00
++#define NVIC_ISPR       0xE000E200
++
++#define R_CTRLA         0x00
++#define R_CTRLBCLR      0x04
++#define R_CTRLBSET      0x05
++#define R_EVCTRL        0x20
++#define R_INTENSET      0x28
++#define R_INTFLAG       0x2C
++#define R_STATUS        0x30
++#define R_COUNT         0x34
++#define R_WAVE          0x3C
++#define R_PER           0x40
++#define R_CC(n)         (0x44 + 4 * (n))
++#define R_PERBUF        0x6C
++#define R_CCBUF(n)      (0x70 + 4 * (n))
++
++#define ENABLE          BIT(1)
++#define DIV1024         (7 << 8)
++#define DIR             BIT(0)
++#define LUPD            BIT(1)
++#define ONESHOT         BIT(2)
++#define CMD_RETRIGGER   (1 << 5)
++#define CMD_STOP        (2 << 5)
++#define CMD_UPDATE      (3 << 5)
++#define CMD_READSYNC    (4 << 5)
++
++#define NFRQ            0
++#define NPWM            2
++#define DSBOTTOM        5
++#define DSTOP           7
++#define POL(n)          BIT(16 + (n))
++
++#define OVF             BIT(0)
++#define TRG             BIT(1)
++#define CNT             BIT(2)
++#define MC(n)           BIT(16 + (n))
++#define STOP            BIT(0)
++#define CCBUFV0         BIT(16)
++
++#define TICK_NS         256000
++#define TCC0_GCLK_ID    23
++#define TCC2_GCLK_ID    24
++#define TCC0_IRQ        13
++
++/* TCC0 with PER 9 and CC0-CC3 = 3, 0, 9, 10 */
++static QTestState *tcc_init(uint32_t wave, uint8_t ctrlb)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, GCLK_PCHCTRL + 4 * TCC0_GCLK_ID, 0x40);
++    qtest_writel(qts, TCC0 + R_CTRLA, DIV1024);
++    qtest_writel(qts, TCC0 + R_WAVE, wave);
++    qtest_writel(qts, TCC0 + R_PER, 9);
++    qtest_writel(qts, TCC0 + R_CC(0), 3);
++    qtest_writel(qts, TCC0 + R_CC(1), 0);
++    qtest_writel(qts, TCC0 + R_CC(2), 9);
++    qtest_writel(qts, TCC0 + R_CC(3), 10);
++    if (ctrlb) {
++        qtest_writeb(qts, TCC0 + R_CTRLBSET, ctrlb);
++    }
++    qtest_writel(qts, TCC0 + R_INTFLAG, 0xFFFFFFFF);
++    return qts;
++}
++
++static void tcc_enable(QTestState *qts)
++{
++    qtest_writel(qts, TCC0 + R_CTRLA, DIV1024 | ENABLE);
++}
++
++/* Step to the middle of tick @n after the previous step point */
++static void ticks(QTestState *qts, unsigned n)
++{
++    qtest_clock_step(qts, (int64_t)n * TICK_NS);
++}
++
++static uint32_t readsync(QTestState *qts)
++{
++    qtest_writeb(qts, TCC0 + R_CTRLBSET, CMD_READSYNC);
++    return qtest_readl(qts, TCC0 + R_COUNT);
++}
++
++static uint32_t cmp(QTestState *qts)
++{
++    return extract32(qtest_readl(qts, TCC0 + R_STATUS), 24, 4);
++}
++
++static uint32_t flags(QTestState *qts)
++{
++    uint32_t f = qtest_readl(qts, TCC0 + R_INTFLAG);
++
++    qtest_writel(qts, TCC0 + R_INTFLAG, f);
++    return f;
++}
++
++static void test_reset(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    g_assert_cmphex(qtest_readl(qts, TCC0 + R_STATUS), ==, STOP);
++    g_assert_cmphex(qtest_readl(qts, TCC0 + R_PER), ==, 0xFFFFFF);
++    g_assert_cmphex(qtest_readl(qts, TCC2 + R_PER), ==, 0xFFFF);
++    qtest_quit(qts);
++}
++
++/* NPWM up: CMPx = previous COUNT < CCx; MCx when COUNT becomes CCx */
++static void test_npwm(void)
++{
++    QTestState *qts = tcc_init(NPWM, 0);
++
++    tcc_enable(qts);
++    g_assert_cmphex(cmp(qts), ==, 0);       /* before the first tick */
++    qtest_clock_step(qts, TICK_NS / 2);
++    ticks(qts, 2);                          /* COUNT 2 */
++    g_assert_cmpuint(readsync(qts), ==, 2);
++    g_assert_cmphex(cmp(qts), ==, 0xD);
++    ticks(qts, 3);                          /* COUNT 5 */
++    g_assert_cmphex(cmp(qts), ==, 0xC);
++    flags(qts);
++    ticks(qts, 10);
++    /* CNTSEL START: CNT at each new cycle */
++    g_assert_cmphex(flags(qts), ==, OVF | CNT | MC(0) | MC(2));
++    qtest_quit(qts);
++
++    /* Down: 0 < previous COUNT <= CCx, CCx above TOP never sets */
++    qts = tcc_init(NPWM, DIR);
++    tcc_enable(qts);
++    qtest_clock_step(qts, TICK_NS / 2);
++    ticks(qts, 5);                          /* 0, 9, 8, 7, 6, 5 */
++    g_assert_cmpuint(readsync(qts), ==, 5);
++    g_assert_cmphex(cmp(qts), ==, 0x4);
++    ticks(qts, 3);                          /* COUNT 2 */
++    g_assert_cmphex(cmp(qts), ==, 0x5);
++    qtest_quit(qts);
++}
++
++static void test_nfrq(void)
++{
++    QTestState *qts = tcc_init(NFRQ | POL(3), 0);
++
++    tcc_enable(qts);
++    qtest_clock_step(qts, TICK_NS / 2);
++    ticks(qts, 2);
++    g_assert_cmphex(cmp(qts), ==, 0xA);     /* CMP1 toggled; POL3 */
++    ticks(qts, 3);
++    g_assert_cmphex(cmp(qts), ==, 0xB);
++    ticks(qts, 7);                          /* next period, COUNT 2 */
++    g_assert_cmphex(cmp(qts), ==, 0xD);
++    qtest_quit(qts);
++}
++
++/* Dual slope: set leaving CCx up, cleared leaving it down; DIR reads */
++static void test_dual(void)
++{
++    QTestState *qts = tcc_init(DSBOTTOM, 0);
++
++    tcc_enable(qts);
++    qtest_clock_step(qts, TICK_NS / 2);
++    ticks(qts, 5);
++    g_assert_cmphex(cmp(qts), ==, 0x3);
++    g_assert_cmphex(flags(qts), ==, MC(0));
++    ticks(qts, 6);                          /* 6, 7, 8, 9, 8, 7 */
++    g_assert_cmpuint(readsync(qts), ==, 7);
++    g_assert_cmphex(qtest_readb(qts, TCC0 + R_CTRLBSET) & DIR, ==, DIR);
++    ticks(qts, 5);                          /* 6, 5, 4, 3, 2 */
++    g_assert_cmphex(cmp(qts), ==, 0x2);
++    g_assert_cmphex(flags(qts), ==, 0);
++    ticks(qts, 4);                          /* 1, 0, 1, 2 */
++    g_assert_cmphex(flags(qts) & OVF, ==, OVF);
++    qtest_quit(qts);
++
++    qts = tcc_init(DSTOP, 0);
++    tcc_enable(qts);
++    qtest_clock_step(qts, TICK_NS / 2);
++    ticks(qts, 9);
++    g_assert_cmphex(flags(qts) & OVF, ==, 0);
++    ticks(qts, 1);                          /* leaves TOP */
++    g_assert_cmphex(flags(qts) & OVF, ==, OVF);
++    qtest_quit(qts);
++}
++
++static void test_oneshot(void)
++{
++    QTestState *qts = tcc_init(NPWM, ONESHOT);
++
++    tcc_enable(qts);
++    ticks(qts, 15);
++    g_assert_cmphex(qtest_readl(qts, TCC0 + R_STATUS) & STOP, ==, STOP);
++    g_assert_cmphex(cmp(qts), ==, 0);
++    g_assert_cmpuint(readsync(qts), ==, 0);
++    qtest_writeb(qts, TCC0 + R_CTRLBSET, CMD_RETRIGGER);
++    g_assert_cmphex(qtest_readl(qts, TCC0 + R_STATUS) & STOP, ==, 0);
++    qtest_quit(qts);
++}
++
++/*
++ * CC0 buffered: reads show CCBUF0, CC0 changes at the wrap; SYNCBUSY.CC0
++ * stays set until then (silicon)
++ */
++static void test_buffers(void)
++{
++    QTestState *qts = tcc_init(NPWM, 0);
++
++    tcc_enable(qts);
++    qtest_clock_step(qts, TICK_NS / 2);
++    ticks(qts, 2);
++    qtest_writel(qts, TCC0 + R_CCBUF(0), 6);
++    g_assert_cmphex(qtest_readl(qts, TCC0 + 0x08), ==, BIT(8));
++    g_assert_cmphex(qtest_readl(qts, TCC0 + R_STATUS) & CCBUFV0, ==, CCBUFV0);
++    g_assert_cmpuint(qtest_readl(qts, TCC0 + R_CC(0)), ==, 6);
++    ticks(qts, 10);                         /* past the wrap, COUNT 2 */
++    g_assert_cmphex(qtest_readl(qts, TCC0 + R_STATUS) & CCBUFV0, ==, 0);
++    g_assert_cmphex(qtest_readl(qts, TCC0 + 0x08), ==, 0);
++    ticks(qts, 3);                          /* COUNT 5 */
++    g_assert_cmphex(cmp(qts) & 1, ==, 1);
++    qtest_quit(qts);
++}
++
++/* STOP clears COUNT and keeps the outputs; RETRIGGER resumes */
++static void test_stop(void)
++{
++    QTestState *qts = tcc_init(NPWM, 0);
++
++    tcc_enable(qts);
++    qtest_clock_step(qts, TICK_NS / 2);
++    ticks(qts, 5);
++    qtest_writeb(qts, TCC0 + R_CTRLBSET, CMD_STOP);
++    g_assert_cmpuint(readsync(qts), ==, 0);
++    g_assert_cmphex(qtest_readl(qts, TCC0 + R_STATUS) & STOP, ==, STOP);
++    g_assert_cmphex(cmp(qts), ==, 0xC);
++    ticks(qts, 3);
++    g_assert_cmpuint(readsync(qts), ==, 0);
++    flags(qts);
++    qtest_writeb(qts, TCC0 + R_CTRLBSET, CMD_RETRIGGER);
++    qtest_clock_step(qts, TICK_NS + TICK_NS / 2);
++    g_assert_cmpuint(readsync(qts), ==, 1);
++    g_assert_cmphex(flags(qts), ==, CNT);
++    qtest_quit(qts);
++}
++
++static void test_counter_width(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, GCLK_PCHCTRL + 4 * TCC2_GCLK_ID, 0x40);
++    qtest_writel(qts, TCC2 + R_CTRLA, DIV1024);
++    qtest_writel(qts, TCC2 + R_COUNT, 0xFFFE);
++    qtest_writel(qts, TCC2 + R_CTRLA, DIV1024 | ENABLE);
++    qtest_clock_step(qts, TICK_NS + TICK_NS / 2);
++    g_assert_cmphex(qtest_readl(qts, TCC2 + R_INTFLAG) & OVF, ==, 0);
++    qtest_clock_step(qts, TICK_NS);
++    g_assert_cmphex(qtest_readl(qts, TCC2 + R_INTFLAG) & OVF, ==, OVF);
++    qtest_quit(qts);
++}
++
++static void test_irq(void)
++{
++    QTestState *qts = tcc_init(NPWM, 0);
++
++    qtest_writel(qts, TCC0 + R_INTENSET, OVF);
++    tcc_enable(qts);
++    ticks(qts, 5);
++    g_assert_false(qtest_readl(qts, NVIC_ISPR) & BIT(TCC0_IRQ));
++    ticks(qts, 6);
++    g_assert_true(qtest_readl(qts, NVIC_ISPR) & BIT(TCC0_IRQ));
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++
++    qtest_add_func("pic32cm-tcc/reset", test_reset);
++    qtest_add_func("pic32cm-tcc/npwm", test_npwm);
++    qtest_add_func("pic32cm-tcc/nfrq", test_nfrq);
++    qtest_add_func("pic32cm-tcc/dual", test_dual);
++    qtest_add_func("pic32cm-tcc/oneshot", test_oneshot);
++    qtest_add_func("pic32cm-tcc/buffers", test_buffers);
++    qtest_add_func("pic32cm-tcc/stop", test_stop);
++    qtest_add_func("pic32cm-tcc/counter-width", test_counter_width);
++    qtest_add_func("pic32cm-tcc/irq", test_irq);
++
++    return g_test_run();
++}
+-- 
+2.53.0.windows.2
+

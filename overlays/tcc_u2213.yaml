@@ -1,0 +1,74 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for TCC U2213 (Timer/Counter for Control). The mchp-tcc
+# model counts in the single- and dual-slope waveform modes with the
+# commands, one-shot, double buffering, compare-match flags, waveform output
+# state (STATUS.CMPx) and events; faults, dead time, pattern generation,
+# dithering, capture and waveform pins are not modelled.
+ip: TCC
+id: U2213
+versions: ["3.0.0", "4a0"]       # 3.0.0: MC00; 4a0: JH01
+references:
+  - "DS60001638E 31 (PIC32CM MC00 TCC), via Microchip's MCP server"
+  - "silicon, PIC32CM1216MC00048 rev A1, firmware/hello/tests/tccprobe.c, 2026-10-13"
+registers:
+  CTRLA:
+    pac_protected: true
+    enable_protected: {all_except: [SWRST, ENABLE]}
+    sync: {SWRST: SWRST, ENABLE: ENABLE}
+    self_clearing: [SWRST]
+    hooks: [post_write]           # start/stop
+  CTRLBCLR:
+    pac_protected: true
+    alias: {storage: CTRLBSET, op: clear}
+    sync: CTRLB
+    hooks: [pre_read, post_write]   # DIR shows the dual-slope direction
+  CTRLBSET:
+    pac_protected: true
+    alias: {storage: CTRLBSET, op: set}
+    sync: CTRLB
+    hooks: [pre_read, post_write]   # commands, read back 0 when done
+  SYNCBUSY:
+    dynamic: true
+    hooks: [pre_read]             # pending until GCLK_TCC runs
+  FCTRLA: {pac_protected: true, enable_protected: all}
+  FCTRLB: {pac_protected: true, enable_protected: all}
+  WEXCTRL: {pac_protected: true, enable_protected: all}
+  DRVCTRL: {pac_protected: true, enable_protected: all}
+  DBGCTRL: {pac_protected: true}
+  EVCTRL: {pac_protected: true, enable_protected: all}
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: all
+    irq_source: {enable: INTENSET}
+    hooks: [post_write]           # cleared flags re-arm the counter timer
+  STATUS:
+    w1c: [UFS, DFS, PATTBUFV, PERBUFV, CCBUFV0, CCBUFV1, CCBUFV2, CCBUFV3]
+    ro: [STOP, IDX, CMP0, CMP1, CMP2, CMP3]
+    sync: STATUS
+    hooks: [pre_read]             # CMPx: waveform output state
+  COUNT:
+    pac_protected: true
+    sync: COUNT
+    hooks: [pre_read, post_write]   # last synchronized value; reload
+  PATT: {pac_protected: true, sync: PATT, optional: true}
+  WAVE:
+    pac_protected: true
+    sync: WAVE
+    hooks: [post_write]
+  PER:
+    pac_protected: true
+    sync: PER
+    hooks: [pre_read, post_write]   # reads show PERBUF while PERBUFV
+  CC:
+    pac_protected: true
+    sync: "CC{n}"
+    hooks: [pre_read, post_write]   # reads show CCBUFx while CCBUFVx
+  PATTBUF: {pac_protected: true, optional: true}
+  PERBUF:
+    pac_protected: true
+    hooks: [post_write]           # STATUS.PERBUFV
+  CCBUF:
+    pac_protected: true
+    hooks: [post_write]           # STATUS.CCBUFVn
