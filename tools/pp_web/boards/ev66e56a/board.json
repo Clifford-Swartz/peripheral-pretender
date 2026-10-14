@@ -1,0 +1,130 @@
+{
+  "id": "ev66e56a",
+  "name": "AVR64EA48 Curiosity Nano (EV66E56A) on a Curiosity Nano Base (AC164162)",
+  "machine": "avr64ea48-cnano",
+  "demo_elf": "firmware/avr-hello/build/blinky.elf",
+  "vcom": "USART1 (PC0/PC1), nEDBG virtual COM port",
+  "source": "Microchip design files: AVR64EA48 Curiosity Nano PCBA rev 3 on Curiosity Nano Base for Click boards rev 7 (Gerbers, pick and place); see README.md",
+  "image": "top.png",
+  "px_per_mm": 20,
+  "origin_mm": [
+    0.0,
+    107.95
+  ],
+  "size_mm": [
+    74.93,
+    107.95
+  ],
+  "view_mm": {
+    "origin": [
+      0.0,
+      107.95
+    ],
+    "size": [
+      96.0,
+      107.95
+    ]
+  },
+  "leds": [
+    {
+      "id": "LED0",
+      "ref": "D200",
+      "at_mm": [
+        19.07,
+        33.1
+      ],
+      "pin": "PB3",
+      "active_low": true,
+      "color": "#ffc400"
+    }
+  ],
+  "buttons": [
+    {
+      "id": "SW0",
+      "ref": "SW200",
+      "at_mm": [
+        19.05,
+        26.93
+      ],
+      "size_mm": [
+        6.0,
+        4.4
+      ],
+      "action": "sw0"
+    }
+  ],
+  "headers": [
+    {
+      "id": "mikroBUS 1",
+      "ref": "J3/J4",
+      "at_mm": [
+        52.07,
+        73.66
+      ],
+      "pins": 16,
+      "slot": "mb1",
+      "int_pin": "PD3",
+      "mikrobus": {
+        "rst": "PD6",
+        "pwm": "PD0",
+        "int": "PD3",
+        "cs": "PA7"
+      },
+      "socket": {
+        "at_mm": [
+          52.07,
+          73.66
+        ],
+        "rotation": 90
+      }
+    },
+    {
+      "id": "mikroBUS 2",
+      "ref": "J5/J6",
+      "at_mm": [
+        52.07,
+        44.45
+      ],
+      "pins": 16,
+      "slot": "mb2",
+      "int_pin": "PF2",
+      "mikrobus": {
+        "rst": "PF3",
+        "pwm": "PD1",
+        "int": "PF2",
+        "cs": "PE2"
+      },
+      "socket": {
+        "at_mm": [
+          52.07,
+          44.45
+        ],
+        "rotation": 90
+      }
+    },
+    {
+      "id": "mikroBUS 3",
+      "ref": "J7/J8",
+      "at_mm": [
+        52.07,
+        15.24
+      ],
+      "pins": 16,
+      "slot": "mb3",
+      "int_pin": "PE0",
+      "mikrobus": {
+        "rst": "PE1",
+        "pwm": "PD2",
+        "int": "PE0",
+        "cs": "PE3"
+      },
+      "socket": {
+        "at_mm": [
+          52.07,
+          15.24
+        ],
+        "rotation": 90
+      }
+    }
+  ]
+}

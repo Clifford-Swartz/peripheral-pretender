@@ -1,0 +1,1883 @@
+From 8a5af2fe795295ad768e63c72989319fd0b2ad14 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 14 Oct 2026 14:03:40 -0700
+Subject: [PATCH 25/25] hw/avr, hw/ssi, hw/timer, hw/misc: Nano Base Click
+ slots, 8x8 G Click
+
+- avr8x-spi: AVR8X SPI host (normal and buffered mode flags, DORD), on an
+  SSI bus "spi0.spi".
+- avr8x-tcb: TCB periodic interrupt mode on QEMU_CLOCK_VIRTUAL from
+  CLK_PER (DIV1/DIV2), CAPT interrupt, CNT, STATUS.RUN.
+- max7219: MAX7219 LED driver chain on SSI, LOAD latches; decode, scan
+  limit, shutdown, display test; "display" and "intensity" properties.
+- mikrobus: the Click catalog and plugging code shared by all boards
+  (from the MC00 machine, which now uses it): a board describes its
+  sockets (pads behind RST/PWM/INT/CS, I2C and SPI buses). New Click:
+  8x8g (MAX7219 on SPI, LOAD on CS). Click parts build with CONFIG_MIKROBUS.
+- avr64ea48-cnano: mb1=, mb2=, mb3= plug Clicks into the three mikroBUS
+  sockets of a Curiosity Nano Base for Click boards (AC164162), with the
+  pins of its user guide and the Nano's edge pins.
+- qtests: SPI to the 8x8 G Click, TCB period and flag; board docs.
+
+firmware/avr-hello's matrix demo shows its frames on the twin and prints
+the same VCOM transcript as the kit.
+
+Peripheral Pretender: AI-assisted, not for upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/avr/avr64ea48-cnano.rst |  40 +++++
+ docs/system/target-avr.rst          |   8 +
+ hw/arm/Kconfig                      |   1 +
+ hw/arm/pic32cm_mc00_cpro.c          | 176 ++----------------
+ hw/avr/Kconfig                      |   3 +
+ hw/avr/avr64ea48_cnano.c            | 105 +++++++++++
+ hw/avr/avr8x_soc.c                  |   4 +
+ hw/misc/Kconfig                     |   5 +
+ hw/misc/meson.build                 |   5 +-
+ hw/misc/mikrobus.c                  | 219 +++++++++++++++++++++++
+ hw/sensor/meson.build               |   2 +-
+ hw/ssi/Kconfig                      |   5 +
+ hw/ssi/avr8x_spi.c                  | 257 +++++++++++++++++++++++++++
+ hw/ssi/max7219.c                    | 214 ++++++++++++++++++++++
+ hw/ssi/meson.build                  |   3 +-
+ hw/ssi/trace-events                 |   6 +
+ hw/timer/Kconfig                    |   4 +
+ hw/timer/avr8x_tcb.c                | 266 ++++++++++++++++++++++++++++
+ hw/timer/meson.build                |   1 +
+ hw/timer/trace-events               |   3 +
+ include/hw/misc/mikrobus.h          |  48 +++++
+ include/hw/ssi/avr8x_spi.h          |  18 ++
+ include/hw/ssi/max7219.h            |  18 ++
+ include/hw/timer/avr8x_tcb.h        |  18 ++
+ tests/qtest/avr64ea48-cnano-test.c  |  68 +++++++
+ 25 files changed, 1334 insertions(+), 163 deletions(-)
+ create mode 100644 docs/system/avr/avr64ea48-cnano.rst
+ create mode 100644 hw/misc/mikrobus.c
+ create mode 100644 hw/ssi/avr8x_spi.c
+ create mode 100644 hw/ssi/max7219.c
+ create mode 100644 hw/timer/avr8x_tcb.c
+ create mode 100644 include/hw/misc/mikrobus.h
+ create mode 100644 include/hw/ssi/avr8x_spi.h
+ create mode 100644 include/hw/ssi/max7219.h
+ create mode 100644 include/hw/timer/avr8x_tcb.h
+
+diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
+new file mode 100644
+index 0000000..7f12554
+--- /dev/null
++++ b/docs/system/avr/avr64ea48-cnano.rst
+@@ -0,0 +1,40 @@
++Microchip AVR64EA48 Curiosity Nano (``avr64ea48-cnano``)
++========================================================
++
++.. note::
++   Peripheral Pretender: a personal project in a downstream fork
++   of QEMU. AI-assisted code; not for submission to upstream QEMU.
++
++The AVR64EA48 Curiosity Nano evaluation kit (EV66E56A) carries an
++AVR64EA48: an AVRxt core with 64 KiB of flash, 6 KiB of SRAM and 512 bytes
++of EEPROM. It runs at OSCHF 20 MHz / 6 after reset.
++
++CPU: ``avrxt`` (target/avr). The register file is not in the data space,
++I/O starts at data address 0, and interrupts follow CPUINT (two levels,
++LVL1VEC, LVL0PRI with round robin, IVSEL). ELF files built by avr-gcc for
++avrxmega2..7 are accepted.
++
++The SoC model (``avr64ea48-soc``, generic ``avr8x-soc``) is built from the
++device description generated from the AVR64EA48 ATDF (AVR-Ex DFP 2.8.189)
++and ``profiles/avr64ea48.yaml`` of Peripheral Pretender. Modelled: PORT and
++VPORT (``/machine/soc/port``, ``pa-levels``..``pf-levels``,
++``pa-stats``..), USART (asynchronous), SPI (host), TCB (periodic
++interrupt), CLKCTRL, CPUINT, NVMCTRL (FLMAP only; commands are logged),
++SIGROW, SYSCFG.REVID (``silicon-rev`` B1 = 0x21), USERROW, FUSE, LOCK.
++Every other instance is a generic register block that logs writes with
++``-d unimp``.
++
++Board: LED0 on PB3 (active low), SW0 on PB2 (``-M avr64ea48-cnano,
++sw0-pressed=on``), the virtual COM port on USART1 (``-serial`` 0), USART2
++on ``-serial`` 1.
++
++On a Curiosity Nano Base for Click boards (AC164162), ``mb1=``, ``mb2=``
++and ``mb3=`` plug a Click board into mikroBUS socket 1-3 (``thermo8`` needs
++I2C, which is not modelled yet; ``buttong``, ``7seg``, ``relay`` and
++``8x8g``, a MAX7219 LED matrix with a ``display`` property, work). The
++Click is ``/machine/mbN-click``.
++
++Firmware comes from ``-kernel`` or ``-bios``::
++
++    qemu-system-avr -M avr64ea48-cnano,mb1=8x8g -kernel matrix.elf \
++        -display none -serial stdio -d unimp,guest_errors
+diff --git a/docs/system/target-avr.rst b/docs/system/target-avr.rst
+index 03d5ab5..b45f7dc 100644
+--- a/docs/system/target-avr.rst
++++ b/docs/system/target-avr.rst
+@@ -46,3 +46,11 @@ AVR cpu
+   compiler yet)::
+ 
+    qemu-system-avr -machine mega2560 -bios demo.elf -d in_asm
++
++Peripheral Pretender boards
++~~~~~~~~~~~~~~~~~~~~~~~~~~~
++
++.. toctree::
++   :maxdepth: 1
++
++   avr/avr64ea48-cnano
+diff --git a/hw/arm/Kconfig b/hw/arm/Kconfig
+index 4cf9306..0eab3e8 100644
+--- a/hw/arm/Kconfig
++++ b/hw/arm/Kconfig
+@@ -704,6 +704,7 @@ config PIC32CM_SOC
+     select MCHP_PORT
+     select MCHP_REGFILE
+     select MCHP_SERCOM
++    select MIKROBUS
+     select OR_IRQ
+     select SPLIT_IRQ
+     select UNIMP
+diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
+index 0192fea..c1db36a 100644
+--- a/hw/arm/pic32cm_mc00_cpro.c
++++ b/hw/arm/pic32cm_mc00_cpro.c
+@@ -31,10 +31,8 @@
+ #include "hw/i2c/i2c.h"
+ #include "hw/misc/led.h"
+ #include "hw/misc/mchp_edbg_dgi.h"
+-#include "hw/misc/click_button.h"
+-#include "hw/sensor/mchp_mcp9808.h"
++#include "hw/misc/mikrobus.h"
+ #include "hw/ssi/ssi.h"
+-#include "hw/ssi/ti_74hc595.h"
+ #include "system/system.h"
+ 
+ #define CPRO_XOSC_HZ        12000000
+@@ -48,65 +46,14 @@
+ #define CPRO_EXT_SPI        "SERCOM1"
+ #define CPRO_EXT_NUM        2
+ 
+-/* mikroBUS signals on each header (pins 5, 7, 9 and 15 of the header) */
+-enum { EXT_RST, EXT_PWM, EXT_INT, EXT_CS, EXT_ROLES };
+-
+-static const unsigned pic32cm_mc00_cpro_ext_pins[CPRO_EXT_NUM][EXT_ROLES] = {
++/* mikroBUS RST, PWM, INT and CS on each header (pins 5, 7, 9 and 15) */
++static const int pic32cm_mc00_cpro_ext_pins[CPRO_EXT_NUM][MIKROBUS_ROLES] = {
+     { MCHP_PORT_PIN('A', 20), MCHP_PORT_PIN('B', 10),
+       MCHP_PORT_PIN('B', 2), MCHP_PORT_PIN('A', 17) },
+     { MCHP_PORT_PIN('A', 10), MCHP_PORT_PIN('B', 22),
+       MCHP_PORT_PIN('A', 28), MCHP_PORT_PIN('A', 15) },
+ };
+ 
+-typedef enum { CLICK_GPIO, CLICK_I2C, CLICK_SPI } CproClickBus;
+-
+-/* A GPIO line between the Click's device and a header pin */
+-typedef struct CproClickLine {
+-    const char *gpio;           /* NULL: unused */
+-    unsigned role;
+-} CproClickLine;
+-
+-/* A resistor on the Click pulling a header pin up (1) or down (0) */
+-typedef struct CproClickPull {
+-    bool used;
+-    unsigned role;
+-    int level;
+-} CproClickPull;
+-
+-typedef struct CproClick {
+-    const char *name;
+-    const char *desc;
+-    const char *type;           /* its device, NULL for none */
+-    CproClickBus bus;
+-    uint8_t addr;               /* on the I2C bus */
+-    uint32_t length;            /* "length" property, 0 for none */
+-    CproClickLine outs[2];      /* device output onto a header pin */
+-    CproClickLine ins[2];       /* header pin into a device input */
+-    CproClickPull pulls[3];
+-} CproClick;
+-
+-/* From the MikroElektronika schematics of each Click (v100) */
+-static const CproClick pic32cm_mc00_cpro_clicks[] = {
+-    { "thermo8", "Thermo 8 Click: MCP9808 temperature sensor, ALERT on INT",
+-      TYPE_MCHP_MCP9808, CLICK_I2C, 0x18, 0,
+-      .outs = { { MCHP_MCP9808_ALERT, EXT_INT } },
+-      .pulls = { { true, EXT_INT, 1 } } },                /* R3 4.7k */
+-    { "buttong", "Button G Click: pushbutton on INT, its LED on PWM",
+-      TYPE_CLICK_BUTTON, CLICK_GPIO, 0, 0,
+-      .outs = { { CLICK_BUTTON_OUT, EXT_INT } },
+-      .pulls = { { true, EXT_INT, 0 } } },                /* R2/R3 10k */
+-    { "7seg", "7seg Click: two digits on two 74HC595, LATCH on CS, "
+-      "MR# on RST, digits enabled by PWM",
+-      TYPE_TI_74HC595, CLICK_SPI, 0, 2,
+-      .ins = { { TI_74HC595_LATCH, EXT_CS }, { TI_74HC595_MR, EXT_RST } },
+-      .pulls = { { true, EXT_RST, 1 },                    /* R19 4.7k */
+-                 { true, EXT_PWM, 1 } } },                /* R22/R23 4.7k */
+-    { "relay", "Relay Click: relay 1 on PWM, relay 2 on CS",
+-      NULL, CLICK_GPIO, 0, 0,
+-      .pulls = { { true, EXT_PWM, 0 },                    /* Q1/Q2 base */
+-                 { true, EXT_CS, 0 } } },                 /* resistors */
+-};
+-
+ /* serial_hd(i) is wired to SERCOM pic32cm_mc00_cpro_serial[i] */
+ static const unsigned pic32cm_mc00_cpro_serial[] = {
+     0,                          /* EDBG virtual COM port (PA06/PA07) */
+@@ -185,37 +132,6 @@ static void pic32cm_mc00_cpro_set_ext2(Object *obj, const char *value,
+     pic32cm_mc00_cpro_set_ext(obj, 1, value, errp);
+ }
+ 
+-/*
+- * A pull resistor on the Click, behind an output that can let go: a
+- * released output (-1) leaves the pad at the resistor's level.
+- */
+-static void pic32cm_mc00_cpro_pull_up(void *opaque, int n, int level)
+-{
+-    qemu_set_irq(opaque, level < 0 ? 1 : level);
+-}
+-
+-static void pic32cm_mc00_cpro_pull_down(void *opaque, int n, int level)
+-{
+-    qemu_set_irq(opaque, level < 0 ? 0 : level);
+-}
+-
+-static const CproClick *pic32cm_mc00_cpro_find_click(unsigned n,
+-                                                     const char *name)
+-{
+-    g_autoptr(GString) known = g_string_new(NULL);
+-
+-    for (unsigned i = 0; i < ARRAY_SIZE(pic32cm_mc00_cpro_clicks); i++) {
+-        if (!strcmp(name, pic32cm_mc00_cpro_clicks[i].name)) {
+-            return &pic32cm_mc00_cpro_clicks[i];
+-        }
+-        g_string_append_printf(known, "%s%s", i ? ", " : "",
+-                               pic32cm_mc00_cpro_clicks[i].name);
+-    }
+-    error_report("ext%u: unknown Click board '%s' (known: %s)", n + 1, name,
+-                 known->str);
+-    exit(1);
+-}
+-
+ /* Plug the Click boards named by ext1= and ext2= into their headers. */
+ static void pic32cm_mc00_cpro_add_clicks(Pic32cmMc00CproState *s)
+ {
+@@ -224,80 +140,18 @@ static void pic32cm_mc00_cpro_add_clicks(Pic32cmMc00CproState *s)
+         pic32cm_soc_periph(&s->soc, CPRO_EXT_I2C), "sercom2.i2c"));
+     SSIBus *spi = (SSIBus *)qdev_get_child_bus(
+         pic32cm_soc_periph(&s->soc, CPRO_EXT_SPI), "sercom1.spi");
+-    uint8_t used[CPRO_EXT_NUM] = { 0 };
++    MikrobusSocket sockets[CPRO_EXT_NUM];
+ 
+     for (unsigned n = 0; n < CPRO_EXT_NUM; n++) {
+-        const unsigned *pin = pic32cm_mc00_cpro_ext_pins[n];
+-        const CproClick *c;
+-        DeviceState *dev = NULL;
+-
+-        if (!s->ext[n] || !*s->ext[n] || !strcmp(s->ext[n], "none")) {
+-            continue;
+-        }
+-        c = pic32cm_mc00_cpro_find_click(n, s->ext[n]);
+-        if (c->bus == CLICK_I2C) {
+-            for (unsigned m = 0; m < n; m++) {
+-                if (used[m] == c->addr) {
+-                    error_report("ext%u: I2C address 0x%02x is taken by "
+-                                 "ext%u", n + 1, c->addr, m + 1);
+-                    exit(1);
+-                }
+-            }
+-            used[n] = c->addr;
+-        }
+-        if (c->type) {
+-            g_autofree char *child = g_strdup_printf("ext%u-click", n + 1);
+-
+-            dev = qdev_new(c->type);
+-            if (c->bus == CLICK_I2C) {
+-                qdev_prop_set_uint8(dev, "address", c->addr);
+-            }
+-            if (c->length) {
+-                qdev_prop_set_uint32(dev, "length", c->length);
+-            }
+-            object_property_add_child(OBJECT(s), child, OBJECT(dev));
+-            switch (c->bus) {
+-            case CLICK_I2C:
+-                i2c_slave_realize_and_unref(I2C_SLAVE(dev), i2c,
+-                                            &error_fatal);
+-                break;
+-            case CLICK_SPI:
+-                ssi_realize_and_unref(dev, spi, &error_fatal);
+-                break;
+-            default:
+-                qdev_realize_and_unref(dev, NULL, &error_fatal);
+-            }
+-        }
+-        /* Resistors first: an output behind one goes through it */
+-        for (unsigned i = 0; i < ARRAY_SIZE(c->pulls) && c->pulls[i].used;
+-             i++) {
+-            qemu_set_irq(qdev_get_gpio_in_named(port, MCHP_PORT_IN,
+-                                                pin[c->pulls[i].role]),
+-                         c->pulls[i].level);
+-        }
+-        for (unsigned i = 0; i < ARRAY_SIZE(c->outs) && c->outs[i].gpio;
+-             i++) {
+-            unsigned role = c->outs[i].role;
+-            qemu_irq pad = qdev_get_gpio_in_named(port, MCHP_PORT_IN,
+-                                                  pin[role]);
+-
+-            for (unsigned j = 0; j < ARRAY_SIZE(c->pulls); j++) {
+-                if (c->pulls[j].used && c->pulls[j].role == role) {
+-                    pad = qemu_allocate_irq(c->pulls[j].level
+-                                            ? pic32cm_mc00_cpro_pull_up
+-                                            : pic32cm_mc00_cpro_pull_down,
+-                                            pad, 0);
+-                }
+-            }
+-            qdev_connect_gpio_out_named(dev, c->outs[i].gpio, 0, pad);
+-        }
+-        for (unsigned i = 0; i < ARRAY_SIZE(c->ins) && c->ins[i].gpio; i++) {
+-            qdev_connect_gpio_out_named(port, MCHP_PORT_PAD,
+-                                        pin[c->ins[i].role],
+-                                        qdev_get_gpio_in_named(dev,
+-                                            c->ins[i].gpio, 0));
+-        }
++        sockets[n] = (MikrobusSocket) {
++            .name = n ? "ext2" : "ext1", .port = port,
++            .port_in = MCHP_PORT_IN, .port_pad = MCHP_PORT_PAD,
++            .i2c = i2c, .spi = spi,
++        };
++        memcpy(sockets[n].pins, pic32cm_mc00_cpro_ext_pins[n],
++               sizeof(sockets[n].pins));
+     }
++    mikrobus_plug(OBJECT(s), sockets, s->ext, CPRO_EXT_NUM);
+ }
+ 
+ static void pic32cm_mc00_cpro_init(MachineState *machine)
+@@ -363,11 +217,13 @@ static void pic32cm_mc00_cpro_class_init(ObjectClass *oc, const void *data)
+     object_class_property_add_str(oc, "ext1", pic32cm_mc00_cpro_get_ext1,
+                                   pic32cm_mc00_cpro_set_ext1);
+     object_class_property_set_description(oc, "ext1",
+-        "Click board on EXT1 (thermo8, buttong, 7seg, relay, none)");
++        "Click board on EXT1 (see mikrobus_clicks[]: thermo8, buttong, "
++        "7seg, relay, 8x8g, none)");
+     object_class_property_add_str(oc, "ext2", pic32cm_mc00_cpro_get_ext2,
+                                   pic32cm_mc00_cpro_set_ext2);
+     object_class_property_set_description(oc, "ext2",
+-        "Click board on EXT2 (thermo8, buttong, 7seg, relay, none)");
++        "Click board on EXT2 (see mikrobus_clicks[]: thermo8, buttong, "
++        "7seg, relay, 8x8g, none)");
+ }
+ 
+ static const TypeInfo pic32cm_mc00_cpro_types[] = {
+diff --git a/hw/avr/Kconfig b/hw/avr/Kconfig
+index 01bdfef..6426067 100644
+--- a/hw/avr/Kconfig
++++ b/hw/avr/Kconfig
+@@ -8,6 +8,9 @@ config AVR8X_SOC
+     bool
+     select AVR8X_PORT
+     select AVR8X_USART
++    select AVR8X_SPI
++    select AVR8X_TCB
++    select MIKROBUS
+     select MCHP_REGFILE
+     select UNIMP
+     select LED
+diff --git a/hw/avr/avr64ea48_cnano.c b/hw/avr/avr64ea48_cnano.c
+index a2a7609..118cd36 100644
+--- a/hw/avr/avr64ea48_cnano.c
++++ b/hw/avr/avr64ea48_cnano.c
+@@ -14,6 +14,14 @@
+  * the UART of mikroBUS sockets 1 and 3 on a Curiosity Nano Base).
+  * The firmware comes from -kernel or -bios (ELF or raw binary).
+  *
++ * Machine options mb1=, mb2= and mb3= plug a Click board into mikroBUS
++ * socket 1-3 of a Curiosity Nano Base for Click boards (AC164162; user
++ * guide DS50002839B Figure 3-1 and schematic rev 7, through the Nano's
++ * edge pins, schematic sheet 2): SPI0 on PA4 MOSI, PA5 MISO, PA6 SCK for
++ * all three; RST/PWM/INT/CS on PD6/PD0/PD3/PA7, PF3/PD1/PF2/PE2 and
++ * PE1/PD2/PE0/PE3. I2C (TWI0 on PA2/PA3) is not modelled yet. The Click's
++ * device, if it has one, is /machine/mbN-click.
++ *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+ 
+@@ -25,6 +33,7 @@
+ #include "hw/core/irq.h"
+ #include "hw/core/qdev-properties.h"
+ #include "hw/misc/led.h"
++#include "hw/misc/mikrobus.h"
+ #include "system/qtest.h"
+ #include "system/system.h"
+ #include "boot.h"
+@@ -35,6 +44,18 @@
+ #define CNANO_LED0_PIN      AVR8X_PIN('B', 3)
+ #define CNANO_SW0_PIN       AVR8X_PIN('B', 2)
+ 
++#define CNANO_MB_NUM        3
++
++/* mikroBUS RST, PWM, INT and CS of the Nano Base's sockets 1-3 */
++static const int avr64ea48_cnano_mb_pins[CNANO_MB_NUM][MIKROBUS_ROLES] = {
++    { AVR8X_PIN('D', 6), AVR8X_PIN('D', 0), AVR8X_PIN('D', 3),
++      AVR8X_PIN('A', 7) },
++    { AVR8X_PIN('F', 3), AVR8X_PIN('D', 1), AVR8X_PIN('F', 2),
++      AVR8X_PIN('E', 2) },
++    { AVR8X_PIN('E', 1), AVR8X_PIN('D', 2), AVR8X_PIN('E', 0),
++      AVR8X_PIN('E', 3) },
++};
++
+ #define TYPE_AVR64EA48_CNANO_MACHINE MACHINE_TYPE_NAME("avr64ea48-cnano")
+ OBJECT_DECLARE_SIMPLE_TYPE(Avr64ea48CnanoState, AVR64EA48_CNANO_MACHINE)
+ 
+@@ -45,6 +66,7 @@ struct Avr64ea48CnanoState {
+     LEDState *led0;
+     qemu_irq sw0;
+     bool sw0_pressed;
++    char *mb[CNANO_MB_NUM];
+ };
+ 
+ /* A pressed SW0 pulls PB2 low; a released one leaves the pad undriven. */
+@@ -68,6 +90,74 @@ static void avr64ea48_cnano_set_sw0(Object *obj, bool value, Error **errp)
+     avr64ea48_cnano_update_sw0(s);
+ }
+ 
++static char *avr64ea48_cnano_get_mb(Object *obj, Error **errp, unsigned n)
++{
++    return g_strdup(AVR64EA48_CNANO_MACHINE(obj)->mb[n]);
++}
++
++static void avr64ea48_cnano_set_mb(Object *obj, const char *value,
++                                   Error **errp, unsigned n)
++{
++    Avr64ea48CnanoState *s = AVR64EA48_CNANO_MACHINE(obj);
++
++    g_free(s->mb[n]);
++    s->mb[n] = g_strdup(value);
++}
++
++static char *avr64ea48_cnano_get_mb1(Object *obj, Error **errp)
++{
++    return avr64ea48_cnano_get_mb(obj, errp, 0);
++}
++
++static void avr64ea48_cnano_set_mb1(Object *obj, const char *value,
++                                    Error **errp)
++{
++    avr64ea48_cnano_set_mb(obj, value, errp, 0);
++}
++
++static char *avr64ea48_cnano_get_mb2(Object *obj, Error **errp)
++{
++    return avr64ea48_cnano_get_mb(obj, errp, 1);
++}
++
++static void avr64ea48_cnano_set_mb2(Object *obj, const char *value,
++                                    Error **errp)
++{
++    avr64ea48_cnano_set_mb(obj, value, errp, 1);
++}
++
++static char *avr64ea48_cnano_get_mb3(Object *obj, Error **errp)
++{
++    return avr64ea48_cnano_get_mb(obj, errp, 2);
++}
++
++static void avr64ea48_cnano_set_mb3(Object *obj, const char *value,
++                                    Error **errp)
++{
++    avr64ea48_cnano_set_mb(obj, value, errp, 2);
++}
++
++/* Plug the Click boards named by mb1= .. mb3= into the Nano Base */
++static void avr64ea48_cnano_add_clicks(Avr64ea48CnanoState *s)
++{
++    DeviceState *spi0 = avr8x_soc_periph(&s->soc, "SPI0");
++    SSIBus *spi = (SSIBus *)qdev_get_child_bus(spi0, "spi0.spi");
++    MikrobusSocket sockets[CNANO_MB_NUM];
++
++    for (unsigned n = 0; n < CNANO_MB_NUM; n++) {
++        static const char *const names[] = { "mb1", "mb2", "mb3" };
++
++        sockets[n] = (MikrobusSocket) {
++            .name = names[n], .port = DEVICE(&s->soc.port),
++            .port_in = AVR8X_PORT_IN, .port_pad = AVR8X_PORT_PAD,
++            .spi = spi,
++        };
++        memcpy(sockets[n].pins, avr64ea48_cnano_mb_pins[n],
++               sizeof(sockets[n].pins));
++    }
++    mikrobus_plug(OBJECT(s), sockets, s->mb, CNANO_MB_NUM);
++}
++
+ static void avr64ea48_cnano_init(MachineState *machine)
+ {
+     Avr64ea48CnanoState *s = AVR64EA48_CNANO_MACHINE(machine);
+@@ -92,6 +182,7 @@ static void avr64ea48_cnano_init(MachineState *machine)
+                  1);
+     s->sw0 = qdev_get_gpio_in_named(port, AVR8X_PORT_IN, CNANO_SW0_PIN);
+     avr64ea48_cnano_update_sw0(s);
++    avr64ea48_cnano_add_clicks(s);
+ 
+     if (!firmware) {
+         /* qom-test and friends start machines without firmware */
+@@ -126,6 +217,20 @@ static void avr64ea48_cnano_class_init(ObjectClass *oc, const void *data)
+                                    avr64ea48_cnano_set_sw0);
+     object_class_property_set_description(oc, "sw0-pressed",
+                                           "Hold user switch SW0 (PB2) down");
++    object_class_property_add_str(oc, "mb1", avr64ea48_cnano_get_mb1,
++                                  avr64ea48_cnano_set_mb1);
++    object_class_property_add_str(oc, "mb2", avr64ea48_cnano_get_mb2,
++                                  avr64ea48_cnano_set_mb2);
++    object_class_property_add_str(oc, "mb3", avr64ea48_cnano_get_mb3,
++                                  avr64ea48_cnano_set_mb3);
++    for (unsigned n = 1; n <= CNANO_MB_NUM; n++) {
++        g_autofree char *name = g_strdup_printf("mb%u", n);
++        g_autofree char *desc = g_strdup_printf(
++            "Click board on mikroBUS socket %u of a Curiosity Nano Base (%s)",
++            n, mikrobus_click_names());
++
++        object_class_property_set_description(oc, name, desc);
++    }
+ }
+ 
+ static const TypeInfo avr64ea48_cnano_types[] = {
+diff --git a/hw/avr/avr8x_soc.c b/hw/avr/avr8x_soc.c
+index 98574d0..a627bb0 100644
+--- a/hw/avr/avr8x_soc.c
++++ b/hw/avr/avr8x_soc.c
+@@ -30,6 +30,8 @@
+ #include "hw/core/qdev-properties.h"
+ #include "hw/core/qdev-properties-system.h"
+ #include "hw/misc/unimp.h"
++#include "hw/ssi/avr8x_spi.h"
++#include "hw/timer/avr8x_tcb.h"
+ #include "system/address-spaces.h"
+ 
+ /*
+@@ -46,6 +48,8 @@ static const struct {
+     { "LOCK", TYPE_AVR8X_NVMBYTES },
+     { "NVMCTRL", TYPE_AVR8X_NVMCTRL },
+     { "SIGROW", TYPE_AVR8X_NVMBYTES },
++    { "SPI", TYPE_AVR8X_SPI },
++    { "TCB", TYPE_AVR8X_TCB },
+     { "SYSCFG", TYPE_AVR8X_NVMBYTES },
+     { "USART", TYPE_AVR8X_USART },
+     { "USERROW", TYPE_AVR8X_NVMBYTES },
+diff --git a/hw/misc/Kconfig b/hw/misc/Kconfig
+index a0a0c23..08167c4 100644
+--- a/hw/misc/Kconfig
++++ b/hw/misc/Kconfig
+@@ -203,6 +203,11 @@ config MCHP_PFSOC_DMC
+ config MCHP_REGFILE
+     bool
+ 
++config MIKROBUS
++    bool
++    select I2C
++    select SSI
++
+ config MCHP_PFSOC_IOSCB
+     bool
+ 
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index ee90075..0af9659 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -21,10 +21,13 @@ system_ss.add(when: 'CONFIG_MCHP_REGFILE', if_true: files(
+   'mchp_regfile.c',
+   'mchp_regblock.c',
+ ))
++system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files(
++  'mikrobus.c',
++  'click_button.c',
++))
+ system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files(
+   'mchp_clock.c',
+   'mchp_edbg_dgi.c',
+-  'click_button.c',
+   'mchp_eic.c',
+   'mchp_evsys.c',
+   'mchp_sysctrl.c',
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+new file mode 100644
+index 0000000..671ddf5
+--- /dev/null
++++ b/hw/misc/mikrobus.c
+@@ -0,0 +1,219 @@
++/*
++ * mikroBUS sockets and the Click boards that plug into them
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The catalog follows MikroElektronika's schematics of each Click (v100):
++ * its device and bus, device outputs onto socket pins, socket pins into
++ * device inputs, and the pull resistors on the Click. A device output
++ * behind a pull resistor lets go with -1 and the resistor sets the pin.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/error-report.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/misc/click_button.h"
++#include "hw/misc/mikrobus.h"
++#include "hw/sensor/mchp_mcp9808.h"
++#include "hw/ssi/max7219.h"
++#include "hw/ssi/ti_74hc595.h"
++
++typedef enum { CLICK_GPIO, CLICK_I2C, CLICK_SPI } ClickBus;
++
++/* A GPIO line between the Click's device and a socket pin */
++typedef struct ClickLine {
++    const char *gpio;           /* NULL: unused */
++    unsigned role;
++} ClickLine;
++
++/* A resistor on the Click pulling a socket pin up (1) or down (0) */
++typedef struct ClickPull {
++    bool used;
++    unsigned role;
++    int level;
++} ClickPull;
++
++typedef struct ClickInfo {
++    const char *name;
++    const char *desc;
++    const char *type;           /* its device, NULL for none */
++    ClickBus bus;
++    uint8_t addr;               /* on the I2C bus */
++    uint32_t length;            /* "length" property, 0 for none */
++    ClickLine outs[2];          /* device output onto a socket pin */
++    ClickLine ins[2];           /* socket pin into a device input */
++    ClickPull pulls[3];
++} ClickInfo;
++
++static const ClickInfo mikrobus_clicks[] = {
++    { "thermo8", "Thermo 8 Click: MCP9808 temperature sensor, ALERT on INT",
++      TYPE_MCHP_MCP9808, CLICK_I2C, 0x18, 0,
++      .outs = { { MCHP_MCP9808_ALERT, MIKROBUS_INT } },
++      .pulls = { { true, MIKROBUS_INT, 1 } } },           /* R3 4.7k */
++    { "buttong", "Button G Click: pushbutton on INT, its LED on PWM",
++      TYPE_CLICK_BUTTON, CLICK_GPIO, 0, 0,
++      .outs = { { CLICK_BUTTON_OUT, MIKROBUS_INT } },
++      .pulls = { { true, MIKROBUS_INT, 0 } } },           /* R2/R3 10k */
++    { "7seg", "7seg Click: two digits on two 74HC595, LATCH on CS, "
++      "MR# on RST, digits enabled by PWM",
++      TYPE_TI_74HC595, CLICK_SPI, 0, 2,
++      .ins = { { TI_74HC595_LATCH, MIKROBUS_CS },
++               { TI_74HC595_MR, MIKROBUS_RST } },
++      .pulls = { { true, MIKROBUS_RST, 1 },               /* R19 4.7k */
++                 { true, MIKROBUS_PWM, 1 } } },           /* R22/R23 4.7k */
++    { "relay", "Relay Click: relay 1 on PWM, relay 2 on CS",
++      NULL, CLICK_GPIO, 0, 0,
++      .pulls = { { true, MIKROBUS_PWM, 0 },               /* Q1/Q2 base */
++                 { true, MIKROBUS_CS, 0 } } },            /* resistors */
++    { "8x8g", "8x8 G Click: 8x8 green LED matrix on a MAX7219, LOAD on CS "
++      "(no pull resistors)",
++      TYPE_MAX7219, CLICK_SPI, 0, 1,
++      .ins = { { MAX7219_LOAD, MIKROBUS_CS } } },
++};
++
++const char *mikrobus_click_names(void)
++{
++    static char *names;
++
++    if (!names) {
++        GString *s = g_string_new(NULL);
++
++        for (unsigned i = 0; i < ARRAY_SIZE(mikrobus_clicks); i++) {
++            g_string_append_printf(s, "%s, ", mikrobus_clicks[i].name);
++        }
++        g_string_append(s, "none");
++        names = g_string_free(s, false);
++    }
++    return names;
++}
++
++static void mikrobus_pull_up(void *opaque, int n, int level)
++{
++    qemu_set_irq(opaque, level < 0 ? 1 : level);
++}
++
++static void mikrobus_pull_down(void *opaque, int n, int level)
++{
++    qemu_set_irq(opaque, level < 0 ? 0 : level);
++}
++
++static const ClickInfo *mikrobus_find(const char *socket, const char *name)
++{
++    for (unsigned i = 0; i < ARRAY_SIZE(mikrobus_clicks); i++) {
++        if (!strcmp(name, mikrobus_clicks[i].name)) {
++            return &mikrobus_clicks[i];
++        }
++    }
++    error_report("%s: unknown Click board '%s' (known: %s)", socket, name,
++                 mikrobus_click_names());
++    exit(1);
++}
++
++/* The socket pin of @role, or exit when the board does not wire it */
++static unsigned mikrobus_pin(const MikrobusSocket *sock, const ClickInfo *c,
++                             unsigned role)
++{
++    static const char *const names[] = { "RST", "PWM", "INT", "CS" };
++
++    if (sock->pins[role] < 0) {
++        error_report("%s: %s needs %s, which this board does not wire",
++                     sock->name, c->name, names[role]);
++        exit(1);
++    }
++    return sock->pins[role];
++}
++
++static void mikrobus_plug_one(Object *machine, const MikrobusSocket *sock,
++                              const ClickInfo *c)
++{
++    DeviceState *dev = NULL;
++
++    if (c->type) {
++        g_autofree char *child = g_strdup_printf("%s-click", sock->name);
++
++        if ((c->bus == CLICK_I2C && !sock->i2c) ||
++            (c->bus == CLICK_SPI && !sock->spi)) {
++            error_report("%s: %s needs %s, which this socket lacks",
++                         sock->name, c->name,
++                         c->bus == CLICK_I2C ? "I2C" : "SPI");
++            exit(1);
++        }
++        dev = qdev_new(c->type);
++        if (c->bus == CLICK_I2C) {
++            qdev_prop_set_uint8(dev, "address", c->addr);
++        }
++        if (c->length) {
++            qdev_prop_set_uint32(dev, "length", c->length);
++        }
++        object_property_add_child(machine, child, OBJECT(dev));
++        switch (c->bus) {
++        case CLICK_I2C:
++            i2c_slave_realize_and_unref(I2C_SLAVE(dev), sock->i2c,
++                                        &error_fatal);
++            break;
++        case CLICK_SPI:
++            ssi_realize_and_unref(dev, sock->spi, &error_fatal);
++            break;
++        default:
++            qdev_realize_and_unref(dev, NULL, &error_fatal);
++        }
++    }
++    /* Resistors first: an output behind one goes through it */
++    for (unsigned i = 0; i < ARRAY_SIZE(c->pulls) && c->pulls[i].used; i++) {
++        qemu_set_irq(qdev_get_gpio_in_named(sock->port, sock->port_in,
++                                            mikrobus_pin(sock, c,
++                                                         c->pulls[i].role)),
++                     c->pulls[i].level);
++    }
++    for (unsigned i = 0; i < ARRAY_SIZE(c->outs) && c->outs[i].gpio; i++) {
++        unsigned role = c->outs[i].role;
++        qemu_irq pad = qdev_get_gpio_in_named(sock->port, sock->port_in,
++                                              mikrobus_pin(sock, c, role));
++
++        for (unsigned j = 0; j < ARRAY_SIZE(c->pulls); j++) {
++            if (c->pulls[j].used && c->pulls[j].role == role) {
++                pad = qemu_allocate_irq(c->pulls[j].level ? mikrobus_pull_up
++                                                          : mikrobus_pull_down,
++                                        pad, 0);
++            }
++        }
++        qdev_connect_gpio_out_named(dev, c->outs[i].gpio, 0, pad);
++    }
++    for (unsigned i = 0; i < ARRAY_SIZE(c->ins) && c->ins[i].gpio; i++) {
++        qdev_connect_gpio_out_named(sock->port, sock->port_pad,
++                                    mikrobus_pin(sock, c, c->ins[i].role),
++                                    qdev_get_gpio_in_named(dev,
++                                                           c->ins[i].gpio, 0));
++    }
++}
++
++void mikrobus_plug(Object *machine, const MikrobusSocket *sockets,
++                   char *const *clicks, unsigned n)
++{
++    g_autofree const ClickInfo **plugged = g_new0(const ClickInfo *, n);
++
++    for (unsigned i = 0; i < n; i++) {
++        const ClickInfo *c;
++
++        if (!clicks[i] || !*clicks[i] || !strcmp(clicks[i], "none")) {
++            continue;
++        }
++        c = mikrobus_find(sockets[i].name, clicks[i]);
++        for (unsigned m = 0; m < i && c->bus == CLICK_I2C; m++) {
++            if (plugged[m] && plugged[m]->bus == CLICK_I2C &&
++                plugged[m]->addr == c->addr &&
++                sockets[m].i2c == sockets[i].i2c) {
++                error_report("%s: I2C address 0x%02x is taken by %s",
++                             sockets[i].name, c->addr, sockets[m].name);
++                exit(1);
++            }
++        }
++        plugged[i] = c;
++        mikrobus_plug_one(machine, &sockets[i], c);
++    }
++}
+diff --git a/hw/sensor/meson.build b/hw/sensor/meson.build
+index c23ea2a..78f1c6f 100644
+--- a/hw/sensor/meson.build
++++ b/hw/sensor/meson.build
+@@ -8,4 +8,4 @@ system_ss.add(when: 'CONFIG_MAX34451', if_true: files('max34451.c'))
+ system_ss.add(when: 'CONFIG_LSM303DLHC_MAG', if_true: files('lsm303dlhc_mag.c'))
+ system_ss.add(when: 'CONFIG_ISL_PMBUS_VR', if_true: files('isl_pmbus_vr.c'))
+ system_ss.add(when: 'CONFIG_MAX31785', if_true: files('max31785.c'))
+-system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_mcp9808.c'))
++system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp9808.c'))
+diff --git a/hw/ssi/Kconfig b/hw/ssi/Kconfig
+index 1bd5646..9c27d97 100644
+--- a/hw/ssi/Kconfig
++++ b/hw/ssi/Kconfig
+@@ -9,6 +9,11 @@ config SIFIVE_SPI
+ config SSI
+     bool
+ 
++config AVR8X_SPI
++    bool
++    select SSI
++    select MCHP_REGFILE
++
+ config XILINX_SPI
+     bool
+     select SSI
+diff --git a/hw/ssi/avr8x_spi.c b/hw/ssi/avr8x_spi.c
+new file mode 100644
+index 0000000..f9e9238
+--- /dev/null
++++ b/hw/ssi/avr8x_spi.c
+@@ -0,0 +1,257 @@
++/*
++ * Microchip AVR8X SPI (spi_8bit_v2: AVR Dx, AVR Ex), host mode
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Behaviour from DS40002324 (AVR64EA48), chapter SPI. A byte written to
++ * DATA while CTRLA.ENABLE and MASTER are set is clocked out on the "spi"
++ * SSI bus at once (DORD 1: LSB first); the byte clocked in is what DATA
++ * reads. Normal mode: INTFLAGS.IF when the transfer ends, cleared by
++ * writing 1 or by reading INTFLAGS with IF set and then accessing DATA.
++ * Buffered mode (CTRLB.BUFEN): DREIF (the transmit buffer has room: always
++ * here), TXCIF (shift register and buffer empty, write 1 to clear), RXCIF
++ * while the 2-byte receive FIFO holds data, BUFOVF when it overflows.
++ * One interrupt vector (sysbus IRQ 0). Chip selects are GPIOs of the
++ * board. Not modelled: client mode, the SS pin's host-mode fault
++ * (CTRLB.SSD), clock modes and timing (transfers take no time).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/bitops.h"
++#include "hw/core/irq.h"
++#include "hw/avr/avr8x_periph.h"
++#include "hw/mchp/gen/spi_spi_8bit_v2.h"
++#include "hw/ssi/avr8x_spi.h"
++#include "hw/ssi/ssi.h"
++#include "migration/vmstate.h"
++#include "trace.h"
++
++#define AVR8X_SPI_RX_DEPTH  2
++
++OBJECT_DECLARE_SIMPLE_TYPE(Avr8xSpiState, AVR8X_SPI)
++
++struct Avr8xSpiState {
++    MchpRegBlock parent_obj;
++
++    SSIBus *bus;
++    uint8_t flags;              /* INTFLAGS as the active mode shows it */
++    uint8_t data;               /* normal mode: last byte received */
++    uint8_t rx[AVR8X_SPI_RX_DEPTH];
++    uint8_t rx_count;
++    bool if_read;               /* INTFLAGS read with IF set */
++};
++
++static uint8_t avr8x_spi_reg(Avr8xSpiState *s, hwaddr reg)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, reg, 1);
++}
++
++static bool avr8x_spi_buffered(Avr8xSpiState *s)
++{
++    return FIELD_EX8(avr8x_spi_reg(s, A_MCHP_SPI_CTRLB), MCHP_SPI_CTRLB,
++                     BUFEN);
++}
++
++/* INTFLAGS as read: buffered mode derives DREIF and RXCIF */
++static uint8_t avr8x_spi_flags(Avr8xSpiState *s)
++{
++    if (!avr8x_spi_buffered(s)) {
++        return s->flags;
++    }
++    return (s->flags & (R_MCHP_SPI_INTFLAGS_BUFFERED_TXCIF_MASK |
++                        R_MCHP_SPI_INTFLAGS_BUFFERED_SSIF_MASK |
++                        R_MCHP_SPI_INTFLAGS_BUFFERED_BUFOVF_MASK)) |
++           R_MCHP_SPI_INTFLAGS_BUFFERED_DREIF_MASK |
++           (s->rx_count ? R_MCHP_SPI_INTFLAGS_BUFFERED_RXCIF_MASK : 0);
++}
++
++static bool avr8x_spi_irq_pending(MchpRegBlock *rb)
++{
++    Avr8xSpiState *s = AVR8X_SPI(rb);
++    uint8_t intctrl = avr8x_spi_reg(s, A_MCHP_SPI_INTCTRL);
++    uint8_t flags = avr8x_spi_flags(s);
++
++    if (!avr8x_spi_buffered(s)) {
++        return (intctrl & R_MCHP_SPI_INTCTRL_IE_MASK) &&
++               (flags & R_MCHP_SPI_INTFLAGS_IF_MASK);
++    }
++    /* RXCIE, TXCIE, DREIE and SSIE sit over RXCIF, TXCIF, DREIF, SSIF */
++    return intctrl & flags & 0xF0;
++}
++
++static uint8_t avr8x_spi_order(Avr8xSpiState *s, uint8_t byte)
++{
++    if (FIELD_EX8(avr8x_spi_reg(s, A_MCHP_SPI_CTRLA), MCHP_SPI_CTRLA, DORD)) {
++        return revbit8(byte);
++    }
++    return byte;
++}
++
++static void avr8x_spi_transfer(Avr8xSpiState *s, uint8_t out)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint8_t ctrla = avr8x_spi_reg(s, A_MCHP_SPI_CTRLA);
++    uint8_t in;
++
++    if (!FIELD_EX8(ctrla, MCHP_SPI_CTRLA, ENABLE)) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s.DATA: write while disabled\n",
++                      rb->name);
++        return;
++    }
++    if (!FIELD_EX8(ctrla, MCHP_SPI_CTRLA, MASTER)) {
++        qemu_log_mask(LOG_UNIMP, "%s: client mode not modelled\n", rb->name);
++        return;
++    }
++    in = avr8x_spi_order(s, ssi_transfer(s->bus, avr8x_spi_order(s, out)));
++    trace_avr8x_spi_transfer(rb->name, out, in);
++    if (!avr8x_spi_buffered(s)) {
++        s->data = in;
++        s->flags |= R_MCHP_SPI_INTFLAGS_IF_MASK;
++        return;
++    }
++    if (s->rx_count == AVR8X_SPI_RX_DEPTH) {
++        s->flags |= R_MCHP_SPI_INTFLAGS_BUFFERED_BUFOVF_MASK;
++    } else {
++        s->rx[s->rx_count++] = in;
++    }
++    s->flags |= R_MCHP_SPI_INTFLAGS_BUFFERED_TXCIF_MASK;
++}
++
++static uint32_t avr8x_spi_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                                   unsigned idx, uint32_t stored,
++                                   bool side_effects)
++{
++    Avr8xSpiState *s = AVR8X_SPI(rf->opaque);
++    uint8_t value;
++
++    switch (ri->offset) {
++    case A_MCHP_SPI_INTFLAGS:
++        value = avr8x_spi_flags(s);
++        if (side_effects && !avr8x_spi_buffered(s)) {
++            s->if_read = value & R_MCHP_SPI_INTFLAGS_IF_MASK;
++        }
++        return value;
++    case A_MCHP_SPI_DATA:
++        if (!avr8x_spi_buffered(s)) {
++            if (side_effects && s->if_read) {
++                s->flags &= ~(R_MCHP_SPI_INTFLAGS_IF_MASK |
++                              R_MCHP_SPI_INTFLAGS_WRCOL_MASK);
++                s->if_read = false;
++            }
++            return s->data;
++        }
++        value = s->rx_count ? s->rx[0] : 0;
++        if (side_effects && s->rx_count) {
++            s->rx[0] = s->rx[1];
++            s->rx_count--;
++        }
++        return value;
++    }
++    return stored;
++}
++
++static void avr8x_spi_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                 unsigned idx, uint32_t old,
++                                 uint32_t written, uint32_t we)
++{
++    Avr8xSpiState *s = AVR8X_SPI(rf->opaque);
++
++    switch (ri->offset) {
++    case A_MCHP_SPI_INTFLAGS:
++        /* Write 1 clears; DREIF and RXCIF follow the buffers */
++        s->flags &= ~(written & we & (avr8x_spi_buffered(s) ?
++                      (R_MCHP_SPI_INTFLAGS_BUFFERED_TXCIF_MASK |
++                       R_MCHP_SPI_INTFLAGS_BUFFERED_SSIF_MASK |
++                       R_MCHP_SPI_INTFLAGS_BUFFERED_BUFOVF_MASK) :
++                      (R_MCHP_SPI_INTFLAGS_IF_MASK |
++                       R_MCHP_SPI_INTFLAGS_WRCOL_MASK)));
++        break;
++    case A_MCHP_SPI_DATA:
++        if (!avr8x_spi_buffered(s) && s->if_read) {
++            s->flags &= ~(R_MCHP_SPI_INTFLAGS_IF_MASK |
++                          R_MCHP_SPI_INTFLAGS_WRCOL_MASK);
++            s->if_read = false;
++        }
++        if (avr8x_spi_buffered(s)) {
++            s->flags &= ~R_MCHP_SPI_INTFLAGS_BUFFERED_TXCIF_MASK;
++        }
++        avr8x_spi_transfer(s, written & 0xff);
++        break;
++    case A_MCHP_SPI_CTRLB:
++        if ((written ^ old) & R_MCHP_SPI_CTRLB_BUFEN_MASK) {
++            s->flags = 0;
++            s->rx_count = 0;
++        }
++        break;
++    case A_MCHP_SPI_CTRLA:
++        if (!FIELD_EX8(written, MCHP_SPI_CTRLA, ENABLE)) {
++            s->flags = 0;
++            s->rx_count = 0;
++        }
++        break;
++    }
++}
++
++static void avr8x_spi_reset_hold(MchpRegBlock *rb)
++{
++    Avr8xSpiState *s = AVR8X_SPI(rb);
++
++    s->flags = 0;
++    s->data = 0;
++    s->rx_count = 0;
++    s->if_read = false;
++}
++
++static bool avr8x_spi_realize(MchpRegBlock *rb, Error **errp)
++{
++    g_autofree char *bus = g_strdup_printf("%s.spi", rb->name);
++
++    AVR8X_SPI(rb)->bus = ssi_create_bus(DEVICE(rb), bus);
++    return true;
++}
++
++static const VMStateDescription vmstate_avr8x_spi = {
++    .name = TYPE_AVR8X_SPI,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, Avr8xSpiState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_UINT8(flags, Avr8xSpiState),
++        VMSTATE_UINT8(data, Avr8xSpiState),
++        VMSTATE_UINT8_ARRAY(rx, Avr8xSpiState, AVR8X_SPI_RX_DEPTH),
++        VMSTATE_UINT8(rx_count, Avr8xSpiState),
++        VMSTATE_BOOL(if_read, Avr8xSpiState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void avr8x_spi_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    dc->vmsd = &vmstate_avr8x_spi;
++    c->realize = avr8x_spi_realize;
++    c->pre_read = avr8x_spi_pre_read;
++    c->post_write = avr8x_spi_post_write;
++    c->irq_pending = avr8x_spi_irq_pending;
++    c->reset_hold = avr8x_spi_reset_hold;
++    c->is_enabled = avr8x_never_enabled;
++    c->log_writes = false;
++}
++
++static const TypeInfo avr8x_spi_types[] = {
++    {
++        .name = TYPE_AVR8X_SPI,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(Avr8xSpiState),
++        .class_init = avr8x_spi_class_init,
++    },
++};
++
++DEFINE_TYPES(avr8x_spi_types)
+diff --git a/hw/ssi/max7219.c b/hw/ssi/max7219.c
+new file mode 100644
+index 0000000..673cd41
+--- /dev/null
++++ b/hw/ssi/max7219.c
+@@ -0,0 +1,214 @@
++/*
++ * Maxim MAX7219 serially interfaced 8-digit LED display driver
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * MAX7219/MAX7221 data sheet (19-4452, rev 4): 16-bit frames D15..D0 shift
++ * in on DIN, MSB first, and out on DOUT 16 clocks later, so "length"
++ * devices form a daisy chain; the rising edge of LOAD latches each
++ * device's last 16 bits. D11..D8 address No-Op (0), Digit 0-7 (1-8),
++ * Decode Mode (9), Intensity (A), Scan Limit (B), Shutdown (C) and Display
++ * Test (F); D7..D0 are the data. At power-up the device is in shutdown
++ * with every register 0. Code B decoding follows Table 5; DP is D7.
++ *
++ * Here the chain sits on a QEMU SSI bus (SPI mode 0, 8 bits a transfer)
++ * and GPIO input "load" takes 0/1 (or -1 undriven: the level stays).
++ * QOM properties (read-only): "display", per device the eight digit
++ * outputs as hex bytes "d0 d1 ... d7" (segment DP..G in bits 7..0, what
++ * the LEDs show: blank in shutdown, all on in display test, digits past
++ * the scan limit off), devices separated by "/"; "intensity" of device 0
++ * (0-15, the PWM duty in 32nds is 2 * intensity + 1).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/ssi/max7219.h"
++#include "hw/ssi/ssi.h"
++#include "migration/vmstate.h"
++#include "trace.h"
++
++#define MAX7219_MAX_CHAIN   4
++#define MAX7219_DIGITS      8
++
++enum {
++    REG_NOOP = 0x0,
++    REG_DIGIT0 = 0x1,
++    REG_DECODE = 0x9,
++    REG_INTENSITY = 0xA,
++    REG_SCAN_LIMIT = 0xB,
++    REG_SHUTDOWN = 0xC,
++    REG_TEST = 0xF,
++    REG_COUNT = 16,
++};
++
++OBJECT_DECLARE_SIMPLE_TYPE(Max7219State, MAX7219)
++
++struct Max7219State {
++    SSIPeripheral parent_obj;
++
++    uint32_t length;
++    uint64_t shift;             /* device 0 (on DIN) in bits 15:0 */
++    uint8_t regs[MAX7219_MAX_CHAIN][REG_COUNT];
++    bool load;
++};
++
++/* Code B font (Table 5): 0-9, -, E, H, L, P, blank; segments A-G in 6:0 */
++static const uint8_t max7219_code_b[16] = {
++    0x7E, 0x30, 0x6D, 0x79, 0x33, 0x5B, 0x5F, 0x70,
++    0x7F, 0x7B, 0x01, 0x4F, 0x37, 0x0E, 0x67, 0x00,
++};
++
++static uint64_t max7219_mask(Max7219State *s)
++{
++    return s->length >= 4 ? UINT64_MAX : (1ULL << (16 * s->length)) - 1;
++}
++
++static uint32_t max7219_transfer(SSIPeripheral *dev, uint32_t val)
++{
++    Max7219State *s = MAX7219(dev);
++    uint32_t out = (s->shift >> (16 * s->length - 8)) & 0xFF;
++
++    s->shift = ((s->shift << 8) | (val & 0xFF)) & max7219_mask(s);
++    return out;
++}
++
++static void max7219_set_load(void *opaque, int n, int level)
++{
++    Max7219State *s = opaque;
++    bool high = level > 0 || (level < 0 && s->load);
++
++    if (high && !s->load) {
++        for (unsigned d = 0; d < s->length; d++) {
++            uint16_t word = s->shift >> (16 * d);
++            unsigned reg = (word >> 8) & 0xF;
++
++            trace_max7219_latch(d, reg, word & 0xFF);
++            if (reg != REG_NOOP) {
++                s->regs[d][reg] = word & 0xFF;
++            }
++        }
++    }
++    s->load = high;
++}
++
++/* What digit @digit of device @d shows */
++static uint8_t max7219_digit(Max7219State *s, unsigned d, unsigned digit)
++{
++    const uint8_t *r = s->regs[d];
++    uint8_t data = r[REG_DIGIT0 + digit];
++
++    if (r[REG_TEST] & 1) {
++        return 0xFF;
++    }
++    if (!(r[REG_SHUTDOWN] & 1) || digit > (r[REG_SCAN_LIMIT] & 7)) {
++        return 0;
++    }
++    if (r[REG_DECODE] & BIT(digit)) {
++        return (data & 0x80) | max7219_code_b[data & 0xF];
++    }
++    return data;
++}
++
++static void max7219_get_display(Object *obj, Visitor *v, const char *name,
++                                void *opaque, Error **errp)
++{
++    Max7219State *s = MAX7219(obj);
++    g_autoptr(GString) str = g_string_new(NULL);
++    g_autofree char *val = NULL;
++
++    for (unsigned d = 0; d < s->length; d++) {
++        for (unsigned digit = 0; digit < MAX7219_DIGITS; digit++) {
++            g_string_append_printf(str, "%s%02x",
++                                   digit ? " " : (d ? "/" : ""),
++                                   max7219_digit(s, d, digit));
++        }
++    }
++    val = g_string_free(g_steal_pointer(&str), false);
++    visit_type_str(v, name, &val, errp);
++}
++
++static void max7219_get_intensity(Object *obj, Visitor *v, const char *name,
++                                  void *opaque, Error **errp)
++{
++    uint32_t value = MAX7219(obj)->regs[0][REG_INTENSITY] & 0xF;
++
++    visit_type_uint32(v, name, &value, errp);
++}
++
++static void max7219_realize(SSIPeripheral *dev, Error **errp)
++{
++    Max7219State *s = MAX7219(dev);
++
++    if (s->length < 1 || s->length > MAX7219_MAX_CHAIN) {
++        error_setg(errp, "length must be 1 to %d", MAX7219_MAX_CHAIN);
++        return;
++    }
++    qdev_init_gpio_in_named(DEVICE(dev), max7219_set_load, MAX7219_LOAD, 1);
++}
++
++static void max7219_reset(DeviceState *dev)
++{
++    Max7219State *s = MAX7219(dev);
++
++    s->shift = 0;
++    memset(s->regs, 0, sizeof(s->regs));
++    s->load = true;
++}
++
++static void max7219_init(Object *obj)
++{
++    object_property_add(obj, "display", "str", max7219_get_display,
++                        NULL, NULL, NULL);
++    object_property_add(obj, "intensity", "uint32", max7219_get_intensity,
++                        NULL, NULL, NULL);
++}
++
++static const Property max7219_properties[] = {
++    DEFINE_PROP_UINT32("length", Max7219State, length, 1),
++};
++
++static const VMStateDescription vmstate_max7219 = {
++    .name = TYPE_MAX7219,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_SSI_PERIPHERAL(parent_obj, Max7219State),
++        VMSTATE_UINT64(shift, Max7219State),
++        VMSTATE_UINT8_2DARRAY(regs, Max7219State, MAX7219_MAX_CHAIN,
++                              REG_COUNT),
++        VMSTATE_BOOL(load, Max7219State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void max7219_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    SSIPeripheralClass *k = SSI_PERIPHERAL_CLASS(klass);
++
++    dc->desc = "MAX7219 8-digit LED display driver";
++    dc->vmsd = &vmstate_max7219;
++    device_class_set_props(dc, max7219_properties);
++    device_class_set_legacy_reset(dc, max7219_reset);
++    k->realize = max7219_realize;
++    k->transfer = max7219_transfer;
++    k->cs_polarity = SSI_CS_NONE;   /* shifts on every clock; LOAD latches */
++}
++
++static const TypeInfo max7219_types[] = {
++    {
++        .name = TYPE_MAX7219,
++        .parent = TYPE_SSI_PERIPHERAL,
++        .instance_size = sizeof(Max7219State),
++        .instance_init = max7219_init,
++        .class_init = max7219_class_init,
++    },
++};
++
++DEFINE_TYPES(max7219_types)
+diff --git a/hw/ssi/meson.build b/hw/ssi/meson.build
+index 879cc93..7a7bff3 100644
+--- a/hw/ssi/meson.build
++++ b/hw/ssi/meson.build
+@@ -13,4 +13,5 @@ system_ss.add(when: 'CONFIG_IMX', if_true: files('imx_spi.c'))
+ system_ss.add(when: 'CONFIG_IBEX', if_true: files('ibex_spi_host.c'))
+ system_ss.add(when: 'CONFIG_BCM2835_SPI', if_true: files('bcm2835_spi.c'))
+ system_ss.add(when: 'CONFIG_PNV_SPI', if_true: files('pnv_spi.c'))
+-system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('ti_74hc595.c'))
++system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('ti_74hc595.c', 'max7219.c'))
++system_ss.add(when: 'CONFIG_AVR8X_SPI', if_true: files('avr8x_spi.c'))
+diff --git a/hw/ssi/trace-events b/hw/ssi/trace-events
+index 7a78dfc..2e70001 100644
+--- a/hw/ssi/trace-events
++++ b/hw/ssi/trace-events
+@@ -63,6 +63,12 @@ allwinner_a10_spi_rx(uint8_t byte) "read 0x%02x"
+ allwinner_a10_spi_read(const char* regname, uint32_t value) "reg[%s] => 0x%08x"
+ allwinner_a10_spi_write(const char* regname, uint32_t value) "reg[%s] <= 0x%08x"
+ 
++# avr8x_spi.c
++avr8x_spi_transfer(const char *name, uint8_t out, uint8_t in) "%s: out 0x%02x in 0x%02x"
++
++# max7219.c
++max7219_latch(unsigned dev, unsigned reg, uint8_t data) "device %u register 0x%x data 0x%02x"
++
+ # ti_74hc595.c
+ ti_74hc595_shift(uint32_t byte, uint32_t shift) "in 0x%02x shift 0x%08x"
+ ti_74hc595_latch(uint32_t outputs) "outputs 0x%08x"
+diff --git a/hw/timer/Kconfig b/hw/timer/Kconfig
+index b3d823c..91d71cb 100644
+--- a/hw/timer/Kconfig
++++ b/hw/timer/Kconfig
+@@ -65,3 +65,7 @@ config STELLARIS_GPTM
+ 
+ config AVR_TIMER16
+     bool
++
++config AVR8X_TCB
++    bool
++    select MCHP_REGFILE
+diff --git a/hw/timer/avr8x_tcb.c b/hw/timer/avr8x_tcb.c
+new file mode 100644
+index 0000000..d228a06
+--- /dev/null
++++ b/hw/timer/avr8x_tcb.c
+@@ -0,0 +1,266 @@
++/*
++ * Microchip AVR8X 16-bit timer/counter type B (tmr_16b_capture_v1)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Behaviour from DS40002324 (AVR64EA48), chapter TCB. Modelled: the
++ * periodic interrupt mode (CTRLB.CNTMODE INT): CNT counts CLK_PER (CLKSEL
++ * DIV1) or CLK_PER / 2 (DIV2) from 0 to CCMP, then restarts at 0 and sets
++ * INTFLAGS.CAPT; CNT reads the count on QEMU_CLOCK_VIRTUAL; STATUS.RUN.
++ * The interrupt (one vector, sysbus IRQ 0) is INTFLAGS & INTCTRL. Not
++ * modelled, and logged: the other counter modes, the TCA clock sources,
++ * events and the waveform output; OVF never sets.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/avr/avr8x_periph.h"
++#include "hw/core/clock.h"
++#include "hw/mchp/gen/tcb_tmr_16b_capture_v1.h"
++#include "hw/timer/avr8x_tcb.h"
++#include "migration/vmstate.h"
++#include "trace.h"
++
++#define TCB_CLKSEL_DIV1     0
++#define TCB_CLKSEL_DIV2     1
++#define TCB_CNTMODE_INT     0
++
++OBJECT_DECLARE_SIMPLE_TYPE(Avr8xTcbState, AVR8X_TCB)
++
++struct Avr8xTcbState {
++    MchpRegBlock parent_obj;
++
++    QEMUTimer *timer;
++    bool running;
++    int64_t start_ns;           /* virtual time of count 0 */
++    uint64_t periods;           /* periods completed since start_ns */
++};
++
++static uint32_t avr8x_tcb_reg(Avr8xTcbState *s, hwaddr reg, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, reg, size);
++}
++
++/* Counter clock in Hz, 0 when it does not run in a modelled way */
++static uint64_t avr8x_tcb_hz(Avr8xTcbState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint8_t ctrla = avr8x_tcb_reg(s, A_MCHP_TCB_CTRLA, 1);
++    uint8_t ctrlb = avr8x_tcb_reg(s, A_MCHP_TCB_CTRLB, 1);
++    uint64_t hz = clock_get_hz(rb->gclk);
++
++    if (!FIELD_EX8(ctrla, MCHP_TCB_CTRLA, ENABLE)) {
++        return 0;
++    }
++    if (FIELD_EX8(ctrlb, MCHP_TCB_CTRLB, CNTMODE) != TCB_CNTMODE_INT) {
++        qemu_log_mask(LOG_UNIMP, "%s.CTRLB: counter mode %u not modelled\n",
++                      rb->name, FIELD_EX8(ctrlb, MCHP_TCB_CTRLB, CNTMODE));
++        return 0;
++    }
++    switch (FIELD_EX8(ctrla, MCHP_TCB_CTRLA, CLKSEL)) {
++    case TCB_CLKSEL_DIV1:
++        return hz;
++    case TCB_CLKSEL_DIV2:
++        return hz / 2;
++    default:
++        qemu_log_mask(LOG_UNIMP, "%s.CTRLA: clock source %u not modelled\n",
++                      rb->name, FIELD_EX8(ctrla, MCHP_TCB_CTRLA, CLKSEL));
++        return 0;
++    }
++}
++
++static uint64_t avr8x_tcb_period(Avr8xTcbState *s)
++{
++    return (uint64_t)avr8x_tcb_reg(s, A_MCHP_TCB_CCMP, 2) + 1;
++}
++
++/* Counter ticks since start_ns */
++static uint64_t avr8x_tcb_ticks(Avr8xTcbState *s, uint64_t hz)
++{
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    return now <= s->start_ns ? 0 :
++           muldiv64(now - s->start_ns, hz, NANOSECONDS_PER_SECOND);
++}
++
++static void avr8x_tcb_schedule(Avr8xTcbState *s, uint64_t hz)
++{
++    uint64_t next = (s->periods + 1) * avr8x_tcb_period(s);
++
++    timer_mod(s->timer, s->start_ns +
++              muldiv64(next, NANOSECONDS_PER_SECOND, hz) + 1);
++}
++
++/* (Re)start counting at @count with the current configuration */
++static void avr8x_tcb_restart(Avr8xTcbState *s, uint32_t count)
++{
++    uint64_t hz = avr8x_tcb_hz(s);
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    s->running = hz != 0;
++    timer_del(s->timer);
++    if (!s->running) {
++        return;
++    }
++    s->start_ns = now - muldiv64(count, NANOSECONDS_PER_SECOND, hz);
++    s->periods = 0;
++    avr8x_tcb_schedule(s, hz);
++}
++
++static uint32_t avr8x_tcb_count(Avr8xTcbState *s)
++{
++    uint64_t hz = avr8x_tcb_hz(s);
++
++    if (!s->running || !hz) {
++        return avr8x_tcb_reg(s, A_MCHP_TCB_CNT, 2);
++    }
++    return avr8x_tcb_ticks(s, hz) % avr8x_tcb_period(s);
++}
++
++static void avr8x_tcb_expire(void *opaque)
++{
++    Avr8xTcbState *s = opaque;
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint64_t hz = avr8x_tcb_hz(s);
++
++    if (!s->running || !hz) {
++        return;
++    }
++    s->periods = avr8x_tcb_ticks(s, hz) / avr8x_tcb_period(s);
++    mchp_regfile_poke(&rb->rf, A_MCHP_TCB_INTFLAGS, 1,
++                      avr8x_tcb_reg(s, A_MCHP_TCB_INTFLAGS, 1) |
++                      R_MCHP_TCB_INTFLAGS_CAPT_MASK);
++    trace_avr8x_tcb_capt(rb->name);
++    mchp_regblock_update_irq(rb);
++    avr8x_tcb_schedule(s, hz);
++}
++
++static bool avr8x_tcb_irq_pending(MchpRegBlock *rb)
++{
++    Avr8xTcbState *s = AVR8X_TCB(rb);
++
++    return avr8x_tcb_reg(s, A_MCHP_TCB_INTFLAGS, 1) &
++           avr8x_tcb_reg(s, A_MCHP_TCB_INTCTRL, 1);
++}
++
++static uint32_t avr8x_tcb_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                                   unsigned idx, uint32_t stored,
++                                   bool side_effects)
++{
++    Avr8xTcbState *s = AVR8X_TCB(rf->opaque);
++
++    switch (ri->offset) {
++    case A_MCHP_TCB_CNT:
++        return avr8x_tcb_count(s);
++    case A_MCHP_TCB_STATUS:
++        return s->running ? R_MCHP_TCB_STATUS_RUN_MASK : 0;
++    }
++    return stored;
++}
++
++static void avr8x_tcb_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                                 unsigned idx, uint32_t old,
++                                 uint32_t written, uint32_t we)
++{
++    Avr8xTcbState *s = AVR8X_TCB(rf->opaque);
++    uint32_t count = s->running ? avr8x_tcb_count(s) : 0;
++
++    switch (ri->offset) {
++    case A_MCHP_TCB_CNT:
++        count = avr8x_tcb_reg(s, A_MCHP_TCB_CNT, 2);
++        break;
++    case A_MCHP_TCB_CTRLA:
++        if (!FIELD_EX8(old, MCHP_TCB_CTRLA, ENABLE)) {
++            count = avr8x_tcb_reg(s, A_MCHP_TCB_CNT, 2);
++        }
++        break;
++    }
++    if (ri->offset == A_MCHP_TCB_CTRLA &&
++        !FIELD_EX8(written, MCHP_TCB_CTRLA, ENABLE) && s->running) {
++        /* Disabling stops the count where it is */
++        mchp_regfile_poke(rf, A_MCHP_TCB_CNT, 2, count);
++    }
++    avr8x_tcb_restart(s, count);
++}
++
++static void avr8x_tcb_gclk_update(MchpRegBlock *rb, ClockEvent event)
++{
++    Avr8xTcbState *s = AVR8X_TCB(rb);
++
++    if (event == ClockPreUpdate) {
++        if (s->running) {
++            mchp_regfile_poke(&rb->rf, A_MCHP_TCB_CNT, 2,
++                              avr8x_tcb_count(s));
++        }
++    } else {
++        avr8x_tcb_restart(s, avr8x_tcb_reg(s, A_MCHP_TCB_CNT, 2));
++    }
++}
++
++static void avr8x_tcb_reset_hold(MchpRegBlock *rb)
++{
++    Avr8xTcbState *s = AVR8X_TCB(rb);
++
++    timer_del(s->timer);
++    s->running = false;
++    s->periods = 0;
++}
++
++static bool avr8x_tcb_realize(MchpRegBlock *rb, Error **errp)
++{
++    AVR8X_TCB(rb)->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, avr8x_tcb_expire,
++                                        rb);
++    return true;
++}
++
++static void avr8x_tcb_finalize(Object *obj)
++{
++    timer_free(AVR8X_TCB(obj)->timer);
++}
++
++static const VMStateDescription vmstate_avr8x_tcb = {
++    .name = TYPE_AVR8X_TCB,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, Avr8xTcbState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_TIMER_PTR(timer, Avr8xTcbState),
++        VMSTATE_BOOL(running, Avr8xTcbState),
++        VMSTATE_INT64(start_ns, Avr8xTcbState),
++        VMSTATE_UINT64(periods, Avr8xTcbState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void avr8x_tcb_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    dc->vmsd = &vmstate_avr8x_tcb;
++    c->realize = avr8x_tcb_realize;
++    c->pre_read = avr8x_tcb_pre_read;
++    c->post_write = avr8x_tcb_post_write;
++    c->irq_pending = avr8x_tcb_irq_pending;
++    c->reset_hold = avr8x_tcb_reset_hold;
++    c->gclk_update = avr8x_tcb_gclk_update;
++    c->is_enabled = avr8x_never_enabled;
++    c->log_writes = false;
++}
++
++static const TypeInfo avr8x_tcb_types[] = {
++    {
++        .name = TYPE_AVR8X_TCB,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(Avr8xTcbState),
++        .instance_finalize = avr8x_tcb_finalize,
++        .class_init = avr8x_tcb_class_init,
++    },
++};
++
++DEFINE_TYPES(avr8x_tcb_types)
+diff --git a/hw/timer/meson.build b/hw/timer/meson.build
+index 4728faa..ad9eeb9 100644
+--- a/hw/timer/meson.build
++++ b/hw/timer/meson.build
+@@ -35,3 +35,4 @@ specific_ss.add(when: 'CONFIG_IBEX', if_true: files('ibex_timer.c'))
+ system_ss.add(when: 'CONFIG_SIFIVE_PWM', if_true: files('sifive_pwm.c'))
+ 
+ system_ss.add(when: 'CONFIG_AVR_TIMER16', if_true: files('avr_timer16.c'))
++system_ss.add(when: 'CONFIG_AVR8X_TCB', if_true: files('avr8x_tcb.c'))
+diff --git a/hw/timer/trace-events b/hw/timer/trace-events
+index f4b94ac..c6e7f8f 100644
+--- a/hw/timer/trace-events
++++ b/hw/timer/trace-events
+@@ -136,3 +136,6 @@ mchp_tc_event_in(const char *name, unsigned evact, uint32_t count) "%s: event ac
+ # mchp_tcc.c
+ mchp_tcc_tick(const char *name, uint32_t count, uint32_t flags) "%s: count 0x%x, flags 0x%x"
+ mchp_tcc_event_in(const char *name, int n, int level, uint32_t count) "%s: EV%d level %d, count 0x%x"
++
++# avr8x_tcb.c
++avr8x_tcb_capt(const char *name) "%s: CAPT"
+diff --git a/include/hw/misc/mikrobus.h b/include/hw/misc/mikrobus.h
+new file mode 100644
+index 0000000..1abf89a
+--- /dev/null
++++ b/include/hw/misc/mikrobus.h
+@@ -0,0 +1,48 @@
++/*
++ * mikroBUS sockets and the Click boards that plug into them
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * A board describes each socket (MikrobusSocket): the MCU pads behind its
++ * RST, PWM, INT and CS pins (inputs that external drivers set, outputs that
++ * show the pad levels) and its I2C and SPI buses. mikrobus_plug() creates
++ * the Click named by a machine option on it, from the shared catalog
++ * mikrobus_clicks[]: its device (at /machine/<socket>-click), the lines
++ * between the device and the pins, and every pull resistor on the Click.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_MIKROBUS_H
++#define HW_MISC_MIKROBUS_H
++
++#include "hw/i2c/i2c.h"
++#include "hw/ssi/ssi.h"
++
++/* GPIO pins of a socket the Clicks use */
++enum { MIKROBUS_RST, MIKROBUS_PWM, MIKROBUS_INT, MIKROBUS_CS,
++       MIKROBUS_ROLES };
++
++typedef struct MikrobusSocket {
++    const char *name;           /* machine option, e.g. "ext1" or "mb1" */
++    DeviceState *port;          /* the GPIO controller with the pads */
++    const char *port_in;        /* its GPIO input array: external drivers */
++    const char *port_pad;       /* its GPIO output array: pad levels */
++    int pins[MIKROBUS_ROLES];   /* index into both arrays, -1: not wired */
++    I2CBus *i2c;                /* NULL: none on this socket */
++    SSIBus *spi;
++} MikrobusSocket;
++
++/* Comma-separated names of the catalog, for option descriptions */
++const char *mikrobus_click_names(void);
++
++/*
++ * Plug the Click @click (a catalog name; NULL, "" or "none": nothing)
++ * into each of @n sockets; exits with an error for unknown Clicks, a bus
++ * the socket lacks or an I2C address two sockets share.
++ */
++void mikrobus_plug(Object *machine, const MikrobusSocket *sockets,
++                   char *const *clicks, unsigned n);
++
++#endif /* HW_MISC_MIKROBUS_H */
+diff --git a/include/hw/ssi/avr8x_spi.h b/include/hw/ssi/avr8x_spi.h
+new file mode 100644
+index 0000000..5865609
+--- /dev/null
++++ b/include/hw/ssi/avr8x_spi.h
+@@ -0,0 +1,18 @@
++/*
++ * Microchip AVR8X SPI (spi_8bit_v2), host mode
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * An mchp-regblock subclass with an SSI bus "<instance>.spi" (e.g.
++ * "spi0.spi"). sysbus IRQ 0: the SPI interrupt.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_SSI_AVR8X_SPI_H
++#define HW_SSI_AVR8X_SPI_H
++
++#define TYPE_AVR8X_SPI "avr8x-spi"
++
++#endif /* HW_SSI_AVR8X_SPI_H */
+diff --git a/include/hw/ssi/max7219.h b/include/hw/ssi/max7219.h
+new file mode 100644
+index 0000000..f47ee5b
+--- /dev/null
++++ b/include/hw/ssi/max7219.h
+@@ -0,0 +1,18 @@
++/*
++ * Maxim MAX7219 serially interfaced 8-digit LED display driver
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_SSI_MAX7219_H
++#define HW_SSI_MAX7219_H
++
++#define TYPE_MAX7219 "max7219"
++
++/* GPIO input: LOAD (CS#); the rising edge latches the last 16 bits */
++#define MAX7219_LOAD "load"
++
++#endif /* HW_SSI_MAX7219_H */
+diff --git a/include/hw/timer/avr8x_tcb.h b/include/hw/timer/avr8x_tcb.h
+new file mode 100644
+index 0000000..2794617
+--- /dev/null
++++ b/include/hw/timer/avr8x_tcb.h
+@@ -0,0 +1,18 @@
++/*
++ * Microchip AVR8X 16-bit timer/counter type B (tmr_16b_capture_v1)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * An mchp-regblock subclass. sysbus IRQ 0: the TCB interrupt. Clock
++ * input "gclk": CLK_PER.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_TIMER_AVR8X_TCB_H
++#define HW_TIMER_AVR8X_TCB_H
++
++#define TYPE_AVR8X_TCB "avr8x-tcb"
++
++#endif /* HW_TIMER_AVR8X_TCB_H */
+diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
+index 90274bb..3c1ca86 100644
+--- a/tests/qtest/avr64ea48-cnano-test.c
++++ b/tests/qtest/avr64ea48-cnano-test.c
+@@ -26,6 +26,9 @@
+ #define SYSCFG          (DATA + 0x0F00)
+ #define NVMCTRL         (DATA + 0x1000)
+ #define SIGROW          (DATA + 0x1100)
++#define PORTA           (DATA + 0x0400)
++#define SPI0            (DATA + 0x0940)
++#define TCB0            (DATA + 0x0B00)
+ #define EEPROM          (DATA + 0x1400)
+ #define SRAM            (DATA + 0x6800)
+ #define FLASH_MAP       (DATA + 0x8000)
+@@ -164,6 +167,69 @@ static void test_usart_cpuint(const void *fw)
+     qtest_quit(qts);
+ }
+ 
++static char *qom_str(QTestState *qts, const char *path, const char *prop)
++{
++    QDict *rsp = qtest_qmp(qts, "{ 'execute': 'qom-get', 'arguments':"
++                           " { 'path': %s, 'property': %s } }", path, prop);
++    char *value = g_strdup(qdict_get_str(rsp, "return"));
++
++    qobject_unref(rsp);
++    return value;
++}
++
++/* One MAX7219 frame through SPI0, LOAD on PA7 (mikroBUS 1 CS) */
++static void max7219_frame(QTestState *qts, uint8_t reg, uint8_t data)
++{
++    qtest_writeb(qts, PORTA + 0x06, BIT(7));                    /* OUTCLR */
++    qtest_writeb(qts, SPI0 + 4, reg);
++    g_assert_cmphex(qtest_readb(qts, SPI0 + 3) & 0x80, ==, 0x80);  /* IF */
++    qtest_writeb(qts, SPI0 + 4, data);
++    qtest_writeb(qts, PORTA + 0x05, BIT(7));                    /* OUTSET */
++}
++
++static void test_spi_8x8g(const void *fw)
++{
++    QTestState *qts = qtest_initf("-M avr64ea48-cnano,mb1=8x8g -kernel %s",
++                                  (const char *)fw);
++    g_autofree char *blank = NULL, *test = NULL, *digits = NULL;
++
++    qtest_writeb(qts, PORTA + 0x05, BIT(7));
++    qtest_writeb(qts, PORTA + 0x01, BIT(4) | BIT(6) | BIT(7));
++    qtest_writeb(qts, SPI0 + 0, 0x21);                  /* MASTER, ENABLE */
++    blank = qom_str(qts, "/machine/mb1-click", "display");
++    g_assert_cmpstr(blank, ==, "00 00 00 00 00 00 00 00");  /* shutdown */
++    max7219_frame(qts, 0x0F, 0x01);                     /* display test */
++    test = qom_str(qts, "/machine/mb1-click", "display");
++    g_assert_cmpstr(test, ==, "ff ff ff ff ff ff ff ff");
++    max7219_frame(qts, 0x0F, 0x00);
++    max7219_frame(qts, 0x0B, 0x07);                     /* scan all */
++    max7219_frame(qts, 0x0C, 0x01);                     /* normal operation */
++    max7219_frame(qts, 0x01, 0x3C);
++    max7219_frame(qts, 0x08, 0x81);
++    digits = qom_str(qts, "/machine/mb1-click", "display");
++    g_assert_cmpstr(digits, ==, "3c 00 00 00 00 00 00 81");
++    qtest_quit(qts);
++}
++
++static void test_tcb(const void *fw)
++{
++    QTestState *qts = start(fw);
++
++    /* Periodic interrupt mode, CLK_PER 3.333 MHz, CCMP 3332: 1 ms */
++    qtest_writeb(qts, TCB0 + 0x0C, 3332 & 0xff);
++    qtest_writeb(qts, TCB0 + 0x0D, 3332 >> 8);
++    qtest_writeb(qts, TCB0 + 0x05, 0x01);                       /* CAPT */
++    qtest_writeb(qts, TCB0 + 0x00, 0x01);                       /* ENABLE */
++    g_assert_cmphex(qtest_readb(qts, TCB0 + 0x07), ==, 0x01);   /* RUN */
++    qtest_clock_step(qts, 500 * 1000);
++    g_assert_cmphex(qtest_readb(qts, TCB0 + 0x06), ==, 0);
++    qtest_clock_step(qts, 600 * 1000);
++    g_assert_cmphex(qtest_readb(qts, TCB0 + 0x06), ==, 0x01);
++    qtest_writeb(qts, TCB0 + 0x06, 0x01);                       /* W1C */
++    g_assert_cmphex(qtest_readb(qts, TCB0 + 0x06), ==, 0);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_autofree char *fw = write_firmware();
+@@ -175,6 +241,8 @@ int main(int argc, char **argv)
+     qtest_add_data_func("avr64ea48-cnano/port", fw, test_port_led_sw0);
+     qtest_add_data_func("avr64ea48-cnano/usart-cpuint", fw,
+                         test_usart_cpuint);
++    qtest_add_data_func("avr64ea48-cnano/spi-8x8g", fw, test_spi_8x8g);
++    qtest_add_data_func("avr64ea48-cnano/tcb", fw, test_tcb);
+     ret = g_test_run();
+     unlink(fw);
+     return ret;
+-- 
+2.53.0.windows.2
+

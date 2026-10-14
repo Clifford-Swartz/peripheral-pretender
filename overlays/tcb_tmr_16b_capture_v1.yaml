@@ -1,0 +1,19 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for the AVR8X 16-bit timer/counter type B
+# (tmr_16b_capture_v1). The model runs the periodic interrupt mode.
+ip: TCB
+id: tmr_16b_capture_v1
+versions: [""]
+references:
+  - "DS40002324 (AVR64EA48) chapter TCB, register descriptions"
+registers:
+  CTRLA: {hooks: [post_write]}             # ENABLE, CLKSEL
+  CTRLB: {hooks: [post_write]}             # CNTMODE
+  CCMP: {hooks: [post_write]}              # period in periodic interrupt mode
+  CNT:
+    dynamic: true                          # counts on the virtual clock
+    hooks: [pre_read, post_write]
+  STATUS:
+    read_only: true
+    dynamic: true                          # RUN

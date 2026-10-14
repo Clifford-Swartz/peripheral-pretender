@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Recreate the pp-qemu fork next to this repo and build qemu-system-arm.
+# Recreate the pp-qemu fork next to this repo and build qemu-system-arm
+# (build/) and qemu-system-avr (build-avr/, the 8-bit AVR boards).
 #
 #   qemu/setup.sh [QEMU_DIR]      default: <repo>/../pp-qemu
 #
 # Clones upstream QEMU v11.1.2, creates branch pp/main, applies
-# qemu/patches/*.patch with 'git am', then configures an arm-softmmu-only
-# build and runs ninja.  Works on Linux, macOS and MSYS2 UCRT64 (Windows).
+# qemu/patches/*.patch with 'git am', then configures an arm-softmmu build
+# in build/ and an avr-softmmu build in build-avr/ and runs ninja in both.  Works on Linux, macOS and MSYS2 UCRT64 (Windows).
 # Re-running on an existing checkout skips the clone and the patches.
 #
 # Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
@@ -60,3 +61,19 @@ echo
     exit 1
 }
 echo "built $QEMU_DIR/build/$exe"
+
+# 8-bit AVR boards (avr64ea48-cnano) run on qemu-system-avr: tools.pp picks
+# the binary from the ELF ($PP_QEMU_AVR, or build-avr/ beside $PP_QEMU).
+mkdir -p "$QEMU_DIR/build-avr"
+cd "$QEMU_DIR/build-avr"
+if [ ! -f build.ninja ]; then
+    ../configure         --target-list=avr-softmmu         --without-default-features         --disable-docs         --disable-werror
+fi
+ninja
+exe=qemu-system-avr
+[ -f qemu-system-avr.exe ] && exe=qemu-system-avr.exe
+"./$exe" -M help | grep -i avr64ea48 || {
+    echo "error: avr64ea48-cnano machine missing from the build" >&2
+    exit 1
+}
+echo "built $QEMU_DIR/build-avr/$exe"

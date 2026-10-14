@@ -1,0 +1,21 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for the AVR8X USART (uart_autobd_v4: AVR Dx, AVR Ex).
+# AVR ATDF modules carry no version attribute; the id names the IP version,
+# so the overlay applies to the empty version.
+ip: USART
+id: uart_autobd_v4
+versions: [""]
+references:
+  - "DS40002324 (AVR64EA48) chapter USART, register descriptions"
+registers:
+  RXDATAL: {hooks: [pre_read]}             # pops the receive FIFO
+  RXDATAH: {hooks: [pre_read]}             # flags of the oldest character
+  TXDATAL: {hooks: [post_write]}           # starts a transmission
+  TXDATAH: {hooks: [post_write]}
+  STATUS:
+    w1c: [TXCIF, RXSIF, ISFIF, BDF]
+    ro: [DREIF, RXCIF]        # DREIF: buffer state; RXCIF: cleared by a read
+    hooks: [pre_read, post_write]
+  CTRLA: {hooks: [post_write]}             # interrupt enables
+  CTRLB: {hooks: [post_write]}             # TXEN/RXEN

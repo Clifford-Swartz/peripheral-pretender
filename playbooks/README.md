@@ -68,5 +68,8 @@ security bit or anything else that cannot be undone.
 | `py -m tools.pp run` | Run an ELF that prints `PP:EXIT` (test firmware) |
 | `py -m tools.pp_accept build / run / suite` | Microchip's examples: build with XC32, play scenarios, check expectations |
 | `py -m harness.hw_run` | Silicon: program, reset, capture the VCOM |
+| `py -m harness.nano_run` | Silicon on Curiosity Nano kits: drag-and-drop programming, VCOM capture |
+| `py -m harness.mdb_sim` | MPLAB simulator: USART output of an ELF (8-bit parts) |
+| `tools/pp_web/boards/compose_carrier.py` | A board in its carrier's socket, one image |
 | `tools/pp_web/boards/recolor_board.py`, `clicks/render_click.py` | Board, adapter and Click art |
 | `py -m tools.pp_web --watch` | The web view, following a firmware project's builds |

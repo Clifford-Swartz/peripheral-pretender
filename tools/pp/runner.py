@@ -45,7 +45,8 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from .protocol import ExitScanner, process_exit_status
-from .qemu import DEFAULT_MACHINE, find_qemu, qemu_env, trace_events
+from .qemu import (DEFAULT_MACHINE, EM_ARM, EM_AVR, find_qemu,
+                   machine_target, qemu_env, trace_events)
 from .unimp import summarize_log
 
 EXIT_TIMEOUT = 124      # no PP:EXIT before the timeout (as GNU timeout)
@@ -61,7 +62,6 @@ STATUS_CPU_LOCKUP = "cpu-lockup"   # QEMU aborted: "qemu: fatal: Lockup..."
 LOG_ITEMS = ("unimp", "guest_errors", "invalid_mem")
 UART_CHARDEV = "pp_uart0"
 QMP_TIMEOUT_S = 1.0
-EM_ARM = 40
 
 POLL_S = 0.05
 QUIET_EXIT_S = 0.2       # accept an unterminated exit line after this
@@ -124,11 +124,15 @@ class RunResult:
 def run(options: RunOptions) -> RunResult:
     """Run *options.elf* on QEMU until PP:EXIT, QEMU exit or timeout."""
     elf = Path(options.elf).resolve()
-    check_elf(elf)
+    target = check_elf(elf)
     _check_options(options)
     extra = split_extra_args(options.extra_args)
+    machine = extra.machine or options.machine
+    if target != machine_target(machine):
+        raise RunnerError(f"{elf.name} is {target} firmware; machine "
+                          f"{machine} runs {machine_target(machine)}")
     kept_log = _kept_log(options.log_path, extra.log_file)
-    qemu = find_qemu(options.qemu)
+    qemu = find_qemu(options.qemu, target)
     trace_patterns = _trace_patterns(options.trace, options.extra_args)
     warnings = unknown_trace_patterns(qemu, trace_patterns)
 
@@ -177,9 +181,10 @@ def run(options: RunOptions) -> RunResult:
     )
 
 
-def check_elf(path: Path) -> None:
-    """Refuse anything but an Arm ELF before QEMU sees it (QEMU would load
-    a raw file as a kernel image and run garbage)."""
+def check_elf(path: Path) -> str:
+    """Refuse anything but an Arm or AVR ELF before QEMU sees it (QEMU
+    would load a raw file as a kernel image and run garbage). Returns the
+    target, "arm" or "avr"."""
     if path.is_dir():
         raise RunnerError(f"{path} is a directory, expected an ELF file")
     if not path.is_file():
@@ -192,9 +197,12 @@ def check_elf(path: Path) -> None:
         raise RunnerError(f"truncated ELF header: {path}")
     machine = int.from_bytes(header[18:20],
                              "big" if header[5] == 2 else "little")
+    if machine == EM_AVR:
+        return "avr"
     if machine != EM_ARM:
-        raise RunnerError(f"not an Arm ELF (e_machine {machine}, expected "
-                          f"{EM_ARM}): {path}")
+        raise RunnerError(f"not an Arm or AVR ELF (e_machine {machine}, "
+                          f"expected {EM_ARM} or {EM_AVR}): {path}")
+    return "arm"
 
 
 def describe_returncode(code: int) -> str:

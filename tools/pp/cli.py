@@ -22,7 +22,8 @@ import sys
 from pathlib import Path
 from typing import Sequence, TextIO
 
-from .qemu import DEFAULT_MACHINE, QemuNotFound, machines_info
+from .qemu import (DEFAULT_AVR_MACHINE, DEFAULT_MACHINE, QemuNotFound,
+                   elf_target, machines_info)
 from .runner import (STATUS_CPU_LOCKUP, STATUS_EXIT, STATUS_TIMEOUT,
                      RunnerError, RunOptions, RunResult, describe_returncode,
                      run)
@@ -60,11 +61,13 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run an ELF until it prints 'PP:EXIT <n>' and exit "
                     "with n (124 on timeout, 125 if QEMU ends first).")
     p.add_argument("elf", help="firmware image (ELF)")
-    p.add_argument("-M", "--machine", default=DEFAULT_MACHINE,
-                   help=f"QEMU machine (default {DEFAULT_MACHINE})")
+    p.add_argument("-M", "--machine",
+                   help=f"QEMU machine (default {DEFAULT_MACHINE} for Arm "
+                        f"firmware, {DEFAULT_AVR_MACHINE} for AVR)")
     p.add_argument("--qemu", metavar="PATH",
-                   help="qemu-system-arm binary (default $PP_QEMU, then "
-                        "../pp-qemu/build, then PATH)")
+                   help="qemu-system-arm (or -avr) binary (default $PP_QEMU "
+                        "or $PP_QEMU_AVR, then ../pp-qemu/build or "
+                        "build-avr, then PATH)")
     p.add_argument("--timeout", type=float, metavar="S",
                    help=f"host seconds before giving up (default "
                         f"{DEFAULT_TIMEOUT_S:g}; none with --gdb)")
@@ -107,7 +110,9 @@ def options_from_args(args: argparse.Namespace) -> RunOptions:
         timeout = DEFAULT_TIMEOUT_S
     return RunOptions(
         elf=args.elf,
-        machine=args.machine,
+        machine=args.machine or (DEFAULT_AVR_MACHINE
+                                 if elf_target(args.elf) == "avr"
+                                 else DEFAULT_MACHINE),
         qemu=args.qemu,
         timeout_s=timeout,
         icount_shift=args.icount,

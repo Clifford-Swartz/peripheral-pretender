@@ -37,6 +37,7 @@ class InstanceSem:
     irq: int
     irq_name: str | None
     irq_input: int
+    vectors: list[int]              # AVR: every vector of the instance
     pac_id: int
     gclk_core: int
     gclk_slow: int
@@ -107,7 +108,8 @@ def _pow2_at_least(n: int) -> int:
 
 def _segment_of(device: atdf.Device, addr: int) -> atdf.MemorySegment | None:
     for s in device.memory_segments:
-        if s.address_space == "base" and s.start <= addr < s.start + s.size:
+        if (s.address_space in atdf.MMIO_SPACES and
+                s.start <= addr < s.start + s.size):
             return s
     return None
 
@@ -124,6 +126,9 @@ def _pmux(function: str) -> int:
 
 
 def _slot(device: atdf.Device, ip: IpSem, base: int, notes: list[str]) -> int:
+    if device.is_avr:
+        # AVR I/O modules sit back to back; map just their registers
+        return ip.size
     size = APB_SLOT
     if ip.size > APB_SLOT:
         size = _pow2_at_least(ip.size)
@@ -159,8 +164,9 @@ def _build_instance(device: atdf.Device, inst: atdf.Instance, ip: IpSem,
                     irq_of: dict[str, tuple[IrqLine, int]]) -> InstanceSem:
     notes: list[str] = []
     flags = []
-    mmio = [g for g in inst.groups if g.address_space == "base"]
-    if ip.core:
+    mmio = [g for g in inst.groups if g.address_space in atdf.MMIO_SPACES]
+    if ip.core or (device.is_avr and inst.module == "CPU"):
+        # AVR: SP and SREG belong to the CPU model, CCP to the SoC
         flags.append("CORE")
     if not mmio:
         flags.append("FUSES")
@@ -172,11 +178,15 @@ def _build_instance(device: atdf.Device, inst: atdf.Instance, ip: IpSem,
     alias_name, alias_base, alias_size = _alias(inst, main, ip, slot)
     seg = _segment_of(device, main.base)
     irq, irq_input, irq_name = -1, 0, None
+    vectors = []
     if inst.name in irq_of:
         line, irq_input = irq_of[inst.name]
         irq, irq_name = line.index, line.name
         if len(line.instances) > 1:
             flags.append("SHARED_IRQ")
+    if device.is_avr:
+        vectors = sorted({it.index for it in device.interrupts
+                          if inst.name in it.instances})
     if inst.module_version != ip.module.version:
         notes.append(f"instance version {inst.module_version} differs from "
                      f"module version {ip.module.version}")
@@ -185,7 +195,7 @@ def _build_instance(device: atdf.Device, inst: atdf.Instance, ip: IpSem,
         ip_version=inst.module_version, base=main.base, slot_size=slot,
         bus=seg.name if seg else main.address_space, alias_name=alias_name,
         alias_base=alias_base, alias_size=alias_size, irq=irq,
-        irq_name=irq_name, irq_input=irq_input,
+        irq_name=irq_name, irq_input=irq_input, vectors=vectors,
         pac_id=_param(inst, "INSTANCE_ID"),
         gclk_core=_param(inst, "GCLK_ID_CORE", "GCLK_ID"),
         gclk_slow=_param(inst, "GCLK_ID_SLOW"),
@@ -206,6 +216,8 @@ def _check_overlaps(instances: list[InstanceSem]):
 def _irq_map(device: atdf.Device) -> tuple[list[IrqLine], list[IrqLine],
                                            dict[str, tuple[IrqLine, int]]]:
     lines, exceptions, irq_of = [], [], {}
+    if device.is_avr:
+        return _avr_vectors(device)
     for it in device.interrupts:
         line = IrqLine(it.index, it.name, it.caption, list(it.instances))
         (lines if it.index >= 0 else exceptions).append(line)
@@ -221,6 +233,31 @@ def _irq_map(device: atdf.Device) -> tuple[list[IrqLine], list[IrqLine],
     return lines, exceptions, irq_of
 
 
+def _avr_vectors(device: atdf.Device) -> tuple[list[IrqLine], list[IrqLine],
+                                                dict[str, tuple[IrqLine, int]]]:
+    """AVR interrupt vectors: an instance has several (USART RXC, DRE,
+    TXC) and a vector may have several names (TCA0 LUNF/OVF, one per timer
+    mode); each vector becomes one line named after its first entry. The
+    instance's IRQ is its lowest vector."""
+    by_index: dict[int, IrqLine] = {}
+    for it in device.interrupts:
+        name = "_".join(it.instances + [it.name]) if it.instances else it.name
+        line = by_index.get(it.index)
+        if line is None:
+            by_index[it.index] = IrqLine(it.index, name,
+                                         it.caption or name, list(it.instances))
+        else:
+            line.caption += f", {name}"
+            line.instances += [i for i in it.instances
+                               if i not in line.instances]
+    lines = sorted(by_index.values(), key=lambda l: l.index)
+    irq_of: dict[str, tuple[IrqLine, int]] = {}
+    for line in lines:
+        for name in line.instances:
+            irq_of.setdefault(name, (line, 0))
+    return lines, [], irq_of
+
+
 def _refs(device: atdf.Device, prefix: str) -> list[PeriphRef]:
     out = []
     for inst in device.instances:
@@ -233,6 +270,14 @@ def _refs(device: atdf.Device, prefix: str) -> list[PeriphRef]:
 def build(device: atdf.Device, overlays, prof: Profile | None = None
           ) -> DeviceSem:
     if prof is not None:
+        if (prof.nvm_rows is None) != device.is_avr:
+            raise ValueError(f"profile {prof.file}: nvm_rows is "
+                             + ("for Arm parts only" if device.is_avr
+                                else "required"))
+        if not device.is_avr and any(v > 15 for _, v in
+                                     prof.silicon_revisions):
+            raise ValueError(f"profile {prof.file}: DSU.DID.REVISION values "
+                             "are 0-15")
         if prof.device != device.name:
             raise ValueError(f"profile {prof.file} is for {prof.device}, not "
                              f"{device.name}")

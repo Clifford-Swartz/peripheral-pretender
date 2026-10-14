@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from tools.pp.qemu import find_qemu, qemu_env
+from tools.pp.qemu import elf_target, find_qemu, machine_target, qemu_env
 
 POLL_S = 1 / 30
 PORT_PATH = "/machine/soc/port"
@@ -101,7 +101,10 @@ class Session:
 
     async def start(self) -> None:
         qmp_port, uart_port = free_port(), free_port()
-        args = [str(find_qemu()), "-M", self.machine, "-kernel", str(self.elf),
+        # Arm firmware runs on qemu-system-arm, AVR on qemu-system-avr
+        target = elf_target(self.elf) or machine_target(self.machine)
+        args = [str(find_qemu(target=target)), "-M", self.machine,
+                "-kernel", str(self.elf),
                 "-display", "none", "-monitor", "none",
                 "-icount", "shift=auto,sleep=on",
                 "-chardev", f"socket,id=vcom,host=127.0.0.1,port={uart_port},"
@@ -151,9 +154,10 @@ class Session:
                 if not prev or stats[0] <= prev[0]:
                     continue
                 dt = stats[0] - prev[0]
+                # 32 pads a group on Arm parts, 8 on AVR
                 pins[g] = [[round((stats[1 + 2 * n] - prev[1 + 2 * n]) / dt, 2),
                             round((stats[2 + 2 * n] - prev[2 + 2 * n]) / dt, 2)]
-                           for n in range(32)]
+                           for n in range((len(stats) - 1) // 2)]
             if pins and pins != self.pins:
                 self.pins = pins
                 self.emit({"type": "pins", "pins": pins})

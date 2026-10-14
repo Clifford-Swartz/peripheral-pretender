@@ -1,0 +1,15 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Device profile for AVR64EA48 (on the AVR64EA48 Curiosity Nano, EV66E56A):
+# facts that belong to this device rather than to an IP version (see
+# generator/mchpgen/profile.py). AVR parts have no NVM rows image: the
+# signature comes from the ATDF, other non-erased bytes are data_rows.
+device: AVR64EA48
+references:
+  - "DS40002324 (AVR64EA28/32/48 data sheet): SYSCFG.REVID, memory map"
+  - "ATDF AVR64EA48 (AVR-Ex_DFP 2.8.189): signature 1E 96 1E"
+  - "Silicon, EV66E56A, read 2026-10-14 by firmware/avr-hello
+    (golden/avr64ea48-b1/hello-vcom.bin): SYSCFG.REVID 0x21"
+# SYSCFG.REVID per silicon revision (MAJOR in bits 7:4, 'A' = 1); default
+# first
+silicon_revisions: {B1: 0x21}

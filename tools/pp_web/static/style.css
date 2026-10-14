@@ -132,3 +132,8 @@ h2 small { color: var(--muted); font-weight: normal; }
   #side { width: auto; max-width: none; border-left: 0; }
   #board-pane { flex: none; height: 70vh; }
 }
+
+/* LED matrix dots on a Click (8x8 G): lit from the driver's display */
+.click-dot { position: absolute; border-radius: 30%; opacity: .12;
+  background: var(--seg); box-shadow: 0 0 0 transparent; }
+.click-dot.on { opacity: 1; box-shadow: 0 0 6px 2px var(--seg); }

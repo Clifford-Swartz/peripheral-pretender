@@ -45,7 +45,26 @@ def test_projects_naming(tmp_path):
         "port__port_led", "sercom__usart__usart_lin__master"]
 
 
+def test_projects_one_repo_per_example(tmp_path):
+    """8-bit kits: example repositories side by side, some with several
+    projects; configuration and toolchain from configurations.xml."""
+    from tools.pp_accept.build import project_conf
+    for rel in ["avr-blink/avr-blink.X/nbproject",
+                "avr-filters/iir/iir.X/nbproject",
+                "avr-filters/median/median.X/nbproject"]:
+        (tmp_path / rel).mkdir(parents=True)
+    (tmp_path / "avr-blink/avr-blink.X/nbproject/configurations.xml").write_text(
+        '<conf name="free" type="2"><languageToolchain>XC8</languageToolchain>')
+    found = projects(tmp_path, "avr64ea48_curiosity_nano")
+    assert [n for n, _ in found] == ["avr-blink", "avr-filters__iir",
+                                     "avr-filters__median"]
+    assert project_conf(found[0][1]) == ("free", "XC8")
+    assert project_conf(found[1][1]) == ("default", "XC32")
+
+
 def test_board_leds():
+    assert [(l.id, l.pin) for l in board_leds("avr64ea48-cnano,mb1=8x8g")] == [
+        ("LED0", "PB3")]
     assert [(l.id, l.pin) for l in board_leds("pic32cm-jh01-cpro")] == [
         ("LED0", "PC05")]
     assert [(l.id, l.pin) for l in board_leds("pic32cm-mc00-cpro,ext1=thermo8")] == [

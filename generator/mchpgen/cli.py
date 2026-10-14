@@ -8,7 +8,8 @@ import glob
 import os
 import sys
 
-from . import GENERATOR, atdf, cgen, device, jsongen, overlay, profile, report
+from . import (GENERATOR, atdf, avrgen, cgen, device, jsongen, overlay,
+               profile, report)
 from .overlay import OverlayError
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -49,6 +50,12 @@ def outputs(dss, qemu_out: str | None, json_out: str | None,
                     if ip.views:
                         files[os.path.join(qemu_out, cgen.ip_tables_path(ds, ip))] = \
                             cgen.ip_tables(ds, ip)
+            if ds.device.is_avr:
+                files[os.path.join(qemu_out, avrgen.soc_header_path(ds))] = \
+                    avrgen.soc_header(ds)
+                files[os.path.join(qemu_out, avrgen.device_header_path(ds))] = \
+                    avrgen.device_header(ds)
+                continue
             files[os.path.join(qemu_out, cgen.soc_header_path(ds))] = \
                 cgen.soc_header(ds)
             files[os.path.join(qemu_out, cgen.nvmrows_header_path(ds))] = \

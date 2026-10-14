@@ -20,7 +20,7 @@ except ImportError:     # mcp 1.x
 
 from ..pp import (DEFAULT_MACHINE, QemuNotFound, RunnerError, RunOptions,
                   machines_info, run)
-from ..pp.qemu import PROJECT_ROOT
+from ..pp.qemu import DEFAULT_AVR_MACHINE, PROJECT_ROOT, elf_target
 
 MAX_TIMEOUT_S = 600.0
 # The transcript goes into the assistant's context: keep its head and tail.
@@ -30,7 +30,9 @@ MAX_TRACE_LINES = 200
 INSTRUCTIONS = f"""\
 Peripheral Pretender runs Microchip MCU firmware on a QEMU digital twin.
 twin_machines shows which machines the QEMU build offers; the default board
-is {DEFAULT_MACHINE} (PIC32CM5164JH01100 Curiosity Pro, UART = SERCOM4 VCOM).
+is {DEFAULT_MACHINE} (PIC32CM5164JH01100 Curiosity Pro, UART = SERCOM4 VCOM)
+for Arm ELFs and {DEFAULT_AVR_MACHINE} (AVR64EA48 Curiosity Nano, UART =
+USART1 VCOM) for AVR ELFs, which run on qemu-system-avr.
 twin_run boots an ELF and waits for the firmware to print 'PP:EXIT <n>':
 exit_code is n, 124 on timeout, 125 if QEMU ended first (status
 cpu-lockup for a CPU lockup; see detail and qemu_stderr_tail). On timeout,
@@ -106,7 +108,7 @@ def machine_extra_args(machine_options: str | None) -> list[str]:
 async def twin_run(elf_path: str, timeout_s: float = 10.0,
                    input_text: str | None = None,
                    icount_shift: int | None = None,
-                   machine: str = DEFAULT_MACHINE,
+                   machine: str | None = None,
                    machine_options: str | None = None,
                    input_after: str | None = None,
                    trace: list[str] | None = None) -> TwinRunResult:
@@ -120,7 +122,8 @@ async def twin_run(elf_path: str, timeout_s: float = 10.0,
         icount_shift: deterministic virtual time, 2^shift ns per
             instruction (0-10); omit for real-time pacing. Only output-only
             runs are reproducible: UART input arrives in host time.
-        machine: QEMU machine name (see twin_machines).
+        machine: QEMU machine name (see twin_machines); omitted: the
+            default board of the ELF's architecture (Arm or AVR).
         machine_options: extra machine properties, comma separated, e.g.
             "sw0-pressed=on" (button SW0 held) on pic32cm-jh01-cpro.
         input_after: send input_text once this text has appeared on the
@@ -136,7 +139,11 @@ async def twin_run(elf_path: str, timeout_s: float = 10.0,
     """
     if not 0 < timeout_s <= MAX_TIMEOUT_S:
         raise ToolError(f"timeout_s must be in (0, {MAX_TIMEOUT_S:g}]")
-    options = RunOptions(elf=resolve_elf(elf_path), machine=machine,
+    elf = resolve_elf(elf_path)
+    if machine is None:
+        machine = (DEFAULT_AVR_MACHINE if elf_target(elf) == "avr"
+                   else DEFAULT_MACHINE)
+    options = RunOptions(elf=elf, machine=machine,
                          timeout_s=timeout_s, icount_shift=icount_shift,
                          input_text=input_text, input_after=input_after,
                          trace=list(trace or ()),

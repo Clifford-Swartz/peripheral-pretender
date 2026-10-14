@@ -21,6 +21,7 @@ THERMO = BUILD / "thermo.elf"
 CLICKS_DEMO = BUILD / "clicks.elf"
 JH01_BLINKY = (ROOT / "firmware" / "hello" / "build" / "pic32cm_jh01_cpro"
                / "blinky.elf")
+AVR_BUILD = ROOT / "firmware" / "avr-hello" / "build"
 
 
 def test_board_description():
@@ -73,10 +74,58 @@ def test_board_description_ev81x90a():
         round(v * board["px_per_mm"]) for v in board["size_mm"])
 
 
+def _socket_box(header: dict, click: dict) -> tuple[float, ...]:
+    """Board-mm box of a Click on a header that is a mikroBUS socket."""
+    sock = header["socket"]
+    hc = click.get("header_center_mm", [11.43, 8.89])
+    kx = click["origin_mm"][0] + click["size_mm"][0] / 2 - hc[0]
+    ky = click["origin_mm"][1] - click["size_mm"][1] / 2 - hc[1]
+    r = math.radians(sock["rotation"])
+    cx = sock["at_mm"][0] + kx * math.cos(r) + ky * math.sin(r)
+    cy = sock["at_mm"][1] - kx * math.sin(r) + ky * math.cos(r)
+    cw, ch = click["size_mm"]
+    if sock["rotation"] % 180:
+        cw, ch = ch, cw
+    return (cx - cw / 2, cy - ch / 2, cx + cw / 2, cy + ch / 2)
+
+
+def test_board_description_ev66e56a():
+    """AVR64EA48 Curiosity Nano on a Curiosity Nano Base: one image of both
+    (compose_carrier.py), pins from the user guides DS50003494A and
+    DS50002839B, three mikroBUS sockets as Click slots."""
+    board = json.loads((BOARDS / "ev66e56a" / "board.json").read_text())
+    assert board["machine"] == "avr64ea48-cnano"
+    x0, y0 = board["origin_mm"]
+    w, h = board["size_mm"]
+    for part in board["leds"] + board["buttons"] + board["headers"]:
+        x, y = part["at_mm"]
+        assert x0 <= x <= x0 + w and y0 - h <= y <= y0, part["id"]
+    led = board["leds"][0]
+    assert (led["id"], led["pin"], led["active_low"]) == ("LED0", "PB3", True)
+    assert {hd["slot"]: hd["mikrobus"] for hd in board["headers"]} == {
+        "mb1": {"rst": "PD6", "pwm": "PD0", "int": "PD3", "cs": "PA7"},
+        "mb2": {"rst": "PF3", "pwm": "PD1", "int": "PF2", "cs": "PE2"},
+        "mb3": {"rst": "PE1", "pwm": "PD2", "int": "PE0", "cs": "PE3"}}
+    assert _png_size(BOARDS / "ev66e56a" / board["image"]) == tuple(
+        round(v * board["px_per_mm"]) for v in board["size_mm"])
+    # Every Click fits the stage on every socket; neighbours do not overlap
+    (vx, vy), (vw, vh) = board["view_mm"]["origin"], board["view_mm"]["size"]
+    spans = []
+    for hd in board["headers"]:
+        boxes = [_socket_box(hd, c) for c in CLICKS.values()]
+        for bx0, by0, bx1, by1 in boxes:
+            assert vx <= bx0 and bx1 <= vx + vw, (hd["id"], bx0, bx1)
+            assert vy - vh <= by0 and by1 <= vy, (hd["id"], by0, by1)
+        spans.append((min(b[1] for b in boxes), max(b[3] for b in boxes)))
+    spans.sort()
+    assert all(a[1] <= b[0] + 0.01 for a, b in zip(spans, spans[1:])), spans
+
+
 def test_pin_groups():
     from tools.pp_web.server import pin_groups
     for bid, groups in (("ev15n46a", ("a", "b")),
-                        ("ev81x90a", ("a", "b", "c"))):
+                        ("ev81x90a", ("a", "b", "c")),
+                        ("ev66e56a", ("a", "b", "d", "e", "f"))):
         board = json.loads((BOARDS / bid / "board.json").read_text())
         assert pin_groups(board) == groups, bid
 
@@ -394,8 +443,85 @@ def test_board_list_and_demos():
     firmware build for that board's machine."""
     from tools.pp_web.server import board_list
     ids = [b["id"] for b in board_list()]
-    assert {"ev15n46a", "ev81x90a"} <= set(ids)
+    assert {"ev15n46a", "ev81x90a", "ev66e56a"} <= set(ids)
     for bid in ids:
         board = json.loads((BOARDS / bid / "board.json").read_text(encoding="utf-8"))
         if "demo_elf" in board:
             assert board["demo_elf"].startswith("firmware/"), board["demo_elf"]
+
+
+def _avr_twin():
+    """Skip unless an AVR pp-qemu build with avr64ea48-cnano is around."""
+    from tools.pp.qemu import QemuNotFound, find_qemu, list_machines
+    try:
+        qemu = find_qemu(target="avr")
+    except QemuNotFound as exc:
+        pytest.skip(str(exc))
+    if "avr64ea48-cnano" not in {m.name for m in list_machines(qemu)}:
+        pytest.skip(f"{qemu} has no avr64ea48-cnano machine")
+
+
+@pytest.mark.qemu
+def test_session_ev66e56a_blinky_and_8x8g():
+    """AVR64EA48 Curiosity Nano: LED0 (PB3) blinks from the TCB0 interrupt
+    and SW0 (PB2) speeds it up; the 8x8 G Click on mikroBUS 1 shows what
+    the MAX7219 is told, through the display property the page polls."""
+    from tools.pp_web.server import pin_groups
+    _avr_twin()
+    for app in ("blinky", "matrix"):
+        if not (AVR_BUILD / f"{app}.elf").is_file():
+            pytest.skip(f"{app}.elf not built (make -C firmware/avr-hello)")
+    board = json.loads((BOARDS / "ev66e56a" / "board.json").read_text())
+
+    def toggles(updates):
+        times, last = [], None
+        for t, pins in updates:
+            on = pins["b"][3][1] > 0.5
+            if last is not None and on != last:
+                times.append(t)
+            last = on
+        return times
+
+    async def scenario():
+        updates, uart, states = [], [], []
+
+        def emit(msg):
+            if msg["type"] == "pins":
+                updates.append((time.monotonic(), msg["pins"]))
+            elif msg["type"] == "uart":
+                uart.append(msg["data"])
+            elif msg["type"] == "clickstate":
+                states.append(msg["state"].get("mb1.display"))
+
+        s = Session(board["machine"], AVR_BUILD / "blinky.elf", emit,
+                    groups=pin_groups(board))
+        await s.start()
+        try:
+            await asyncio.sleep(2.0)
+            slow = toggles(updates)
+            n = len(updates)
+            await s.press("sw0", True)
+            await asyncio.sleep(1.0)
+            await s.press("sw0", False)
+            fast = toggles(updates[n:])
+            await asyncio.sleep(0.3)
+        finally:
+            await s.stop()
+        m = Session(f"{board['machine']},mb1=8x8g", AVR_BUILD / "matrix.elf",
+                    emit, groups=pin_groups(board),
+                    watch=[("mb1", CLICKS["8x8g"]["display"]["property"])])
+        await m.start()
+        try:
+            await asyncio.sleep(1.5)
+        finally:
+            await m.stop()
+        return slow, fast, "".join(uart), states
+
+    slow, fast, uart, states = asyncio.run(scenario())
+    assert "PP blinky" in uart and "SW0 pressed" in uart, uart
+    assert 5 <= len(slow) <= 10, slow
+    assert len(fast) >= 7, fast
+    assert "frame: 3C 42 A9 85 85 A9 42 3C" in uart, uart
+    frames = {f for f in states if f}
+    assert len(frames) >= 3, frames        # the text scrolls
+    assert all(len(f.split()) == 8 for f in frames), frames
