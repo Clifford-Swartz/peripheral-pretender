@@ -8,27 +8,35 @@ references:
   - "DS60001638E (PIC32CM MC00 data sheet): Table 8-2 (user row), DSU.DID, SUPC.VREG, MCLK.AHBMASK"
   - "DS80000905G (errata): DSU.DID revisions A1 0x11070006, A2 0x11070106"
   - "ATDF PIC32CM1216MC00048 (PIC32CM-MC_DFP 1.4.67): NVMCTRL parameters"
+  - "Silicon, EV15N46A rev A1 board, read 2026-10-13 (pyOCD attach, no halt): user row,
+    OTP1, OTP5, TEMP_LOG, NVMCTRL.PARAM, DSU.DID"
 # DSU.DID.REVISION per silicon revision (DS80000905G); default first
 silicon_revisions: {A2: 1, A1: 0}
 reset_overrides:
   DSU:
     DID: 0x11070106                 # rev A2 (SERIES 7, DEVSEL 0x06)
   NVMCTRL:
-    PARAM: 0x04030800               # NVMP 2048, PSZ 3 (64 B), DFP 64 pages
+    PARAM: 0x04030800               # NVMP 2048, PSZ 3 (64 B), DFP 64; silicon
   SUPC:
     VREG: 0x00000002                # DS: ENABLE at reset (the ATDF says 0)
   MCLK:
     AHBMASK: 0x000005FF             # DS reset value (the ATDF says 0x7FFF)
 nvm_rows:
-  # Production settings computed from DS60001638E Table 8-2 (BOOTPROT is 3
-  # bits here). UNCONFIRMED: check against a dump from silicon.
+  # Production settings (DS60001638E Table 8-2; BOOTPROT 7 = none, BODVDD
+  # level 4 with reset action, WDT off), confirmed on silicon.
   user_row: [0xB15088FF, 0xFFFFF8BB]
   serial_addrs: [0x0080A00C, 0x0080A040, 0x0080A044, 0x0080A048]
   serial_default: [0x50500000, 0x00000001, 0x00000002, 0x00000003]
+  # Factory rows of one part (EV15N46A, rev A1). Calibration values differ
+  # per part; these are real ones rather than placeholders.
   words:
-    # Software calibration row: CAL48M in bits 40:19 (Harmony copies it into
-    # OSCCTRL.CAL48M). Placeholder value as on the JH01 until dumped.
-    - {addr: 0x00806020, value: 0x1103F924,
-       what: "OTP5 word 0: placeholder calibration, CAL48M low"}
-    - {addr: 0x00806024, value: 0xFFFFFF00,
-       what: "OTP5 word 1: CAL48M high, reserved"}
+    - {addr: 0x00806000, value: 0x08000300, what: "OTP1 word 0 (silicon)"}
+    - {addr: 0x00806004, value: 0x00000040, what: "OTP1 word 1 (silicon)"}
+    # Software calibration row: CAL48M 0x210320 in bits 40:19 (Harmony copies
+    # it into OSCCTRL.CAL48M)
+    - {addr: 0x00806020, value: 0x1904FFBE,
+       what: "OTP5 word 0: calibration (silicon), CAL48M low"}
+    - {addr: 0x00806024, value: 0xC2064108,
+       what: "OTP5 word 1: calibration (silicon), CAL48M high"}
+    - {addr: 0x00806030, value: 0x14421ADF, what: "TEMP_LOG word 0 (silicon)"}
+    - {addr: 0x00806034, value: 0xF0024420, what: "TEMP_LOG word 1 (silicon)"}

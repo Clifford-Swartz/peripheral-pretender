@@ -199,14 +199,34 @@
     "what": "USER row word 1 (production)"
    },
    {
+    "addr": 8413184,
+    "value": 134218496,
+    "what": "OTP1 word 0 (silicon)"
+   },
+   {
+    "addr": 8413188,
+    "value": 64,
+    "what": "OTP1 word 1 (silicon)"
+   },
+   {
     "addr": 8413216,
-    "value": 285473060,
-    "what": "OTP5 word 0: placeholder calibration, CAL48M low"
+    "value": 419758014,
+    "what": "OTP5 word 0: calibration (silicon), CAL48M low"
    },
    {
     "addr": 8413220,
-    "value": 4294967040,
-    "what": "OTP5 word 1: CAL48M high, reserved"
+    "value": 3255189768,
+    "what": "OTP5 word 1: calibration (silicon), CAL48M high"
+   },
+   {
+    "addr": 8413232,
+    "value": 339876575,
+    "what": "TEMP_LOG word 0 (silicon)"
+   },
+   {
+    "addr": 8413236,
+    "value": 4026680352,
+    "what": "TEMP_LOG word 1 (silicon)"
    }
   ],
   "serial_addrs": [

@@ -110,10 +110,18 @@ What changed to support a second device:
 - **Tests:** generator tests check outputs for both devices; the e2e test runs hello on both
   boards. Regression qtests (qom-test, test-hmp: 80 machines) pass.
 
+Silicon check (2026-10-13, EV15N46A on the desk, pyOCD attach mode, reads only, core never
+halted): DSU.DID 0x11070006 (**rev A1**), CPUID 0x410CC601, user row 0xB15088FF / 0xFFFFF8BB and
+NVMCTRL.PARAM 0x04030800 all **confirmed**. OTP1, OTP5 (calibration, CAL48M 0x210320, matching
+what the running firmware had loaded) and TEMP_LOG were read and are now the profile's defaults.
+Serial number of this part: F79A74AF 51524B59 39202020 FF190418 (pass it as the SoC's
+`serial-number` to make the twin's transcript match the board's byte for byte).
+
 Open MC00 items:
-- The production user row (0xB15088FF / 0xFFFFF8BB) is computed from a garbled data-sheet table
-  and is UNCONFIRMED; the calibration row is the JH01 placeholder. Dump both from silicon.
-- NVMCTRL.PARAM's data-flash page field (0x04030800 vs 0x00030800) is unconfirmed.
+- Observed while the factory firmware ran (so not necessarily reset values): PAC.STATUSC
+  0x02000000 (twin: 0), MCLK.AHBMASK 0x7FF (twin: data-sheet reset 0x5FF). A dump after a reset
+  needs approval to reset/halt the board.
+- The twin defaults to rev A2; this board is A1 (`-global pic32cm1216mc00048-soc.silicon-rev=A1`).
 - `tools.pp` still defaults to `pic32cm-jh01-cpro`; MC00 runs need `--machine pic32cm-mc00-cpro`.
 - DS SERIES field inconsistency for DSU.DID (6 in the header and bit drawing, 7 in text, errata
   and signature); the twin uses 7.

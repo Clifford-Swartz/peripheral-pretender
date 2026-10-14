@@ -266,20 +266,22 @@ firmware/hello/build/pic32cm_mc00_cpro/hello.elf --machine pic32cm-mc00-cpro`.
 - The board has a 12 MHz oscillator on XIN and a 32.768 kHz one on XIN32;
   like Harmony, the image uses neither.
 
-Transcript on the twin (default NVM image):
+Transcript on the twin (default NVM image, whose calibration rows come from
+a real rev A1 part; the default revision is A2, so DID reads 0x11070106 unless
+`-global pic32cm1216mc00048-soc.silicon-rev=A1` is given):
 
 ```
 PP hello: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
 step 3 nvmctrl: CTRLB <- RWS(3)
 step 4 port: PA.PINCFG6=0x01 PA.PINCFG7=0x01 PA.PMUX3=0x33 PA.DIR=0x01000000
-step 5 clock: CAL48M=0x00200220 OSC48MDIV=0x00 GENCTRL0=0x00010106 PCHCTRL19=0x00000040 APBCMASK=0x00000002
+step 5 clock: CAL48M=0x00210320 OSC48MDIV=0x00 GENCTRL0=0x00010106 PCHCTRL19=0x00000040 APBCMASK=0x00000002
 step 6 nvmctrl: CTRLB=0x00000084
 step 7 sercom0: CTRLA=0x40310106 BAUD=0xF62B CTRLB=0x00030000
 step 8 nvic: ISER=0x00000200 IPR2=0x0000C000
 dsu: DID=0x11070106
 scb: CPUID=0x410CC601
 serial: 0x50500000 0x00000001 0x00000002 0x00000003
-calrow: 0xFFFFFF001103F924
+calrow: 0xC20641081904FFBE
 irq9: sent by SERCOM0_Handler, one byte per DRE interrupt
 led0: blink 1/3
 led0: blink 2/3
