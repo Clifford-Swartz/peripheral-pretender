@@ -3,6 +3,11 @@
 state over a WebSocket.
 
     py -m tools.pp_web [--port 8080] [--elf firmware.elf] [--board ev15n46a]
+                       [--watch <project folder or ELF>]
+
+--watch follows a firmware project: whenever a newer ELF appears (an
+MPLAB for VS Code build in out/, an MPLAB X build in dist/, or the file
+itself), the twin restarts with it.
 
 Messages to the page: {"type": "status"|"pins"|"uart"|"board"|"clicks",
 ...}; "pins" maps a PORT group ("a", "b") to 32 [driven-high, driven-low]
@@ -25,6 +30,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -36,17 +42,29 @@ HERE = Path(__file__).resolve().parent
 STATIC = HERE / "static"
 BOARDS = HERE / "boards"
 MAX_ELF = 4 * 1024 * 1024
+WATCH_S = 1.0
+WATCH_GLOBS = ("**/out/**/*.elf", "**/dist/**/*.elf")
+
+
+def newest_elf(target: Path) -> Path | None:
+    """The newest build output of a project folder, or @target itself."""
+    if target.is_file():
+        return target
+    found = [p for g in WATCH_GLOBS for p in target.glob(g) if p.is_file()]
+    return max(found, key=lambda p: p.stat().st_mtime, default=None)
 CLICKS = json.loads((HERE / "clicks.json").read_text(encoding="utf-8"))
 ADAPTERS = json.loads((HERE / "adapters.json").read_text(encoding="utf-8"))
 
 
 class App:
-    def __init__(self, board: str, elf: Path | None):
+    def __init__(self, board: str, elf: Path | None,
+                 watch: Path | None = None):
         self.board_dir = BOARDS / board
         self.board = json.loads((self.board_dir / "board.json").read_text(encoding="utf-8"))
         self.clients: set[web.WebSocketResponse] = set()
         self.session: Session | None = None
         self.elf = elf
+        self.watch = watch
         self.tmp = Path(tempfile.mkdtemp(prefix="pp_web_"))
         self.uart_log = ""
         self.lock = asyncio.Lock()
@@ -173,11 +191,49 @@ class App:
         self.clients.discard(ws)
         return ws
 
+    async def _watch(self) -> None:
+        """Run each new build of the watched project once it is complete
+        (unchanged for one poll); a copy, so the linker can overwrite it."""
+        seen = pending = None
+        if self.elf is None and (first := newest_elf(self.watch)):
+            seen = (first, first.stat().st_mtime_ns, first.stat().st_size)
+            await self._load(first)
+        elif first := newest_elf(self.watch):
+            seen = (first, first.stat().st_mtime_ns, first.stat().st_size)
+        while True:
+            await asyncio.sleep(WATCH_S)
+            elf = newest_elf(self.watch)
+            try:
+                now = elf and (elf, elf.stat().st_mtime_ns, elf.stat().st_size)
+            except OSError:
+                continue                # being rewritten
+            if not now or now == seen:
+                pending = None
+            elif now == pending:
+                seen, pending = now, None
+                await self._load(elf)
+            else:
+                pending = now
+
+    async def _load(self, elf: Path) -> None:
+        if elf.read_bytes()[:4] != b"\x7fELF":
+            return
+        dest = self.tmp / "watch" / elf.name
+        dest.parent.mkdir(exist_ok=True)
+        shutil.copyfile(elf, dest)
+        self.emit({"type": "status", "state": "idle",
+                   "text": f"new build: {elf.name}"})
+        await self.run(dest)
+
     async def on_startup(self, app: web.Application) -> None:
         if self.elf:
             await self.run(self.elf)
+        if self.watch:
+            self.watcher = asyncio.create_task(self._watch())
 
     async def on_cleanup(self, app: web.Application) -> None:
+        if getattr(self, "watcher", None):
+            self.watcher.cancel()
         if self.session:
             await self.session.stop()
 
@@ -191,8 +247,9 @@ async def part_image(request: web.Request) -> web.StreamResponse:
     return web.FileResponse(path)
 
 
-def make_app(board: str = "ev15n46a", elf: Path | None = None) -> web.Application:
-    state = App(board, elf)
+def make_app(board: str = "ev15n46a", elf: Path | None = None,
+             watch: Path | None = None) -> web.Application:
+    state = App(board, elf, watch)
     app = web.Application(client_max_size=MAX_ELF + 1024)
     app.add_routes([
         web.get("/", state.index),
@@ -214,6 +271,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--board", default="ev15n46a")
     ap.add_argument("--elf", type=Path, help="firmware to start with")
+    ap.add_argument("--watch", type=Path, metavar="PATH",
+                    help="project folder (or ELF) whose new builds to run")
     args = ap.parse_args(argv)
-    web.run_app(make_app(args.board, args.elf), host=args.host, port=args.port)
+    web.run_app(make_app(args.board, args.elf, args.watch),
+                host=args.host, port=args.port)
     return 0

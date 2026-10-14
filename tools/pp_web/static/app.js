@@ -266,6 +266,7 @@ function handle(msg) {
     if (msg.state === "running") setStatus("running", `running ${msg.elf}`);
     else if (msg.state === "stopped") setStatus("stopped", `stopped (exit ${msg.code})`);
     else if (msg.state === "error") setStatus("error", msg.error);
+    else if (msg.state === "idle") setStatus("idle", msg.text);
     break;
   }
 }

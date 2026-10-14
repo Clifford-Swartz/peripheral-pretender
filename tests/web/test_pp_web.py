@@ -210,3 +210,38 @@ def test_session_thermo8(qemu_path, qemu_machines):
     assert "Thermo 8 Click found" in uart, uart
     assert "T=+25.00 C" in uart and "T=+35.50 C HIGH alert" in uart, uart
     assert cool == (1, 0) and hot[0] == 0 and hot[1] > 0.5, (cool, hot)
+
+
+def test_watch_runs_each_new_build(tmp_path, monkeypatch):
+    """--watch: the newest out/ or dist/ ELF runs once its build settles."""
+    import os
+    from tools.pp_web import server
+
+    monkeypatch.setattr(server, "WATCH_S", 0.05)
+    out = tmp_path / "out" / "app"
+    out.mkdir(parents=True)
+    old = out / "default.elf"
+    old.write_bytes(b"\x7fELF old")
+    assert server.newest_elf(tmp_path) == old
+    assert server.newest_elf(old) == old
+
+    async def scenario():
+        app = server.App("ev15n46a", None, tmp_path)
+        ran = []
+
+        async def run(elf):
+            ran.append(elf.read_bytes())
+        app.run = run
+        task = asyncio.create_task(app._watch())
+        await asyncio.sleep(0.2)                # the existing build runs
+        new = tmp_path / "dist" / "default" / "production" / "app.elf"
+        new.parent.mkdir(parents=True)
+        new.write_bytes(b"\x7fELF new")
+        os.utime(new, (time.time() + 5, time.time() + 5))
+        await asyncio.sleep(0.4)
+        (tmp_path / "out" / "app" / "notes.txt").write_text("x")
+        await asyncio.sleep(0.2)
+        task.cancel()
+        return ran
+
+    assert asyncio.run(scenario()) == [b"\x7fELF old", b"\x7fELF new"]

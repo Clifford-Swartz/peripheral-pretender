@@ -13,6 +13,32 @@ py -m tools.pp_web --elf firmware/hello/build/pic32cm_mc00_cpro/blinky.elf
 
 You need a pp-qemu build (`PP_QEMU`, as for `tools.pp`) and `aiohttp`.
 
+## With MPLAB for VS Code (or MPLAB X)
+
+Point the page at a firmware project and every build shows up on the board view:
+
+```
+py -m tools.pp_web --watch <project folder>
+```
+
+The watcher looks for the newest `out/**/*.elf` (MPLAB for VS Code writes
+`out/<project>/<configuration>.elf`) or `dist/**/*.elf` (MPLAB X), waits until the file stops
+changing, copies it and restarts the twin with it. Plugged Clicks and their settings carry over.
+`--watch` also takes a single ELF.
+
+Checked with Microchip's own example for this board, `csp_apps_pic32cm_mc00`
+`apps/port/port_led_on_off_polling` (an MCC/Harmony project built with XC32 v4.45). Unchanged,
+it runs on the twin (LED0 follows SW0), and the same hex programmed the EV15N46A through
+MPLAB IPE over the on-board EDBG:
+
+```
+ipecmd -P32CM1216MC00048 -TS<EDBG serial> -F<project>.hex -M -OL
+```
+
+In VS Code, install the "MPLAB" extension pack (`Microchip.mplab-extension-pack`), open the
+project folder and import the `.X` project when asked. Build, Program and Debug then come from
+MPLAB, and with `--watch` on that folder the page follows every build.
+
 ## How it works
 
 - `session.py` starts QEMU with the ELF under icount paced to the host clock
