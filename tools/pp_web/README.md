@@ -81,6 +81,32 @@ D700. `origin_mm` is the image's top-left corner in those coordinates (y points 
 board, down in the image). Designators: LED0 = D700 (PA24, active low), SW0 = SW700
 (PA25), RESET = SW301, EXT1 = J200, EXT2 = J201.
 
+## Board assets: `boards/ev81x90a/`
+
+The PIC32CM JH01 Curiosity Pro (`py -m tools.pp_web --board ev81x90a --elf
+firmware/hello/build/pic32cm_jh01_cpro/blinky.elf`). `top.png` is rendered from
+Microchip's Gerbers in "PIC32CM_JH01_Curiosity_Pro_R4.zip" (design
+documentation R4, from the EV81X90A product page; inside it, "PIC32CM JH0_R4_
+Gerber Files.zip"). tracespace 4.2.1 took the copper (GTL, G1, G2, GBL), mask,
+paste and silkscreen layers and the two NC drill files (`-RoundHoles.TXT`,
+`-SlotHoles.TXT`); `.DRL` is a binary drill drawing and is left out. This
+release has no outline layer: the board edge is the 60 x 100 mm rectangle the
+top silkscreen draws from (0, 0), and copper text above y = 100 mm is outside
+the board. The mask is red like the EV15N46A's (product photo), so the
+defaults apply:
+
+```
+py tools/pp_web/boards/recolor_board.py PIC32CMJH_Curiosity_Pro_R4.top.svg out.svg     --edge 0,0,60000,100000 --flip 108446
+```
+
+`--flip` is the y of tracespace's `translate(0,<flip>) scale(1,-1)` (its
+viewBox height less 100). Positions come from the R4 pick-and-place file.
+Designators: LED0 = D700 (PC05, active low), SW0 = SW700 (PB19), RESET = SW301,
+EXT1 = J200, EXT2 = J201, EXT3 = J202 (INT pins PA21, PC24, PA28; user guide
+DS70005482B tables 4-4 to 4-6). The `pic32cm-jh01-cpro` machine has no Click
+slots yet, so the headers carry no `slot`. LED0 is on port C: the server
+polls every PORT group a board's LEDs and INT pins use (`pin_groups`).
+
 ## Click assets: `clicks/<id>/`
 
 `top.png` is the Click's top side, rendered by `clicks/render_click.py` from MikroElektronika's

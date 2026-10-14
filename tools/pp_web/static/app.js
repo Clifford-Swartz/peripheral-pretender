@@ -49,6 +49,7 @@ function buildBoard(b, cat, ads) {
   catalog = cat || {};
   adapters = ads || {};
   $("board-name").textContent = b.name;
+  $("vcom").textContent = b.vcom || "";
   $("board-img").src = `/board/${b.image}`;
   // The image covers the board outline; the stage may be larger
   const v = view();
@@ -93,7 +94,12 @@ function buildBoard(b, cat, ads) {
 function buildSlots() {
   const box = $("clicks");
   box.textContent = "";
-  for (const h of board.headers.filter((x) => x.slot)) {
+  // Only headers the QEMU machine can plug a Click into have a slot
+  const slots = board.headers.filter((x) => x.slot);
+  $("clicks-head").hidden = !slots.length;
+  $("clicks-where").textContent =
+    `mikroBUS on ${slots.map((h) => h.id).join("/")}`;
+  for (const h of slots) {
     const row = document.createElement("div");
     row.className = "slot";
     row.dataset.slot = h.slot;

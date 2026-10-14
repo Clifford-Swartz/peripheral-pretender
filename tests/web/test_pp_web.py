@@ -17,6 +17,8 @@ BUILD = ROOT / "firmware" / "hello" / "build" / "pic32cm_mc00_cpro"
 BLINKY = BUILD / "blinky.elf"
 BREATHE = BUILD / "breathe.elf"
 THERMO = BUILD / "thermo.elf"
+JH01_BLINKY = (ROOT / "firmware" / "hello" / "build" / "pic32cm_jh01_cpro"
+               / "blinky.elf")
 
 
 def test_board_description():
@@ -44,6 +46,37 @@ def test_board_description():
     assert spans[0][1] <= spans[1][0], spans
     assert _png_size(BOARDS / "ev15n46a" / board["image"]) == tuple(
         round(v * board["px_per_mm"]) for v in board["size_mm"])
+
+
+def test_board_description_ev81x90a():
+    """PIC32CM JH01 Curiosity Pro: parts inside the image, pins from the
+    user guide (DS70005482B) and schematic R4."""
+    board = json.loads((BOARDS / "ev81x90a" / "board.json").read_text())
+    assert board["machine"] == "pic32cm-jh01-cpro"
+    x0, y0 = board["origin_mm"]
+    w, h = board["size_mm"]
+    for part in board["leds"] + board["buttons"] + board["headers"]:
+        x, y = part["at_mm"]
+        assert x0 <= x <= x0 + w and y0 - h <= y <= y0, part["id"]
+    led = board["leds"][0]
+    assert (led["id"], led["ref"], led["pin"], led["active_low"]) == (
+        "LED0", "D700", "PC05", True)
+    assert {b["id"]: b["action"] for b in board["buttons"]} == {
+        "SW0": "sw0", "RESET": "reset"}
+    assert {hd["id"]: hd["int_pin"] for hd in board["headers"]} == {
+        "EXT1": "PA21", "EXT2": "PC24", "EXT3": "PA28"}
+    # The machine has no Click slots yet, so no header offers one
+    assert not any("slot" in hd for hd in board["headers"])
+    assert _png_size(BOARDS / "ev81x90a" / board["image"]) == tuple(
+        round(v * board["px_per_mm"]) for v in board["size_mm"])
+
+
+def test_pin_groups():
+    from tools.pp_web.server import pin_groups
+    for bid, groups in (("ev15n46a", ("a", "b")),
+                        ("ev81x90a", ("a", "b", "c"))):
+        board = json.loads((BOARDS / bid / "board.json").read_text())
+        assert pin_groups(board) == groups, bid
 
 
 def _stack_boxes(header: dict, click: dict) -> list[tuple[float, ...]]:
@@ -140,6 +173,62 @@ def test_session_blinks_and_reads_sw0(qemu_path, qemu_machines):
     slow, fast, uart = asyncio.run(scenario())
     assert "PP blinky" in uart and "SW0 pressed" in uart
     # 2 Hz: a toggle every 250 ms; 8 Hz while SW0 is held (sampled at 30 Hz)
+    assert 5 <= len(slow) <= 10, slow
+    assert len(fast) >= 7, fast
+
+
+@pytest.mark.qemu
+def test_session_blinks_jh01(qemu_path, qemu_machines):
+    """EV81X90A: LED0 on PC05 (PORT group C) blinks and SW0 (PB19) speeds
+    it up, through the same page path (pin_groups) the server uses."""
+    from tools.pp_web.server import pin_groups
+    if "pic32cm-jh01-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-jh01-cpro machine")
+    if not JH01_BLINKY.is_file():
+        pytest.skip("blinky.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_jh01_cpro APP=blinky)")
+    board = json.loads((BOARDS / "ev81x90a" / "board.json").read_text())
+
+    def led0(pins):
+        return pins["c"][5][1]
+
+    def toggles(updates):
+        times, last = [], None
+        for t, pins in updates:
+            on = led0(pins) > 0.5
+            if last is not None and on != last:
+                times.append(t)
+            last = on
+        return times
+
+    async def scenario():
+        updates, uart = [], []
+
+        def emit(msg):
+            if msg["type"] == "pins":
+                updates.append((time.monotonic(), msg["pins"]))
+            elif msg["type"] == "uart":
+                uart.append(msg["data"])
+
+        s = Session(board["machine"], JH01_BLINKY, emit,
+                    groups=pin_groups(board))
+        await s.start()
+        try:
+            await asyncio.sleep(2.0)
+            slow = toggles(updates)
+            n = len(updates)
+            await s.press("sw0", True)
+            await asyncio.sleep(1.0)
+            await s.press("sw0", False)
+            fast = toggles(updates[n:])
+            await asyncio.sleep(0.3)
+        finally:
+            await s.stop()
+        return slow, fast, "".join(uart)
+
+    slow, fast, uart = asyncio.run(scenario())
+    assert "PP blinky" in uart and "EV81X90A" in uart, uart
+    assert "SW0 pressed" in uart, uart
     assert 5 <= len(slow) <= 10, slow
     assert len(fast) >= 7, fast
 

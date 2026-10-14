@@ -9,9 +9,7 @@
 #include "sys_init.h"
 #include "util.h"
 
-/* SW0: PA25 to ground, no external pull-up (board user guide) */
-#define SW0_GROUP       (&PORT_REGS->GROUP[0])
-#define SW0_PIN         25U
+/* SW0_GROUP/SW0_PIN (board.h): to ground, no external pull-up */
 
 static int sw0_pressed(void)
 {

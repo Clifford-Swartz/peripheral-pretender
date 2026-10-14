@@ -21,6 +21,9 @@
 #define VCOM_IRQ_LABEL      "irq13"
 #define LED0_GROUP          (&PORT_REGS->GROUP[2])  /* group 2 = port C */
 #define LED0_MASK           PORT_PC05               /* active low */
+/* SW0: PB19 to ground through 39 R, no external pull-up (schematic R4) */
+#define SW0_GROUP           (&PORT_REGS->GROUP[1])
+#define SW0_PIN             19U
 
 /* GCLK0 runs from OSC48M divided by 1 once sys_initialize() returns. */
 #define CPU_CLOCK_HZ        48000000U

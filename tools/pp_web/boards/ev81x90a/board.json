@@ -1,0 +1,29 @@
+{
+  "id": "ev81x90a",
+  "name": "PIC32CM JH01 Curiosity Pro (EV81X90A)",
+  "machine": "pic32cm-jh01-cpro",
+  "vcom": "SERCOM4 (PB10/PB11), EDBG virtual COM port",
+  "source": "Microchip board design files R4 (Gerbers, pick and place); see README.md",
+  "image": "top.png",
+  "px_per_mm": 20,
+  "origin_mm": [0.0, 100.0],
+  "size_mm": [60.0, 100.0],
+  "leds": [
+    {"id": "LED0", "ref": "D700", "at_mm": [27.2258, 88.0858],
+     "pin": "PC05", "active_low": true, "color": "#ffc400"}
+  ],
+  "buttons": [
+    {"id": "SW0", "ref": "SW700", "at_mm": [27.0, 95.1],
+     "size_mm": [6.2, 6.4], "action": "sw0"},
+    {"id": "RESET", "ref": "SW301", "at_mm": [34.0, 95.1],
+     "size_mm": [6.2, 6.4], "action": "reset"}
+  ],
+  "headers": [
+    {"id": "EXT1", "ref": "J200", "at_mm": [54.3, 59.84], "pins": 20,
+     "int_pin": "PA21"},
+    {"id": "EXT2", "ref": "J201", "at_mm": [54.3, 24.28], "pins": 20,
+     "int_pin": "PC24"},
+    {"id": "EXT3", "ref": "J202", "at_mm": [30.0, 5.7], "pins": 20,
+     "int_pin": "PA28"}
+  ]
+}

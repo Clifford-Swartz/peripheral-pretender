@@ -1,2 +1,8 @@
 # Golden data captured from silicon: byte-exact, never convert line endings
 golden/** -text
+# The generator hashes overlays and profiles into its outputs and its tests
+# compare devices/*.json byte for byte: keep their
+# bytes the same on every checkout (core.autocrlf=true would add CR)
+overlays/*.yaml text eol=lf
+profiles/*.yaml text eol=lf
+devices/*.json text eol=lf

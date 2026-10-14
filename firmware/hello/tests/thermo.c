@@ -12,6 +12,11 @@
 #include "sys_init.h"
 #include "util.h"
 
+/* EV15N46A only: the pins and peripherals below are that board's */
+#ifndef _PIC32CM1216MC00048_H_
+#error "thermo.c is written for BOARD=pic32cm_mc00_cpro"
+#endif
+
 #define I2C             (&SERCOM2_REGS->I2CM)
 #define MB              SERCOM_I2CM_INTFLAG_MB_Msk
 #define SB              SERCOM_I2CM_INTFLAG_SB_Msk

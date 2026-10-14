@@ -21,6 +21,9 @@
 #define VCOM_IRQ_LABEL      "irq9"
 #define LED0_GROUP          (&PORT_REGS->GROUP[0])  /* group 0 = port A */
 #define LED0_MASK           PORT_PA24               /* active low */
+/* SW0: PA25 to ground, no external pull-up (board user guide) */
+#define SW0_GROUP           (&PORT_REGS->GROUP[0])
+#define SW0_PIN             25U
 
 /* GCLK0 runs from OSC48M divided by 1 once sys_initialize() returns. */
 #define CPU_CLOCK_HZ        48000000U

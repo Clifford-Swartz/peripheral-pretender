@@ -56,6 +56,14 @@ CLICKS = json.loads((HERE / "clicks.json").read_text(encoding="utf-8"))
 ADAPTERS = json.loads((HERE / "adapters.json").read_text(encoding="utf-8"))
 
 
+def pin_groups(board: dict) -> tuple[str, ...]:
+    """PORT groups ("a", "b", ...) the page shows: those of the board's
+    LEDs and header INT pins, and always A and B."""
+    pins = [p["pin"] for p in board["leds"]]
+    pins += [h["int_pin"] for h in board["headers"] if "int_pin" in h]
+    return tuple(sorted({"a", "b"} | {p[1].lower() for p in pins}))
+
+
 class App:
     def __init__(self, board: str, elf: Path | None,
                  watch: Path | None = None):
@@ -122,7 +130,8 @@ class App:
             self.uart_log = ""
             self.emit({"type": "reset"})
             self.elf = elf
-            self.session = Session(self.machine(), elf, self.emit)
+            self.session = Session(self.machine(), elf, self.emit,
+                                   groups=pin_groups(self.board))
             try:
                 await self.session.start()
                 for slot, c in self.clicks.items():

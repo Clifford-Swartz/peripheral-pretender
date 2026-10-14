@@ -15,9 +15,13 @@
 #include "sys_init.h"
 #include "util.h"
 
+/* EV15N46A only: the pins and peripherals below are that board's */
+#ifndef _PIC32CM1216MC00048_H_
+#error "breathe.c is written for BOARD=pic32cm_mc00_cpro"
+#endif
+
 #define T               TCC1_REGS
 #define TOP             4799U           /* 48 MHz / 4800 = 10 kHz */
-#define SW0_PIN         25U
 
 int main(void)
 {

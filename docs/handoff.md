@@ -158,6 +158,16 @@ EDBG data gateway at 0x28 and an SPI pad loopback). The first Click board is in 
 Click picker and a live temperature slider on the page and the `thermo` demo. It is modelled
 from the data sheet only; no physical Click has been checked.
 
+**2026-10-14: the PIC32CM JH01 Curiosity Pro in the web view** (`--board ev81x90a`), rendered
+from the R4 Gerbers; LED0 (PC05) and SW0 (PB19) work (`tests/web`). Microchip's 38
+`csp_apps_pic32cm_jh00_jh01` examples for this kit build with XC32 v4.45 (they ask for v4.60,
+PIC32CM-JH_DFP 1.5.236 and CMSIS 5.9.0, fetched into `~/.mchp_packs`). On the twin, port, EIC,
+EVSYS, SysTick, TC timer, clock, DIVAS, USART echo, PM/EIC wake-up and RSTC external reset
+behave as the code says. Gaps they show on the JH01: RTC (`rtc_03608`, no overlay; the MC00's
+RTC is `rtc_u2250`), WDT time-out, DMAC, DSU CRC32, NVMCTRL programming, MCRAMC/SMBIST, FREQM,
+ADC, AC, DAC, CCL, CAN, TC capture, TCC dead time, SERCOM I2C client and LIN. Not checked on
+silicon (no board on the desk).
+
 ## Next steps, in order
 
 1. ~~Independent review~~ **done 2026-10-13** (three lenses). Fixed: clock state lost on
