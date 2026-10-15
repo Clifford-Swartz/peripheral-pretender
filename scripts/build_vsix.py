@@ -7,6 +7,7 @@ vscode/engine/ (staged here, not in git):
   app/      the project root the engine needs: tools/pp, tools/pp_web,
             devices/*.json and each board's demo firmware (if built)
   qemu/     qemu-system-arm and -avr (stripped) and their MSYS2 DLLs
+  gdb/      gdb-multiarch (Arm, AVR) with its Python and data directory
 
   py scripts/build_vsix.py [--qemu C:/pp/pp-qemu] [--skip-package]
 """
@@ -129,6 +130,39 @@ def stage_qemu(src: Path) -> None:
     log(f"qemu: 2 binaries, {len(dlls)} DLLs")
 
 
+def ucrt_dlls(binary: Path) -> list[str]:
+    out = []
+    for line in msys(f"ldd '{binary.as_posix()}'").splitlines():
+        m = re.match(r"\s*(\S+\.dll) => /ucrt64/bin/", line, re.I)
+        if m:
+            out.append(m.group(1))
+    return out
+
+
+def stage_gdb() -> None:
+    """MSYS2's gdb-multiarch (Arm and AVR) in its own prefix: gdb finds
+    its Python (lib/python3.14) and data directory (share/gdb) relative to
+    bin/, so the layout must stay."""
+    ucrt = MSYS2 / "ucrt64"
+    out = STAGE / "gdb"
+    (out / "bin").mkdir(parents=True)
+    exe = ucrt / "bin" / "gdb-multiarch.exe"
+    subprocess.run([str(ucrt / "bin" / "strip.exe"), "-o",
+                    str(out / "bin" / exe.name), str(exe)], check=True)
+    dlls = ucrt_dlls(exe)
+    for dll in dlls:
+        shutil.copy2(ucrt / "bin" / dll, out / "bin" / dll)
+    pyver = next(d for d in dlls if d.startswith("libpython"))[9:-4]
+    shutil.copytree(ucrt / "lib" / f"python{pyver}",
+                    out / "lib" / f"python{pyver}",
+                    ignore=shutil.ignore_patterns(
+                        "test", "tests", "idlelib", "tkinter", "turtledemo",
+                        "ensurepip", "site-packages", "lib2to3",
+                        "__pycache__", "config-*", "pydoc_data", "*.a"))
+    shutil.copytree(ucrt / "share" / "gdb", out / "share" / "gdb")
+    log(f"gdb: gdb-multiarch, {len(dlls)} DLLs, Python {pyver}")
+
+
 def smoke() -> None:
     """The staged engine imports, and its QEMU starts, with no MSYS2 or
     system Python in sight."""
@@ -153,7 +187,13 @@ def smoke() -> None:
             "assert 'avr64ea48-cnano' in r.stdout, r.stderr; print('ok')")
     subprocess.run([str(STAGE / "python" / "python.exe"), "-c", code],
                    cwd=STAGE / "app", env=env, check=True)
-    log("smoke test: engine and both QEMUs start standalone")
+    gdb = subprocess.run(
+        [str(STAGE / "gdb" / "bin" / "gdb-multiarch.exe"), "-q", "-batch",
+         "-ex", "python import gdb; print('gdb', gdb.VERSION)",
+         "-ex", "set architecture avr", "-ex", "set architecture arm"],
+        env=env, capture_output=True, text=True)
+    assert gdb.returncode == 0 and "gdb " in gdb.stdout, gdb.stderr
+    log("smoke test: engine, both QEMUs and gdb start standalone")
 
 
 def package() -> Path:
@@ -186,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
     stage_python()
     stage_app()
     stage_qemu(args.qemu)
+    stage_gdb()
     smoke()
     if not args.skip_package:
         vsix = package()

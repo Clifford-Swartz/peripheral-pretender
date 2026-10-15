@@ -2,7 +2,7 @@
   "name": "peripheral-pretender",
   "displayName": "Peripheral Pretender",
   "description": "Run firmware on a digital twin of Microchip boards: the board, its LEDs, buttons, console, Click boards and a parts bench, live in VS Code.",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "publisher": "cliffordswartz",
   "private": true,
   "engines": {
@@ -21,7 +21,11 @@
     "digital twin"
   ],
   "main": "./out/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onDebugResolve:twin",
+    "onDebugDynamicConfigurations:twin",
+    "onDebugInitialConfigurations"
+  ],
   "contributes": {
     "commands": [
       {
@@ -87,9 +91,67 @@
           "type": "string",
           "default": "",
           "description": "Development: the Python to run engineRoot with (default: py on Windows, python3 elsewhere)."
+        },
+        "peripheralPretender.gdbPath": {
+          "type": "string",
+          "default": "",
+          "description": "The gdb to debug with (default: the bundled gdb-multiarch)."
         }
       }
-    }
+    },
+    "debuggers": [
+      {
+        "type": "twin",
+        "label": "Peripheral Pretender Twin",
+        "languages": [
+          "c",
+          "cpp"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The firmware ELF to debug. Default: the workspace's newest out/**/*.elf or dist/**/*.elf."
+              },
+              "board": {
+                "type": "string",
+                "description": "Board id (ev15n46a, ev81x90a, ev66e56a, pykit). Default: the board showing, if the ELF fits it, else ask."
+              },
+              "stopAtEntry": {
+                "type": "boolean",
+                "default": true,
+                "description": "Stop at main."
+              },
+              "gdbPath": {
+                "type": "string",
+                "description": "A gdb for the ELF's architecture. Default: the bundled gdb-multiarch."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "twin",
+            "request": "launch",
+            "name": "Debug on the twin",
+            "program": "${workspaceFolder}/out/${workspaceFolderBasename}/default.elf"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Peripheral Pretender: Debug on the twin",
+            "description": "Run the firmware on the board's twin under the debugger",
+            "body": {
+              "type": "twin",
+              "request": "launch",
+              "name": "Debug on the twin",
+              "program": "^\"\\${workspaceFolder}/out/\\${workspaceFolderBasename}/default.elf\""
+            }
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
     "compile": "tsc -p .",

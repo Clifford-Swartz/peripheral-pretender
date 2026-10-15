@@ -392,6 +392,47 @@ def test_watch_runs_each_new_build(tmp_path, monkeypatch):
     assert asyncio.run(scenario()) == [b"\x7fELF old", b"\x7fELF new"]
 
 
+@pytest.mark.qemu
+def test_run_for_the_debugger(qemu_path, qemu_machines):
+    """run(debug_port=): the twin starts paused at reset with its gdbstub
+    on that port (the VS Code extension's debug sessions attach there)."""
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro")
+    if not BLINKY.is_file():
+        pytest.skip("blinky.elf not built")
+    from tools.pp_web import server
+    from tools.pp_web.session import free_port
+
+    async def scenario():
+        app = server.App("ev15n46a", None)
+        port = free_port()
+        assert await app.run(BLINKY, debug_port=port)
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+
+            async def packet(cmd: bytes) -> bytes:
+                """One GDB remote packet out, the reply's payload back."""
+                writer.write(b"$%s#%02x" % (cmd, sum(cmd) & 0xFF))
+                await writer.drain()
+                buf = b""
+                while not (b"$" in buf and b"#" in buf.split(b"$", 1)[1]
+                           and len(buf.split(b"#")[-1]) >= 2):
+                    buf += await asyncio.wait_for(reader.read(4096), 10)
+                writer.write(b"+")
+                return buf.split(b"$", 1)[1].split(b"#")[0]
+            stop = await packet(b"?")               # why are you stopped?
+            regs = await packet(b"g")               # pc is r15
+            writer.close()
+        finally:
+            await app.session.stop()
+        return stop, regs
+
+    stop, regs = asyncio.run(scenario())
+    assert stop[:3] in (b"T05", b"S05"), stop               # SIGTRAP: paused
+    pc = int.from_bytes(bytes.fromhex(regs[15 * 8:16 * 8].decode()), "little")
+    assert pc != 0, regs                                    # at Reset_Handler
+
+
 def test_default_firmware(tmp_path, monkeypatch):
     """A board runs its demo until given firmware; the PyKit, which has
     none, its stock CircuitPython, fetched once (here: a stub)."""

@@ -9,7 +9,15 @@
 const os = require("os");
 const path = require("path");
 const fs = require("fs");
-const { runTests } = require("@vscode/test-electron");
+const cp = require("child_process");
+const {
+    downloadAndUnzipVSCode, resolveCliArgsFromVSCodeExecutablePath, runTests,
+} = require("@vscode/test-electron");
+
+/* Kept between runs (.vscode-test is not in git): the C/C++ extension,
+   whose debugger the twin's debug sessions use */
+const EXTENSIONS = path.resolve(__dirname, "..", ".vscode-test", "extensions");
+const CPPTOOLS = "ms-vscode.cpptools";
 
 /*
  * The test runner's module path may not contain spaces (VS Code requires
@@ -31,14 +39,25 @@ async function main() {
     if (!fs.existsSync(path.join(ext, "engine", "app"))) {
         throw new Error("no staged engine: py scripts/build_vsix.py --skip-package");
     }
+    const exe = process.env.VSCODE_EXE || await downloadAndUnzipVSCode();
+    if (!fs.existsSync(EXTENSIONS) ||
+        !fs.readdirSync(EXTENSIONS).some((d) => d.startsWith(CPPTOOLS))) {
+        const [cli, ...args] = resolveCliArgsFromVSCodeExecutablePath(exe);
+        const q = (s) => `"${s}"`;          /* paths with spaces */
+        const env = { ...process.env };
+        delete env.ELECTRON_RUN_AS_NODE;
+        cp.execSync([cli, ...args, "--extensions-dir", EXTENSIONS,
+                     "--install-extension", CPPTOOLS].map(q).join(" "),
+                    { stdio: "inherit", env });
+    }
     try {
         await runTests({
-            vscodeExecutablePath: process.env.VSCODE_EXE || undefined,
+            vscodeExecutablePath: exe,
             extensionDevelopmentPath: noSpaces(ext),
             extensionTestsPath: noSpaces(path.join(__dirname, "suite.js")),
             launchArgs: [
                 "--user-data-dir", path.join(profile, "user"),
-                "--extensions-dir", path.join(profile, "ext"),
+                "--extensions-dir", noSpaces(EXTENSIONS),
                 "--disable-workspace-trust",
                 "--skip-welcome",
                 ...(process.env.PP_CDP_PORT ?

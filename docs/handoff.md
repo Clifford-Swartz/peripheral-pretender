@@ -355,6 +355,25 @@ webview's DOM, `PP_CDP_PORT=9333 PP_SUITE_HOLD=<file> npm test` holds the panel 
 DevTools on that port (the page is in the `#active-frame` iframe of the `vscode-webview://`
 target) until `<file>` exists.
 
+**Debug on the twin (0.2.0).** A `twin` debug type (`vscode/src/debug.ts`): F5 (the workspace's
+newest `out/`/`dist/` ELF) or a `launch.json` entry picks a board that fits the ELF's
+architecture (e_machine; the board showing, else ask), posts the ELF to
+`/api/firmware?debug=<port>&name=<file>` (the engine starts QEMU with
+`-gdb tcp:127.0.0.1:<port> -S`, the board view running as usual) and resolves to a `cppdbg`
+configuration (`ms-vscode.cpptools`, activated first: its adapter exists only once it is active)
+for the bundled gdb, which sets a temporary breakpoint at `main` and continues. gdb's kill ends
+QEMU, so when the session ends the extension posts the ELF again without `debug`. The bundle's
+`engine/gdb` is MSYS2's gdb-multiarch 18.1 (Arm and AVR) in its own prefix, because gdb finds
+its Python (`lib/python3.14`, pruned to 21 MB) and `share/gdb` relative to `bin/`; without them
+it dies at start. VSIX 45 MB. `npm test` debugs blinky on the MC00 in VS Code: stop in `main`,
+step a line, the firmware runs on after; it installs cpptools once into
+`vscode/.vscode-test/extensions`. AVR checked by hand with the bundled gdb (stop at `main`,
+source steps, locals); `firmware/avr-hello` now builds with `-g`. QEMU's AVR gdbstub warns
+"Target-supplied registers are not supported" (harmless). Not yet: peripheral register views
+(cppdbg has no SVD view; the DFPs carry SVDs for the Arm parts, Cortex-Debug could show them),
+the PyKit's SAM E51 under the debugger (same path as the PIC32CMs, untested), a test of F5
+without `launch.json`.
+
 Board switching (0.1.2, after the owner saw the page stick on "switching board"): not
 reproduced, in a browser or in a VS Code webview, but every way it could stick is closed:
 QEMU's QMP `quit`, its exit and the DGI sign-off are bounded (`session.STOP_S`, 2 s for DGI); a

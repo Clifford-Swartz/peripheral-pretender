@@ -16,6 +16,7 @@ import * as fs from "fs";
 import * as net from "net";
 import * as path from "path";
 import * as vscode from "vscode";
+import { registerDebug } from "./debug";
 
 interface Engine {
     proc: cp.ChildProcess;
@@ -23,9 +24,10 @@ interface Engine {
     board: string;
 }
 
-interface Board {
+export interface Board {
     id: string;
     name: string;
+    machine: string;            /* QEMU machine: says Arm or AVR */
 }
 
 let engine: Engine | undefined;
@@ -69,6 +71,19 @@ function layout(ctx: vscode.ExtensionContext): Layout {
     };
 }
 
+/* The bundled gdb-multiarch (Arm and AVR), or a configured one */
+function gdbPath(ctx: vscode.ExtensionContext): string {
+    const cfg = vscode.workspace.getConfiguration("peripheralPretender");
+    const exe = process.platform === "win32" ? ".exe" : "";
+
+    return cfg.get<string>("gdbPath", "") ||
+        (cfg.get<string>("engineRoot", "") ?
+            (process.platform === "win32" ?
+                "C:/msys64/ucrt64/bin/gdb-multiarch.exe" : "gdb-multiarch") :
+            path.join(ctx.extensionPath, "engine", "gdb", "bin",
+                      `gdb-multiarch${exe}`));
+}
+
 function boards(root: string): Board[] {
     const dir = path.join(root, "tools", "pp_web", "boards");
     const out: Board[] = [];
@@ -80,7 +95,8 @@ function boards(root: string): Board[] {
         }
         try {
             const doc = JSON.parse(fs.readFileSync(file, "utf8"));
-            out.push({ id: doc.id || id, name: doc.name || id });
+            out.push({ id: doc.id || id, name: doc.name || id,
+                       machine: doc.machine || "" });
         } catch {
             /* not a board */
         }
@@ -120,15 +136,20 @@ async function waitReady(e: Engine, timeoutMs: number): Promise<void> {
     throw new Error("engine did not start in time");
 }
 
-async function pickBoard(root: string,
-                         ask = false): Promise<string | undefined> {
+async function pickBoard(root: string, ask = false,
+                         only?: (b: Board) => boolean)
+                         : Promise<string | undefined> {
     const cfg = vscode.workspace.getConfiguration("peripheralPretender");
     const fixed = cfg.get<string>("board", "");
+    const all = boards(root).filter(only || (() => true));
 
-    if (fixed && !ask) {
+    if (fixed && !ask && all.some((b) => b.id === fixed)) {
         return fixed;
     }
-    const items = boards(root).map((b) => ({ label: b.name, id: b.id }));
+    if (all.length === 1 && only) {
+        return all[0].id;
+    }
+    const items = all.map((b) => ({ label: b.name, id: b.id }));
     if (!items.length) {
         vscode.window.showErrorMessage(
             `Peripheral Pretender: no boards found under ${root}`);
@@ -312,6 +333,15 @@ export function activate(ctx: vscode.ExtensionContext): Api {
         vscode.commands.registerCommand("peripheralPretender.showLog",
                                         () => log.show()),
         { dispose: stopEngine });
+    registerDebug(ctx, {
+        log,
+        port: () => engine?.port,
+        board: () => engine?.board,
+        boards: () => boards(layout(ctx).root),
+        pickBoard: (only) => pickBoard(layout(ctx).root, false, only),
+        open: (board) => open(ctx, board),
+        gdb: () => gdbPath(ctx),
+    });
     return { port: () => engine?.port };
 }
 

@@ -26,12 +26,38 @@ engine that runs it. Nothing else to install.
   (also the **Twin** item in the status bar).
 - **Twin: Stop** ends the twin; **Twin: Show Engine Log** shows what the engine did.
 
+## Debug on the twin
+
+Breakpoints, stepping, variables, the call stack and memory, on the twin instead of a board,
+with the board view live beside the debugger. Arm (PIC32CM, SAM E51) and AVR firmware.
+
+- Press **F5** in a workspace with a build and pick **Peripheral Pretender Twin**: the newest
+  `out/**/*.elf` or `dist/**/*.elf` runs on the twin and stops at `main`.
+- Or add it to `launch.json` (**Add Configuration… → Peripheral Pretender: Debug on the twin**):
+
+  ```jsonc
+  {
+    "type": "twin",
+    "request": "launch",
+    "name": "Debug on the twin",
+    "program": "${workspaceFolder}/out/${workspaceFolderBasename}/default.elf",
+    "board": "ev15n46a",          // optional: else the board showing, or ask
+    "stopAtEntry": true           // optional: stop at main (default)
+  }
+  ```
+
+When the session ends the firmware runs on, undebugged. Debugging uses the C/C++ extension's
+debugger (`ms-vscode.cpptools`, part of the MPLAB extension pack) with the gdb that comes with
+this extension. Build with debug information (`-g`, MPLAB's debug configuration) for source
+lines.
+
 ## Settings
 
 | Setting | |
 |---|---|
 | `peripheralPretender.board` | board id to open without asking (`ev15n46a`, `ev81x90a`, `ev66e56a`, `pykit`) |
 | `peripheralPretender.watch` | run new builds of the workspace (default on) |
+| `peripheralPretender.gdbPath` | the gdb to debug with (default: the bundled gdb-multiarch) |
 | `peripheralPretender.engineRoot`, `.python` | development: run a source checkout instead of the bundled engine |
 
 ## Building the extension
@@ -39,7 +65,7 @@ engine that runs it. Nothing else to install.
 ```
 py scripts/build_vsix.py            # stages vscode/engine, smoke-tests it, packages the VSIX
 cd vscode && npm test               # end to end in a downloaded VS Code
-code --install-extension vscode/peripheral-pretender-win32-x64-0.1.2.vsix
+code --install-extension vscode/peripheral-pretender-win32-x64-0.2.0.vsix
 ```
 
 Windows x64 only so far. The bundle holds QEMU (GPL-2.0-or-later) built from the pp-qemu fork,

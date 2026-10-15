@@ -22,7 +22,7 @@ APPS   := hello blinky matrix dgigpio adc
 APP    ?= $(APPS)
 
 CFLAGS := -mmcu=$(DEVICE) -B "$(DFP)/gcc/dev/$(DEVICE)" -isystem "$(DFP)/include" \
-          -Os -std=gnu11 -Wall -Wextra -ffunction-sections -fdata-sections
+          -Os -g -std=gnu11 -Wall -Wextra -ffunction-sections -fdata-sections
 LDFLAGS:= -Wl,--gc-sections
 
 all: $(foreach a,$(APP),$(BUILD)/$(a).elf $(BUILD)/$(a).hex)

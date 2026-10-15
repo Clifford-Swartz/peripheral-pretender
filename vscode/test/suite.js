@@ -35,6 +35,57 @@ async function until(what, fn, ms) {
     }
 }
 
+/*
+ * Debug on the twin: a "twin" launch stops at main (the C/C++ extension's
+ * gdb session on the bundled gdb-multiarch), a step moves on, and when the
+ * session ends the firmware runs on undebugged
+ */
+async function debugBlinky(elf, qemuDir) {
+    const stops = [];
+    const tracker = vscode.debug.registerDebugAdapterTrackerFactory("cppdbg", {
+        createDebugAdapterTracker: () => ({
+            onDidSendMessage: (m) => {
+                if (m.type === "event" && m.event === "stopped") {
+                    stops.push(m.body);
+                }
+            },
+        }),
+    });
+    try {
+        const started = await vscode.debug.startDebugging(undefined, {
+            type: "twin", request: "launch", name: "blinky on the twin",
+            program: elf, board: "ev15n46a",
+        });
+        assert.ok(started, "debug session did not start");
+        await until("stopped at main", () => stops.length > 0, 60000);
+        const session = vscode.debug.activeDebugSession;
+        const frame = async () => {
+            const st = await session.customRequest("stackTrace", {
+                threadId: stops[stops.length - 1].threadId, levels: 1 });
+            return st.stackFrames[0];
+        };
+        const top = await frame();
+        assert.strictEqual(top.name.replace(/\(.*$/, "").trim(), "main", top.name);
+        assert.match(top.source.path, /blinky\.c$/);
+        console.log(`[suite] debugger stopped in ${top.name} at ` +
+                    `${path.basename(top.source.path)}:${top.line}`);
+        const before = stops.length;
+        await session.customRequest("next", { threadId: stops[before - 1].threadId });
+        await until("step done", () => stops.length > before, 20000);
+        const next = await frame();
+        assert.ok(next.line > top.line, `step went from ${top.line} to ${next.line}`);
+        console.log(`[suite] stepped to line ${next.line}`);
+        await vscode.debug.stopDebugging(session);
+        await until("debug session over",
+                    () => vscode.debug.activeDebugSession === undefined, 20000);
+        await until("firmware runs on after debugging",
+                    () => qemusUnder(qemuDir).length > 0, 20000);
+        console.log("[suite] session ended; the twin runs the firmware on");
+    } finally {
+        tracker.dispose();
+    }
+}
+
 async function run() {
     const ext = vscode.extensions.getExtension(ID);
     assert.ok(ext, `${ID} not loaded`);
@@ -70,6 +121,8 @@ async function run() {
                 15000);
     console.log(`[suite] firmware posted; ${qemusUnder(qemuDir).length} ` +
                 "bundled QEMU running");
+
+    await debugBlinky(elf, qemuDir);
 
     await vscode.commands.executeCommand("peripheralPretender.stop");
     assert.strictEqual(api.port(), undefined);

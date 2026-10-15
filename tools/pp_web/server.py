@@ -596,7 +596,9 @@ class App:
             await self.dgi.stop()
         self.dgi = None
 
-    async def run(self, elf: Path) -> None:
+    async def run(self, elf: Path, debug_port: int | None = None) -> bool:
+        """Run @elf on the twin (False if it did not start). With
+        @debug_port, QEMU starts paused with its gdbstub on that port."""
         async with self.lock:
             await self._stop_dgi()
             if self.session:
@@ -620,7 +622,10 @@ class App:
                                        (a["pad"], a["path"], a["property"])
                                        for a in self.board.get("analog_out",
                                                                [])),
-                                   dgi=bool(self.board.get("dgi")))
+                                   dgi=bool(self.board.get("dgi")),
+                                   extra_args=() if debug_port is None else (
+                                       "-gdb", f"tcp:127.0.0.1:{debug_port}",
+                                       "-S"))
             try:
                 await self.session.start()
                 if self.session.dgi_port:
@@ -634,6 +639,11 @@ class App:
                             round(c["values"][ctl["id"]] * ctl["scale"]))
             except Exception as e:      # report to the page, keep serving
                 self.emit({"type": "status", "state": "error", "error": str(e)})
+                return False
+            if debug_port is not None:
+                self.emit({"type": "status", "state": "running",
+                           "elf": f"{elf.name} (debugger on {debug_port})"})
+            return True
 
     # -- handlers ------------------------------------------------------
 
@@ -651,9 +661,19 @@ class App:
         data = await request.content.read(MAX_ELF + 1)
         if len(data) > MAX_ELF or data[:4] != b"\x7fELF":
             raise web.HTTPBadRequest(text="expected an ELF file up to 4 MiB")
-        elf = self.tmp / "firmware.elf"
+        # ?name=: the file name the page shows; ?debug=<port>: start paused
+        # with the gdbstub on 127.0.0.1:<port> (the VS Code extension's
+        # debug sessions)
+        name = Path(request.query.get("name") or "firmware.elf").name
+        elf = self.tmp / (name if name.endswith(".elf") else "firmware.elf")
         elf.write_bytes(data)
-        await self.run(elf)
+        debug = request.query.get("debug")
+        if debug is not None and not (debug.isdigit() and
+                                      0 < int(debug) < 65536):
+            raise web.HTTPBadRequest(text="debug must be a TCP port")
+        ok = await self.run(elf, int(debug) if debug else None)
+        if not ok:
+            raise web.HTTPInternalServerError(text="the twin did not start")
         return web.json_response({"ok": True})
 
     async def ws(self, request: web.Request) -> web.WebSocketResponse:
