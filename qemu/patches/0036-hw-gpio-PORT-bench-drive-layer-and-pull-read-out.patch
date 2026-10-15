@@ -1,0 +1,336 @@
+From e4372875dec49f898a6417051672648a3daf022a Mon Sep 17 00:00:00 2001
+From: Clifford Swartz <cliffordswartz1@gmail.com>
+Date: Thu, 15 Oct 2026 02:43:28 -0700
+Subject: [PATCH 36/36] hw/gpio: PORT bench drive layer and pull read-out
+
+The web view's parts bench drives pads through "pX-bench" ("<mask>
+<level>" in hex), a layer over the "port-in" drivers so a Click or a
+board button keeps its own pad, and reads which pads have a pull
+resistor on, and which way, through "pX-pull" ("<mask> <up>").
+Both PORT models: SAM/PIC32CM (U2210) and AVR8X.
+
+Peripheral Pretender: AI-assisted; not for submission to upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/gpio/avr8x_port.c         |  77 +++++++++++++++++++++++---
+ hw/gpio/mchp_port.c          | 101 +++++++++++++++++++++++++++++++----
+ include/hw/gpio/avr8x_port.h |   3 ++
+ 3 files changed, 164 insertions(+), 17 deletions(-)
+
+diff --git a/hw/gpio/avr8x_port.c b/hw/gpio/avr8x_port.c
+index 7858b2c..9b9c3ef 100644
+--- a/hw/gpio/avr8x_port.c
++++ b/hw/gpio/avr8x_port.c
+@@ -11,7 +11,9 @@
+  * configuration, and the VPORT view of DIR, OUT, IN and INTFLAGS.
+  * A pad is driven by OUT (or a peripheral override) while DIR is set;
+  * otherwise an external driver sets it, else the pull-up, else it floats
+- * and reads 0. INVEN inverts both the output and the input. Not modelled:
++ * and reads 0. INVEN inverts both the output and the input. The board's
++ * bench of parts drives pads over the other external drivers ("pa-bench")
++ * and reads the pull-ups ("pa-pull"). Not modelled:
+  * slew rate (PORTCTRL.SRL), input levels (INLVL) and the event generators
+  * (EVGENCTRL is stored only).
+  *
+@@ -65,14 +67,22 @@ static uint8_t avr8x_port_drive_level(Avr8xPortGroup *g)
+     return out ^ avr8x_port_mask_of(g, avr8x_inven);
+ }
+ 
++/* Pads of group @g with the pull-up on: inputs with PULLUPEN */
++static uint8_t avr8x_port_pulls(Avr8xPortGroup *g)
++{
++    return avr8x_port_mask_of(g, avr8x_pullup) & ~g->dir;
++}
++
+ /* Level of every pad of group @g */
+ static uint8_t avr8x_port_pads(Avr8xPortGroup *g)
+ {
+     uint8_t drive = g->dir;
+-    uint8_t ext = g->ext_mask & ~drive;
+-    uint8_t pull = avr8x_port_mask_of(g, avr8x_pullup) & ~drive & ~ext;
++    uint8_t ext = (g->ext_mask | g->bench_mask) & ~drive;
++    uint8_t elevel = (g->ext_level & ~g->bench_mask) |
++                     (g->bench_level & g->bench_mask);
++    uint8_t pull = avr8x_port_pulls(g) & ~ext;
+ 
+-    return (avr8x_port_drive_level(g) & drive) | (g->ext_level & ext) | pull;
++    return (avr8x_port_drive_level(g) & drive) | (elevel & ext) | pull;
+ }
+ 
+ /* IN: the pads as the input buffers see them (INVEN, input disable) */
+@@ -392,6 +402,53 @@ static void avr8x_port_get_stats(Object *obj, Visitor *v, const char *name,
+     visit_type_str(v, name, &val, errp);
+ }
+ 
++/*
++ * "pa-bench": "<mask> <level>" in hex, the pads the parts on the board's
++ * bench drive and their levels, over the "port-in" drivers
++ */
++static void avr8x_port_get_bench(Object *obj, Visitor *v, const char *name,
++                                 void *opaque, Error **errp)
++{
++    Avr8xPortState *s = AVR8X_PORT(obj);
++    Avr8xPortGroup *g = &s->g[GPOINTER_TO_UINT(opaque)];
++    g_autofree char *val = g_strdup_printf("%x %x", g->bench_mask,
++                                           g->bench_level & g->bench_mask);
++
++    visit_type_str(v, name, &val, errp);
++}
++
++static void avr8x_port_set_bench(Object *obj, Visitor *v, const char *name,
++                                 void *opaque, Error **errp)
++{
++    Avr8xPortState *s = AVR8X_PORT(obj);
++    unsigned grp = GPOINTER_TO_UINT(opaque);
++    Avr8xPortGroup *g = &s->g[grp];
++    g_autofree char *val = NULL;
++    unsigned mask, level;
++
++    if (!visit_type_str(v, name, &val, errp)) {
++        return;
++    }
++    if (sscanf(val, "%x %x", &mask, &level) != 2) {
++        error_setg(errp, "%s must be \"<mask> <level>\" in hex", name);
++        return;
++    }
++    g->bench_mask = mask;
++    g->bench_level = level & mask;
++    avr8x_port_update(s, grp);
++}
++
++/* "pa-pull": "<mask> <up>" in hex, the pads with a pull resistor on */
++static void avr8x_port_get_pull(Object *obj, Visitor *v, const char *name,
++                                void *opaque, Error **errp)
++{
++    Avr8xPortState *s = AVR8X_PORT(obj);
++    uint8_t pull = avr8x_port_pulls(&s->g[GPOINTER_TO_UINT(opaque)]);
++    g_autofree char *val = g_strdup_printf("%x %x", pull, pull);
++
++    visit_type_str(v, name, &val, errp);
++}
++
+ static void avr8x_port_reset_hold(Object *obj, ResetType type)
+ {
+     Avr8xPortState *s = AVR8X_PORT(obj);
+@@ -444,6 +501,8 @@ static void avr8x_port_realize(DeviceState *dev, Error **errp)
+         g_autofree char *vport = g_strdup_printf("vport%c", 'a' + n);
+         g_autofree char *stats = g_strdup_printf("p%c-stats", 'a' + n);
+         g_autofree char *levels = g_strdup_printf("p%c-levels", 'a' + n);
++        g_autofree char *bench = g_strdup_printf("p%c-bench", 'a' + n);
++        g_autofree char *pull = g_strdup_printf("p%c-pull", 'a' + n);
+ 
+         s->g[n].owner = s;
+         s->g[n].index = n;
+@@ -458,13 +517,17 @@ static void avr8x_port_realize(DeviceState *dev, Error **errp)
+                             NULL, NULL, group);
+         object_property_add(obj, levels, "uint32", avr8x_port_get_levels,
+                             NULL, NULL, group);
++        object_property_add(obj, bench, "str", avr8x_port_get_bench,
++                            avr8x_port_set_bench, NULL, group);
++        object_property_add(obj, pull, "str", avr8x_port_get_pull,
++                            NULL, NULL, group);
+     }
+ }
+ 
+ static const VMStateDescription vmstate_avr8x_port_group = {
+     .name = "avr8x-port-group",
+-    .version_id = 1,
+-    .minimum_version_id = 1,
++    .version_id = 2,
++    .minimum_version_id = 2,
+     .fields = (const VMStateField[]) {
+         VMSTATE_UINT8(dir, Avr8xPortGroup),
+         VMSTATE_UINT8(out, Avr8xPortGroup),
+@@ -475,6 +538,8 @@ static const VMStateDescription vmstate_avr8x_port_group = {
+         VMSTATE_UINT8(evgenctrl, Avr8xPortGroup),
+         VMSTATE_UINT8(ext_mask, Avr8xPortGroup),
+         VMSTATE_UINT8(ext_level, Avr8xPortGroup),
++        VMSTATE_UINT8(bench_mask, Avr8xPortGroup),
++        VMSTATE_UINT8(bench_level, Avr8xPortGroup),
+         VMSTATE_UINT8(per_mask, Avr8xPortGroup),
+         VMSTATE_UINT8(per_level, Avr8xPortGroup),
+         VMSTATE_UINT8(in_last, Avr8xPortGroup),
+diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
+index ad6b5fd..7e57cfc 100644
+--- a/hw/gpio/mchp_port.c
++++ b/hw/gpio/mchp_port.c
+@@ -15,7 +15,9 @@
+  * without driving it (a disabled TCC) leaves it floating with the pull
+  * resistor off, while input functions (EIC) keep the pull (silicon). Each
+  * pad's driven-high and driven-low time is accounted on QEMU_CLOCK_VIRTUAL
+- * ("pa-stats"), for duty cycles. Not modelled: the input sampling mode
++ * ("pa-stats"), for duty cycles. The board's bench of parts drives pads
++ * over the other external drivers ("pa-bench") and reads the pulls
++ * ("pa-pull"). Not modelled: the input sampling mode
+  * (CTRL.SAMPLING), since IN always shows the current pads.
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+@@ -52,6 +54,9 @@ struct MchpPortState {
+     /* External drivers, per group: the pads they drive and the levels */
+     uint32_t ext_mask[MCHP_PORT_GROUP_COUNT];
+     uint32_t ext_level[MCHP_PORT_GROUP_COUNT];
++    /* Parts on the board's bench ("pX-bench"): over the drivers above */
++    uint32_t bench_mask[MCHP_PORT_GROUP_COUNT];
++    uint32_t bench_level[MCHP_PORT_GROUP_COUNT];
+     /* The PORT's own drive, as last signalled on "port-out" */
+     uint32_t drive_mask[MCHP_PORT_GROUP_COUNT];
+     uint32_t drive_level[MCHP_PORT_GROUP_COUNT];
+@@ -174,6 +179,20 @@ static uint32_t mchp_port_periph(MchpPortState *s, unsigned g,
+     return mask;
+ }
+ 
++/*
++ * Pads of group @g whose pull resistor is on, towards OUT, whoever else
++ * drives them: an input with PULLEN, and no output peripheral holding it
++ */
++static uint32_t mchp_port_pulls(MchpPortState *s, unsigned g)
++{
++    uint32_t drive = mchp_port_drive_mask(s, g);
++    uint32_t plevel, periph = mchp_port_periph(s, g, &plevel) & ~drive;
++
++    return mchp_port_pincfg(s, g, R_MCHP_PORT_GROUP_PINCFG_PULLEN_MASK) &
++           ~mchp_port_reg(s, g, A_MCHP_PORT_GROUP_DIR) & ~periph &
++           ~mchp_port_hiz(s, g);
++}
++
+ /*
+  * Level of every pad of group @g (DS 27.6.3.2): the PORT's output, else
+  * the peripheral the pin is muxed to, else an external driver, else the
+@@ -184,15 +203,13 @@ static uint32_t mchp_port_pads(MchpPortState *s, unsigned g)
+     uint32_t out = mchp_port_reg(s, g, A_MCHP_PORT_GROUP_OUT);
+     uint32_t drive = mchp_port_drive_mask(s, g);
+     uint32_t plevel, periph = mchp_port_periph(s, g, &plevel) & ~drive;
+-    uint32_t ext = s->ext_mask[g] & ~drive & ~periph;
+-    /* No pull where an output peripheral holds the pad, even floating */
+-    uint32_t pull = mchp_port_pincfg(s, g,
+-                                     R_MCHP_PORT_GROUP_PINCFG_PULLEN_MASK) &
+-                    ~mchp_port_reg(s, g, A_MCHP_PORT_GROUP_DIR) & ~ext &
+-                    ~periph & ~mchp_port_hiz(s, g);
++    uint32_t bench = s->bench_mask[g];
++    uint32_t ext = (s->ext_mask[g] | bench) & ~drive & ~periph;
++    uint32_t elevel = (s->ext_level[g] & ~bench) |
++                      (s->bench_level[g] & bench);
++    uint32_t pull = mchp_port_pulls(s, g) & ~ext;
+ 
+-    return (out & drive) | (plevel & periph) | (s->ext_level[g] & ext) |
+-           (out & pull);
++    return (out & drive) | (plevel & periph) | (elevel & ext) | (out & pull);
+ }
+ 
+ /* Add the time since the last call to the high/low time of driven pads */
+@@ -526,6 +543,58 @@ static void mchp_port_get_levels(Object *obj, Visitor *v, const char *name,
+     visit_type_uint32(v, name, &value, errp);
+ }
+ 
++/*
++ * "pa-bench": "<mask> <level>" in hex, the pads the parts on the board's
++ * bench drive and their levels. The bench sits over the "port-in"
++ * drivers: a Click or a board button keeps its own pad as it was.
++ */
++static void mchp_port_get_bench(Object *obj, Visitor *v, const char *name,
++                                void *opaque, Error **errp)
++{
++    MchpPortState *s = MCHP_PORT(obj);
++    unsigned g = GPOINTER_TO_UINT(opaque);
++    g_autofree char *val = g_strdup_printf("%" PRIx32 " %" PRIx32,
++                                           s->bench_mask[g],
++                                           s->bench_level[g] &
++                                           s->bench_mask[g]);
++
++    visit_type_str(v, name, &val, errp);
++}
++
++static void mchp_port_set_bench(Object *obj, Visitor *v, const char *name,
++                                void *opaque, Error **errp)
++{
++    MchpPortState *s = MCHP_PORT(obj);
++    unsigned g = GPOINTER_TO_UINT(opaque);
++    g_autofree char *val = NULL;
++    uint32_t mask, level;
++
++    if (!visit_type_str(v, name, &val, errp)) {
++        return;
++    }
++    if (sscanf(val, "%" SCNx32 " %" SCNx32, &mask, &level) != 2) {
++        error_setg(errp, "%s must be \"<mask> <level>\" in hex", name);
++        return;
++    }
++    s->bench_mask[g] = mask;
++    s->bench_level[g] = level & mask;
++    mchp_port_update_func(s, g);
++}
++
++/* "pa-pull": "<mask> <up>" in hex, the pads with a pull resistor on */
++static void mchp_port_get_pull(Object *obj, Visitor *v, const char *name,
++                               void *opaque, Error **errp)
++{
++    MchpPortState *s = MCHP_PORT(obj);
++    unsigned g = GPOINTER_TO_UINT(opaque);
++    uint32_t pull = mchp_port_pulls(s, g);
++    g_autofree char *val = g_strdup_printf(
++        "%" PRIx32 " %" PRIx32, pull,
++        pull & mchp_port_reg(s, g, A_MCHP_PORT_GROUP_OUT));
++
++    visit_type_str(v, name, &val, errp);
++}
++
+ /* After a reset every pin is an input again: release the pads. */
+ /*
+  * "pa-stats": "<ns> <high0> <low0> ... <high31> <low31>", the virtual time
+@@ -599,6 +668,8 @@ static bool mchp_port_realize(MchpRegBlock *rb, Error **errp)
+         g_autofree char *out_mask = g_strdup_printf("p%c-out-mask", p);
+         g_autofree char *stats = g_strdup_printf("p%c-stats", p);
+         g_autofree char *levels = g_strdup_printf("p%c-levels", p);
++        g_autofree char *bench = g_strdup_printf("p%c-bench", p);
++        g_autofree char *pull = g_strdup_printf("p%c-pull", p);
+ 
+         object_property_add(obj, in, "uint32", mchp_port_get_in,
+                             mchp_port_set_in, NULL, group);
+@@ -612,19 +683,27 @@ static bool mchp_port_realize(MchpRegBlock *rb, Error **errp)
+                             NULL, NULL, group);
+         object_property_add(obj, levels, "uint32", mchp_port_get_levels,
+                             NULL, NULL, group);
++        object_property_add(obj, bench, "str", mchp_port_get_bench,
++                            mchp_port_set_bench, NULL, group);
++        object_property_add(obj, pull, "str", mchp_port_get_pull,
++                            NULL, NULL, group);
+     }
+     return true;
+ }
+ 
+ static const VMStateDescription vmstate_mchp_port = {
+     .name = TYPE_MCHP_PORT,
+-    .version_id = 4,
+-    .minimum_version_id = 4,
++    .version_id = 5,
++    .minimum_version_id = 5,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpPortState, 1, vmstate_mchp_regblock,
+                        MchpRegBlock),
+         VMSTATE_UINT32_ARRAY(ext_mask, MchpPortState, MCHP_PORT_GROUP_COUNT),
+         VMSTATE_UINT32_ARRAY(ext_level, MchpPortState, MCHP_PORT_GROUP_COUNT),
++        VMSTATE_UINT32_ARRAY(bench_mask, MchpPortState,
++                             MCHP_PORT_GROUP_COUNT),
++        VMSTATE_UINT32_ARRAY(bench_level, MchpPortState,
++                             MCHP_PORT_GROUP_COUNT),
+         VMSTATE_UINT32_ARRAY(drive_mask, MchpPortState, MCHP_PORT_GROUP_COUNT),
+         VMSTATE_UINT32_ARRAY(drive_level, MchpPortState,
+                              MCHP_PORT_GROUP_COUNT),
+diff --git a/include/hw/gpio/avr8x_port.h b/include/hw/gpio/avr8x_port.h
+index 8c6b316..e134ee8 100644
+--- a/include/hw/gpio/avr8x_port.h
++++ b/include/hw/gpio/avr8x_port.h
+@@ -55,6 +55,9 @@ typedef struct Avr8xPortGroup {
+     /* External drivers and peripheral overrides: pins and levels */
+     uint8_t ext_mask;
+     uint8_t ext_level;
++    /* Parts on the board's bench ("pX-bench"): over the drivers above */
++    uint8_t bench_mask;
++    uint8_t bench_level;
+     uint8_t per_mask;
+     uint8_t per_level;
+     /* Input as last sensed (after INVEN), for edge detection */
+-- 
+2.53.0.windows.2
+

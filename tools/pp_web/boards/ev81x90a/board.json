@@ -2,6 +2,7 @@
   "id": "ev81x90a",
   "name": "PIC32CM JH01 Curiosity Pro (EV81X90A)",
   "machine": "pic32cm-jh01-cpro",
+  "device": "pic32cm5164jh01100",
   "demo_elf": "firmware/hello/build/pic32cm_jh01_cpro/blinky.elf",
   "vcom": "SERCOM4 (PB10/PB11), EDBG virtual COM port",
   "source": "Microchip board design files R4 (Gerbers, pick and place); see README.md",

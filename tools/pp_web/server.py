@@ -26,6 +26,13 @@ twin restarts with it, like a power cycle) and {"type": "control",
 "pressed": false} (a joystick or a tilt, live; see stick_values()). POST
 /api/firmware with the ELF as the body (re)starts the twin.
 
+The parts bench (bench.py): the page sends {"type": "bench", "bench":
+{...}} (the whole bench, replaced) and {"type": "bench-prop", "id": "sw1",
+"prop": "pressed", "value": true} (one property, live); it gets "bench"
+(the bench as stored) and "benchstate" (the solved circuit: parts, pads,
+nets, warnings). Each board's bench is kept in ~/.pp_web/bench-<board>.json
+(PP_WEB_BENCH_DIR elsewhere); --bench loads one from a file.
+
 Local, single-user prototype: one twin shared by every open page.
 """
 
@@ -35,13 +42,16 @@ import argparse
 import asyncio
 import json
 import math
+import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
 
 from aiohttp import WSMsgType, web
 
-from .session import Session
+from . import bench as benchlib
+from .session import PORT_PATH, Session
 from tools.pp import circuitpython, fatfs
 
 HERE = Path(__file__).resolve().parent
@@ -51,6 +61,32 @@ MAX_ELF = 4 * 1024 * 1024
 ROOT = HERE.parents[1]
 WATCH_S = 1.0
 WATCH_GLOBS = ("**/out/**/*.elf", "**/dist/**/*.elf")
+DEVICES = ROOT / "devices"
+
+
+def bench_dir() -> Path:
+    return Path(os.environ.get("PP_WEB_BENCH_DIR") or
+                Path.home() / ".pp_web")
+
+
+def device_pads(device: str | None) -> tuple[list[str], dict]:
+    """The pads of @device (devices/<device>.json), and per pad the ADC
+    channels on it: {pad: [(QOM path of the ADC, channel)]}."""
+    path = DEVICES / f"{device}.json"
+    if not device or not path.is_file():
+        return [], {}
+    dev = json.loads(path.read_text(encoding="utf-8"))
+    pads, ain = set(), {}
+    for sig in dev["signals"]:
+        if not re.fullmatch(r"P[A-Z]\d+", sig["pad"]):
+            continue                    # RESET_N, VDD...
+        pads.add(sig["pad"])
+        if sig["instance"].startswith("ADC") and \
+                sig["group"] in ("AIN", "AINP"):
+            ain.setdefault(sig["pad"], []).append(
+                (f"/machine/soc/{sig['instance'].lower()}", sig["index"]))
+    key = lambda p: (p[1], int(p[2:]))                  # noqa: E731
+    return sorted(pads, key=key), ain
 
 
 def newest_elf(target: Path) -> Path | None:
@@ -105,12 +141,6 @@ def slot_watch(slot: str, *prop: str) -> tuple[str, ...]:
     return (f"{slot}.{prop[0]}", f"/machine/{slot}-click", *prop)
 
 
-def slot_watch(slot: str, *prop: str) -> tuple[str, ...]:
-    """The Session watch entry of a Click property (property[, generation
-    property]) on @slot."""
-    return (f"{slot}.{prop[0]}", f"/machine/{slot}-click", *prop)
-
-
 def part_watch(board: dict) -> list[tuple[str, ...]]:
     """(key, path, property[, generation]) of what the board's own parts
     show or play (board.json "parts": a display panel, NeoPixels, a
@@ -147,8 +177,10 @@ def pin_groups(board: dict) -> tuple[str, ...]:
 
 class App:
     def __init__(self, board: str, elf: Path | None,
-                 watch: Path | None = None):
+                 watch: Path | None = None, bench: Path | None = None):
         self.load_board(board)
+        if bench:
+            self.bench.set(json.loads(bench.read_text(encoding="utf-8")))
         self.clients: set[web.WebSocketResponse] = set()
         self.session: Session | None = None
         self.elf = elf
@@ -171,6 +203,136 @@ class App:
                 "circuitpy.img"
             fatfs_files = fatfs.folder_files(self.board_dir / cp["drive"])
             self.drive.write_bytes(fatfs.build_image(fatfs_files))
+        self.pads, self.ain = device_pads(self.board.get("device"))
+        saved = bench_dir() / f"bench-{board}.json"
+        try:
+            data = json.loads(saved.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        self.bench = benchlib.Bench(data, vdd=self.board.get("vdd", 3.3),
+                                    pad_max_ma=self.board.get("pad_max_ma",
+                                                              20.0))
+        self.bench_view = ""
+        self.bench_frame_last: dict = {}
+        self.bench_applied: dict[str, str] = {}     # PORT group -> value
+        self.ain_applied: dict[str, dict[int, int]] = {}    # ADC -> ch: mV
+
+    # -- the parts bench ----------------------------------------------
+
+    def bench_pins(self) -> list[dict]:
+        """The pads the page offers for wiring, with their board names."""
+        names: dict[str, list[str]] = {}
+        for label, pad in self.board.get("pin_labels", {}).items():
+            names.setdefault(pad, []).append(label)
+        for led in self.board["leds"]:
+            names.setdefault(led["pin"], []).append(led["id"])
+        return [{"pad": p, "label": " ".join(names.get(p, [])),
+                 "adc": p in self.ain} for p in self.pads]
+
+    def bench_groups(self) -> tuple[str, ...]:
+        return tuple(sorted({benchlib.pad_ref(p)[0] for p in self.bench.pads}))
+
+    def bench_message(self) -> dict:
+        return {"type": "bench", "bench": self.bench.data}
+
+    def save_bench(self) -> None:
+        try:
+            d = bench_dir()
+            d.mkdir(parents=True, exist_ok=True)
+            data = {"parts": [{k: v for k, v in p.items() if k != "pressed"}
+                              for p in self.bench.data["parts"]],
+                    "wires": self.bench.data["wires"],
+                    "anchors": self.bench.data["anchors"]}
+            (d / f"bench-{self.board['id']}.json").write_text(
+                json.dumps(data, indent=1), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _bench_session(self) -> None:
+        """Tell the running twin what the bench needs polled."""
+        if self.session:
+            groups = self.bench_groups()
+            self.session.bench_active = not self.bench.empty
+            self.session.bench_groups = groups
+            self.session.groups = tuple(sorted(set(self.session.groups) |
+                                               set(groups)))
+
+    async def set_bench(self, data: dict) -> None:
+        self.bench.set(data)
+        self.save_bench()
+        self.emit(self.bench_message())
+        self._bench_session()
+        await self.bench_frame(None)
+
+    async def bench_prop(self, pid: str, prop: str, value) -> None:
+        """One property of a bench part, live (a button held, a knob)."""
+        part = next((p for p in self.bench.data["parts"] if p["id"] == pid),
+                    None)
+        if not part or prop not in benchlib.PARTS[part["type"]]["props"]:
+            return
+        part[prop] = value
+        self.bench.set(self.bench.data)
+        if prop != "pressed":
+            self.save_bench()
+        self.emit(self.bench_message())
+        await self.bench_frame(None)
+
+    async def bench_frame(self, frame: dict | None) -> None:
+        """Solve the bench for the twin's pads (@frame from the session,
+        or the last one), drive the input pads and ADC channels it feeds,
+        and send the page what changed."""
+        if frame is None:
+            frame = self.bench_frame_last if self.session else {}
+        self.bench_frame_last = frame
+        pins, pulls = frame.get("pins", {}), frame.get("pulls", {})
+        pads = {}
+        for pad in self.bench.pads:
+            g, bit = benchlib.pad_ref(pad)
+            group = pins.get(g) or []
+            hi, lo = group[bit] if bit < len(group) else (0, 0)
+            mask, up = pulls.get(g, (0, 0))
+            pull = (1 if up >> bit & 1 else -1) if mask >> bit & 1 else 0
+            pads[pad] = benchlib.Pad(high=hi, low=lo, pull=pull)
+        res = self.bench.solve(pads)
+        if self.session and self.session.qmp:
+            await self._bench_apply(res)
+        view = json.dumps({"type": "benchstate", "parts": res.parts,
+                           "pads": res.pads, "nets": res.nets,
+                           "warnings": res.warnings})
+        if view != self.bench_view:
+            self.bench_view = view
+            self.emit(json.loads(view))
+
+    async def _bench_apply(self, res: benchlib.Result) -> None:
+        """Input pads read the level the bench settles them at; ADC
+        channels read their pad's voltage."""
+        groups = set(self.bench_groups()) | set(self.bench_applied)
+        for g, (mask, level) in benchlib.pad_drives(res.inputs,
+                                                    groups).items():
+            val = f"{mask:x} {level:x}"
+            if self.bench_applied.get(g, "0 0") == val:
+                continue
+            self.bench_applied[g] = val
+            try:
+                await self.session.set_prop(PORT_PATH, f"p{g}-bench", val)
+            except (RuntimeError, ConnectionError):
+                pass                    # no such group, or restarting
+        want: dict[str, dict[int, int]] = {}
+        for pad, volts in res.volts.items():
+            for path, ch in self.ain.get(pad, []):
+                want.setdefault(path, {})[ch] = round(volts * 1000)
+        for path in set(want) | set(self.ain_applied):
+            new, old = want.get(path, {}), self.ain_applied.get(path, {})
+            if new == old:
+                continue
+            items = {**{ch: -1 for ch in old}, **new}
+            self.ain_applied[path] = new
+            try:
+                await self.session.set_prop(
+                    path, "ain", ",".join(f"{c}={mv}"
+                                          for c, mv in sorted(items.items())))
+            except (RuntimeError, ConnectionError):
+                pass                    # no ADC model on this device
 
     def circuitpython_elf(self) -> Path | None:
         """The board's stock CircuitPython (from the cache; fetched once
@@ -213,7 +375,12 @@ class App:
 
     def board_message(self) -> dict:
         return {"type": "board", "board": self.board, "boards": board_list(),
-                "catalog": CLICKS, "adapters": ADAPTERS}
+                "catalog": CLICKS, "adapters": ADAPTERS,
+                "bench_lib": {t: {"name": d["name"],
+                                  "terminals": d["terminals"],
+                                  "props": d["props"]}
+                              for t, d in benchlib.PARTS.items()},
+                "bench_pins": self.bench_pins()}
 
     async def select_board(self, board: str) -> None:
         """Switch boards: the twin stops, the page redraws, and the board's
@@ -233,6 +400,8 @@ class App:
         self.emit(self.board_message())
         self.emit({"type": "clicks", "clicks": self.clicks})
         self.emit(self.files_message())
+        self.emit(self.bench_message())
+        await self.bench_frame(None)
         if self.elf:
             await self.run(self.elf)
         elif self.board.get("circuitpython"):
@@ -350,10 +519,18 @@ class App:
             self.uart_log = ""
             self.emit({"type": "reset"})
             self.elf = elf
+            self.bench_applied, self.ain_applied = {}, {}
+            self.bench_frame_last = {}
+            groups = self.bench_groups()
             self.session = Session(self.machine(), elf, self.emit,
-                                   groups=pin_groups(self.board),
+                                   groups=tuple(sorted(
+                                       set(pin_groups(self.board)) |
+                                       set(groups))),
                                    watch=self.click_watch(),
-                                   drive=self.drive)
+                                   drive=self.drive,
+                                   bench=self.bench_frame,
+                                   bench_active=not self.bench.empty,
+                                   bench_groups=groups)
             try:
                 await self.session.start()
                 for slot, c in self.clicks.items():
@@ -392,6 +569,9 @@ class App:
         await ws.send_str(json.dumps(self.board_message()))
         await ws.send_str(json.dumps({"type": "clicks", "clicks": self.clicks}))
         await ws.send_str(json.dumps(self.files_message()))
+        await ws.send_str(json.dumps(self.bench_message()))
+        if self.bench_view:
+            await ws.send_str(self.bench_view)
         if self.session:
             await ws.send_str(json.dumps({"type": "status", "state": "running",
                                           "elf": self.session.elf.name}))
@@ -425,6 +605,13 @@ class App:
             if req.get("type") == "save-file":
                 await self.save_file(str(req.get("path", "")),
                                      str(req.get("text", "")))
+                continue
+            if req.get("type") == "bench":
+                await self.set_bench(req.get("bench") or {})
+                continue
+            if req.get("type") == "bench-prop":
+                await self.bench_prop(str(req.get("id")), str(req.get("prop")),
+                                      req.get("value"))
                 continue
             if req.get("type") == "control":
                 await self.control(str(req.get("slot")), str(req.get("id")),
@@ -478,6 +665,7 @@ class App:
         await self.run(dest)
 
     async def on_startup(self, app: web.Application) -> None:
+        await self.bench_frame(None)
         if self.elf is None and not self.watch:
             self.elf = self.circuitpython_elf()
         if self.elf:
@@ -502,8 +690,9 @@ async def part_image(request: web.Request) -> web.StreamResponse:
 
 
 def make_app(board: str = "ev15n46a", elf: Path | None = None,
-             watch: Path | None = None) -> web.Application:
-    state = App(board, elf, watch)
+             watch: Path | None = None,
+             bench: Path | None = None) -> web.Application:
+    state = App(board, elf, watch, bench)
     app = web.Application(client_max_size=MAX_ELF + 1024)
     app.add_routes([
         web.get("/", state.index),
@@ -527,7 +716,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--elf", type=Path, help="firmware to start with")
     ap.add_argument("--watch", type=Path, metavar="PATH",
                     help="project folder (or ELF) whose new builds to run")
+    ap.add_argument("--bench", type=Path, metavar="JSON",
+                    help="parts bench to start with (see bench.py)")
     args = ap.parse_args(argv)
-    web.run_app(make_app(args.board, args.elf, args.watch),
+    web.run_app(make_app(args.board, args.elf, args.watch, args.bench),
                 host=args.host, port=args.port)
     return 0

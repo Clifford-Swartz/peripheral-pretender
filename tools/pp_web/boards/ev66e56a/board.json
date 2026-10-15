@@ -2,6 +2,7 @@
   "id": "ev66e56a",
   "name": "AVR64EA48 Curiosity Nano (EV66E56A) on a Curiosity Nano Base (AC164162)",
   "machine": "avr64ea48-cnano",
+  "device": "avr64ea48",
   "demo_elf": "firmware/avr-hello/build/blinky.elf",
   "vcom": "USART1 (PC0/PC1), nEDBG virtual COM port",
   "source": "Microchip design files: AVR64EA48 Curiosity Nano PCBA rev 3 on Curiosity Nano Base for Click boards rev 7 (Gerbers, pick and place); see README.md",

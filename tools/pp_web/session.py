@@ -19,7 +19,7 @@ import re
 import socket
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Awaitable, Callable
 
 from tools.pp.qemu import elf_target, find_qemu, machine_target, qemu_env
 
@@ -116,6 +116,11 @@ class Session:
     watch: list[tuple[str, ...]] = field(default_factory=list)
     # The board's external flash image (-drive if=mtd): a CIRCUITPY drive
     drive: Path | None = None
+    # Called each frame with {"pins", "pulls"} while the board's parts
+    # bench has anything on it (the bench solves and drives pads)
+    bench: Callable[[dict], Awaitable[None]] | None = None
+    bench_active: bool = False
+    bench_groups: tuple[str, ...] = ()      # PORT groups of the bench's pads
     click_state: dict[str, object] = field(default_factory=dict)
     proc: asyncio.subprocess.Process | None = None
     qmp: Qmp | None = None
@@ -199,6 +204,14 @@ class Session:
             if levels != self.levels:
                 self.levels = levels
                 self.emit({"type": "levels", "levels": levels})
+            if self.bench and self.bench_active:
+                pulls = {}
+                for g in self.bench_groups:
+                    mask, up = str(await self.qmp.execute(
+                        "qom-get", path=PORT_PATH,
+                        property=f"p{g}-pull")).split()
+                    pulls[g] = (int(mask, 16), int(up, 16))
+                await self.bench({"pins": self.pins, "pulls": pulls})
             state = {}
             for key, path, prop, *gen in self.watch:
                 if gen:

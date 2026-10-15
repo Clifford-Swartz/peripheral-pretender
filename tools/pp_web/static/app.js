@@ -744,7 +744,10 @@ function handle(msg) {
     }
     pinsNow = {}; levels = {}; clickState = {};
     buildBoard(msg.board, msg.catalog, msg.adapters);
+    if (typeof Bench !== "undefined") Bench.board(msg);
     break;
+  case "bench": if (typeof Bench !== "undefined") Bench.bench(msg.bench); break;
+  case "benchstate": if (typeof Bench !== "undefined") Bench.state(msg); break;
   case "clicks": showClicks(msg.clicks); break;
   case "levels": showSignals(msg.levels); break;
   case "clickstate": clickState = msg.state; updateClickParts(); break;

@@ -25,6 +25,7 @@ header h1 { font-size: 16px; margin: 0; letter-spacing: .3px; }
 .status.running { background: #173d26; color: var(--ok); }
 .status.stopped, .status.error { background: #43191a; color: #ff8a86; }
 main { flex: 1; display: flex; min-height: 0; }
+#left { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 #board-pane {
   flex: 1; display: flex; align-items: center; justify-content: center;
   padding: 16px; min-width: 0; container-type: size;
@@ -131,7 +132,67 @@ h2 small { color: var(--muted); font-weight: normal; }
   main { flex-direction: column; }
   #side { width: auto; max-width: none; border-left: 0; }
   #board-pane { flex: none; height: 70vh; }
+  #bench-pane { height: 340px; }
 }
+
+/* The parts bench (bench.js) */
+#bench-pane { height: 45%; min-height: 150px; display: flex; flex-direction: column;
+  border-top: 1px solid #262c34; background: #0e1216; }
+#bench-pane[hidden] { display: none; }
+#bench-pane.collapsed { height: auto; min-height: 0; }
+#bench-pane.collapsed #bench-svg { display: none; }
+.bench-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; flex-wrap: wrap;
+  background: var(--panel); border-bottom: 1px solid #262c34; font-size: 12px; }
+.bench-bar select, .bench-bar button, .bench-bar input { background: #232a33; color: var(--text);
+  border: 1px solid #2c333c; border-radius: 6px; padding: 3px 7px; font: inherit; }
+.bench-bar button { cursor: pointer; }
+#bench-toggle { font-weight: 700; }
+#bench-props { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+#bench-props label { color: var(--muted); }
+#bench-props .muted { color: var(--muted); }
+#bench-warn { color: #ffb347; margin-left: auto; }
+#bench-clear { margin-left: 4px; }
+#bench-svg { flex: 1; width: 100%; min-height: 0; display: block; user-select: none;
+  background-color: #0e1216;
+  background-image: radial-gradient(#26303a 1px, transparent 1px); background-size: 20px 20px; }
+#bench-svg text { fill: #c9d1db; font: 11px system-ui, sans-serif; text-anchor: middle;
+  pointer-events: none; }
+#bench-svg .part { cursor: move; }
+#bench-svg .part.selected .body, #bench-svg .tag.selected rect { stroke: #fff; stroke-width: 2; }
+#bench-svg .part.warn .body, #bench-svg .tag rect.warn { stroke: #ffb347; stroke-width: 2.5; }
+#bench-svg .lead { stroke: #aab4c0; stroke-width: 2; fill: none; }
+#bench-svg .body { fill: #2b333d; stroke: #5d6a78; stroke-width: 1.2; }
+#bench-svg .bp-resistor .body { fill: #c8a46a; stroke: #6d5530; }
+#bench-svg .glow { opacity: 0; filter: blur(7px); pointer-events: none; transition: opacity 60ms; }
+#bench-svg .cap { fill: #3a434e; cursor: pointer; }
+#bench-svg .bp-button .knob { fill: #c0392b; pointer-events: none; }
+#bench-svg .bp-button.down .knob { fill: #ff6b5e; r: 6; }
+#bench-svg .dot { fill: #aab4c0; }
+#bench-svg .lever { stroke: #e6e9ee; stroke-width: 3; stroke-linecap: round; }
+#bench-svg .lever.on { stroke: #3ccf6e; }
+#bench-svg .hit { fill: transparent; cursor: pointer; }
+#bench-svg .track { fill: #1a1f25; }
+#bench-svg .pot-knob { fill: #8fd3ff; stroke: #fff; cursor: ew-resize; }
+#bench-svg .wiper { fill: #aab4c0; }
+#bench-svg .rotor .blade { stroke: #e6e9ee; stroke-width: 3; stroke-linecap: round; }
+#bench-svg .hub { fill: #8a94a3; }
+#bench-svg .horn .arm { stroke: #f3f3f3; stroke-width: 5; stroke-linecap: round; }
+#bench-svg .horn { transition: transform 120ms; }
+#bench-svg .horn.idle .arm { stroke: #8a94a3; }
+#bench-svg .meter { fill: #0b1d24; }
+#bench-svg .reading { fill: #9fe8ff; font: 700 13px ui-monospace, Consolas, monospace; }
+#bench-svg .pm { fill: #8a94a3; }
+#bench-svg .tag { cursor: move; }
+#bench-svg .tag-name { font-weight: 700; fill: #fff; }
+#bench-svg .tag-sub { font-size: 9px; fill: #d0d7e0; }
+#bench-svg .term { fill: #11161b; stroke: #e6e9ee; stroke-width: 1.5; cursor: crosshair; }
+#bench-svg .term:hover { fill: #ffd21a; }
+#bench-svg .term.armed { fill: #ffd21a; stroke: #ffd21a; }
+#bench-svg .wire-line { fill: none; stroke-width: 2.5; pointer-events: none; }
+#bench-svg .wire-hit { fill: none; stroke: transparent; stroke-width: 10; cursor: pointer; }
+#bench-svg .wire.selected .wire-line { stroke-width: 4; filter: drop-shadow(0 0 3px #fff); }
+#bench-svg .rubber { stroke: #ffd21a; stroke-width: 2; stroke-dasharray: 5 4; fill: none;
+  pointer-events: none; }
 
 /* LED matrix dots on a Click (8x8 G): lit from the driver's display */
 .click-dot { position: absolute; border-radius: 30%; opacity: .12;

@@ -63,6 +63,45 @@ MPLAB, and with `--watch` on that folder the page follows every build.
   # pick "Thermo 8 Click" for EXT1, then move the temperature above 30 C
   ```
 
+## The parts bench
+
+Below the board is a bench for everyday parts: resistors, LEDs (and an RGB LED), a diode,
+a push button, a switch, a potentiometer, a DC motor, a logic-level N-MOSFET, a servo and a
+voltmeter. Wire them to the board's pads and to 3V3, 5V and GND:
+
+- **+ pin…** puts a pad (with its board name and whether it has an ADC channel) or a rail on
+  the bench as a tag; **+ part…** adds a part.
+- Click a terminal, then another, to wire them (Esc cancels). Drag parts and tags. Select a
+  part to edit its values in the bar; right-click (or select and Delete) to remove things.
+- While the twin runs: hold a button, drag a pot's knob, double-click a switch. LEDs glow with
+  their current, a motor spins at its speed, a servo's horn follows its pulse width (a 50 Hz
+  frame is assumed), the meter reads, wires are coloured by voltage and hovering shows it.
+  Warnings: an LED with no resistor, a motor on a bare pad, a pad over its current, a short.
+
+`bench.py` solves the circuit as DC each frame: nodal analysis with Newton steps for the
+diodes. A pad the firmware drives is VDD or 0 V behind about 40 ohm; a PWM pad is solved high
+and low and weighted by its duty cycle. An input pad is open, with its pull resistor if the
+PORT has one on (`pX-pull`). The results go back into the twin: an input pad wired to the
+bench reads the level its net settles at (`pX-bench`, a drive layer over the Clicks' and
+buttons'; hysteresis at 40/60 % of VDD), and a pad with an ADC channel reads its net's voltage
+(the ADC's `ain`; the SAM D5x ADC model only, so on the PyKit for now). Not modelled: anything
+that changes in time (capacitors, inductors, motor inertia). That is the analog step, with
+ngspice, later.
+
+Each board's bench is kept in `~/.pp_web/bench-<board>.json` (or `PP_WEB_BENCH_DIR`), and
+`--bench <file>` starts with one, so a bench can live in a project and run headless. Example,
+on the PyKit with a `code.py` that reads D0 and A4 and lights D1:
+
+```json
+{"parts": [{"id": "sw1", "type": "button", "x": 250, "y": 50},
+           {"id": "pot1", "type": "pot", "x": 250, "y": 150, "position": 0.25},
+           {"id": "r1", "type": "resistor", "x": 250, "y": 250, "ohms": 330},
+           {"id": "led1", "type": "led", "x": 380, "y": 250, "color": "green"}],
+ "wires": [["pin:PA15", "sw1.a"], ["sw1.b", "rail:GND"],
+           ["rail:3V3", "pot1.a"], ["pot1.b", "rail:GND"], ["pot1.w", "pin:PB08"],
+           ["pin:PA20", "r1.a"], ["r1.b", "led1.a"], ["led1.k", "rail:GND"]]}
+```
+
 It is a local, single-user prototype: one twin is shared by every open page. Hosting
 (one sandboxed twin per visitor) is a later step.
 

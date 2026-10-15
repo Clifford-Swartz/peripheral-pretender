@@ -29,3 +29,10 @@ OUT), else 0 (floating reads 0).
   drive `port-in` = 1 on the LED pin). A Click's pull-up on an open-drain INT (Thermo 8 R3) is
   modelled in the board's Click table (`int_pullup`). Leaving it out made ALERT read active
   whenever firmware did not enable the pad's own pull.
+
+## Outside drivers: who wins
+
+A pad's level, highest first: the PORT's own output, a peripheral it is muxed to, the web
+view's parts bench (`pX-bench`), the `port-in` drivers (Clicks, board buttons, `pX-in`),
+then the pull resistor. The bench reads which pulls are on through `pX-pull` (`"<mask> <up>"`),
+so its solver includes them; keep both in step when the pad logic changes (both PORT models).

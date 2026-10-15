@@ -719,8 +719,14 @@ def test_session_accel(qemu_path, qemu_machines):
         try:
             await asyncio.sleep(0.8)
             await app.stick("ext1", "tilt", 0.6, 0.0, None)    # lean right
-            await asyncio.sleep(0.5)
-            led = app.session.pins["a"][24][1]
+            # LED0 lights at the next sample; under load a frame may still
+            # straddle the change, so wait for a whole lit frame
+            led = 0.0
+            for _ in range(30):
+                await asyncio.sleep(0.1)
+                led = app.session.pins.get("a", [[0, 0]] * 32)[24][1]
+                if led > 0.9:
+                    break
             await app.stick("ext1", "tilt", 0.0, -0.8, None)   # bottom down
             await asyncio.sleep(0.5)
             await app.stick("ext1", "tilt", 0.0, 0.0, None)

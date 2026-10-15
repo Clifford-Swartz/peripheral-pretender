@@ -264,6 +264,22 @@ part B, reuse its `COREB` prompt and pass in the reports from `docs/handoff/agen
   SIGROW serial number and TEMPSENSE from silicon into `profiles/avr64ea48.yaml` `data_rows`;
   the 8x8 G Click's physical LED order (the schematic's is used).
 
+## Parts bench with a DC solver (2026-10-15)
+
+The web page has a bench below the board: resistors, LEDs, RGB LED, diode, button, switch,
+potentiometer, DC motor, N-MOSFET, servo and voltmeter, wired to the board's pads and rails
+(`tools/pp_web/bench.py`, `static/bench.js`; usage in `tools/pp_web/README.md`). Every frame
+it is solved as a DC circuit from the twin's pads (drive, PWM duty, pulls), and the results go
+back in: input pads read their net's level through the PORT's new `pX-bench` layer (patch
+0036, both PORT models), and ADC pads read their net's voltage through `ain`. Checked on the
+PyKit (stock CircuitPython reads a bench button and pot; the firmware lights a bench LED) and
+the MC00 (`blinky` speeds up from a bench button on SW0's pad; a bench LED on LED0's pad blinks
+with it, `tests/web/test_bench.py`).
+
+- **Open:** analog (ngspice: RC, inductive kick, motor inertia); an ADC model for the PIC32CM
+  U2247 and the AVR ADC so pots work there too; a logic analyzer view; servo period from the
+  timer instead of an assumed 50 Hz; nicer wire routing.
+
 ## Curiosity PyKit Explorer (CircuitPython, 2026-10-14)
 
 The first CircuitPython kit and the first Cortex-M4F: the Curiosity CircuitPython board

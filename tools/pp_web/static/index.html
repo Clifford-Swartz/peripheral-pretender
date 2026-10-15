@@ -18,12 +18,25 @@
     <span id="status" class="status idle">no firmware</span>
   </header>
   <main>
-    <section id="board-pane">
-      <div id="board">
-        <img id="board-img" alt="Board">
-        <div id="overlays"></div>
-      </div>
-    </section>
+    <div id="left">
+      <section id="board-pane">
+        <div id="board">
+          <img id="board-img" alt="Board">
+          <div id="overlays"></div>
+        </div>
+      </section>
+      <section id="bench-pane" hidden>
+        <div class="bench-bar">
+          <button id="bench-toggle" title="Show or hide the bench">Bench</button>
+          <select id="bench-add" title="Add a part"></select>
+          <select id="bench-pin" title="Add a pad or rail to wire to"></select>
+          <span id="bench-props"></span>
+          <span id="bench-warn"></span>
+          <button id="bench-clear" title="Remove every part">Clear</button>
+        </div>
+        <svg id="bench-svg"></svg>
+      </section>
+    </div>
     <section id="side">
       <div id="drop" tabindex="0">
         <strong>Drop a firmware ELF here</strong>
@@ -44,5 +57,7 @@
     </section>
   </main>
   <script src="/static/app.js"></script>
+  <script src="/static/bench.js"></script>
+  <script>Bench.init();</script>
 </body>
 </html>

@@ -2,6 +2,8 @@
   "id": "pykit",
   "name": "Curiosity PyKit Explorer (CircuitPython)",
   "machine": "curiosity-circuitpython",
+  "device": "atsame51j20a",
+  "pin_labels": {"A0": "PB04", "A1": "PB05", "A2": "PB06", "A3": "PB07", "A4": "PB08", "A5": "PB09", "D0": "PA15", "D1": "PA20", "D2": "PA21", "D3": "PA27", "D4": "PB14", "D5": "PB15", "D6": "PB16"},
   "vcom": "USB CDC: the CircuitPython REPL and print()",
   "source": "No design files are published; composed from the kit's workshop renders (PyKit Ruler 04-12387 rev 4, Curiosity CircuitPython 04-12379 rev 4) by make_art.py; positions from those renders, pins from the schematics (EV78P89A rev 3, EV82H04A rev 3)",
   "image": "top.png",

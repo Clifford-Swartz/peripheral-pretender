@@ -42,6 +42,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0033 | SAM D5x DMAC (descriptors, peripheral-paced triggers, write-back; transfers start at the next status read); ST7789V TFT driver on `pp_panel`; WS2812 chain decoder; the PyKit Ruler on `curiosity-circuitpython` (display, NeoPixels, I2C pull-ups); DMAC triggers in `MchpDeviceInfo`; qtests |
 | 0034 | ICM-20948 (with AK09916) and BNO085 (SH-2/SHTP) I2C sensors; RNBD451 BLE module chardev (replies as from the kit); SAM D5x ADC (pins, supplies, temperature sensor); SERCOM I2C host keeps the next byte's SB when firmware clears SB right after a smart-mode read; machine option `bno085=on` |
 | 0035 | SAM D5x DAC (START events, the `audio` property: the output as PCM for front ends) and EVSYS U2504 models; DMAC pulsed triggers (TC overflows; served without touching channels firmware has just enabled) and block events; TC serves every overflow while a DMAC channel waits for it; `mchp_event_time_ns()`, the time of a late event being served; the speaker on `curiosity-circuitpython`; regenerated DAC/EVSYS tables; qtest; board doc `docs/system/arm/curiosity-circuitpython.rst` |
+| 0036 | PORT bench drive layer for the web view's parts bench: `pX-bench` (`"<mask> <level>"`, over the `port-in` drivers so Clicks and board buttons keep their pads) and `pX-pull` (`"<mask> <up>"`, the pads with a pull resistor on), in both the SAM/PIC32CM (U2210) and AVR8X PORT models |
 
 ## Setting it up
 
