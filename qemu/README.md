@@ -46,6 +46,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0037 | EDBG data gateway (DGI) on `pic32cm-mc00-cpro`: the DGI host protocol on a chardev (`-M ...,dgi=<chardev>`, the bytes of a debugger's USB DGI endpoints; command layer checked against an nEDBG), I2C target 0x28, SPI target (SERCOM1, SS PA17), GPIO0-3 (PA10/PA11/PA20/PA21) with 2 MHz timestamps; `mchp_port_watch()` pad observers; SERCOM SPI ignores an idle DGI target when reading an open MISO |
 | 0038 | PIC32CM JH/MC ADC (U2247): conversions on START and free-running, AIN0-11 from the board (`ain`), INTREF/VDDCORE/VDDANA inputs, the data sheet's references (INTVCC0 = VDDANA/1.48 pending silicon), 16-bit averaging, differential, correction, window monitor; `adc_u2247` overlay and regenerated tables |
 | 0039 | U2247 ADC checked on MC00 silicon (`APP=adc`): INTREF is SUPC VREF (1.024 V at reset) and converts only with VREF.VREFOE (else START stays set), INTVCC0 = VDDANA/1.6 (DFP right, data sheet table wrong), REFCTRL enable-protected |
+| 0040 | PIC32CM JH/MC DAC (U2214): 10-bit, INTREF/VDDANA/VREFA, VOUT on PA02 (`vout` property for front ends), read back by ADC0 AIN0 and used as the ADC's DAC reference; checked on MC00 silicon (`APP=dac`); `dac_u2214` overlay |
 
 ## Setting it up
 

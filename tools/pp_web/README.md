@@ -92,7 +92,9 @@ and low and weighted by its duty cycle. An input pad is open, with its pull resi
 PORT has one on (`pX-pull`). The results go back into the twin: an input pad wired to the
 bench reads the level its net settles at (`pX-bench`, a drive layer over the Clicks' and
 buttons'; hysteresis at 40/60 % of VDD), and a pad with an ADC channel reads its net's voltage
-(the ADC's `ain`; the SAM D5x ADC model only, so on the PyKit for now). Not modelled: anything
+(the ADC's `ain`: the PyKit's SAM D5x ADC and the MC00/JH01's PIC32CM ADC). Pads a peripheral
+drives with a voltage (`board.json` `"analog_out"`: the MC00's DAC on PA02, J700) are sources
+behind their output resistance, so a meter or an LED on DAC OUT follows the firmware. Not modelled: anything
 that changes in time (capacitors, inductors, motor inertia). That is the analog step, with
 ngspice, later.
 

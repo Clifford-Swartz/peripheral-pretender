@@ -274,3 +274,59 @@ def test_pot_on_a0_reaches_the_mc00_adc(qemu_path, qemu_machines):
     # The wiper from the a end: 75 % of 3.3 V, then 10 %
     assert quarter == pytest.approx(2475, abs=20), uart[-300:]
     assert ninety == pytest.approx(330, abs=20), uart[-300:]
+
+
+def test_analog_pad_drives_its_net():
+    """A pad a DAC drives is a voltage source behind its output resistance:
+    a 10k load barely moves it, an input on its net reads no digital level
+    from the bench."""
+    b = Bench({"parts": [part("resistor", "r", ohms=10e3),
+                         part("voltmeter", "vm")],
+               "wires": [["pin:PA02", "r.a"], ["r.b", "rail:GND"],
+                         ["vm.p", "pin:PA02"], ["vm.n", "rail:GND"]]})
+    res = b.solve({"PA02": Pad(analog_mv=1650, analog_ohms=100)})
+    assert res.parts["vm"]["volts"] == pytest.approx(1.6337, abs=0.002)
+    assert "PA02" not in res.inputs and res.pads["PA02"]["analog"] == 1.65
+
+
+DAC_ELF = ROOT / "firmware" / "hello" / "build" / "pic32cm_mc00_cpro" / \
+    "dac.elf"
+
+
+@pytest.mark.qemu
+def test_voltmeter_on_the_mc00_dac_out(qemu_path, qemu_machines):
+    """dac.elf ramps the DAC after its checks: a voltmeter plugged into
+    J700 (DAC OUT, GND) follows the triangle between 0 and 3.3 V."""
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not DAC_ELF.is_file():
+        pytest.skip("dac.elf not built")
+
+    async def scenario():
+        app = App("ev15n46a", DAC_ELF)
+        readings, uart = [], []
+
+        def emit(m):
+            if m["type"] == "benchstate":
+                v = m["parts"].get("vm", {}).get("volts")
+                if v is not None:
+                    readings.append(v)
+            elif m["type"] == "uart":
+                uart.append(m["data"])
+        app.emit = emit
+        await app.run(DAC_ELF)
+        try:
+            await app.set_bench({
+                "parts": [part("voltmeter", "vm", plug=["p", "n"])],
+                "wires": [["vm.p", "hole:J700.1"], ["vm.n", "hole:J700.2"]]})
+            await asyncio.sleep(3.0)
+        finally:
+            await app.session.stop()
+        return readings, "".join(uart)
+
+    readings, uart = asyncio.run(scenario())
+    assert "PP:EXIT 0" in uart, uart
+    assert len(set(readings)) > 10, readings[:20]
+    assert min(readings) < 0.8 and max(readings) > 2.5, (min(readings),
+                                                         max(readings))
+    assert max(readings) <= 3.31

@@ -1,0 +1,26 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for DAC U2214 (PIC32CM MC00 and JH01, one 10-bit
+# channel). The mchp-dac-u2214 model converts at once on a DATA write.
+ip: DAC
+id: U2214
+versions: ["2.0.1", "2.1.0"]
+references:
+  - "PIC32CM MC00 data sheet (Low-Power, 32-bit Cortex-M0+ MCU with Advanced Analog and PWM), DAC chapter"
+  - "PIC32CM MC00 silicon, firmware/hello APP=dac (2026-10-15)"
+registers:
+  CTRLA:
+    pac_protected: true
+    enable_protected: {all_except: [SWRST, ENABLE]}
+    self_clearing: [SWRST]
+  CTRLB: {pac_protected: true, enable_protected: all}
+  EVCTRL: {pac_protected: true, enable_protected: all}
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: all
+    irq_source: {enable: INTENSET}
+  STATUS: {hooks: [pre_read]}     # READY while enabled (silicon: at once)
+  DATA: {hooks: [post_write]}     # converts
+  DATABUF: {hooks: [post_write]}  # START events: logged, not modelled
+  SYNCBUSY: {dynamic: true}       # instant synchronization

@@ -193,6 +193,10 @@ class Pad:
     high: float = 0.0       # fraction of the frame driven high
     low: float = 0.0        # fraction driven low
     pull: int = 0           # 0: none, 1: pull-up, -1: pull-down
+    # A peripheral driving the pad with a voltage (a DAC's VOUT), in mV
+    # behind analog_ohms; None while it does not
+    analog_mv: float | None = None
+    analog_ohms: float = 100.0
 
     @property
     def driven(self) -> bool:
@@ -390,6 +394,8 @@ class Bench:
             st = pads.get(pad, Pad())
             if pad in states:
                 src(n, states[pad] * vdd, R_PAD)
+            elif st.analog_mv is not None:
+                src(n, st.analog_mv / 1000, st.analog_ohms)
             elif st.pull:
                 src(n, vdd if st.pull > 0 else 0.0, R_PULL)
         for p in self.data["parts"]:
@@ -503,6 +509,8 @@ class Bench:
             vp = volt(f"pin:{pad}")
             res.volts[pad] = round(vp, 4)
             info = {"volts": round(vp, 3), "driven": st.driven}
+            if st.analog_mv is not None:
+                info["analog"] = round(st.analog_mv / 1000, 3)
             if pad in acc_pad:
                 amps = acc_pad[pad]
                 info["amps"] = round(amps, 5)
@@ -510,7 +518,7 @@ class Bench:
                     info["warn"] = f"{abs(amps) * 1000:.0f} mA: over the " \
                                    f"pad's {self.pad_max * 1000:.0f} mA"
                     res.warnings.append(f"{pad}: {info['warn']}")
-            elif self._pad_attached(pad):
+            elif self._pad_attached(pad) and st.analog_mv is None:
                 # An input wired to the bench reads its net's level
                 prev = self.levels.get(pad, 1 if st.pull > 0 else 0)
                 lvl = 1 if vp > HYST_HI * vdd else 0 if vp < HYST_LO * vdd \

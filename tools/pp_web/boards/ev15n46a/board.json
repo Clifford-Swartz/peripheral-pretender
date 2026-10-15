@@ -4,6 +4,7 @@
   "machine": "pic32cm-mc00-cpro",
   "device": "pic32cm1216mc00048",
   "dgi": {"gpio": ["GPIO0 PA10", "GPIO1 PA11", "GPIO2 PA20", "GPIO3 PA21"]},
+  "analog_out": [{"pad": "PA02", "path": "/machine/soc/dac", "property": "vout", "ohms": 100}],
   "demo_elf": "firmware/hello/build/pic32cm_mc00_cpro/blinky.elf",
   "vcom": "SERCOM0 (PA06/PA07), EDBG virtual COM port",
   "source": "Microchip board design files R3 (Gerbers, pick and place); see README.md",
@@ -394,7 +395,9 @@
           "VCC"
         ]
       ]
-    }
+    },
+    {"id": "J700", "name": "DAC output", "first_mm": [26.283, 6.126], "step_mm": [2.525, 0], "pins": [["PA02", "DAC OUT"], ["GND", "GND"]]},
+    {"id": "J701", "name": "ADC/DAC reference", "first_mm": [37.008, 5.826], "step_mm": [2.55, 0], "pins": [["3V3", "VCC"], ["PA03", "ADC/DAC VREF"], ["GND", "GND"]]}
   ],
   "leds": [
     {"id": "LED0", "ref": "D700", "at_mm": [27.2258, 88.0858],

@@ -290,6 +290,9 @@ class App:
             frame = self.bench_frame_last if self.session else {}
         self.bench_frame_last = frame
         pins, pulls = frame.get("pins", {}), frame.get("pulls", {})
+        analog = frame.get("analog", {})
+        ohms = {a["pad"]: a.get("ohms", 100.0)
+                for a in self.board.get("analog_out", [])}
         pads = {}
         for pad in self.bench.pads:
             g, bit = benchlib.pad_ref(pad)
@@ -297,7 +300,10 @@ class App:
             hi, lo = group[bit] if bit < len(group) else (0, 0)
             mask, up = pulls.get(g, (0, 0))
             pull = (1 if up >> bit & 1 else -1) if mask >> bit & 1 else 0
-            pads[pad] = benchlib.Pad(high=hi, low=lo, pull=pull)
+            mv = analog.get(pad, -1)
+            pads[pad] = benchlib.Pad(high=hi, low=lo, pull=pull,
+                                     analog_mv=mv if mv >= 0 else None,
+                                     analog_ohms=ohms.get(pad, 100.0))
         res = self.bench.solve(pads)
         if self.session and self.session.qmp:
             await self._bench_apply(res)
@@ -547,6 +553,10 @@ class App:
                                    bench=self.bench_frame,
                                    bench_active=not self.bench.empty,
                                    bench_groups=groups,
+                                   bench_analog=tuple(
+                                       (a["pad"], a["path"], a["property"])
+                                       for a in self.board.get("analog_out",
+                                                               [])),
                                    dgi=bool(self.board.get("dgi")))
             try:
                 await self.session.start()

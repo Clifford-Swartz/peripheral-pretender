@@ -1,0 +1,10 @@
+PP dac: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+vddana mv=0x1317
+ready loops=0x00000000 ok
+dac set=0x0000 vddana code=0x000C expect=0x0000 ok
+dac set=0x0100 vddana code=0x03F4 expect=0x0400 ok
+dac set=0x0200 vddana code=0x07F4 expect=0x0801 ok
+dac set=0x0300 vddana code=0x0BF4 expect=0x0C02 ok
+dac set=0x03FF vddana code=0x0FEC expect=0x0FFF ok
+dac=1023 intref code=0x0352 expect=0x035A ok
+PP:EXIT 0

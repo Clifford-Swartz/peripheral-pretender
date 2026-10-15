@@ -298,8 +298,14 @@ enabled. The desk MC00's VCC_SEL jumper is at 5 V (the twin runs at 3.3 V). On t
 flash algorithm faulted (IPSR=3) that day; MPLAB IPE programs it (`ipecmd -P32CM1216MC00048
 -TS<serial> -F<hex> -M -OL`), then `hw_run --programmer none --allow-reset --target
 pic32cm1216mc00048 --pack <MC DFP .pack>` captures. **Open:** the AVR64EA48 ADC; SDADC; the
-MC00 DAC; `hw_run`'s IPE path still assumes the JH01 part and `-TP` (fix it to take the part and
-`-TS<serial>`).
+MC00 DAC: **done** below; `hw_run`'s IPE path still assumes the JH01 part and `-TP` (fix it to take
+the part and `-TS<serial>`).
+
+**DAC (2026-10-15):** the JH01/MC00 DAC (U2214, patch 0040) drives VOUT (PA02), which ADC0 AIN0 reads
+back on silicon and on the twin; `APP=dac` passes on both (`golden/.../dac-silicon.txt`). On the web
+page the MC00's J700 (DAC OUT, GND) and J701 (VREF) are header holes, and `board.json`
+`"analog_out"` makes the DAC's `vout` a voltage source for the bench: a voltmeter in J700 follows
+the DAC (`tests/web/test_bench.py`).
 
 ## EDBG data gateway (DGI) and a Data Visualizer panel (2026-10-15)
 

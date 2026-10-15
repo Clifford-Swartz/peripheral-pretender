@@ -121,6 +121,9 @@ class Session:
     bench: Callable[[dict], Awaitable[None]] | None = None
     bench_active: bool = False
     bench_groups: tuple[str, ...] = ()      # PORT groups of the bench's pads
+    # Peripherals that drive pads with a voltage (board.json "analog_out"):
+    # (pad, QOM path, property in mV, < 0 while not driving)
+    bench_analog: tuple[tuple[str, str, str], ...] = ()
     # The debugger's data gateway (the machine's "dgi=dgi" chardev): the
     # TCP port its DGI host side listens on once started
     dgi: bool = False
@@ -219,7 +222,13 @@ class Session:
                         "qom-get", path=PORT_PATH,
                         property=f"p{g}-pull")).split()
                     pulls[g] = (int(mask, 16), int(up, 16))
-                await self.bench({"pins": self.pins, "pulls": pulls})
+                analog = {}
+                for pad, path, prop in self.bench_analog:
+                    with contextlib.suppress(RuntimeError):
+                        analog[pad] = int(await self.qmp.execute(
+                            "qom-get", path=path, property=prop))
+                await self.bench({"pins": self.pins, "pulls": pulls,
+                                  "analog": analog})
             state = {}
             for key, path, prop, *gen in self.watch:
                 if gen:

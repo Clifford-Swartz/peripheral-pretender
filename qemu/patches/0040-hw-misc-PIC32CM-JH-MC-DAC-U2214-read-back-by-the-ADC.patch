@@ -1,0 +1,527 @@
+From 839bd5427db3b97ebd39b53f781d9f7ff61926e0 Mon Sep 17 00:00:00 2001
+From: Clifford Swartz <cliffordswartz1@gmail.com>
+Date: Thu, 15 Oct 2026 06:46:36 -0700
+Subject: [PATCH 40/40] hw/misc: PIC32CM JH/MC DAC (U2214), read back by the
+ ADC
+
+One 10-bit channel converting at once on a DATA write (LEFTADJ), against
+INTREF (SUPC VREF), VDDANA or VREFA; CTRLB.EOEN drives VOUT (PA02), whose
+voltage the "vout" property gives (-1 while not driven) for front
+ends; STATUS.READY while enabled. VOUT is ADC0 AIN0 on these parts: the
+U2247 ADC reads the DAC there while it drives the pin, and its DAC
+reference is the DAC's output. Checked on PIC32CM MC00 silicon
+(firmware/hello APP=dac): linear over 0-1023, INTREF full scale 1.02 V,
+READY at once. New dac_u2214 overlay; regenerated tables.
+
+Peripheral Pretender: AI-assisted; not for submission to upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/adc/mchp_adc_u2247.c                       |  42 +++-
+ hw/arm/pic32cm_soc.c                          |   1 +
+ hw/misc/mchp_dac_u2214.c                      | 210 ++++++++++++++++++
+ hw/misc/meson.build                           |   1 +
+ include/hw/mchp/gen/dac_u2214.h               |   2 +-
+ .../mchp/gen/pic32cm1216mc00048/dac_u2214.h   |  21 +-
+ .../mchp/gen/pic32cm5164jh01100/dac_u2214.h   |  21 +-
+ include/hw/misc/mchp_dac.h                    |   7 +
+ 8 files changed, 284 insertions(+), 21 deletions(-)
+ create mode 100644 hw/misc/mchp_dac_u2214.c
+
+diff --git a/hw/adc/mchp_adc_u2247.c b/hw/adc/mchp_adc_u2247.c
+index 8df645d..52035cd 100644
+--- a/hw/adc/mchp_adc_u2247.c
++++ b/hw/adc/mchp_adc_u2247.c
+@@ -26,7 +26,8 @@
+  *
+  * References: INTREF (VREF, as above, without VREFOE), INTVCC0 = VDDANA /
+  * 1.6, INTVCC1 = VDDANA / 2, INTVCC2 = VDDANA, VREFA = "vrefa" (a pin;
+- * VDDANA unless the board sets it), DAC as VDDANA. "vdd" is VDDANA in
++ * VDDANA unless the board sets it), DAC (the DAC's output). AIN0 of ADC0
++ * reads the DAC's VOUT while the DAC drives it. "vdd" is VDDANA in
+  * millivolts. Checked on PIC32CM MC00 silicon (APP=adc, a board at 5 V):
+  * INTREF 1.024 V, INTVCC0 VDDANA / 1.6 (the data sheet's table says
+  * 1 / 1.48; the DFP and silicon say 1 / 1.6), VDDCORE 1.2 V, the INTREF
+@@ -44,6 +45,7 @@
+ #include "qemu/log.h"
+ #include "hw/adc/mchp_adc.h"
+ #include "hw/misc/mchp_sysctrl.h"
++#include "hw/misc/mchp_dac.h"
+ #include "hw/mchp/gen/adc_u2247.h"
+ #include "migration/vmstate.h"
+ 
+@@ -66,6 +68,8 @@ struct MchpAdcU2247State {
+     int32_t vrefa_mv;           /* < 0: VDDANA */
+     bool unread;                /* a result not read yet */
+     MchpRegBlock *supc;         /* the SUPC, for VREF (found on first use) */
++    DeviceState *dac;           /* the DAC: VOUT on ADC0 AIN0, DAC ref */
++    bool dac_looked;
+ };
+ 
+ static uint32_t adc_reg(MchpAdcU2247State *s, hwaddr off, unsigned size)
+@@ -109,8 +113,39 @@ static int32_t adc_intref_mv(MchpAdcU2247State *s)
+     }
+ }
+ 
++static DeviceState *adc_dac(MchpAdcU2247State *s)
++{
++    if (!s->dac_looked) {
++        Object *o = object_resolve_path_type("", TYPE_MCHP_DAC_U2214, NULL);
++
++        s->dac = o ? DEVICE(o) : NULL;
++        s->dac_looked = true;
++    }
++    return s->dac;
++}
++
++/*
++ * The DAC's VOUT pin (PA02) is ADC0's AIN0 on the JH01 and MC00: while the
++ * DAC drives it, that is what the ADC reads there (silicon: APP=dac)
++ */
++static int32_t adc_dac_vout_mv(MchpAdcU2247State *s, unsigned mux)
++{
++    DeviceState *dac;
++
++    if (mux != 0 || strcmp(MCHP_REGBLOCK(s)->name, "adc0")) {
++        return -1;
++    }
++    dac = adc_dac(s);
++    return dac ? mchp_dac_u2214_vout_mv(dac) : -1;
++}
++
+ static int32_t adc_input_mv(MchpAdcU2247State *s, unsigned mux)
+ {
++    int32_t vout = adc_dac_vout_mv(s, mux);
++
++    if (vout >= 0) {
++        return vout;
++    }
+     switch (mux) {
+     case MCHP_ADC_INPUTCTRL_MUXPOS_INTREF:
+         return adc_intref_mv(s);
+@@ -141,7 +176,10 @@ static int64_t adc_ref_uv(MchpAdcU2247State *s)
+         return vdd / 2;
+     case MCHP_ADC_REFCTRL_REFSEL_VREFA:
+         return s->vrefa_mv >= 0 ? s->vrefa_mv * 1000LL : vdd;
+-    default:                    /* INTVCC2, DAC */
++    case MCHP_ADC_REFCTRL_REFSEL_DAC:
++        return adc_dac(s) ? mchp_dac_u2214_internal_mv(adc_dac(s)) * 1000LL
++                          : vdd;
++    default:                    /* INTVCC2 */
+         return vdd;
+     }
+ }
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index b8c1994..4b95bca 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -54,6 +54,7 @@ static const struct {
+     { "ADC", TYPE_MCHP_ADC, "U2500" },
+     { "ADC", TYPE_MCHP_ADC_U2247, "U2247" },
+     { "DAC", TYPE_MCHP_DAC, "U2502" },
++    { "DAC", TYPE_MCHP_DAC_U2214, "U2214" },
+     { "DIVAS", TYPE_MCHP_DIVAS },
+     { "DMAC", TYPE_MCHP_DMAC, "U2503" },
+     { "DSU", TYPE_MCHP_DSU, "U2209" },
+diff --git a/hw/misc/mchp_dac_u2214.c b/hw/misc/mchp_dac_u2214.c
+new file mode 100644
+index 0000000..3bf5b0d
+--- /dev/null
++++ b/hw/misc/mchp_dac_u2214.c
+@@ -0,0 +1,210 @@
++/*
++ * Microchip PIC32CM JH/MC DAC (DAC U2214)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * One 10-bit channel converting at once: a DATA write sets the output code
++ * (DATA[9:0], or DATA[15:6] with CTRLB.LEFTADJ). The output is code / 1023
++ * of the reference CTRLB.REFSEL: INTREF (the SUPC's VREF, VREF.SEL: 1.024
++ * V at reset), VDDANA ("vdd") or VREFA ("vrefa"; VDDANA unless the board
++ * sets it). With CTRLB.EOEN it drives VOUT (PA02, ADC0 AIN0 on these
++ * parts: the ADC reads it back there, see mchp_dac_u2214_vout_mv()); with
++ * IOEN it feeds the ADC as its DAC reference. STATUS.READY reads 1 while
++ * enabled, and SYNCBUSY never shows busy. "vout" (read-only) is the VOUT
++ * pin's voltage in mV, -1 while the DAC does not drive it.
++ *
++ * Checked on PIC32CM MC00 silicon (firmware/hello APP=dac, read back by
++ * ADC0 on PA02): linear from 0 to 1023 against VDDANA, INTREF full scale
++ * at 1.02 V, READY set at once after enable. Silicon's offset of about 15
++ * mV at code 0 is not modelled. Not modelled: DATABUF with START events
++ * (logged), the EMPTY and UNDERRUN flags, dithering, VPD, the
++ * conversion time.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "qemu/log.h"
++#include "hw/misc/mchp_dac.h"
++#include "hw/misc/mchp_sysctrl.h"
++#include "hw/mchp/gen/dac_u2214.h"
++#include "migration/vmstate.h"
++
++/* SUPC VREF (hw/mchp/gen/supc_u2117.h): SEL bits 16-19 */
++#define SUPC_VREF_OFFSET    0x1C
++#define SUPC_VREF_SEL(v)    extract32(v, 16, 4)
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpDacU2214State, MCHP_DAC_U2214)
++
++struct MchpDacU2214State {
++    MchpRegBlock parent_obj;
++
++    uint16_t code;              /* the converted 10-bit code */
++    int32_t vdd_mv;
++    int32_t vrefa_mv;           /* < 0: VDDANA */
++    MchpRegBlock *supc;         /* the SUPC, for VREF (found on first use) */
++};
++
++static uint32_t dac_reg(MchpDacU2214State *s, hwaddr off, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, off, size);
++}
++
++static int32_t dac_ref_mv(MchpDacU2214State *s)
++{
++    uint32_t vref;
++
++    switch (FIELD_EX32(dac_reg(s, A_MCHP_DAC_CTRLB, 1), MCHP_DAC_CTRLB,
++                       REFSEL)) {
++    case MCHP_DAC_CTRLB_REFSEL_INTREF:
++        if (!s->supc) {
++            Object *o = object_resolve_path_type("", TYPE_MCHP_SUPC, NULL);
++
++            s->supc = o ? MCHP_REGBLOCK(o) : NULL;
++        }
++        vref = s->supc ? mchp_regfile_peek(&s->supc->rf, SUPC_VREF_OFFSET,
++                                           4) : 0;
++        return SUPC_VREF_SEL(vref) == 2 ? 2048 :
++               SUPC_VREF_SEL(vref) == 3 ? 4096 : 1024;
++    case MCHP_DAC_CTRLB_REFSEL_VREFA:
++        return s->vrefa_mv >= 0 ? s->vrefa_mv : s->vdd_mv;
++    default:
++        return s->vdd_mv;
++    }
++}
++
++static bool dac_enabled(MchpDacU2214State *s)
++{
++    return FIELD_EX32(dac_reg(s, A_MCHP_DAC_CTRLA, 1), MCHP_DAC_CTRLA,
++                      ENABLE);
++}
++
++/* The output voltage while enabled, in mV */
++static int32_t dac_out_mv(MchpDacU2214State *s)
++{
++    return (int64_t)s->code * dac_ref_mv(s) / 1023;
++}
++
++int32_t mchp_dac_u2214_vout_mv(DeviceState *dev)
++{
++    MchpDacU2214State *s = MCHP_DAC_U2214(dev);
++
++    if (!dac_enabled(s) || !FIELD_EX32(dac_reg(s, A_MCHP_DAC_CTRLB, 1),
++                                       MCHP_DAC_CTRLB, EOEN)) {
++        return -1;
++    }
++    return dac_out_mv(s);
++}
++
++int32_t mchp_dac_u2214_internal_mv(DeviceState *dev)
++{
++    MchpDacU2214State *s = MCHP_DAC_U2214(dev);
++
++    return dac_enabled(s) ? dac_out_mv(s) : 0;
++}
++
++static uint32_t dac_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                             unsigned idx, uint32_t stored, bool side_effects)
++{
++    MchpDacU2214State *s = MCHP_DAC_U2214(rf->opaque);
++
++    if (ri->offset == A_MCHP_DAC_STATUS) {
++        return dac_enabled(s) ? R_MCHP_DAC_STATUS_READY_MASK : 0;
++    }
++    return stored;              /* SYNCBUSY: idle, writes are instant */
++}
++
++static void dac_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                           unsigned idx, uint32_t old, uint32_t written,
++                           uint32_t we)
++{
++    MchpDacU2214State *s = MCHP_DAC_U2214(rf->opaque);
++    uint16_t data = dac_reg(s, A_MCHP_DAC_DATA, 2);
++
++    if (ri->offset == A_MCHP_DAC_DATA) {
++        s->code = FIELD_EX32(dac_reg(s, A_MCHP_DAC_CTRLB, 1), MCHP_DAC_CTRLB,
++                             LEFTADJ) ? data >> 6 : data & 0x3FF;
++    } else if (ri->offset == A_MCHP_DAC_DATABUF) {
++        qemu_log_mask(LOG_UNIMP, "%s: DATABUF (START events) not "
++                      "modelled\n", MCHP_REGBLOCK(s)->name);
++    }
++}
++
++static void dac_reset_hold(MchpRegBlock *rb)
++{
++    MCHP_DAC_U2214(rb)->code = 0;
++}
++
++static void dac_get_vout(Object *obj, Visitor *v, const char *name,
++                         void *opaque, Error **errp)
++{
++    int32_t mv = mchp_dac_u2214_vout_mv(DEVICE(obj));
++
++    visit_type_int32(v, name, &mv, errp);
++}
++
++static void dac_get_i32(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, opaque, errp);
++}
++
++static void dac_set_i32(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, opaque, errp);
++}
++
++static void dac_init(Object *obj)
++{
++    MchpDacU2214State *s = MCHP_DAC_U2214(obj);
++
++    s->vdd_mv = 3300;
++    s->vrefa_mv = -1;
++    object_property_add(obj, "vout", "int32", dac_get_vout, NULL, NULL,
++                        NULL);
++    object_property_add(obj, "vdd", "int32", dac_get_i32, dac_set_i32, NULL,
++                        &s->vdd_mv);
++    object_property_add(obj, "vrefa", "int32", dac_get_i32, dac_set_i32,
++                        NULL, &s->vrefa_mv);
++}
++
++static const VMStateDescription vmstate_mchp_dac_u2214 = {
++    .name = TYPE_MCHP_DAC_U2214,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpDacU2214State, 1,
++                       vmstate_mchp_regblock, MchpRegBlock),
++        VMSTATE_UINT16(code, MchpDacU2214State),
++        VMSTATE_INT32(vdd_mv, MchpDacU2214State),
++        VMSTATE_INT32(vrefa_mv, MchpDacU2214State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void dac_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_dac_u2214;
++    c->pre_read = dac_pre_read;
++    c->post_write = dac_post_write;
++    c->reset_hold = dac_reset_hold;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_dac_u2214_types[] = {
++    {
++        .name = TYPE_MCHP_DAC_U2214,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpDacU2214State),
++        .instance_init = dac_init,
++        .class_init = dac_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_dac_u2214_types)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index f99a1a3..c58f623 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -33,6 +33,7 @@ system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files(
+   'mchp_edbg_dgi.c',
+   'mchp_eic.c',
+   'mchp_dac.c',
++  'mchp_dac_u2214.c',
+   'mchp_evsys.c',
+   'mchp_evsys5x.c',
+   'mchp_same5x.c',
+diff --git a/include/hw/mchp/gen/dac_u2214.h b/include/hw/mchp/gen/dac_u2214.h
+index 09e8133..89329e3 100644
+--- a/include/hw/mchp/gen/dac_u2214.h
++++ b/include/hw/mchp/gen/dac_u2214.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/dac_u2214.yaml (sha1 e9d330790b02)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h b/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h
+index 77287b7..4ba5b5a 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/dac_u2214.yaml (sha1 e9d330790b02)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,25 +23,28 @@ static const MchpRegInfo pic32cm1216mc00048_dac_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x43, .wmask = 0x43, .rdz = 0x01,
+-        .syncbusy = 0x00000003 /* SYNCBUSY */, .flags = 0,
++        .enprot = 0x40, .syncbusy = 0x00000003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "CTRLB", .offset = 0x01, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0xEF, .wmask = 0xEF, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0xEF, .wmask = 0xEF,
++        .enprot = 0xEF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x02, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .enprot = 0x07, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 4 /* INTENSET */, .reset = 0x00, .impl = 0x03,
+-        .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x03, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x05, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 4 /* INTENSET */, .reset = 0x00, .impl = 0x03,
+-        .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x03, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x06, .size = 1, .count = 1, .stride = 1,
+@@ -51,19 +54,19 @@ static const MchpRegInfo pic32cm1216mc00048_dac_regs[] = {
+     {
+         .name = "STATUS", .offset = 0x07, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "DATA", .offset = 0x08, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFFFF, .wmask = 0xFFFF,
+         .rdz = 0xFFFF, .syncbusy = 0x00000004 /* SYNCBUSY */,
+-        .flags = MCHP_F_WRITE_ONLY,
++        .flags = MCHP_F_HOOK_POST_WRITE | MCHP_F_WRITE_ONLY,
+     },
+     {
+         .name = "DATABUF", .offset = 0x0C, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFFFF, .wmask = 0xFFFF,
+         .rdz = 0xFFFF, .syncbusy = 0x00000008 /* SYNCBUSY */,
+-        .flags = MCHP_F_WRITE_ONLY,
++        .flags = MCHP_F_HOOK_POST_WRITE | MCHP_F_WRITE_ONLY,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h b/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h
+index 709201b..e1fe602 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/dac_u2214.yaml (sha1 e9d330790b02)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,25 +23,28 @@ static const MchpRegInfo pic32cm5164jh01100_dac_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x43, .wmask = 0x43, .rdz = 0x01,
+-        .syncbusy = 0x00000003 /* SYNCBUSY */, .flags = 0,
++        .enprot = 0x40, .syncbusy = 0x00000003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "CTRLB", .offset = 0x01, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0xEF, .wmask = 0xEF, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0xEF, .wmask = 0xEF,
++        .enprot = 0xEF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x02, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .enprot = 0x07, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 4 /* INTENSET */, .reset = 0x00, .impl = 0x03,
+-        .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x03, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x05, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 4 /* INTENSET */, .reset = 0x00, .impl = 0x03,
+-        .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x03, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x06, .size = 1, .count = 1, .stride = 1,
+@@ -51,19 +54,19 @@ static const MchpRegInfo pic32cm5164jh01100_dac_regs[] = {
+     {
+         .name = "STATUS", .offset = 0x07, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "DATA", .offset = 0x08, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFFFF, .wmask = 0xFFFF,
+         .rdz = 0xFFFF, .syncbusy = 0x00000004 /* SYNCBUSY */,
+-        .flags = MCHP_F_WRITE_ONLY,
++        .flags = MCHP_F_HOOK_POST_WRITE | MCHP_F_WRITE_ONLY,
+     },
+     {
+         .name = "DATABUF", .offset = 0x0C, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFFFF, .wmask = 0xFFFF,
+         .rdz = 0xFFFF, .syncbusy = 0x00000008 /* SYNCBUSY */,
+-        .flags = MCHP_F_WRITE_ONLY,
++        .flags = MCHP_F_HOOK_POST_WRITE | MCHP_F_WRITE_ONLY,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+diff --git a/include/hw/misc/mchp_dac.h b/include/hw/misc/mchp_dac.h
+index b1cf146..95e019d 100644
+--- a/include/hw/misc/mchp_dac.h
++++ b/include/hw/misc/mchp_dac.h
+@@ -18,6 +18,13 @@
+ #include "hw/misc/mchp_regblock.h"
+ 
+ #define TYPE_MCHP_DAC "mchp-dac"
++/* The PIC32CM JH/MC DAC (U2214): one 10-bit channel, "vout" */
++#define TYPE_MCHP_DAC_U2214 "mchp-dac-u2214"
++
++/* VOUT's voltage in mV while the U2214 DAC drives it (CTRLB.EOEN), else -1 */
++int32_t mchp_dac_u2214_vout_mv(DeviceState *dev);
++/* The U2214 DAC's output for the ADC's DAC reference, in mV (0 when off) */
++int32_t mchp_dac_u2214_internal_mv(DeviceState *dev);
+ #define MCHP_DAC_START_EVENT_IN "start-event-in"
+ 
+ #endif /* HW_MISC_MCHP_DAC_H */
+-- 
+2.53.0.windows.2
+
