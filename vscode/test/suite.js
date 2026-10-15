@@ -95,7 +95,10 @@ async function run() {
     const api = await ext.activate();
     const qemuDir = path.join(ext.extensionPath, "engine", "qemu");
 
-    await vscode.commands.executeCommand("peripheralPretender.open");
+    /* The sidebar (activity bar icon) exists; its board items open a board
+       through peripheralPretender.open with the board id */
+    await vscode.commands.executeCommand("workbench.view.extension.peripheralPretender");
+    await vscode.commands.executeCommand("peripheralPretender.open", "ev15n46a");
     const port = api.port();
     assert.ok(port, "engine not started");
     const page = await fetch(`http://127.0.0.1:${port}/`);

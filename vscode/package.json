@@ -2,7 +2,7 @@
   "name": "peripheral-pretender",
   "displayName": "Peripheral Pretender",
   "description": "Run firmware on a digital twin of Microchip boards: the board, its LEDs, buttons, console, Click boards and a parts bench, live in VS Code.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "cliffordswartz",
   "private": true,
   "engines": {
@@ -22,9 +22,10 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "onDebugResolve:twin",
     "onDebugDynamicConfigurations:twin",
-    "onDebugInitialConfigurations"
+    "onDebugInitialConfigurations",
+    "onDebugResolve:twin",
+    "onStartupFinished"
   ],
   "contributes": {
     "commands": [
@@ -36,22 +37,32 @@
       {
         "command": "peripheralPretender.switchBoard",
         "title": "Switch Board",
-        "category": "Twin"
+        "category": "Twin",
+        "icon": "$(arrow-swap)"
       },
       {
         "command": "peripheralPretender.runElf",
         "title": "Run on Twin",
-        "category": "Twin"
+        "category": "Twin",
+        "icon": "$(file-binary)"
       },
       {
         "command": "peripheralPretender.stop",
         "title": "Stop",
-        "category": "Twin"
+        "category": "Twin",
+        "icon": "$(debug-stop)"
       },
       {
         "command": "peripheralPretender.showLog",
         "title": "Show Engine Log",
-        "category": "Twin"
+        "category": "Twin",
+        "icon": "$(output)"
+      },
+      {
+        "command": "peripheralPretender.debug",
+        "title": "Debug on the Twin",
+        "category": "Twin",
+        "icon": "$(debug-alt)"
       }
     ],
     "menus": {
@@ -62,10 +73,26 @@
           "group": "navigation"
         }
       ],
-      "commandPalette": [
+      "view/title": [
+        {
+          "command": "peripheralPretender.debug",
+          "when": "view == peripheralPretender.boards",
+          "group": "navigation@1"
+        },
         {
           "command": "peripheralPretender.runElf",
-          "when": "false"
+          "when": "view == peripheralPretender.boards",
+          "group": "navigation@2"
+        },
+        {
+          "command": "peripheralPretender.stop",
+          "when": "view == peripheralPretender.boards",
+          "group": "navigation@3"
+        },
+        {
+          "command": "peripheralPretender.showLog",
+          "when": "view == peripheralPretender.boards",
+          "group": "navigation@4"
         }
       ]
     },
@@ -151,7 +178,25 @@
           }
         ]
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "peripheralPretender",
+          "title": "Peripheral Pretender",
+          "icon": "media/twin.svg"
+        }
+      ]
+    },
+    "views": {
+      "peripheralPretender": [
+        {
+          "id": "peripheralPretender.boards",
+          "name": "Boards",
+          "icon": "media/twin.svg"
+        }
+      ]
+    }
   },
   "scripts": {
     "compile": "tsc -p .",

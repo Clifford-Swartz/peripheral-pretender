@@ -17,6 +17,7 @@ import * as net from "net";
 import * as path from "path";
 import * as vscode from "vscode";
 import { registerDebug } from "./debug";
+import { registerSidebar } from "./sidebar";
 
 interface Engine {
     proc: cp.ChildProcess;
@@ -174,7 +175,25 @@ function stopEngine(): void {
             e.proc.kill();
         }
     }
-    status.hide();
+    refresh();
+}
+
+/* Engine started or stopped: the status bar and the sidebar follow */
+const changed = new vscode.EventEmitter<void>();
+
+function refresh(): void {
+    if (engine) {
+        status.text = `$(circuit-board) Twin: ${engine.board}`;
+        status.tooltip = `Peripheral Pretender: ${engine.board} on port ` +
+            `${engine.port}. Click to switch boards.`;
+        status.command = "peripheralPretender.switchBoard";
+    } else {
+        status.text = "$(circuit-board) Twin";
+        status.tooltip = "Peripheral Pretender: open a board";
+        status.command = "peripheralPretender.open";
+    }
+    status.show();
+    changed.fire();
 }
 
 async function startEngine(ctx: vscode.ExtensionContext,
@@ -205,14 +224,10 @@ async function startEngine(ctx: vscode.ExtensionContext,
         log.appendLine(`[twin] engine exited (${code})`);
         if (engine === e) {
             engine = undefined;
-            status.hide();
+            refresh();
         }
     });
     await waitReady(e, 30000);
-    status.text = "$(circuit-board) Twin";
-    status.tooltip = `Peripheral Pretender: ${board} on port ${port}`;
-    status.command = "peripheralPretender.switchBoard";
-    status.show();
     return e;
 }
 
@@ -278,6 +293,7 @@ async function open(ctx: vscode.ExtensionContext,
             `Peripheral Pretender: ${(err as Error).message}`);
         return false;
     }
+    refresh();
     await showPanel(engine.port, board);
     return true;
 }
@@ -316,7 +332,7 @@ export function activate(ctx: vscode.ExtensionContext): Api {
     ctx.subscriptions.push(
         log, status,
         vscode.commands.registerCommand("peripheralPretender.open",
-                                        () => open(ctx)),
+                                        (board?: string) => open(ctx, board)),
         vscode.commands.registerCommand(
             "peripheralPretender.switchBoard", async () => {
                 const board = await pickBoard(layout(ctx).root, true);
@@ -332,7 +348,13 @@ export function activate(ctx: vscode.ExtensionContext): Api {
         }),
         vscode.commands.registerCommand("peripheralPretender.showLog",
                                         () => log.show()),
-        { dispose: stopEngine });
+        { dispose: stopEngine }, changed);
+    registerSidebar(ctx, {
+        boards: () => boards(layout(ctx).root),
+        board: () => engine?.board,
+        changed: changed.event,
+    });
+    refresh();
     registerDebug(ctx, {
         log,
         port: () => engine?.port,

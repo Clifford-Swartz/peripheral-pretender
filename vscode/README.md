@@ -17,8 +17,11 @@ engine that runs it. Nothing else to install.
 
 ## Use
 
-- **Twin: Open Board** (Command Palette) picks a board and opens it beside your editor, running
-  the board's demo firmware.
+- Click the **chip icon** in the activity bar (the left edge): the **Boards** view lists the
+  boards; click one to open it beside your editor, running its demo firmware (the running one has
+  a green dot; click another to switch). Its title bar has **Debug on the Twin**, **Run on Twin**
+  (pick an ELF), **Stop** and the engine log. The **Twin** item in the status bar opens a board
+  too, or switches once one runs. **Twin: Open Board** in the Command Palette does the same.
 - Build your project: with MPLAB for VS Code (`out/**/*.elf`) or MPLAB X (`dist/**/*.elf`), each
   new build in the workspace runs on the twin by itself (`peripheralPretender.watch`).
 - Right-click any `.elf` in the Explorer: **Run on Twin**. Or drop an ELF on the board view.
@@ -65,7 +68,7 @@ lines.
 ```
 py scripts/build_vsix.py            # stages vscode/engine, smoke-tests it, packages the VSIX
 cd vscode && npm test               # end to end in a downloaded VS Code
-code --install-extension vscode/peripheral-pretender-win32-x64-0.2.0.vsix
+code --install-extension vscode/peripheral-pretender-win32-x64-0.2.1.vsix
 ```
 
 Windows x64 only so far. The bundle holds QEMU (GPL-2.0-or-later) built from the pp-qemu fork,
