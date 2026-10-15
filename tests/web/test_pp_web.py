@@ -926,12 +926,16 @@ def test_session_pykit_circuitpython(tmp_path, qemu_path, qemu_machines):
                     watch=part_watch(board), drive=drive)
         await s.start()
         try:
+            # Wait for each expected state, not just any change: under load the
+            # first NeoPixel write can land after the first "pitch" line
             await until(lambda: "pitch" in "".join(uart), 60)
+            await until(lambda: state.get("neopixels.pixels")
+                        == " ".join(["000020"] * 5), 10)
             level = dict(state)
             for prop, value in stick_values(tilt, 0.5, 0).items():
                 await s.set_prop("/machine/imu", prop, value)
-            await until(lambda: state.get("neopixels.pixels")
-                        != level.get("neopixels.pixels"), 10)
+            await until(lambda: state.get("neopixels.pixels", "")
+                        .startswith("007820"), 10)
             leaning = dict(state)
             await s.press("user", True, "user-pressed")
             await until(lambda: state.get("neopixels.pixels", "")

@@ -53,8 +53,9 @@ CircuitPython build. Read the real board's `boot_out.txt` for its version.
 ## Open questions (answered 2026-10-14)
 
 1. **Which IMU?** Both. The Ruler carries an ICM-20948 at 0x69 (schematic EV82H04A rev 3, U3). The
-   kit on the desk also answers at 0x4A: a BNO085 breakout on the QWIIC connector, not on either
-   schematic (the owner is asking where it comes from). The kit's own `code.py` uses the BNO085.
+   kit on the desk also answers at 0x4A: an **Adafruit BNO085 breakout** (STEMMA QT), an add-on
+   plugged into the QWIIC connector, not part of the PyKit (confirmed by the owner 2026-10-15). The
+   kit's own `code.py` uses it.
 2. **Design files.** Schematics exist (Curiosity CircuitPython 02-01318 rev 3, 2025-09-05; PyKit
    Ruler 03-02-01326 rev 3, 2025-09-10; under `C:/pp/pykit/`). No Gerbers or pick-and-place: the
    product pages for EV82H04A and EV78P89A redirect to the development-tool listing. The board art

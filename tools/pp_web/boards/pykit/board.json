@@ -37,7 +37,7 @@
     {"id": "speaker", "name": "Speaker SP1 (class-D amplifier on DAC0, PA02)",
      "path": "/machine/soc/dac",
      "audio": {"property": "audio", "at_mm": [50.7, 19.9], "size_mm": 9}},
-    {"id": "imu", "name": "ICM-20948 IMU (and a BNO085 if plugged)",
+    {"id": "imu", "name": "ICM-20948 IMU (and the Adafruit BNO085 STEMMA QT breakout if plugged)",
      "path": "/machine/imu", "also": ["/machine/qwiic-bno085"],
      "sticks": [{"id": "tilt", "mode": "tilt", "label": "Tilt the PyKit",
                  "range": 1000, "xyz_property": "accel",
