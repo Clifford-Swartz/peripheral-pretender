@@ -290,9 +290,16 @@ Nano Base).
 The JH01 and MC00 twins have an ADC (U2247, patch 0038, overlay `overlays/adc_u2247.yaml`): the
 same `ain` interface as the SAM D5x ADC, so a pot on the web bench reaches the firmware
 (`tests/web/test_bench.py`: a pot plugged into the MC00's J803 A0 hole reads 2475 mV then 330 mV).
-`make BOARD=pic32cm_mc00_cpro APP=adc` checks the internal inputs against the data sheet and then
-reports A0. **Open:** run `adc` on the MC00 silicon: the INTREF-against-INTVCC0 line settles
-INTVCC0 (data sheet VDDANA/1.48, DFP comment 1/1.6); the AVR64EA48 ADC; SDADC; the DAC on the MC00.
+`make BOARD=pic32cm_mc00_cpro APP=adc` checks the internal inputs and then reports A0; it passes
+on the twin and on MC00 silicon (patch 0039, `golden/pic32cm1216mc00048-a1/adc-silicon.txt`).
+Silicon settled: INTREF = SUPC VREF (1.024 V), converts only with VREF.VREFOE (else it stalls),
+INTVCC0 = VDDANA/1.6 (the data sheet's table says 1/1.48: wrong), REFCTRL ignores writes while
+enabled. The desk MC00's VCC_SEL jumper is at 5 V (the twin runs at 3.3 V). On the MC00, pyOCD's
+flash algorithm faulted (IPSR=3) that day; MPLAB IPE programs it (`ipecmd -P32CM1216MC00048
+-TS<serial> -F<hex> -M -OL`), then `hw_run --programmer none --allow-reset --target
+pic32cm1216mc00048 --pack <MC DFP .pack>` captures. **Open:** the AVR64EA48 ADC; SDADC; the
+MC00 DAC; `hw_run`'s IPE path still assumes the JH01 part and `-TP` (fix it to take the part and
+`-TS<serial>`).
 
 ## EDBG data gateway (DGI) and a Data Visualizer panel (2026-10-15)
 

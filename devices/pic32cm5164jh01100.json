@@ -3611,7 +3611,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/adc_u2247.yaml",
-    "sha1": "39added8b393c395e314874c2e12ccbd74ed43e6",
+    "sha1": "574aa9437c7e2ac38b95119628758e37622e9107",
     "status": "applied",
     "versions": [
      "2.2.0",
@@ -3813,11 +3813,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 143,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Reference Control",
@@ -3871,7 +3873,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0x8F"
+        ]
+       ]
       },
       {
        "name": "EVCTRL",

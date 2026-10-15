@@ -1,0 +1,8 @@
+PP adc: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+intref without vrefoe: stalls ok
+vddana mv=0x1322
+vddana4/vddana code=0x03F6 expect=0x0400 ok
+vddcore4/vddana code=0x00FE expect=0x00FA ok
+vddana4/intref code=0x0FFF expect=0x0FFF ok
+intref/intvcc0 code=0x055A expect=0x0559 ok
+PP:EXIT 0

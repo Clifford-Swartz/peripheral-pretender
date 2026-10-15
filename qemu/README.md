@@ -45,6 +45,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0036 | PORT bench drive layer for the web view's parts bench: `pX-bench` (`"<mask> <level>"`, over the `port-in` drivers so Clicks and board buttons keep their pads) and `pX-pull` (`"<mask> <up>"`, the pads with a pull resistor on), in both the SAM/PIC32CM (U2210) and AVR8X PORT models |
 | 0037 | EDBG data gateway (DGI) on `pic32cm-mc00-cpro`: the DGI host protocol on a chardev (`-M ...,dgi=<chardev>`, the bytes of a debugger's USB DGI endpoints; command layer checked against an nEDBG), I2C target 0x28, SPI target (SERCOM1, SS PA17), GPIO0-3 (PA10/PA11/PA20/PA21) with 2 MHz timestamps; `mchp_port_watch()` pad observers; SERCOM SPI ignores an idle DGI target when reading an open MISO |
 | 0038 | PIC32CM JH/MC ADC (U2247): conversions on START and free-running, AIN0-11 from the board (`ain`), INTREF/VDDCORE/VDDANA inputs, the data sheet's references (INTVCC0 = VDDANA/1.48 pending silicon), 16-bit averaging, differential, correction, window monitor; `adc_u2247` overlay and regenerated tables |
+| 0039 | U2247 ADC checked on MC00 silicon (`APP=adc`): INTREF is SUPC VREF (1.024 V at reset) and converts only with VREF.VREFOE (else START stays set), INTVCC0 = VDDANA/1.6 (DFP right, data sheet table wrong), REFCTRL enable-protected |
 
 ## Setting it up
 

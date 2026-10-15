@@ -8,12 +8,15 @@ id: U2247
 versions: ["2.2.0", "2.4.0"]
 references:
   - "PIC32CM MC00 data sheet (Low-Power, 32-bit Cortex-M0+ MCU with Advanced Analog and PWM), ADC chapter"
+  - "PIC32CM MC00 silicon, firmware/hello APP=adc (2026-10-15)"
 registers:
   CTRLA:
     pac_protected: true
     enable_protected: {all_except: [SWRST, ENABLE]}
     self_clearing: [SWRST]
     hooks: [post_write]                     # enabled in FREERUN converts
+  # Silicon (MC00): a REFCTRL write while ENABLE is set is ignored
+  REFCTRL: {pac_protected: true, enable_protected: all}
   CTRLC: {pac_protected: true, hooks: [post_write]}   # FREERUN starts
   INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
   INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
