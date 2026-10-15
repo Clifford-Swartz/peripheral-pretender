@@ -295,8 +295,11 @@ off: an nEDBG left streaming dropped off USB and needed a replug). The web page 
 Visualizer panel (Data Stream graph, GPIO lanes, raw bytes); `APP=dgi` is the demo;
 `tests/web/test_dgi.py`.
 
-- **Open:** compare GPIO and timestamp record formats with a real debugger (`firmware/avr-hello`
-  `APP=dgigpio` toggles the Nano's DGI GPIO line; probe with `--poll 30 --timestamp`); DGI on the
+- **Open:** GPIO and timestamp record formats, and the setup GPIO needs, from Data Visualizer's
+  DGI host code (the owner is getting it from the DV team). Do not probe DGI GPIO on hardware
+  meanwhile: on the nEDBG, enabling GPIO answered 0x99, a poll of the interface that was then off
+  got no reply, and the debugger dropped off USB (twice; replug needed). `APP=dgigpio` is ready
+  for that comparison. DGI on the
   AVR64EA48 Nano (GPIO on PB2, needs an AVR PORT watch), the JH01 and the PyKit; USART and power
   interfaces; MPLAB Data Visualizer connecting to the twin's socket (on the DV side).
 

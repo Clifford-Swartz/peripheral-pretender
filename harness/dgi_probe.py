@@ -44,6 +44,16 @@ class Dgi:
         self.intf = next(i.bInterfaceNumber for c in self.dev for i in c
                          if any(e.bEndpointAddress == EP_IN for e in i))
         usb.util.claim_interface(self.dev, self.intf)
+        self.drain()
+
+    def drain(self) -> int:
+        """Throw away replies left over from an earlier session."""
+        n = 0
+        while True:
+            try:
+                n += len(self.dev.read(EP_IN, 512, timeout=100))
+            except usb.core.USBTimeoutError:
+                return n
 
     @staticmethod
     def _has_dgi(dev) -> bool:
@@ -97,11 +107,15 @@ def main(argv=None) -> int:
         print("status   ", hexs(d.cmd(0x11)))
         if args.poll:
             polls = [int(x, 16) for x in args.poll]
-            for i in polls:
-                enabled.append(i)
-                print("enable", hex(i),
-                      hexs(d.cmd(0x10, bytes([i, 2 if args.timestamp
-                                              else 1]))))
+            for i in list(polls):
+                r = d.cmd(0x10, bytes([i, 2 if args.timestamp else 1]))
+                print("enable", hex(i), hexs(r))
+                if len(r) > 1 and r[1] == 0x80:
+                    enabled.append(i)
+                else:
+                    # A debugger does not answer a poll of an interface
+                    # that is off: never poll one that failed to enable
+                    polls.remove(i)
             end = time.monotonic() + args.seconds
             while time.monotonic() < end:
                 for i in polls:
