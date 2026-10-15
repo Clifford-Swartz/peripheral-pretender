@@ -120,11 +120,12 @@ async function waitReady(e: Engine, timeoutMs: number): Promise<void> {
     throw new Error("engine did not start in time");
 }
 
-async function pickBoard(root: string): Promise<string | undefined> {
+async function pickBoard(root: string,
+                         ask = false): Promise<string | undefined> {
     const cfg = vscode.workspace.getConfiguration("peripheralPretender");
     const fixed = cfg.get<string>("board", "");
 
-    if (fixed) {
+    if (fixed && !ask) {
         return fixed;
     }
     const items = boards(root).map((b) => ({ label: b.name, id: b.id }));
@@ -189,23 +190,31 @@ async function startEngine(ctx: vscode.ExtensionContext,
     await waitReady(e, 30000);
     status.text = "$(circuit-board) Twin";
     status.tooltip = `Peripheral Pretender: ${board} on port ${port}`;
-    status.command = "peripheralPretender.open";
+    status.command = "peripheralPretender.switchBoard";
     status.show();
     return e;
 }
 
-async function pageHtml(port: number): Promise<string> {
-    const uri = await vscode.env.asExternalUri(
-        vscode.Uri.parse(`http://127.0.0.1:${port}/`));
-    const src = uri.toString(true);
-    const origin = `${uri.scheme}://${uri.authority}`;
+/*
+ * The engine's page itself, loaded straight into the webview with <base>
+ * pointing at the engine. Not in an iframe: native dropdowns, keyboard
+ * focus and drag and drop misbehave in an iframe nested in a webview.
+ */
+export function injectPage(html: string, port: number): string {
+    const engine = `http://127.0.0.1:${port}`;
+    const head = `<base href="${engine}/">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; ` +
+        `script-src ${engine} 'unsafe-inline'; style-src ${engine} 'unsafe-inline'; ` +
+        `img-src ${engine} data: blob:; font-src ${engine} data:; ` +
+        `media-src ${engine} blob:; ` +
+        `connect-src ${engine} ws://127.0.0.1:${port};">`;
 
-    return `<!DOCTYPE html>
-<html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; frame-src ${origin} http://127.0.0.1:${port}; style-src 'unsafe-inline';">
-<style>html,body,iframe{margin:0;padding:0;border:0;width:100%;height:100%;overflow:hidden}</style>
-</head><body><iframe src="${src}" allow="clipboard-read; clipboard-write"></iframe></body></html>`;
+    return html.replace(/<head>/i, `<head>\n${head}`);
+}
+
+async function pageHtml(port: number): Promise<string> {
+    const r = await fetch(`http://127.0.0.1:${port}/`);
+    return injectPage(await r.text(), port);
 }
 
 async function showPanel(port: number, board: string): Promise<void> {
@@ -225,12 +234,14 @@ async function showPanel(port: number, board: string): Promise<void> {
     panel.reveal();
 }
 
-async function open(ctx: vscode.ExtensionContext): Promise<boolean> {
-    if (engine) {
+async function open(ctx: vscode.ExtensionContext,
+                    choice?: string): Promise<boolean> {
+    if (engine && (!choice || choice === engine.board)) {
         await showPanel(engine.port, engine.board);
         return true;
     }
-    const board = await pickBoard(layout(ctx).root);
+    stopEngine();
+    const board = choice || await pickBoard(layout(ctx).root);
     if (!board) {
         return false;
     }
@@ -284,6 +295,13 @@ export function activate(ctx: vscode.ExtensionContext): Api {
         log, status,
         vscode.commands.registerCommand("peripheralPretender.open",
                                         () => open(ctx)),
+        vscode.commands.registerCommand(
+            "peripheralPretender.switchBoard", async () => {
+                const board = await pickBoard(layout(ctx).root, true);
+                if (board) {
+                    await open(ctx, board);
+                }
+            }),
         vscode.commands.registerCommand("peripheralPretender.runElf",
                                         (uri?: vscode.Uri) => runElf(ctx, uri)),
         vscode.commands.registerCommand("peripheralPretender.stop", () => {

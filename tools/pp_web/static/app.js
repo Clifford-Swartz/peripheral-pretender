@@ -32,7 +32,11 @@ function segPolys() {
 }
 
 function connect() {
-  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  // From the base URL, not the page's: a VS Code webview loads this page
+  // from its own origin with <base href> pointing at the engine
+  const url = new URL("/ws", document.baseURI);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(url);
   ws.onmessage = (e) => handle(JSON.parse(e.data));
   ws.onclose = () => { setStatus("error", "disconnected"); setTimeout(connect, 1000); };
 }

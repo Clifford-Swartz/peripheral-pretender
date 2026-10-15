@@ -332,8 +332,11 @@ a known input voltage (needs a wire from 3V3 or DAC OUT to A1), the conversion t
 `vscode/` is the extension; `py scripts/build_vsix.py` builds
 `vscode/peripheral-pretender-win32-x64-<version>.vsix` (25 MB). The extension is a thin TypeScript
 shell around the existing engine: it starts `tools.pp_web` on a free loopback port and shows the
-page in a webview panel (an iframe with `portMapping`). So the bundle carries the engine, not a
-port of it:
+page in a webview panel. The webview loads the engine's `index.html` itself, with `<base href>`
+at the engine and a CSP for it (`injectPage`), not an iframe: in an iframe nested in the webview
+the board dropdown did not switch boards (0.1.0, the owner's first try), and native popups,
+keyboard focus and drag and drop are unreliable there. `app.js` builds its websocket URL from
+`document.baseURI` for this. So the bundle carries the engine, not a port of it:
 
 - `engine/python`: the python.org embeddable Python 3.12 with aiohttp (its `._pth` adds
   `../app`);
@@ -349,7 +352,8 @@ open the MC00, the page answers, a posted ELF runs on the bundled QEMU, and Stop
 with `ELECTRON_RUN_AS_NODE` unset (VS Code's terminals set it). The test passes paths through
 8.3 names, because test-electron breaks on the spaces in this repo's path.
 
-Commands: **Twin: Open Board** (pick a board), **Run on Twin** (Explorer context on `.elf`, or
+Commands: **Twin: Open Board** (pick a board), **Switch Board** (also the status-bar item;
+restarts the engine on the new board), **Run on Twin** (Explorer context on `.elf`, or
 drop on the page), **Stop**, **Show Engine Log**. With `peripheralPretender.watch` (default on)
 the workspace's newest `out/**/*.elf` or `dist/**/*.elf` runs, and each new build follows.
 Otherwise the board's default firmware runs: `pp_web` now starts the demo (or the PyKit's
@@ -357,8 +361,8 @@ CircuitPython, downloaded once into `~/.pp_cache`) when there is nothing else to
 the plain web page. `peripheralPretender.engineRoot`/`.python` run a checkout instead (development).
 
 Open: macOS/Linux VSIXes (same layout; QEMU and python-build-standalone per platform), a CI job
-that builds the VSIX, the webview not yet checked by eye in a user's VS Code (the test checks the
-engine, not the iframe's pixels), marketplace publishing (publisher id, `repository`, licence:
+that builds the VSIX, a test of the webview's own DOM (the end-to-end test checks the engine;
+the injected page was checked from a foreign origin with Playwright), marketplace publishing (publisher id, `repository`, licence:
 the bundle includes GPL QEMU binaries, so it must point at their source).
 
 ## EDBG data gateway (DGI) and a Data Visualizer panel (2026-10-15)
