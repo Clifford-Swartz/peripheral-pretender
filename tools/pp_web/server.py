@@ -51,6 +51,7 @@ from pathlib import Path
 from aiohttp import WSMsgType, web
 
 from . import bench as benchlib
+from .dgiview import DgiView
 from .session import PORT_PATH, Session
 from tools.pp import circuitpython, fatfs
 
@@ -188,6 +189,8 @@ class App:
         self.tmp = Path(tempfile.mkdtemp(prefix="pp_web_"))
         self.uart_log = ""
         self.lock = asyncio.Lock()
+        self.dgi: DgiView | None = None
+        self.dgi_wanted: list[int] = []
 
     def load_board(self, board: str) -> None:
         """Make @board (a folder under boards/) current; no Clicks plugged."""
@@ -365,6 +368,7 @@ class App:
         if not self.drive or not path:
             return
         async with self.lock:
+            await self._stop_dgi()
             if self.session:
                 await self.session.stop()
                 self.session = None
@@ -391,6 +395,7 @@ class App:
         if board == self.board["id"] or not (BOARDS / board / "board.json").is_file():
             return
         async with self.lock:
+            await self._stop_dgi()
             if self.session:
                 await self.session.stop()
                 self.session = None
@@ -417,6 +422,8 @@ class App:
 
     def machine(self) -> str:
         opts = [f"{slot}={c['id']}" for slot, c in self.clicks.items() if c]
+        if self.board.get("dgi"):
+            opts.append("dgi=dgi")
         return ",".join([self.board["machine"], *opts])
 
     def click_watch(self) -> list[tuple[str, ...]]:
@@ -515,8 +522,14 @@ class App:
         except ConnectionError:
             self.clients.discard(ws)
 
+    async def _stop_dgi(self) -> None:
+        if getattr(self, "dgi", None):
+            await self.dgi.stop()
+        self.dgi = None
+
     async def run(self, elf: Path) -> None:
         async with self.lock:
+            await self._stop_dgi()
             if self.session:
                 await self.session.stop()
             self.uart_log = ""
@@ -533,9 +546,14 @@ class App:
                                    drive=self.drive,
                                    bench=self.bench_frame,
                                    bench_active=not self.bench.empty,
-                                   bench_groups=groups)
+                                   bench_groups=groups,
+                                   dgi=bool(self.board.get("dgi")))
             try:
                 await self.session.start()
+                if self.session.dgi_port:
+                    self.dgi = DgiView(self.session.dgi_port, self.emit)
+                    await self.dgi.start()
+                    self.dgi.set_wanted(self.dgi_wanted)
                 for slot, c in self.clicks.items():
                     for ctl in CLICKS[c["id"]]["controls"] if c else ():
                         await self.session.set_click(
@@ -573,6 +591,8 @@ class App:
         await ws.send_str(json.dumps({"type": "clicks", "clicks": self.clicks}))
         await ws.send_str(json.dumps(self.files_message()))
         await ws.send_str(json.dumps(self.bench_message()))
+        if getattr(self, "dgi", None) and self.dgi.info:
+            await ws.send_str(json.dumps(self.dgi.info))
         if self.bench_view:
             await ws.send_str(self.bench_view)
         if self.session:
@@ -608,6 +628,11 @@ class App:
             if req.get("type") == "save-file":
                 await self.save_file(str(req.get("path", "")),
                                      str(req.get("text", "")))
+                continue
+            if req.get("type") == "dgi":
+                self.dgi_wanted = [int(i) for i in req.get("enable", [])]
+                if getattr(self, "dgi", None):
+                    self.dgi.set_wanted(self.dgi_wanted)
                 continue
             if req.get("type") == "bench":
                 await self.set_bench(req.get("bench") or {})
@@ -679,6 +704,7 @@ class App:
     async def on_cleanup(self, app: web.Application) -> None:
         if getattr(self, "watcher", None):
             self.watcher.cancel()
+        await self._stop_dgi()
         if self.session:
             await self.session.stop()
 

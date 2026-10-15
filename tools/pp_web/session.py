@@ -121,6 +121,10 @@ class Session:
     bench: Callable[[dict], Awaitable[None]] | None = None
     bench_active: bool = False
     bench_groups: tuple[str, ...] = ()      # PORT groups of the bench's pads
+    # The debugger's data gateway (the machine's "dgi=dgi" chardev): the
+    # TCP port its DGI host side listens on once started
+    dgi: bool = False
+    dgi_port: int | None = None
     click_state: dict[str, object] = field(default_factory=dict)
     proc: asyncio.subprocess.Process | None = None
     qmp: Qmp | None = None
@@ -133,6 +137,7 @@ class Session:
 
     async def start(self) -> None:
         qmp_port, uart_port = free_port(), free_port()
+        self.dgi_port = free_port() if self.dgi else None
         # Arm firmware runs on qemu-system-arm, AVR on qemu-system-avr
         target = elf_target(self.elf) or machine_target(self.machine)
         args = [str(find_qemu(target=target)), "-M", self.machine,
@@ -145,6 +150,9 @@ class Session:
                 "-qmp", f"tcp:127.0.0.1:{qmp_port},server=on,wait=off",
                 *(["-drive", f"if=mtd,format=raw,file={self.drive}"]
                   if self.drive else []),
+                *(["-chardev", f"socket,id=dgi,host=127.0.0.1,"
+                               f"port={self.dgi_port},server=on,wait=off"]
+                  if self.dgi else []),
                 *self.extra_args]
         self.proc = await asyncio.create_subprocess_exec(
             *args, env=qemu_env(), stdout=asyncio.subprocess.DEVNULL,

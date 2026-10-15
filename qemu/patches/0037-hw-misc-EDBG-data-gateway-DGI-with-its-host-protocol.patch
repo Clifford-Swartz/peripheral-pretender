@@ -1,0 +1,983 @@
+From 990acfacd1f83342501e0a41bfd2e04bfea250b2 Mon Sep 17 00:00:00 2001
+From: Clifford Swartz <cliffordswartz1@gmail.com>
+Date: Thu, 15 Oct 2026 05:50:49 -0700
+Subject: [PATCH 37/37] hw/misc: EDBG data gateway (DGI) with its host protocol
+
+The MC00 Curiosity Pro's debugger data gateway, both sides. Toward the
+host, the DGI command protocol on a chardev (-M ...,dgi=<chardev>): the
+bytes a debugger exchanges on its USB DGI endpoints (sign on, version,
+interface list, mode, enable, status, configuration, send, poll),
+checked against an nEDBG for sign on, version, list, configuration and
+status. Toward the target, an I2C target at 0x28 (SERCOM2), an SPI
+target on SERCOM1 with PA17 as its slave select, and GPIO0-3 on PA10,
+PA11, PA20, PA21, each feeding its interface while the host has it on;
+GPIO records carry timestamps of the 2 MHz timestamp clock (record
+format still to be compared with a debugger's).
+
+hw/gpio: mchp_port_watch(), any number of observers of a pad's level
+(the DGI's GPIO monitor, later a logic analyzer). hw/char: SERCOM SPI
+reads MISO open (all ones) while the bus's only devices are DGI targets
+that are not taking part.
+
+Peripheral Pretender: AI-assisted; not for submission to upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/arm/pic32cm_mc00_cpro.c      |  86 ++++-
+ hw/char/mchp_sercom.c           |  21 +-
+ hw/gpio/mchp_port.c             |  41 +++
+ hw/misc/mchp_edbg_dgi.c         | 565 +++++++++++++++++++++++++++++++-
+ include/hw/gpio/mchp_port.h     |  12 +
+ include/hw/misc/mchp_edbg_dgi.h |  38 ++-
+ 6 files changed, 738 insertions(+), 25 deletions(-)
+
+diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
+index 0c2187d..0f683f8 100644
+--- a/hw/arm/pic32cm_mc00_cpro.c
++++ b/hw/arm/pic32cm_mc00_cpro.c
+@@ -31,6 +31,10 @@
+ #include "hw/i2c/i2c.h"
+ #include "hw/misc/led.h"
+ #include "hw/misc/mchp_edbg_dgi.h"
++#include "chardev/char.h"
++#include "hw/core/qdev-properties-system.h"
++#include "hw/ssi/ssi.h"
++#include "qemu/error-report.h"
+ #include "hw/misc/mikrobus.h"
+ #include "hw/ssi/ssi.h"
+ #include "system/system.h"
+@@ -46,6 +50,16 @@
+ #define CPRO_EXT_SPI        "SERCOM1"
+ #define CPRO_EXT_NUM        2
+ 
++/*
++ * The EDBG data gateway (DS70005440A 4.5.3): SPI on SERCOM1 with PA17 as
++ * its slave select, I2C on SERCOM2, GPIO0-3 on PA10, PA11, PA20, PA21
++ */
++#define CPRO_DGI_SS         MCHP_PORT_PIN('A', 17)
++static const unsigned pic32cm_mc00_cpro_dgi_gpio[] = {
++    MCHP_PORT_PIN('A', 10), MCHP_PORT_PIN('A', 11),
++    MCHP_PORT_PIN('A', 20), MCHP_PORT_PIN('A', 21),
++};
++
+ /* mikroBUS RST, PWM, INT and CS on each header (pins 5, 7, 9 and 15) */
+ static const int pic32cm_mc00_cpro_ext_pins[CPRO_EXT_NUM][MIKROBUS_ROLES] = {
+     { MCHP_PORT_PIN('A', 20), MCHP_PORT_PIN('B', 10),
+@@ -73,6 +87,7 @@ struct Pic32cmMc00CproState {
+     qemu_irq sw0;
+     bool sw0_pressed;
+     char *ext[CPRO_EXT_NUM];
++    char *dgi;                  /* chardev id of the EDBG data gateway */
+ };
+ 
+ /* A pressed SW0 pulls PA25 low; a released one leaves the pad undriven. */
+@@ -154,6 +169,66 @@ static void pic32cm_mc00_cpro_add_clicks(Pic32cmMc00CproState *s)
+     mikrobus_plug(OBJECT(s), sockets, s->ext, CPRO_EXT_NUM);
+ }
+ 
++/*
++ * The EDBG data gateway: its host side on the chardev "dgi=" names (none:
++ * the target side still answers, as the debugger's I2C address does)
++ */
++static void pic32cm_mc00_cpro_add_dgi(Pic32cmMc00CproState *s,
++                                      DeviceState *port)
++{
++    DeviceState *dgi = qdev_new(TYPE_MCHP_EDBG_DGI);
++    DeviceState *dev;
++
++    if (s->dgi) {
++        Chardev *chr = qemu_chr_find(s->dgi);
++
++        if (!chr) {
++            error_report("dgi: no chardev \"%s\"", s->dgi);
++            exit(1);
++        }
++        qdev_prop_set_chr(dgi, "chardev", chr);
++    }
++    qdev_prop_set_string(dgi, "interfaces", "00,20,22,30");
++    object_property_add_child(OBJECT(s), "edbg-dgi", OBJECT(dgi));
++    qdev_realize_and_unref(dgi, NULL, &error_fatal);
++
++    dev = qdev_new(TYPE_MCHP_EDBG_DGI_I2C);
++    qdev_prop_set_uint8(dev, "address", CPRO_EDBG_DGI_ADDR);
++    object_property_set_link(OBJECT(dev), "dgi", OBJECT(dgi), &error_fatal);
++    i2c_slave_realize_and_unref(I2C_SLAVE(dev), I2C_BUS(qdev_get_child_bus(
++        pic32cm_soc_periph(&s->soc, CPRO_EXT_I2C), "sercom2.i2c")),
++        &error_fatal);
++
++    dev = qdev_new(TYPE_MCHP_EDBG_DGI_SPI);
++    /* Its own slave select is a pad watch: a CS index the Clicks do not use */
++    qdev_prop_set_uint8(dev, "cs", 15);
++    object_property_set_link(OBJECT(dev), "dgi", OBJECT(dgi), &error_fatal);
++    ssi_realize_and_unref(dev, (SSIBus *)(qdev_get_child_bus(
++        pic32cm_soc_periph(&s->soc, CPRO_EXT_SPI), "sercom1.spi")),
++        &error_fatal);
++
++    for (unsigned i = 0; i < ARRAY_SIZE(pic32cm_mc00_cpro_dgi_gpio); i++) {
++        mchp_port_watch(port, pic32cm_mc00_cpro_dgi_gpio[i],
++                        mchp_edbg_dgi_gpio, dgi, i);
++    }
++    mchp_port_watch(port, CPRO_DGI_SS, mchp_edbg_dgi_gpio, dgi,
++                    MCHP_EDBG_DGI_SS_LINE);
++}
++
++static char *pic32cm_mc00_cpro_get_dgi(Object *obj, Error **errp)
++{
++    return g_strdup(PIC32CM_MC00_CPRO_MACHINE(obj)->dgi);
++}
++
++static void pic32cm_mc00_cpro_set_dgi(Object *obj, const char *value,
++                                      Error **errp)
++{
++    Pic32cmMc00CproState *s = PIC32CM_MC00_CPRO_MACHINE(obj);
++
++    g_free(s->dgi);
++    s->dgi = g_strdup(value);
++}
++
+ static void pic32cm_mc00_cpro_init(MachineState *machine)
+ {
+     Pic32cmMc00CproState *s = PIC32CM_MC00_CPRO_MACHINE(machine);
+@@ -183,11 +258,7 @@ static void pic32cm_mc00_cpro_init(MachineState *machine)
+     /* The LED from VCC pulls its pad high while nothing drives it */
+     qemu_set_irq(qdev_get_gpio_in_named(port, MCHP_PORT_IN, CPRO_LED0_PIN), 1);
+     s->sw0 = qdev_get_gpio_in_named(port, MCHP_PORT_IN, CPRO_SW0_PIN);
+-    /* The EDBG data gateway on the I2C bus (SERCOM2, PA12/PA13) */
+-    i2c_slave_create_simple(
+-        I2C_BUS(qdev_get_child_bus(pic32cm_soc_periph(&s->soc, "SERCOM2"),
+-                                   "sercom2.i2c")),
+-        TYPE_MCHP_EDBG_DGI, CPRO_EDBG_DGI_ADDR);
++    pic32cm_mc00_cpro_add_dgi(s, port);
+     pic32cm_mc00_cpro_add_clicks(s);
+     pic32cm_mc00_cpro_update_sw0(s);
+ 
+@@ -214,6 +285,11 @@ static void pic32cm_mc00_cpro_class_init(ObjectClass *oc, const void *data)
+                                    pic32cm_mc00_cpro_set_sw0);
+     object_class_property_set_description(oc, "sw0-pressed",
+                                           "Hold user switch SW0 (PA25) down");
++    object_class_property_add_str(oc, "dgi", pic32cm_mc00_cpro_get_dgi,
++                                  pic32cm_mc00_cpro_set_dgi);
++    object_class_property_set_description(oc, "dgi",
++        "Chardev id for the EDBG data gateway's host side (the DGI "
++        "command protocol, as on the debugger's USB endpoints)");
+     object_class_property_add_str(oc, "ext1", pic32cm_mc00_cpro_get_ext1,
+                                   pic32cm_mc00_cpro_set_ext1);
+     object_class_property_add_str(oc, "ext2", pic32cm_mc00_cpro_get_ext2,
+diff --git a/hw/char/mchp_sercom.c b/hw/char/mchp_sercom.c
+index fd76a10..f2cd2d7 100644
+--- a/hw/char/mchp_sercom.c
++++ b/hw/char/mchp_sercom.c
+@@ -36,6 +36,7 @@
+ #include "qemu/log.h"
+ #include "qemu/timer.h"
+ #include "chardev/char-fe.h"
++#include "hw/misc/mchp_edbg_dgi.h"
+ #include "hw/char/mchp_sercom.h"
+ #include "hw/core/clock.h"
+ #include "hw/core/qdev-properties.h"
+@@ -420,6 +421,24 @@ static unsigned mchp_sercom_spi_do_pad(uint32_t ctrla)
+     return pad[FIELD_EX32(ctrla, MCHP_SERCOM_SPIM_CTRLA, DOPO)];
+ }
+ 
++/*
++ * Whether anything on the bus can drive MISO: a device, unless it is a
++ * debugger's DGI SPI target that is not taking part (its pins tristated)
++ */
++static bool mchp_sercom_spi_driven(MchpSercomState *s)
++{
++    BusChild *kid;
++
++    QTAILQ_FOREACH(kid, &BUS(s->spi)->children, sibling) {
++        if (!object_dynamic_cast(OBJECT(kid->child),
++                                 TYPE_MCHP_EDBG_DGI_SPI) ||
++            mchp_edbg_dgi_spi_driving(kid->child)) {
++            return true;
++        }
++    }
++    return false;
++}
++
+ /* One character out on DATA's write, the reply into the buffer */
+ static void mchp_sercom_spi_write(MchpSercomState *s, uint32_t data)
+ {
+@@ -434,7 +453,7 @@ static void mchp_sercom_spi_write(MchpSercomState *s, uint32_t data)
+     if (FIELD_EX32(ctrla, MCHP_SERCOM_SPIM_CTRLA, DIPO) ==
+         mchp_sercom_spi_do_pad(ctrla)) {
+         rx = tx;                /* the input pad is the output pad */
+-    } else if (QTAILQ_EMPTY(&BUS(s->spi)->children)) {
++    } else if (!mchp_sercom_spi_driven(s)) {
+         rx = MAKE_64BIT_MASK(0, bits);  /* nothing drives MISO */
+     } else {
+         rx = ssi_transfer(s->spi, tx) & MAKE_64BIT_MASK(0, bits);
+diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
+index 7e57cfc..1bf193b 100644
+--- a/hw/gpio/mchp_port.c
++++ b/hw/gpio/mchp_port.c
+@@ -46,6 +46,8 @@
+ 
+ OBJECT_DECLARE_SIMPLE_TYPE(MchpPortState, MCHP_PORT)
+ 
++#define MCHP_PORT_WATCHES 16
++
+ struct MchpPortState {
+     MchpRegBlock parent_obj;
+ 
+@@ -74,6 +76,14 @@ struct MchpPortState {
+     uint32_t fn_hiz[MCHP_PORT_GROUP_COUNT][MCHP_PORT_FUNCS];
+     qemu_irq pmux_active[MCHP_PORT_NUM_PINS * MCHP_PORT_FUNCS];
+     uint8_t sel[MCHP_PORT_NUM_PINS];            /* function + 1, 0: GPIO */
++    /* Pad watchers (mchp_port_watch()): not migrated, set up by boards */
++    struct {
++        unsigned pin, line;
++        MchpPadWatchFn *fn;
++        void *opaque;
++        bool level, valid;
++    } watch[MCHP_PORT_WATCHES];
++    unsigned nwatch;
+     /* Driven pads as last signalled on "pad", and their accounting */
+     qemu_irq pad[MCHP_PORT_NUM_PINS];
+     uint32_t pad_mask[MCHP_PORT_GROUP_COUNT];
+@@ -295,6 +305,20 @@ static void mchp_port_update_func(MchpPortState *s, unsigned g)
+             }
+         }
+     }
++    for (unsigned i = 0; i < s->nwatch; i++) {
++        unsigned pin = s->watch[i].pin;
++        bool on;
++
++        if (pin / MCHP_PORT_GROUP_PINS != g) {
++            continue;
++        }
++        on = extract32(pads, pin % MCHP_PORT_GROUP_PINS, 1);
++        if (!s->watch[i].valid || on != s->watch[i].level) {
++            s->watch[i].level = on;
++            s->watch[i].valid = true;
++            s->watch[i].fn(s->watch[i].opaque, s->watch[i].line, on);
++        }
++    }
+     if (pad_changed) {
+         mchp_port_account(s, g);
+         s->pad_mask[g] = driven;
+@@ -595,6 +619,23 @@ static void mchp_port_get_pull(Object *obj, Visitor *v, const char *name,
+     visit_type_str(v, name, &val, errp);
+ }
+ 
++void mchp_port_watch(DeviceState *port, unsigned pin, MchpPadWatchFn *fn,
++                     void *opaque, unsigned line)
++{
++    MchpPortState *s = MCHP_PORT(port);
++
++    assert(s->nwatch < MCHP_PORT_WATCHES);
++    s->watch[s->nwatch].pin = pin;
++    s->watch[s->nwatch].line = line;
++    s->watch[s->nwatch].fn = fn;
++    s->watch[s->nwatch].opaque = opaque;
++    s->watch[s->nwatch].valid = false;
++    s->nwatch++;
++    if (pin / MCHP_PORT_GROUP_PINS < s->ngroups) {
++        mchp_port_update_func(s, pin / MCHP_PORT_GROUP_PINS);
++    }
++}
++
+ /* After a reset every pin is an input again: release the pads. */
+ /*
+  * "pa-stats": "<ns> <high0> <low0> ... <high31> <low31>", the virtual time
+diff --git a/hw/misc/mchp_edbg_dgi.c b/hw/misc/mchp_edbg_dgi.c
+index cac8bf4..52d03f5 100644
+--- a/hw/misc/mchp_edbg_dgi.c
++++ b/hw/misc/mchp_edbg_dgi.c
+@@ -1,25 +1,479 @@
+ /*
+- * Microchip EDBG data gateway (DGI) as seen on a Curiosity Pro I2C bus
++ * Microchip EDBG/nEDBG data gateway (DGI): the debugger's data channel
+  *
+  * Peripheral Pretender: a personal project. AI-assisted code;
+  * not for submission to upstream QEMU.
+  *
+- * The board's debugger listens on the target's I2C bus (address 0x28 on
+- * the PIC32CM MC00 Curiosity Pro). As the target sees it on silicon, it
+- * acknowledges its address and every byte written, reads return 0x00, and
+- * it does not answer the general call (address 0). The gateway protocol
+- * itself is not modelled.
++ * Host side: the DGI command protocol, read and written on "chardev" as
++ * the debugger exchanges it over its USB DGI endpoints. A command is its
++ * code, a 16-bit big-endian payload length and the payload; a reply
++ * echoes the code, then 0x80 (OK) or 0xA0 (data) and the data. Checked
++ * against an nEDBG (AVR64EA48 Curiosity Nano, firmware with DGI 4.1):
++ * sign on, version, interface list, configuration and status replies.
++ *
++ *   0x00 sign on       A0 len16 name (NUL terminated)
++ *   0x01 sign off      80, every interface stops
++ *   0x02 version       A0 major minor
++ *   0x08 interfaces    A0 count ids...
++ *   0x0A set mode      80 (2- or 4-byte poll lengths, overflow marker)
++ *   0x10 enable        payload interface, state (0 off, 1 on, 2 on with
++ *                      timestamps); 80
++ *   0x11 status        A0 then interface, flags (bit 0 on, 1 timestamps,
++ *                      2 overflow) per interface
++ *   0x12 set config    payload interface, then id16 value32 pairs; 80
++ *   0x13 get config    A0 len16 interface pairs...
++ *   0x14 send data     payload interface, data; 80 (to the target: what
++ *                      the target reads from the DGI over I2C or SPI)
++ *   0x15 poll          A0 interface len16 (len32 in 4-byte mode) data
++ *   0x20 target reset  80
++ *
++ * Target side: the I2C target (a write feeds interface I2C, a read takes
++ * the next byte sent by the host, else 0x00; the general call is not
++ * answered, as on the MC00 Curiosity Pro), the SPI target (MOSI bytes feed
++ * interface SPI while its slave select is low; MISO is the next byte sent
++ * by the host, else 0x00), and the GPIO monitor lines. Bytes and edges
++ * are only taken while the host has their interface on, like the
++ * debugger, whose target pins stay tristated otherwise.
++ *
++ * GPIO and timestamp records: a GPIO poll returns one byte per change,
++ * the levels of all lines (bit n is line n). With timestamps on, each
++ * record is preceded by the time of the change in "tick-hz" ticks since
++ * the interface was enabled, as a 32-bit big-endian count. TODO: compare
++ * these record formats with a debugger's; the command layer above is
++ * checked, these are not yet.
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+ 
+ #include "qemu/osdep.h"
++#include "qemu/timer.h"
++#include "qemu/log.h"
++#include "qemu/host-utils.h"
++#include "qemu/bswap.h"
++#include "qapi/error.h"
++#include "chardev/char-fe.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/core/qdev-properties-system.h"
+ #include "hw/i2c/i2c.h"
++#include "hw/ssi/ssi.h"
+ #include "hw/misc/mchp_edbg_dgi.h"
+ 
++#define DGI_RESP_OK 0x80
++#define DGI_RESP_DATA 0xA0
++#define DGI_RESP_FAIL 0x81
++#define DGI_BUF_MAX (64 * 1024)
++#define DGI_CMD_MAX (4 + 512)
++#define DGI_MAX_IF 8
++#define DGI_MAX_CFG 8
++#define DGI_GPIO_LINES MCHP_EDBG_DGI_SS_LINE
++
++typedef struct DgiIface {
++    uint8_t id;
++    uint8_t state;              /* 0 off, 1 on, 2 on with timestamps */
++    bool overflow;
++    int64_t start_ns;           /* virtual time it was switched on */
++    GByteArray *buf;            /* data for the host, oldest first */
++    uint16_t cfg_id[DGI_MAX_CFG];
++    uint32_t cfg_val[DGI_MAX_CFG];
++    unsigned ncfg;
++} DgiIface;
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpEdbgDgiState, MCHP_EDBG_DGI)
++
++struct MchpEdbgDgiState {
++    DeviceState parent_obj;
++
++    CharFrontend chr;
++    char *sign_on;
++    uint16_t version;
++    char *interfaces;
++    uint32_t tick_hz;
++
++    DgiIface iface[DGI_MAX_IF];
++    unsigned niface;
++    bool poll_len32;
++    uint8_t cmd[DGI_CMD_MAX];
++    unsigned cmd_len;
++    GByteArray *to_target;      /* sent by the host, for I2C/SPI reads */
++    uint8_t gpio;               /* levels of the monitored lines */
++    bool ss_low;                /* the SPI slave select */
++};
++
++static DgiIface *dgi_iface(MchpEdbgDgiState *s, uint8_t id)
++{
++    for (unsigned i = 0; i < s->niface; i++) {
++        if (s->iface[i].id == id) {
++            return &s->iface[i];
++        }
++    }
++    return NULL;
++}
++
++/* Data for the host from interface @id, if the host has it on */
++static void dgi_push(MchpEdbgDgiState *s, uint8_t id, const uint8_t *data,
++                     size_t len)
++{
++    DgiIface *f = dgi_iface(s, id);
++
++    if (!f || !f->state) {
++        return;
++    }
++    if (f->buf->len + len > DGI_BUF_MAX) {
++        f->overflow = true;
++        return;
++    }
++    g_byte_array_append(f->buf, data, len);
++}
++
++static void dgi_reply(MchpEdbgDgiState *s, const uint8_t *data, size_t len)
++{
++    qemu_chr_fe_write_all(&s->chr, data, len);
++}
++
++static void dgi_reply_status(MchpEdbgDgiState *s, uint8_t cmd, uint8_t st)
++{
++    uint8_t r[2] = { cmd, st };
++
++    dgi_reply(s, r, sizeof(r));
++}
++
++static void dgi_stop_all(MchpEdbgDgiState *s)
++{
++    for (unsigned i = 0; i < s->niface; i++) {
++        s->iface[i].state = 0;
++        s->iface[i].overflow = false;
++        g_byte_array_set_size(s->iface[i].buf, 0);
++    }
++    g_byte_array_set_size(s->to_target, 0);
++}
++
++static void dgi_command(MchpEdbgDgiState *s, uint8_t cmd, const uint8_t *p,
++                        unsigned n)
++{
++    g_autoptr(GByteArray) r = g_byte_array_new();
++    uint8_t hdr[2] = { cmd, DGI_RESP_DATA };
++    DgiIface *f;
++
++    switch (cmd) {
++    case 0x00: {                                        /* sign on */
++        size_t len = strlen(s->sign_on) + 1;
++        uint8_t l[2] = { len >> 8, len };
++
++        g_byte_array_append(r, hdr, 2);
++        g_byte_array_append(r, l, 2);
++        g_byte_array_append(r, (const uint8_t *)s->sign_on, len);
++        break;
++    }
++    case 0x01:                                          /* sign off */
++        dgi_stop_all(s);
++        dgi_reply_status(s, cmd, DGI_RESP_OK);
++        return;
++    case 0x02: {                                        /* version */
++        uint8_t v[2] = { s->version >> 8, s->version };
++
++        g_byte_array_append(r, hdr, 2);
++        g_byte_array_append(r, v, 2);
++        break;
++    }
++    case 0x08: {                                        /* interfaces */
++        uint8_t count = s->niface;
++
++        g_byte_array_append(r, hdr, 2);
++        g_byte_array_append(r, &count, 1);
++        for (unsigned i = 0; i < s->niface; i++) {
++            g_byte_array_append(r, &s->iface[i].id, 1);
++        }
++        break;
++    }
++    case 0x0A:                                          /* set mode */
++        if (n >= 1) {
++            s->poll_len32 = p[0] & 4;
++        }
++        dgi_reply_status(s, cmd, DGI_RESP_OK);
++        return;
++    case 0x10:                                          /* enable */
++        f = n >= 2 ? dgi_iface(s, p[0]) : NULL;
++        if (!f || p[1] > 2) {
++            dgi_reply_status(s, cmd, DGI_RESP_FAIL);
++            return;
++        }
++        if (p[1] && !f->state) {
++            f->start_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++            f->overflow = false;
++            g_byte_array_set_size(f->buf, 0);
++            f->state = p[1];
++            if (f->id == DGI_IF_GPIO) {
++                /* The levels at the start come first */
++                mchp_edbg_dgi_gpio(s, UINT_MAX, false);
++            }
++        }
++        f->state = p[1];
++        dgi_reply_status(s, cmd, DGI_RESP_OK);
++        return;
++    case 0x11:                                          /* status */
++        g_byte_array_append(r, hdr, 2);
++        for (unsigned i = 0; i < s->niface; i++) {
++            uint8_t st[2] = { s->iface[i].id,
++                              (s->iface[i].state ? 1 : 0) |
++                              (s->iface[i].state == 2 ? 2 : 0) |
++                              (s->iface[i].overflow ? 4 : 0) };
++
++            g_byte_array_append(r, st, 2);
++        }
++        break;
++    case 0x12:                                          /* set config */
++        f = n >= 1 ? dgi_iface(s, p[0]) : NULL;
++        if (!f) {
++            dgi_reply_status(s, cmd, DGI_RESP_FAIL);
++            return;
++        }
++        for (unsigned o = 1; o + 6 <= n; o += 6) {
++            uint16_t id = p[o] << 8 | p[o + 1];
++            uint32_t val = ldl_be_p(p + o + 2);
++
++            for (unsigned c = 0; c < f->ncfg; c++) {
++                if (f->cfg_id[c] == id) {
++                    f->cfg_val[c] = val;
++                }
++            }
++        }
++        dgi_reply_status(s, cmd, DGI_RESP_OK);
++        return;
++    case 0x13: {                                        /* get config */
++        uint8_t l[2], pair[6];
++
++        f = n >= 1 ? dgi_iface(s, p[0]) : NULL;
++        if (!f) {
++            dgi_reply_status(s, cmd, DGI_RESP_FAIL);
++            return;
++        }
++        l[0] = (1 + 6 * f->ncfg) >> 8;
++        l[1] = 1 + 6 * f->ncfg;
++        g_byte_array_append(r, hdr, 2);
++        g_byte_array_append(r, l, 2);
++        g_byte_array_append(r, &f->id, 1);
++        for (unsigned c = 0; c < f->ncfg; c++) {
++            pair[0] = f->cfg_id[c] >> 8;
++            pair[1] = f->cfg_id[c];
++            stl_be_p(pair + 2, f->cfg_val[c]);
++            g_byte_array_append(r, pair, 6);
++        }
++        break;
++    }
++    case 0x14:                                          /* send data */
++        if (n >= 1 && dgi_iface(s, p[0]) &&
++            s->to_target->len + n - 1 <= DGI_BUF_MAX) {
++            g_byte_array_append(s->to_target, p + 1, n - 1);
++            dgi_reply_status(s, cmd, DGI_RESP_OK);
++        } else {
++            dgi_reply_status(s, cmd, DGI_RESP_FAIL);
++        }
++        return;
++    case 0x15: {                                        /* poll */
++        uint8_t l[4];
++        size_t len;
++
++        f = n >= 1 ? dgi_iface(s, p[0]) : NULL;
++        if (!f) {
++            dgi_reply_status(s, cmd, DGI_RESP_FAIL);
++            return;
++        }
++        len = s->poll_len32 ? f->buf->len : MIN(f->buf->len, 0xffff);
++        g_byte_array_append(r, hdr, 2);
++        g_byte_array_append(r, &f->id, 1);
++        if (s->poll_len32) {
++            stl_be_p(l, len);
++            g_byte_array_append(r, l, 4);
++        } else {
++            l[0] = len >> 8;
++            l[1] = len;
++            g_byte_array_append(r, l, 2);
++        }
++        g_byte_array_append(r, f->buf->data, len);
++        g_byte_array_remove_range(f->buf, 0, len);
++        f->overflow = false;
++        break;
++    }
++    case 0x20:                                          /* target reset */
++        dgi_reply_status(s, cmd, DGI_RESP_OK);
++        return;
++    default:
++        qemu_log_mask(LOG_UNIMP, "mchp-edbg-dgi: command 0x%02x\n", cmd);
++        dgi_reply_status(s, cmd, DGI_RESP_FAIL);
++        return;
++    }
++    dgi_reply(s, r->data, r->len);
++}
++
++static int dgi_can_receive(void *opaque)
++{
++    MchpEdbgDgiState *s = opaque;
++
++    return DGI_CMD_MAX - s->cmd_len;
++}
++
++static void dgi_receive(void *opaque, const uint8_t *buf, int size)
++{
++    MchpEdbgDgiState *s = opaque;
++
++    memcpy(s->cmd + s->cmd_len, buf, size);
++    s->cmd_len += size;
++    while (s->cmd_len >= 3) {
++        unsigned n = s->cmd[1] << 8 | s->cmd[2];
++
++        if (n > DGI_CMD_MAX - 3) {
++            s->cmd_len = 0;                 /* garbage: start over */
++            return;
++        }
++        if (s->cmd_len < 3 + n) {
++            return;
++        }
++        dgi_command(s, s->cmd[0], s->cmd + 3, n);
++        memmove(s->cmd, s->cmd + 3 + n, s->cmd_len - 3 - n);
++        s->cmd_len -= 3 + n;
++    }
++}
++
++static void dgi_chr_event(void *opaque, QEMUChrEvent event)
++{
++    MchpEdbgDgiState *s = opaque;
++
++    if (event == CHR_EVENT_CLOSED) {
++        /* The host went away: as a sign off */
++        dgi_stop_all(s);
++        s->cmd_len = 0;
++    }
++}
++
++static uint8_t dgi_from_host(MchpEdbgDgiState *s)
++{
++    uint8_t b = 0;
++
++    if (s->to_target->len) {
++        b = s->to_target->data[0];
++        g_byte_array_remove_index(s->to_target, 0);
++    }
++    return b;
++}
++
++void mchp_edbg_dgi_gpio(void *opaque, unsigned line, bool level)
++{
++    MchpEdbgDgiState *s = opaque;
++    DgiIface *f = dgi_iface(s, DGI_IF_GPIO);
++    uint8_t rec[5];
++    unsigned n = 0;
++
++    if (line < DGI_GPIO_LINES) {
++        s->gpio = deposit32(s->gpio, line, 1, level);
++    } else if (line == DGI_GPIO_LINES) {
++        s->ss_low = !level;                 /* the SPI slave select */
++        return;
++    }
++    if (!f || !f->state) {
++        return;
++    }
++    if (f->state == 2) {
++        int64_t dt = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - f->start_ns;
++
++        stl_be_p(rec, muldiv64(dt, s->tick_hz, NANOSECONDS_PER_SECOND));
++        n = 4;
++    }
++    rec[n++] = s->gpio;
++    dgi_push(s, DGI_IF_GPIO, rec, n);
++}
++
++static void dgi_add_iface(MchpEdbgDgiState *s, uint8_t id)
++{
++    DgiIface *f = &s->iface[s->niface++];
++
++    f->id = id;
++    f->buf = g_byte_array_new();
++    /* Configurations as an nEDBG reports them */
++    switch (id) {
++    case DGI_IF_TIMESTAMP:
++        f->cfg_id[0] = 0;                   /* prescaler */
++        f->cfg_val[0] = 1;
++        f->cfg_id[1] = 1;                   /* clock, Hz */
++        f->cfg_val[1] = s->tick_hz;
++        f->ncfg = 2;
++        break;
++    case DGI_IF_GPIO:
++        f->cfg_id[0] = 0;                   /* input lines */
++        f->cfg_val[0] = 2;
++        f->cfg_id[1] = 1;                   /* output lines */
++        f->cfg_val[1] = 0;
++        f->ncfg = 2;
++        break;
++    default:
++        break;
++    }
++}
++
++static void dgi_realize(DeviceState *dev, Error **errp)
++{
++    MchpEdbgDgiState *s = MCHP_EDBG_DGI(dev);
++    g_auto(GStrv) ids = g_strsplit(s->interfaces ? s->interfaces : "", ",",
++                                   -1);
++
++    for (unsigned i = 0; ids[i] && *ids[i]; i++) {
++        unsigned long id = strtoul(ids[i], NULL, 16);
++
++        if (s->niface == DGI_MAX_IF || id > 0xff) {
++            error_setg(errp, "mchp-edbg-dgi: bad interfaces \"%s\"",
++                       s->interfaces);
++            return;
++        }
++        dgi_add_iface(s, id);
++    }
++    s->to_target = g_byte_array_new();
++    qemu_chr_fe_set_handlers(&s->chr, dgi_can_receive, dgi_receive,
++                             dgi_chr_event, NULL, s, NULL, true);
++}
++
++static void dgi_reset(DeviceState *dev)
++{
++    /* A target reset leaves the debugger's session as it is */
++}
++
++static const Property dgi_properties[] = {
++    DEFINE_PROP_CHR("chardev", MchpEdbgDgiState, chr),
++    DEFINE_PROP_STRING("sign-on", MchpEdbgDgiState, sign_on),
++    DEFINE_PROP_UINT16("version", MchpEdbgDgiState, version, 0x0401),
++    DEFINE_PROP_STRING("interfaces", MchpEdbgDgiState, interfaces),
++    DEFINE_PROP_UINT32("tick-hz", MchpEdbgDgiState, tick_hz, 2000000),
++};
++
++static void dgi_init(Object *obj)
++{
++    MchpEdbgDgiState *s = MCHP_EDBG_DGI(obj);
++
++    s->sign_on = g_strdup("EDBG Data Gateway Interface");
++}
++
++static void dgi_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->desc = "Microchip EDBG data gateway (DGI)";
++    dc->realize = dgi_realize;
++    device_class_set_legacy_reset(dc, dgi_reset);
++    device_class_set_props(dc, dgi_properties);
++    /* Host-side session state: not migrated */
++    dc->user_creatable = false;
++}
++
++/* -- the I2C target -------------------------------------------------- */
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpEdbgDgiI2cState, MCHP_EDBG_DGI_I2C)
++
++struct MchpEdbgDgiI2cState {
++    I2CSlave parent_obj;
++    MchpEdbgDgiState *dgi;
++};
++
+ /* Its own address only: the general call goes unanswered (silicon) */
+-static bool mchp_edbg_dgi_match(I2CSlave *candidate, uint8_t address,
+-                                bool broadcast, I2CNodeList *current_devs)
++static bool dgi_i2c_match(I2CSlave *candidate, uint8_t address,
++                          bool broadcast, I2CNodeList *current_devs)
+ {
+     I2CNode *node;
+ 
+@@ -32,31 +486,108 @@ static bool mchp_edbg_dgi_match(I2CSlave *candidate, uint8_t address,
+     return true;
+ }
+ 
+-static uint8_t mchp_edbg_dgi_recv(I2CSlave *i2c)
++static uint8_t dgi_i2c_recv(I2CSlave *i2c)
+ {
+-    return 0x00;
++    MchpEdbgDgiI2cState *s = MCHP_EDBG_DGI_I2C(i2c);
++
++    return s->dgi ? dgi_from_host(s->dgi) : 0x00;
+ }
+ 
+-static int mchp_edbg_dgi_send(I2CSlave *i2c, uint8_t data)
++static int dgi_i2c_send(I2CSlave *i2c, uint8_t data)
+ {
++    MchpEdbgDgiI2cState *s = MCHP_EDBG_DGI_I2C(i2c);
++
++    if (s->dgi) {
++        dgi_push(s->dgi, DGI_IF_I2C, &data, 1);
++    }
+     return 0;                   /* ACK */
+ }
+ 
+-static void mchp_edbg_dgi_class_init(ObjectClass *klass, const void *data)
++static const Property dgi_i2c_properties[] = {
++    DEFINE_PROP_LINK("dgi", MchpEdbgDgiI2cState, dgi, TYPE_MCHP_EDBG_DGI,
++                     MchpEdbgDgiState *),
++};
++
++static void dgi_i2c_class_init(ObjectClass *klass, const void *data)
+ {
+     I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
+ 
+-    k->match_and_add = mchp_edbg_dgi_match;
+-    k->recv = mchp_edbg_dgi_recv;
+-    k->send = mchp_edbg_dgi_send;
++    k->match_and_add = dgi_i2c_match;
++    k->recv = dgi_i2c_recv;
++    k->send = dgi_i2c_send;
++    device_class_set_props(DEVICE_CLASS(klass), dgi_i2c_properties);
++}
++
++/* -- the SPI target -------------------------------------------------- */
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpEdbgDgiSpiState, MCHP_EDBG_DGI_SPI)
++
++struct MchpEdbgDgiSpiState {
++    SSIPeripheral parent_obj;
++    MchpEdbgDgiState *dgi;
++};
++
++/*
++ * Every transfer on the bus reaches it: it takes part while its slave
++ * select (a GPIO monitor line, mchp_edbg_dgi_gpio() line DGI_GPIO_LINES)
++ * is low and the host has SPI on; otherwise it answers 0 (the bus ORs).
++ */
++bool mchp_edbg_dgi_spi_driving(DeviceState *dev)
++{
++    MchpEdbgDgiSpiState *s = MCHP_EDBG_DGI_SPI(dev);
++    DgiIface *f = s->dgi ? dgi_iface(s->dgi, DGI_IF_SPI) : NULL;
++
++    return f && f->state && s->dgi->ss_low;
++}
++
++static uint32_t dgi_spi_transfer(SSIPeripheral *dev, uint32_t val)
++{
++    MchpEdbgDgiSpiState *s = MCHP_EDBG_DGI_SPI(dev);
++    uint8_t b = val;
++
++    if (!mchp_edbg_dgi_spi_driving(DEVICE(dev))) {
++        return 0;
++    }
++    dgi_push(s->dgi, DGI_IF_SPI, &b, 1);
++    return dgi_from_host(s->dgi);
++}
++
++static void dgi_spi_realize(SSIPeripheral *dev, Error **errp)
++{
++}
++
++static const Property dgi_spi_properties[] = {
++    DEFINE_PROP_LINK("dgi", MchpEdbgDgiSpiState, dgi, TYPE_MCHP_EDBG_DGI,
++                     MchpEdbgDgiState *),
++};
++
++static void dgi_spi_class_init(ObjectClass *klass, const void *data)
++{
++    SSIPeripheralClass *k = SSI_PERIPHERAL_CLASS(klass);
++
++    k->realize = dgi_spi_realize;
++    k->transfer = dgi_spi_transfer;
++    k->cs_polarity = SSI_CS_NONE;
++    device_class_set_props(DEVICE_CLASS(klass), dgi_spi_properties);
+ }
+ 
+ static const TypeInfo mchp_edbg_dgi_types[] = {
+     {
+         .name = TYPE_MCHP_EDBG_DGI,
++        .parent = TYPE_DEVICE,
++        .instance_size = sizeof(MchpEdbgDgiState),
++        .instance_init = dgi_init,
++        .class_init = dgi_class_init,
++    }, {
++        .name = TYPE_MCHP_EDBG_DGI_I2C,
+         .parent = TYPE_I2C_SLAVE,
+-        .instance_size = sizeof(I2CSlave),
+-        .class_init = mchp_edbg_dgi_class_init,
++        .instance_size = sizeof(MchpEdbgDgiI2cState),
++        .class_init = dgi_i2c_class_init,
++    }, {
++        .name = TYPE_MCHP_EDBG_DGI_SPI,
++        .parent = TYPE_SSI_PERIPHERAL,
++        .instance_size = sizeof(MchpEdbgDgiSpiState),
++        .class_init = dgi_spi_class_init,
+     },
+ };
+ 
+diff --git a/include/hw/gpio/mchp_port.h b/include/hw/gpio/mchp_port.h
+index 6ae18ef..c61e176 100644
+--- a/include/hw/gpio/mchp_port.h
++++ b/include/hw/gpio/mchp_port.h
+@@ -50,6 +50,7 @@
+ #define HW_GPIO_MCHP_PORT_H
+ 
+ #include "hw/misc/mchp_regblock.h"
++#include "hw/core/qdev.h"
+ 
+ #define TYPE_MCHP_PORT "mchp-port"
+ 
+@@ -67,4 +68,15 @@
+ /* GPIO line of pin P<group><pin>, for example MCHP_PORT_PIN('C', 5) */
+ #define MCHP_PORT_PIN(group, pin) (((group) - 'A') * 32 + (pin))
+ 
++/*
++ * Watch the level of pad @pin (MCHP_PORT_PIN numbering), whoever sets it:
++ * @fn(@opaque, @line, level) runs once with the current level and again
++ * on every change, at the virtual time of the change. For observers that
++ * share a pin with other devices (a debugger's GPIO monitor, a logic
++ * analyzer): unlike the "pad" GPIO line, any number of them can watch.
++ */
++typedef void MchpPadWatchFn(void *opaque, unsigned line, bool level);
++void mchp_port_watch(DeviceState *port, unsigned pin, MchpPadWatchFn *fn,
++                     void *opaque, unsigned line);
++
+ #endif /* HW_GPIO_MCHP_PORT_H */
+diff --git a/include/hw/misc/mchp_edbg_dgi.h b/include/hw/misc/mchp_edbg_dgi.h
+index 19fbdac..a7be094 100644
+--- a/include/hw/misc/mchp_edbg_dgi.h
++++ b/include/hw/misc/mchp_edbg_dgi.h
+@@ -1,10 +1,21 @@
+ /*
+- * Microchip EDBG data gateway (DGI) as seen on a Curiosity Pro I2C bus
++ * Microchip EDBG/nEDBG data gateway (DGI): the debugger's data channel
+  *
+  * Peripheral Pretender: a personal project. AI-assisted code;
+  * not for submission to upstream QEMU.
+  *
+- * An I2C target that acknowledges everything and reads 0x00.
++ * The debugger side of a kit's Data Gateway Interface. Toward the host it
++ * speaks the DGI command protocol on a chardev ("chardev"), the same bytes
++ * a debugger exchanges over its USB DGI endpoints: sign on, list, enable,
++ * configure, poll and send. Toward the target it is
++ *   - an I2C target (TYPE_MCHP_EDBG_DGI_I2C, its "dgi" link set),
++ *   - an SPI target (TYPE_MCHP_EDBG_DGI_SPI, on the DGI SPI bus),
++ *   - GPIO monitor lines (mchp_edbg_dgi_gpio(), fed by a pad watcher),
++ * each feeding its DGI interface while the host has it enabled.
++ *
++ * Properties: "sign-on" (the name a sign on returns), "version" (major <<
++ * 8 | minor), "interfaces" (the interface ids the kit offers, "00,30"),
++ * "tick-hz" (the timestamp clock).
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -12,6 +23,29 @@
+ #ifndef HW_MISC_MCHP_EDBG_DGI_H
+ #define HW_MISC_MCHP_EDBG_DGI_H
+ 
++#include "hw/core/qdev.h"
++
+ #define TYPE_MCHP_EDBG_DGI "mchp-edbg-dgi"
++#define TYPE_MCHP_EDBG_DGI_I2C "mchp-edbg-dgi-i2c"
++#define TYPE_MCHP_EDBG_DGI_SPI "mchp-edbg-dgi-spi"
++
++/* DGI interface ids */
++#define DGI_IF_TIMESTAMP 0x00
++#define DGI_IF_SPI 0x20
++#define DGI_IF_USART 0x21
++#define DGI_IF_I2C 0x22
++#define DGI_IF_GPIO 0x30
++
++/* GPIO monitor lines 0-7; this line is the SPI slave select */
++#define MCHP_EDBG_DGI_SS_LINE 8
++
++/* A monitored GPIO line @line of the DGI @opaque changed to @level */
++void mchp_edbg_dgi_gpio(void *opaque, unsigned line, bool level);
++
++/*
++ * Whether the DGI SPI target @dev drives MISO now (the host has SPI on and
++ * its slave select is low): otherwise the line is as if it were absent
++ */
++bool mchp_edbg_dgi_spi_driving(DeviceState *dev);
+ 
+ #endif /* HW_MISC_MCHP_EDBG_DGI_H */
+-- 
+2.53.0.windows.2
+

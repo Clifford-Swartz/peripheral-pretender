@@ -745,7 +745,11 @@ function handle(msg) {
     pinsNow = {}; levels = {}; clickState = {};
     buildBoard(msg.board, msg.catalog, msg.adapters);
     if (typeof Bench !== "undefined") Bench.board(msg);
+    if (typeof DV !== "undefined") DV.board(msg.board);
     break;
+  case "dgiinfo": if (typeof DV !== "undefined") DV.info(msg); break;
+  case "dgidata": if (typeof DV !== "undefined") DV.data(msg); break;
+  case "dgigpio": if (typeof DV !== "undefined") DV.gpio(msg); break;
   case "bench": if (typeof Bench !== "undefined") Bench.bench(msg.bench); break;
   case "benchstate": if (typeof Bench !== "undefined") Bench.state(msg); break;
   case "clicks": showClicks(msg.clicks); break;
@@ -753,7 +757,10 @@ function handle(msg) {
   case "clickstate": clickState = msg.state; updateClickParts(); break;
   case "pins": showPins(msg.pins); break;
   case "uart": appendUart(msg.data); break;
-  case "reset": $("console").textContent = ""; showPins({}); showSignals({}); break;
+  case "reset":
+    $("console").textContent = ""; showPins({}); showSignals({});
+    if (typeof DV !== "undefined") DV.reset();
+    break;
   case "status":
     $("board").classList.toggle("powered", msg.state === "running");
     if (msg.state === "running") setStatus("running", `running ${msg.elf}`);

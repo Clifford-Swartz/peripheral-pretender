@@ -116,6 +116,23 @@ on the PyKit with a `code.py` that reads D0 and A4 and lights D1:
            ["pot1.w", "hole:J9T.19"]]}
 ```
 
+## Data Visualizer panel
+
+On a board whose debugger has a data gateway (`board.json` `"dgi"`: the MC00 Curiosity Pro so far)
+the twin's EDBG speaks the DGI command protocol on a socket, the same bytes a real debugger
+exchanges over USB with MPLAB Data Visualizer (`hw/misc/mchp_edbg_dgi.c`, `tools/pp/dgi.py` is a
+client). The server signs on and the side panel shows what the kit's DGI offers: tick SPI, I2C
+or GPIO and the server enables and polls them.
+
+- Byte streams are decoded as Data Visualizer's Data Stream packets (0x03, fields, 0xFC) with
+  the fields typed in the box (`u16`, `u8,i16,f32`, ...) and plotted; raw bytes show below.
+- GPIO lines (MC00: GPIO0-3 on PA10, PA11, PA20, PA21) are drawn from the debugger's timestamps
+  (2 MHz), with each line's period.
+
+`make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=dgi` is the demo: a counter as Data Stream
+packets to the DGI over I2C every 10 ms, and GPIO0 toggling. MPLAB Data Visualizer itself finds
+DGI tools over USB only; letting it use the twin's socket is a change on its side.
+
 It is a local, single-user prototype: one twin is shared by every open page. Hosting
 (one sandboxed twin per visitor) is a later step.
 

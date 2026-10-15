@@ -259,6 +259,16 @@ h2 small { color: var(--muted); font-weight: normal; }
   transition: opacity 40ms linear; }
 .board-stick { z-index: 3; background: rgba(20,24,30,.55); border: 2px solid #9fd3ff;
   box-shadow: 0 0 6px rgba(159,211,255,.8); }
+/* Data Visualizer panel (dv.js) */
+#dv { display: flex; flex-direction: column; gap: 6px; }
+#dv[hidden] { display: none; }
+.dv-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.dv-row small { color: var(--muted); }
+#dv-format { background: #0b0d10; color: var(--text); border: 1px solid #2c333c; border-radius: 4px;
+  padding: 2px 6px; width: 9em; font: 12px ui-monospace, Consolas, monospace; }
+#dv canvas { width: 100%; border-radius: 6px; background: #0b0d10; }
+#dv-raw { max-height: 6em; overflow: auto; margin: 0; font: 11px ui-monospace, Consolas, monospace;
+  color: var(--muted); background: #0b0d10; border-radius: 6px; padding: 4px 6px; }
 /* CIRCUITPY editor */
 #files textarea { width: 100%; background: #0d1014; color: var(--text); border: 1px solid #2c333c;
   border-radius: 6px; font: 12px/1.35 ui-monospace, Consolas, monospace; padding: 6px; resize: vertical; }

@@ -51,6 +51,15 @@
         <div class="files-row"><button id="save-code">Save and restart</button></div>
         <pre id="file-list"></pre>
       </div>
+      <h2 id="dv-head" hidden>Data Visualizer <small id="dv-name"></small></h2>
+      <div id="dv" hidden>
+        <div class="dv-row" id="dv-ifaces"></div>
+        <div class="dv-row"><label>Data Stream fields <input id="dv-format" value="u16" spellcheck="false"></label>
+          <small>u8 i8 u16 i16 u32 i32 f32, comma separated</small></div>
+        <canvas id="dv-graph" width="380" height="130"></canvas>
+        <canvas id="dv-gpio" width="380" height="88"></canvas>
+        <pre id="dv-raw"></pre>
+      </div>
       <h2>VCOM <small id="vcom"></small></h2>
       <pre id="console"></pre>
       <form id="send"><input id="send-text" placeholder="send to the UART" autocomplete="off"><button>Send</button></form>
@@ -58,6 +67,7 @@
   </main>
   <script src="/static/app.js"></script>
   <script src="/static/bench.js"></script>
+  <script src="/static/dv.js"></script>
   <script>Bench.init();</script>
 </body>
 </html>

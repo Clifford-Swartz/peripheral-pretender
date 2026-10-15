@@ -285,6 +285,21 @@ with it, `tests/web/test_bench.py`).
   timer instead of an assumed 50 Hz; `pin_headers` for the JH01 and the AVR64EA48 Nano (and its
 Nano Base).
 
+## EDBG data gateway (DGI) and a Data Visualizer panel (2026-10-15)
+
+The MC00 twin's debugger has a data gateway (patch 0037): the DGI command protocol on a chardev,
+I2C target 0x28, SPI target on SERCOM1 (SS PA17), GPIO0-3 with 2 MHz timestamps. The command
+layer (sign on, version, interface list, configuration, status) was checked against the AVR64EA48
+Nano's nEDBG with `py -m harness.dgi_probe` (read-only; it must always stop interfaces and sign
+off: an nEDBG left streaming dropped off USB and needed a replug). The web page has a Data
+Visualizer panel (Data Stream graph, GPIO lanes, raw bytes); `APP=dgi` is the demo;
+`tests/web/test_dgi.py`.
+
+- **Open:** compare GPIO and timestamp record formats with a real debugger (`firmware/avr-hello`
+  `APP=dgigpio` toggles the Nano's DGI GPIO line; probe with `--poll 30 --timestamp`); DGI on the
+  AVR64EA48 Nano (GPIO on PB2, needs an AVR PORT watch), the JH01 and the PyKit; USART and power
+  interfaces; MPLAB Data Visualizer connecting to the twin's socket (on the DV side).
+
 ## Curiosity PyKit Explorer (CircuitPython, 2026-10-14)
 
 The first CircuitPython kit and the first Cortex-M4F: the Curiosity CircuitPython board
