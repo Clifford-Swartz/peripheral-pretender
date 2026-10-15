@@ -224,3 +224,53 @@ def test_led_plugged_into_d13_and_gnd():
               holes=header_holes(_board("ev15n46a")))
     res = b.solve({"PA19": Pad(high=1)})
     assert res.parts["d1"]["brightness"] == 1.0 and "warn" in res.parts["d1"]
+
+
+ADC_ELF = ROOT / "firmware" / "hello" / "build" / "pic32cm_mc00_cpro" / \
+    "adc.elf"
+
+
+@pytest.mark.qemu
+def test_pot_on_a0_reaches_the_mc00_adc(qemu_path, qemu_machines):
+    """A pot from the J802 3V3 and GND holes, wiper in J803 A0 (PB08,
+    ADC0 AIN2): adc.elf's A0 readings follow the knob."""
+    from tools.pp_web.bench import header_holes
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not ADC_ELF.is_file():
+        pytest.skip("adc.elf not built")
+    assert "hole:J803.1" in header_holes(_board("ev15n46a"))
+
+    async def scenario():
+        app = App("ev15n46a", ADC_ELF)
+        uart = []
+        app.emit = lambda m: uart.append(m.get("data", "")) \
+            if m["type"] == "uart" else None
+
+        async def a0_mv():
+            mark = len("".join(uart))
+            for _ in range(50):
+                await asyncio.sleep(0.1)
+                lines = [ln for ln in "".join(uart)[mark:].splitlines()
+                         if ln.startswith("a0 ")]
+                if len(lines) >= 2:
+                    return int(lines[-1].split("mv=")[1], 16)
+            return None
+        await app.run(ADC_ELF)
+        try:
+            await app.set_bench({
+                "parts": [part("pot", "p1", position=0.25)],
+                "wires": [["p1.a", "hole:J802.4"], ["p1.b", "hole:J802.6"],
+                          ["p1.w", "hole:J803.1"]]})
+            quarter = await a0_mv()
+            await app.bench_prop("p1", "position", 0.9)
+            ninety = await a0_mv()
+        finally:
+            await app.session.stop()
+        return quarter, ninety, "".join(uart)
+
+    quarter, ninety, uart = asyncio.run(scenario())
+    assert "PP:EXIT 0" in uart, uart
+    # The wiper from the a end: 75 % of 3.3 V, then 10 %
+    assert quarter == pytest.approx(2475, abs=20), uart[-300:]
+    assert ninety == pytest.approx(330, abs=20), uart[-300:]

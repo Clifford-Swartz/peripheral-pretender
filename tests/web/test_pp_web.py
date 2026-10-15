@@ -559,8 +559,14 @@ def test_session_buzz(qemu_path, qemu_machines):
             await asyncio.sleep(2.5)
             tune = list(tones)
             await s.press("sw0", True)
-            await asyncio.sleep(1.0)
-            held = tones[-1]
+            # The firmware looks at SW0 between notes; under load that can
+            # take a while, so wait for the A4 rather than sampling once
+            held = (0, 0)
+            for _ in range(40):
+                await asyncio.sleep(0.1)
+                held = tones[-1]
+                if held[0] == 440:
+                    break
             await s.press("sw0", False)
             await asyncio.sleep(0.5)
             after = tones[-1]

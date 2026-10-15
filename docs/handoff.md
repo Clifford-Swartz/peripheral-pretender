@@ -285,6 +285,15 @@ with it, `tests/web/test_bench.py`).
   timer instead of an assumed 50 Hz; `pin_headers` for the JH01 and the AVR64EA48 Nano (and its
 Nano Base).
 
+## PIC32CM ADC (2026-10-15)
+
+The JH01 and MC00 twins have an ADC (U2247, patch 0038, overlay `overlays/adc_u2247.yaml`): the
+same `ain` interface as the SAM D5x ADC, so a pot on the web bench reaches the firmware
+(`tests/web/test_bench.py`: a pot plugged into the MC00's J803 A0 hole reads 2475 mV then 330 mV).
+`make BOARD=pic32cm_mc00_cpro APP=adc` checks the internal inputs against the data sheet and then
+reports A0. **Open:** run `adc` on the MC00 silicon: the INTREF-against-INTVCC0 line settles
+INTVCC0 (data sheet VDDANA/1.48, DFP comment 1/1.6); the AVR64EA48 ADC; SDADC; the DAC on the MC00.
+
 ## EDBG data gateway (DGI) and a Data Visualizer panel (2026-10-15)
 
 The MC00 twin's debugger has a data gateway (patch 0037): the DGI command protocol on a chardev,
