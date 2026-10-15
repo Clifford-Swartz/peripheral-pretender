@@ -7,10 +7,13 @@
 // server solves the circuit (bench.py) and sends "benchstate"; this draws
 // it: LED glow, motor spin, servo horn, meter readings, wire voltages.
 //
-// Editing: drag parts and tags; click a part's leg, then a header hole
-// (or another leg or tag) to run a wire; select a part or wire and press
-// Delete, or right-click it. While it runs: hold a button, drag a pot's
-// knob, double-click a switch.
+// Editing: drag a part onto a header and drop it: each leg near a hole
+// plugs into it (drawn as a bent lead, like a real part pushed into a
+// header); drag it away to unplug, right-click a leg to pull just that
+// one out, R to turn it. Or click a leg, then a header hole (or another
+// leg or tag) to run a jumper wire. Select a part or wire and press
+// Delete, or right-click it. While it runs: hold a button, drag a
+// pot's knob, double-click a switch.
 "use strict";
 
 const Bench = (() => {
@@ -119,8 +122,28 @@ const Bench = (() => {
     }
     const [pid, term] = end.split(".");
     const p = data.parts.find((x) => x.id === pid);
-    const off = p && SHAPES[p.type] && SHAPES[p.type].terms[term];
+    const off = p && legOffset(p, term);
     return off ? [p.x + off[0] * u, p.y + off[1] * u] : null;
+  }
+
+  // A leg's offset from the part's centre, turned with the part
+  function legOffset(p, term) {
+    const off = SHAPES[p.type] && SHAPES[p.type].terms[term];
+    if (!off) return null;
+    const [x, y] = off;
+    switch ((p.rot || 0) % 360) {
+    case 90: return [-y, x];
+    case 180: return [-x, -y];
+    case 270: return [y, -x];
+    default: return [x, y];
+    }
+  }
+
+  function rotate(p) {
+    p.rot = ((p.rot || 0) + 90) % 360;
+    if ((p.plug || []).length) plug(p);
+    commit();
+    render();
   }
 
   function netVolts(end) {
@@ -135,6 +158,79 @@ const Bench = (() => {
   }
 
   function commit() { send({ type: "bench", bench: data }); }
+
+  // A wire from a plugged leg into its hole: drawn as the leg itself
+  function plugWire([a, b]) {
+    const [leg, hole] = a.startsWith("hole:") ? [b, a] : [a, b];
+    if (!hole.startsWith("hole:") || leg.startsWith("hole:")) return null;
+    const p = data.parts.find((x) => leg.startsWith(`${x.id}.`));
+    const term = leg.slice(leg.indexOf(".") + 1);
+    return p && (p.plug || []).includes(term) && p.plugHoles && p.plugHoles[term] === hole
+      ? { part: p, leg, hole } : null;
+  }
+
+  // Which hole each plugged leg is in (from the wires; not stored)
+  function findPlugHoles() {
+    for (const p of data.parts) {
+      p.plugHoles = {};
+      for (const term of p.plug || []) {
+        const w = data.wires.findLast((x) => x.includes(`${p.id}.${term}`) &&
+                                         x.some((e) => e.startsWith("hole:")));
+        if (w) p.plugHoles[term] = w.find((e) => e.startsWith("hole:"));
+      }
+    }
+  }
+
+  // The holes @p's legs would plug into where it is now. Its legs are
+  // shrunk onto the header grid around the part (an LED's two legs one
+  // 2.54 mm pitch apart, as if pushed into neighbouring holes), and each
+  // goes into the nearest free hole of the one header nearest the part.
+  const PITCH_UNITS = 64;                // an LED's leg span: one pitch
+  function snapTargets(p) {
+    const u = unit(), reach = Math.max(6, 24 * u);
+    let near = null, nearD = reach;
+    for (const [end, h] of Object.entries(holes)) {
+      if (!h.net) continue;
+      const d = Math.hypot(h.at[0] - p.x, h.at[1] - p.y);
+      if (d < nearD) { near = end; nearD = d; }
+    }
+    if (!near) return {};
+    const header = near.slice(0, near.lastIndexOf(".") + 1);
+    const pool = Object.entries(holes).filter(([end, h]) => h.net && end.startsWith(header));
+    const legs = Object.keys(SHAPES[p.type].terms).map((term) => {
+      const [ox, oy] = legOffset(p, term);
+      return [`${p.id}.${term}`, p.x + ox / PITCH_UNITS * 2.54, p.y + oy / PITCH_UNITS * 2.54];
+    });
+    // Nearest pairs first, each leg and hole once
+    const pairs = [];
+    for (const [leg, x, y] of legs) {
+      for (const [end, h] of pool) pairs.push([Math.hypot(h.at[0] - x, h.at[1] - y), leg, end]);
+    }
+    pairs.sort((a, b) => a[0] - b[0]);
+    const out = {}, taken = new Set();
+    for (const [d, leg, end] of pairs) {
+      if (leg in out || taken.has(end) || d > 2.54 * 1.6) continue;
+      out[leg] = end;
+      taken.add(end);
+    }
+    return out;
+  }
+
+  // Drop @p where it is: its old plugs come out, and each leg near a hole
+  // goes into it
+  function plug(p) {
+    data.wires = data.wires.filter((w) => {
+      const pw = plugWire(w);
+      return !(pw && pw.part === p);
+    });
+    const targets = snapTargets(p);
+    p.plug = Object.keys(targets).map((leg) => leg.slice(leg.indexOf(".") + 1));
+    p.plugHoles = {};
+    for (const [leg, hole] of Object.entries(targets)) {
+      data.wires.push([leg, hole]);
+      p.plugHoles[leg.slice(leg.indexOf(".") + 1)] = hole;
+    }
+  }
 
   function nextId(type) {
     const stem = { resistor: "r", led: "led", rgb_led: "rgb", diode: "d", button: "sw",
@@ -226,18 +322,29 @@ const Bench = (() => {
     t.dataset.end = end;
     if (wiring === end) t.classList.add("armed");
     t.appendChild(el("title"));
-    t.addEventListener("pointerdown", (e) => clickEnd(end, e));
+    t.addEventListener("pointerdown", (e) => { if (e.button === 0) clickEnd(end, e); });
+    // Right-click a leg: pull it out of its hole and drop its wires
+    t.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const n = data.wires.length;
+      data.wires = data.wires.filter((w) => !w.includes(end));
+      const [pid, term] = end.split(".");
+      const part = data.parts.find((x) => x.id === pid);
+      if (part && part.plug) part.plug = part.plug.filter((t) => t !== term);
+      if (data.wires.length !== n) { commit(); render(); }
+    });
     g.appendChild(t);
   }
 
   // Drag a part or a tag by pointer; the window follows the pointer so
   // the layer itself can let clicks through to the board
-  function draggable(g, getPos, setPos) {
+  function draggable(g, getPos, setPos, part = null) {
     g.addEventListener("pointerdown", (e) => {
       if (e.button !== 0 || e.target.classList.contains("term")) return;
       e.stopPropagation();
       const [x0, y0] = toStage(e), [px, py] = getPos();
-      drag = { dx: px - x0, dy: py - y0, moved: false, setPos };
+      drag = { dx: px - x0, dy: py - y0, moved: false, setPos, part, snap: {} };
     });
   }
 
@@ -250,6 +357,7 @@ const Bench = (() => {
       c.dataset.end = end;
       if (used.has(end)) c.classList.add("used");
       if (wiring === end) c.classList.add("armed");
+      if (drag && drag.part && Object.values(drag.snap).includes(end)) c.classList.add("snap");
       const title = el("title");
       title.textContent = endName(end);
       c.appendChild(title);
@@ -291,14 +399,15 @@ const Bench = (() => {
     for (const p of data.parts) {
       const shape = SHAPES[p.type];
       if (!shape) continue;
-      const g = el("g", { class: `part bp-${p.type}`, transform: `translate(${p.x},${p.y}) scale(${u})` },
+      const g = el("g", { class: `part bp-${p.type}`,
+                          transform: `translate(${p.x},${p.y}) scale(${u}) rotate(${p.rot || 0})` },
                    shape.draw(p));
       g.dataset.id = p.id;
       if (selected && selected.part === p.id) g.classList.add("selected");
       const title = el("title");
       title.textContent = `${p.id}: ${lib[p.type].name}`;
       g.prepend(title);
-      draggable(g, () => [p.x, p.y], (x, y) => { p.x = x; p.y = y; });
+      draggable(g, () => [p.x, p.y], (x, y) => { p.x = x; p.y = y; }, p);
       g.addEventListener("click", (e) => {
         if (drag && drag.moved) return;
         e.stopPropagation(); selected = { part: p.id }; render();
@@ -323,11 +432,13 @@ const Bench = (() => {
         g.classList.toggle("down", down);
         send({ type: "bench-prop", id: p.id, prop: "pressed", value: down });
       };
+      // Held: pressed. Moved while held: picked up instead (the part's
+      // own drag handler sees the same pointerdown)
       cap.addEventListener("pointerdown", (e) => {
-        e.stopPropagation();
         try { cap.setPointerCapture(e.pointerId); } catch (_) { /* synthetic */ }
         press(true);
       });
+      p.release = () => press(false);
       cap.addEventListener("pointerup", () => press(false));
       cap.addEventListener("pointercancel", () => press(false));
       g.classList.toggle("down", !!p.pressed);
@@ -374,9 +485,38 @@ const Bench = (() => {
   // with a thin core showing the voltage
   function renderWires() {
     const u = unit();
+    // While a part is dragged: where its legs would go in
+    if (drag && drag.part) {
+      for (const [leg, hole] of Object.entries(drag.snap)) {
+        const a = endPos(leg), b = endPos(hole);
+        if (a && b) layerWires.appendChild(el("path", { d: `M${a[0]} ${a[1]}L${b[0]} ${b[1]}`, class: "snap-line" }));
+      }
+    }
     data.wires.forEach(([a, b], i) => {
       const pa = endPos(a), pb = endPos(b);
       if (!pa || !pb) return;
+      const pw = plugWire([a, b]);
+      if (pw) {
+        if (drag && drag.moved && drag.part === pw.part) return;   // being pulled out
+        const from = endPos(pw.leg), to = endPos(pw.hole);
+        const g = el("g", { class: "plugged" });
+        const lead = `M${from[0]} ${from[1]}L${to[0]} ${to[1]}`;
+        g.appendChild(el("path", { d: lead, class: "wire-hit" }));
+        g.appendChild(el("path", { d: lead, class: "plug-lead" }));
+        g.appendChild(el("circle", { cx: to[0], cy: to[1], r: Math.max(0.5, 3 * u), class: "plug-pin" }));
+        const title = el("title");
+        title.dataset.ends = `${endName(pw.leg)} in ${endName(pw.hole)} (right-click pulls it out)`;
+        title.dataset.end = pw.hole;
+        g.appendChild(title);
+        if (selected && selected.wire === i) g.classList.add("selected");
+        g.addEventListener("pointerdown", (e) => e.stopPropagation());
+        g.addEventListener("click", (e) => { e.stopPropagation(); selected = { wire: i }; render(); });
+        g.addEventListener("contextmenu", (e) => {     // pull this leg out
+          e.preventDefault(); selected = { wire: i }; removeSelected();
+        });
+        layerWires.appendChild(g);
+        return;
+      }
       const len = Math.hypot(pb[0] - pa[0], pb[1] - pa[1]);
       const mx = (pa[0] + pb[0]) / 2, my = (pa[1] + pb[1]) / 2 + Math.min(len * 0.25, 60 * u);
       const d = `M${pa[0]} ${pa[1]}Q${mx} ${my} ${pb[0]} ${pb[1]}`;
@@ -481,6 +621,7 @@ const Bench = (() => {
 
   function render() {
     if (!svg) return;
+    findPlugHoles();
     svg.classList.toggle("wiring", !!wiring);
     for (const l of [layerHoles, layerWires, layerParts]) l.textContent = "";
     renderHoles();
@@ -499,7 +640,7 @@ const Bench = (() => {
     if (!p) {
       box.innerHTML = wiring
         ? `<span class="muted">wire from <b>${endName(wiring)}</b>: click a header hole, a leg or a tag (Esc cancels)</span>`
-        : `<span class="muted">click a part's leg, then a hole on the board's headers, to wire it; right-click removes</span>`;
+        : `<span class="muted">drop a part on a header to plug it in (R turns it) · click a leg, then a hole, for a jumper · right-click a leg to pull it out</span>`;
       return;
     }
     const head = document.createElement("b");
@@ -533,6 +674,10 @@ const Bench = (() => {
       lab.appendChild(input);
       box.appendChild(lab);
     }
+    const rot = document.createElement("button");
+    rot.textContent = "Rotate (R)";
+    rot.addEventListener("click", () => rotate(p));
+    box.appendChild(rot);
     const del = document.createElement("button");
     del.textContent = "Remove";
     del.addEventListener("click", removeSelected);
@@ -576,20 +721,28 @@ const Bench = (() => {
     layerWires = el("g");
     layerParts = el("g");
     rubber = el("path", { class: "rubber" });
-    svg.append(layerWires, layerParts, layerHoles, rubber);
+    svg.append(layerHoles, layerWires, layerParts, rubber);
     window.addEventListener("pointermove", (e) => {
       if (!svg) return;
       const [x, y] = toStage(e);
       if (drag) {
         drag.moved = true;
+        if (drag.part && drag.part.release && drag.part.pressed) drag.part.release();
         drag.setPos(x + drag.dx, y + drag.dy);
+        if (drag.part) drag.snap = snapTargets(drag.part);
         render();
       }
       const p = wiring && endPos(wiring);
       rubber.setAttribute("d", p ? `M${p[0]} ${p[1]}L${x} ${y}` : "");
     });
     window.addEventListener("pointerup", () => {
-      if (drag && drag.moved) commit();
+      if (drag && drag.moved) {
+        if (drag.part) plug(drag.part);
+        commit();
+        const d = drag;
+        setTimeout(() => { if (drag === d) drag = null; render(); }, 0);
+        return;
+      }
       setTimeout(() => { drag = null; }, 0);
     });
     // A click on the board (not on a part, hole or wire) ends wiring and
@@ -600,6 +753,10 @@ const Bench = (() => {
     document.addEventListener("keydown", (e) => {
       if (e.target.closest && e.target.closest("input, textarea, select")) return;
       if (e.key === "Escape") { wiring = null; selected = null; render(); }
+      if ((e.key === "r" || e.key === "R") && selected && selected.part) {
+        const p = data.parts.find((x) => x.id === selected.part);
+        if (p) rotate(p);
+      }
       if ((e.key === "Delete" || e.key === "Backspace") && selected) {
         e.preventDefault(); removeSelected();
       }

@@ -271,7 +271,8 @@ potentiometer, DC motor, N-MOSFET, servo and voltmeter, wired to the board's pad
 (`tools/pp_web/bench.py`, `static/bench.js`; usage in `tools/pp_web/README.md`). Parts sit on
 the board picture and jumper wires plug into the holes of its headers (`board.json`
 `pin_headers`: MC00 Arduino/EXT/power headers from the user guide's tables, PyKit J9 from the
-schematic; positions measured on the board art). Every frame
+schematic; positions measured on the board art). Dropped on a header, a part plugs in: its legs
+go into the nearest holes as bent leads (R turns it); `APP=shield` is the MC00 demo for it. Every frame
 it is solved as a DC circuit from the twin's pads (drive, PWM duty, pulls), and the results go
 back in: input pads read their net's level through the PORT's new `pX-bench` layer (patch
 0036, both PORT models), and ADC pads read their net's voltage through `ain`. Checked on the
@@ -282,7 +283,7 @@ with it, `tests/web/test_bench.py`).
 - **Open:** analog (ngspice: RC, inductive kick, motor inertia); an ADC model for the PIC32CM
   U2247 and the AVR ADC so pots work there too; a logic analyzer view; servo period from the
   timer instead of an assumed 50 Hz; `pin_headers` for the JH01 and the AVR64EA48 Nano (and its
-Nano Base); parts snapping straight into holes at 2.54 mm.
+Nano Base).
 
 ## Curiosity PyKit Explorer (CircuitPython, 2026-10-14)
 

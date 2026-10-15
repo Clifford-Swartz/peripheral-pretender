@@ -203,3 +203,24 @@ def test_wire_into_a_header_hole():
                                ["sw.b", "hole:J801.7"]]
     # D2 (PA20) through the button to J801's GND pin, against the pull-up
     assert b.solve({"PA20": Pad(pull=1)}).inputs == {"PA20": 0}
+
+
+def test_clean_keeps_plugged_legs_and_rotation():
+    data = clean({"parts": [{"id": "d1", "type": "led", "plug": ["a", "zz"],
+                             "rot": 270},
+                            {"id": "sw", "type": "button", "plug": True,
+                             "rot": "x"}]})
+    led, sw = data["parts"]
+    assert led["plug"] == ["a"] and led["rot"] == 270
+    assert sw["plug"] == [] and sw["rot"] == 0
+
+
+def test_led_plugged_into_d13_and_gnd():
+    """The Arduino trick: an LED straight into D13 and the GND beside it
+    (J801 pins 6 and 7); with no resistor it is overdriven."""
+    from tools.pp_web.bench import header_holes
+    b = Bench({"parts": [part("led", "d1", plug=["a", "k"])],
+               "wires": [["d1.a", "hole:J801.6"], ["d1.k", "hole:J801.7"]]},
+              holes=header_holes(_board("ev15n46a")))
+    res = b.solve({"PA19": Pad(high=1)})
+    assert res.parts["d1"]["brightness"] == 1.0 and "warn" in res.parts["d1"]

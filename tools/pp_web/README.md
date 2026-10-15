@@ -71,9 +71,13 @@ They sit on or beside the board picture, and jumper wires run from their legs in
 the board's headers (`board.json` `"pin_headers"`: the Arduino, EXT and power headers on the
 MC00, J9 on the PyKit), each tied to its pad or to GND, 3V3 or 5V:
 
-- **+ part…** (the toolbar under the board) adds a part beside the board. Click one of its legs,
-  then a header hole (hover shows the pin's name, pad and voltage); Esc cancels. A leg can
-  also go to another leg.
+- **+ part…** (the toolbar under the board) adds a part beside the board. Drag it onto a
+  header and drop it: its legs plug into the holes nearest them (green while you drag), bent
+  in like a real part pushed into a header, so an LED dropped on D13 and GND sits in those two
+  pins. **R** turns the selected part (to put the anode where you want it); drag it away to
+  unplug it; right-click a leg to pull just that one out.
+- Or run a jumper: click a leg, then a header hole (hover shows the pin's name, pad and
+  voltage); Esc cancels. A leg can also go to another leg, and a hole to another hole.
 - **+ pin tag…** puts a pad with no header hole (or a rail) on the page as a tag to wire to.
 - Drag parts and tags. Select a part to edit its values in the toolbar; right-click (or select
   and Delete) to remove things. Wires in use light their holes (red while the pad is high).
@@ -91,6 +95,10 @@ buttons'; hysteresis at 40/60 % of VDD), and a pad with an ADC channel reads its
 (the ADC's `ain`; the SAM D5x ADC model only, so on the PyKit for now). Not modelled: anything
 that changes in time (capacitors, inductors, motor inertia). That is the analog step, with
 ngspice, later.
+
+`firmware/hello` has a demo for it on the MC00: `make BOARD=pic32cm_mc00_cpro APP=shield`
+blinks D13 at 2 Hz, at 8 Hz while D2 is pulled low. Plug an LED into D13/GND and a button into
+D2 with its other leg on GND.
 
 Each board's bench is kept in `~/.pp_web/bench-<board>.json` (or `PP_WEB_BENCH_DIR`), and
 `--bench <file>` starts with one, so a bench can live in a project and run headless. Part

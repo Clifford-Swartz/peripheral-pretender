@@ -167,6 +167,14 @@ h2 small { color: var(--muted); font-weight: normal; }
 #bench-svg .rubber { stroke: #ffd21a; stroke-width: 2px; vector-effect: non-scaling-stroke;
   stroke-dasharray: 5 4; fill: none; pointer-events: none; }
 #bench-svg .hitbox { fill: transparent; }
+#bench-svg .hole.snap { fill: #3ccf6e; stroke: #b9ffd0; }
+#bench-svg .snap-line { stroke: #3ccf6e; stroke-width: 2px; vector-effect: non-scaling-stroke;
+  stroke-dasharray: 3 3; fill: none; pointer-events: none; }
+#bench-svg .plug-lead { stroke: #cfd5dc; stroke-width: 2.5px; vector-effect: non-scaling-stroke;
+  stroke-linecap: round; fill: none; filter: drop-shadow(0 1px 1px rgba(0,0,0,.7)); }
+#bench-svg .plugged { cursor: pointer; }
+#bench-svg .plugged.selected .plug-lead { stroke: #ffd21a; }
+#bench-svg .plug-pin { fill: #e9edf2; stroke: #555; stroke-width: 1px; vector-effect: non-scaling-stroke; }
 #bench-svg .band { stroke: #6d3a1e; stroke-width: 3; }
 #bench-svg text { fill: #c9d1db; font: 11px system-ui, sans-serif; text-anchor: middle;
   pointer-events: none; }

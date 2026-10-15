@@ -25,6 +25,11 @@
 #define SW0_GROUP           (&PORT_REGS->GROUP[0])
 #define SW0_PIN             25U
 
+/* Arduino header pins (DS70005440A Tables 4-5 and 4-6), port A */
+#define ARDUINO_GROUP       (&PORT_REGS->GROUP[0])
+#define ARDUINO_D13_PIN     19U                     /* J801 pin 6 */
+#define ARDUINO_D2_PIN      20U                     /* J804 pin 3 */
+
 /* GCLK0 runs from OSC48M divided by 1 once sys_initialize() returns. */
 #define CPU_CLOCK_HZ        48000000U
 

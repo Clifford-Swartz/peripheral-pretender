@@ -141,6 +141,15 @@ def clean(bench: dict, holes: dict | None = None) -> dict:
                     part[k] = default
             else:
                 part[k] = v if isinstance(v, str) and v in LED_VF else default
+        # The legs plugged straight into header holes (their leg-to-hole
+        # wires are drawn as bent leads, not jumpers)
+        terms = PARTS[p["type"]]["terminals"]
+        plug = p.get("plug") if isinstance(p.get("plug"), list) else []
+        part["plug"] = [t for t in terms if t in plug]
+        try:                            # turned on the page, in 90s
+            part["rot"] = int(p.get("rot", 0)) // 90 % 4 * 90
+        except (TypeError, ValueError):
+            part["rot"] = 0
         if part["type"] == "pot":
             part["position"] = min(1.0, max(0.0, part["position"]))
         for k in ("ohms", "ron", "rpm_per_volt"):
