@@ -86,6 +86,11 @@ def device_pads(device: str | None) -> tuple[list[str], dict]:
                 sig["group"] in ("AIN", "AINP"):
             ain.setdefault(sig["pad"], []).append(
                 (f"/machine/soc/{sig['instance'].lower()}", sig["index"]))
+        elif sig["instance"] == "SDADC" and sig["group"] in ("INN", "INP"):
+            # The SDADC's "ain": 2n is INNn, 2n + 1 is INPn
+            ain.setdefault(sig["pad"], []).append(
+                ("/machine/soc/sdadc",
+                 2 * sig["index"] + (sig["group"] == "INP")))
     key = lambda p: (p[1], int(p[2:]))                  # noqa: E731
     return sorted(pads, key=key), ain
 

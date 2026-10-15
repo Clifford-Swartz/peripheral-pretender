@@ -1,0 +1,14 @@
+PP sdadc: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+vddana mv=0x1322
+reset ctrlb=0x2000 offsetcorr=0x00000000 gaincorr=0x0001 shiftcorr=0x00 anactrl=0x00 ok
+base result=0x00FFEFC8
+offset+ result=0x000FEFD6 expect=0x000FEFC8 ok
+offset- result=0x00EFEFA5 expect=0x00EFEFC8 ok
+gain2 result=0x001FDE0B expect=0x001FDF90 ok
+gain2shift1 result=0x000FF022 expect=0x000FEFC8 ok
+sat result=0x007FFFFF expect=0x007FFFFF ok
+refctrl_en wrote=0x0000 read=0x0003 ok
+ctrlb_en wrote=0x3404 read=0x2404 ok
+resrdy before=0x01 after_read=0x00 ok
+freerun resrdy_again=0x01 result=0x00FFEF7A ok
+PP:EXIT 0

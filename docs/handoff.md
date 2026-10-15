@@ -297,8 +297,8 @@ INTVCC0 = VDDANA/1.6 (the data sheet's table says 1/1.48: wrong), REFCTRL ignore
 enabled. The desk MC00's VCC_SEL jumper is at 5 V (the twin runs at 3.3 V). On the MC00, pyOCD's
 flash algorithm faulted (IPSR=3) that day; MPLAB IPE programs it (`ipecmd -P32CM1216MC00048
 -TS<serial> -F<hex> -M -OL`), then `hw_run --programmer none --allow-reset --target
-pic32cm1216mc00048 --pack <MC DFP .pack>` captures. **Open:** the AVR64EA48 ADC; SDADC; the
-MC00 DAC: **done** below; `hw_run`'s IPE path still assumes the JH01 part and `-TP` (fix it to take
+pic32cm1216mc00048 --pack <MC DFP .pack>` captures. **Open:** the AVR64EA48 ADC, the MC00
+SDADC and DAC: **done** below; `hw_run`'s IPE path still assumes the JH01 part and `-TP` (fix it to take
 the part and `-TS<serial>`).
 
 **DAC (2026-10-15):** the JH01/MC00 DAC (U2214, patch 0040) drives VOUT (PA02), which ADC0 AIN0 reads
@@ -315,6 +315,17 @@ adc-silicon.txt`): all checks pass on both; silicon showed an internal reference
 VDD (4.096 V at 3.3 V). The kit's SIGROW TEMPSENSE0/1 are data rows in `profiles/avr64ea48.yaml`,
 so the twin's temperature reading converts as the kit's. avr-gcc (XC8 4.00) drops
 `(void)ADC0.RESULT;`: read into a volatile.
+
+**MC00 SDADC (2026-10-15):** patch 0043 (U2260), built from Harmony's `sdadc_sample` and its plib
+(RESULT >> 8 as int16 against VREF/32767), then silicon. Three differential pairs (`ain`: 2n is
+INNn, 2n+1 is INPn; AIN1 is INP1 PB09 = A1, INN1 PB08 = A0, which the bench drives); references
+INTREF (SUPC VREF), AREFB (`arefb`), DAC, INTVCC. `APP=sdadc` needs no wiring: it checks the
+corrections against an uncorrected reading of the open inputs. Silicon (`golden/.../
+sdadc-silicon.txt`): RESULT = (code + OFFSETCORR) * GAINCORR >> SHIFTCORR, saturated at 0x7FFFFF
+(OFFSETCORR is *added*; the data sheet's formula image was unavailable), REFCTRL and CTRLB ignore
+writes while enabled, the low byte of RESULT is live. Passes on both
+(`tests/golden/test_mc00_silicon.py::test_analog_checks_pass`, with `adc` and `dac`). Not checked:
+a known input voltage (needs a wire from 3V3 or DAC OUT to A1), the conversion time, SKPCNT.
 
 ## EDBG data gateway (DGI) and a Data Visualizer panel (2026-10-15)
 

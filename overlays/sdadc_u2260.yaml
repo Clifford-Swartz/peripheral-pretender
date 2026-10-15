@@ -1,0 +1,30 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for SDADC U2260 (PIC32CM MC00 sigma-delta ADC, one IRQ
+# line). The mchp-sdadc-u2260 model converts at once on SWTRIG.START, or on
+# enable and each RESULT read in free-running mode.
+ip: SDADC
+id: U2260
+versions: ["1.0.1"]
+references:
+  - "PIC32CM MC00 data sheet (Low-Power, 32-bit Cortex-M0+ MCU with Advanced Analog and PWM), SDADC chapter"
+  - "Harmony csp_apps_pic32cm_mc00 apps/sdadc/sdadc_sample (plib_sdadc.c, main.c)"
+  - "PIC32CM MC00 silicon, firmware/hello APP=sdadc (2026-10-15)"
+registers:
+  CTRLA:
+    pac_protected: true
+    enable_protected: {all_except: [SWRST, ENABLE]}
+    self_clearing: [SWRST]
+    hooks: [post_write]                     # enabled in FREERUN converts
+  # Silicon (MC00): REFCTRL and CTRLB writes while ENABLE is set are ignored
+  REFCTRL: {pac_protected: true, enable_protected: all}
+  CTRLB: {pac_protected: true, enable_protected: all}
+  CTRLC: {hooks: [post_write]}              # FREERUN starts
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: all
+    irq_source: {enable: INTENSET}
+  SWTRIG: {hooks: [post_write]}   # START converts, FLUSH drops
+  SYNCBUSY: {dynamic: true}       # instant synchronization
+  RESULT: {hooks: [pre_read]}     # reading clears RESRDY

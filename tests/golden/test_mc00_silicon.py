@@ -160,3 +160,18 @@ def test_transcript_matches_silicon(mc00, app):
     silicon = (GOLDEN / f"{app}-vcom.bin").read_bytes().decode("ascii")
     assert result.exit_code == 0, result.uart
     assert result.uart == silicon.replace("\r\n", "\n")
+
+
+@pytest.mark.parametrize("app", ["adc", "dac", "sdadc"])
+def test_analog_checks_pass(mc00, app):
+    """The analog applications check themselves against what silicon did
+    (<app>-silicon.txt in GOLDEN: codes follow the supply and the open
+    inputs, so no byte golden); the twin passes the same checks."""
+    elf = BUILD / f"{app}.elf"
+    if not elf.is_file():
+        pytest.skip(f"{elf.relative_to(ROOT)} not built (make -C firmware/hello "
+                    f"BOARD=pic32cm_mc00_cpro APP={app})")
+    assert (GOLDEN / f"{app}-silicon.txt").is_file()
+    result = run(RunOptions(elf, machine=MACHINE, timeout_s=60))
+    assert result.firmware_exit == 0, result.uart
+    assert "FAIL" not in result.uart, result.uart

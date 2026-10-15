@@ -1,0 +1,524 @@
+From 8a92d2006010386622b410df0efa198e058f7bb7 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 15 Oct 2026 11:33:43 -0700
+Subject: [PATCH 43/43] hw/adc: PIC32CM MC00 sigma-delta ADC (SDADC U2260)
+
+Three differential pairs against INTREF, AREFB, the DAC or INTVCC;
+24-bit result with offset, gain and shift correction as checked on
+MC00 silicon (OFFSETCORR added, saturation at 0x7FFFFF), window and
+free-running mode.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/adc/mchp_sdadc_u2260.c                     | 365 ++++++++++++++++++
+ hw/adc/meson.build                            |   3 +-
+ hw/arm/pic32cm_soc.c                          |   1 +
+ include/hw/adc/mchp_adc.h                     |   5 +
+ .../mchp/gen/pic32cm1216mc00048/sdadc_u2260.h |  20 +-
+ include/hw/mchp/gen/sdadc_u2260.h             |   2 +-
+ 6 files changed, 385 insertions(+), 11 deletions(-)
+ create mode 100644 hw/adc/mchp_sdadc_u2260.c
+
+diff --git a/hw/adc/mchp_sdadc_u2260.c b/hw/adc/mchp_sdadc_u2260.c
+new file mode 100644
+index 0000000..74a9c70
+--- /dev/null
++++ b/hw/adc/mchp_sdadc_u2260.c
+@@ -0,0 +1,365 @@
++/*
++ * Microchip PIC32CM MC00 sigma-delta ADC (SDADC U2260)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Conversions as in the PIC32CM MC00 data sheet (SDADC chapter) and
++ * Microchip's Harmony SDADC library and example (csp_apps_pic32cm_mc00,
++ * sdadc_sample: RESULT >> 8 as int16, times VREF / 32767), completed at
++ * once: a start (SWTRIG.START, a CTRLC write with FREERUN, or each RESULT
++ * read in free-running mode) converts the differential pair of
++ * INPUTCTRL.MUXSEL (INPn minus INNn) against REFCTRL.REFSEL into a signed
++ * 24-bit code, +-VREF over +-2^23 (the 16-bit result in the top 16 bits;
++ * silicon fills the low byte too). Gain and offset compensation then gives
++ *
++ *   RESULT = (code + OFFSETCORR) * GAINCORR >> SHIFTCORR
++ *
++ * saturated to 24 bits signed (OFFSETCORR signed 24 bits, GAINCORR 14 bits,
++ * 1 at reset). Checked on PIC32CM MC00 silicon (APP=sdadc, inputs left
++ * open): the reset values, OFFSETCORR added (not subtracted), the gain and
++ * shift, saturation at 0x7FFFFF, RESRDY cleared by reading RESULT, and
++ * REFCTRL and CTRLB ignoring writes while enabled (the overlay makes them
++ * enable-protected). The window (WINCTRL.WINMODE, against WINLT/WINUT as 24-bit
++ * signed) sets INTFLAG.WINMON; RESRDY is cleared by reading RESULT, and
++ * OVERRUN is set when a result replaces an unread one. Inputs:
++ *
++ * - the "ain" property ("channel=millivolts,..."): channel 2n is INNn,
++ *   2n + 1 is INPn (the sequencer's order: AINN0, AINP0, AINN1...); the
++ *   board sets the pins' voltages; unset inputs read "ain-default", 0 mV;
++ *
++ * References: INTREF (the SUPC's VREF: 1.024, 2.048 or 4.096 V), AREFB
++ * ("arefb", a pin: VDDANA unless the board sets it), DAC (the DAC's
++ * output), INTVCC (VDDANA, "vdd" in millivolts). Not modelled: the
++ * sequencer (SEQCTRL, logged), SKPCNT and the conversion time, event
++ * inputs, the chopper (ANACTRL), noise.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "qemu/log.h"
++#include "hw/adc/mchp_adc.h"
++#include "hw/misc/mchp_sysctrl.h"
++#include "hw/misc/mchp_dac.h"
++#include "hw/mchp/gen/sdadc_u2260.h"
++#include "migration/vmstate.h"
++
++#define SD_NAIN             6       /* INN0, INP0, ... INN2, INP2 */
++#define SD_SEQCTRL          0x28
++#define SD_MAX              0x7FFFFF
++/* SUPC VREF (hw/mchp/gen/supc_u2117.h): SEL bits 16-19 */
++#define SUPC_VREF_OFFSET    0x1C
++#define SUPC_VREF_SEL(v)    extract32(v, 16, 4)
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpSdadcState, MCHP_SDADC)
++
++struct MchpSdadcState {
++    MchpRegBlock parent_obj;
++
++    int32_t ain_mv[SD_NAIN];    /* < 0: unset */
++    int32_t ain_default;
++    int32_t vdd_mv;
++    int32_t arefb_mv;           /* < 0: VDDANA */
++    bool unread;                /* a result not read yet */
++    MchpRegBlock *supc;         /* the SUPC, for VREF (found on first use) */
++    DeviceState *dac;           /* the DAC, for the DAC reference */
++    bool dac_looked;
++};
++
++static uint32_t sd_reg(MchpSdadcState *s, hwaddr off, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, off, size);
++}
++
++static void sd_set(MchpSdadcState *s, hwaddr off, unsigned size, uint32_t v)
++{
++    mchp_regfile_poke(&MCHP_REGBLOCK(s)->rf, off, size, v);
++}
++
++static void sd_flag(MchpSdadcState *s, uint8_t mask)
++{
++    sd_set(s, A_MCHP_SDADC_INTFLAG, 1, sd_reg(s, A_MCHP_SDADC_INTFLAG, 1) |
++           mask);
++}
++
++/* INTREF: the SUPC's VREF.SEL level (1.024 V at reset or without a SUPC) */
++static int32_t sd_intref_mv(MchpSdadcState *s)
++{
++    if (!s->supc) {
++        Object *o = object_resolve_path_type("", TYPE_MCHP_SUPC, NULL);
++
++        s->supc = o ? MCHP_REGBLOCK(o) : NULL;
++    }
++    if (!s->supc) {
++        return 1024;
++    }
++    switch (SUPC_VREF_SEL(mchp_regfile_peek(&s->supc->rf, SUPC_VREF_OFFSET,
++                                            4))) {
++    case 2:
++        return 2048;
++    case 3:
++        return 4096;
++    default:
++        return 1024;
++    }
++}
++
++static int32_t sd_ref_mv(MchpSdadcState *s)
++{
++    switch (FIELD_EX32(sd_reg(s, A_MCHP_SDADC_REFCTRL, 1), MCHP_SDADC_REFCTRL,
++                       REFSEL)) {
++    case MCHP_SDADC_REFCTRL_REFSEL_INTREF:
++        return sd_intref_mv(s);
++    case MCHP_SDADC_REFCTRL_REFSEL_AREFB:
++        return s->arefb_mv >= 0 ? s->arefb_mv : s->vdd_mv;
++    case MCHP_SDADC_REFCTRL_REFSEL_DAC:
++        if (!s->dac_looked) {
++            Object *o = object_resolve_path_type("", TYPE_MCHP_DAC_U2214,
++                                                 NULL);
++
++            s->dac = o ? DEVICE(o) : NULL;
++            s->dac_looked = true;
++        }
++        return s->dac ? mchp_dac_u2214_internal_mv(s->dac) : s->vdd_mv;
++    default:                    /* INTVCC */
++        return s->vdd_mv;
++    }
++}
++
++static int32_t sd_input_mv(MchpSdadcState *s, unsigned ch)
++{
++    return s->ain_mv[ch] >= 0 ? s->ain_mv[ch] : s->ain_default;
++}
++
++/* INTFLAG.WINMON: RESULT against WINLT/WINUT as WINCTRL.WINMODE says */
++static void sd_window(MchpSdadcState *s, int32_t code)
++{
++    unsigned mode = FIELD_EX32(sd_reg(s, A_MCHP_SDADC_WINCTRL, 1),
++                               MCHP_SDADC_WINCTRL, WINMODE);
++    int32_t lt = sextract32(sd_reg(s, A_MCHP_SDADC_WINLT, 4), 0, 24);
++    int32_t ut = sextract32(sd_reg(s, A_MCHP_SDADC_WINUT, 4), 0, 24);
++    bool hit;
++
++    switch (mode) {
++    case 1:
++        hit = code > lt;
++        break;
++    case 2:
++        hit = code < ut;
++        break;
++    case 3:
++        hit = code > lt && code < ut;
++        break;
++    case 4:
++        hit = !(code >= lt && code <= ut);
++        break;
++    default:
++        return;
++    }
++    if (hit) {
++        sd_flag(s, R_MCHP_SDADC_INTFLAG_WINMON_MASK);
++    }
++}
++
++static void sd_convert(MchpSdadcState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    unsigned mux = FIELD_EX32(sd_reg(s, A_MCHP_SDADC_INPUTCTRL, 1),
++                              MCHP_SDADC_INPUTCTRL, MUXSEL);
++    int32_t off = sextract32(sd_reg(s, A_MCHP_SDADC_OFFSETCORR, 4), 0, 24);
++    uint32_t gain = sd_reg(s, A_MCHP_SDADC_GAINCORR, 2) & 0x3FFF;
++    unsigned shift = sd_reg(s, A_MCHP_SDADC_SHIFTCORR, 1) & 0xF;
++    int64_t vref = sd_ref_mv(s), diff, code;
++
++    if (!FIELD_EX32(sd_reg(s, A_MCHP_SDADC_CTRLA, 1), MCHP_SDADC_CTRLA,
++                    ENABLE)) {
++        return;
++    }
++    if (sd_reg(s, SD_SEQCTRL, 1)) {
++        qemu_log_mask(LOG_UNIMP, "%s: sequencing not modelled\n", rb->name);
++    }
++    if (mux > 2) {
++        diff = 0;
++    } else {
++        diff = sd_input_mv(s, 2 * mux + 1) - sd_input_mv(s, 2 * mux);
++    }
++    /* +-VREF over +-2^23 - 1, rounded to nearest */
++    code = vref ? (diff * SD_MAX * 2 + (diff < 0 ? -vref : vref)) /
++                  (2 * vref) : 0;
++    code = MIN(MAX(code, -SD_MAX - 1), SD_MAX);
++    code = (code + off) * gain >> shift;
++    code = MIN(MAX(code, -SD_MAX - 1), SD_MAX);
++    sd_window(s, code);
++    if (s->unread) {
++        sd_flag(s, R_MCHP_SDADC_INTFLAG_OVERRUN_MASK);
++    }
++    sd_set(s, A_MCHP_SDADC_RESULT, 4, (uint32_t)code & 0xFFFFFF);
++    sd_flag(s, R_MCHP_SDADC_INTFLAG_RESRDY_MASK);
++    s->unread = true;
++    mchp_regblock_update_irq(rb);
++}
++
++static bool sd_freerun(MchpSdadcState *s)
++{
++    return FIELD_EX32(sd_reg(s, A_MCHP_SDADC_CTRLC, 1), MCHP_SDADC_CTRLC,
++                      FREERUN);
++}
++
++static uint32_t sd_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                            unsigned idx, uint32_t stored, bool side_effects)
++{
++    MchpSdadcState *s = MCHP_SDADC(rf->opaque);
++
++    if (ri->offset == A_MCHP_SDADC_RESULT && side_effects) {
++        s->unread = false;
++        sd_set(s, A_MCHP_SDADC_INTFLAG, 1,
++               sd_reg(s, A_MCHP_SDADC_INTFLAG, 1) &
++               ~R_MCHP_SDADC_INTFLAG_RESRDY_MASK);
++        mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++        if (sd_freerun(s)) {
++            sd_convert(s);      /* the next conversion is ready */
++        }
++    }
++    return stored;              /* SYNCBUSY: idle, writes are instant */
++}
++
++static void sd_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                          unsigned idx, uint32_t old, uint32_t written,
++                          uint32_t we)
++{
++    MchpSdadcState *s = MCHP_SDADC(rf->opaque);
++
++    if (ri->offset == A_MCHP_SDADC_SWTRIG) {
++        if (written & we & R_MCHP_SDADC_SWTRIG_FLUSH_MASK) {
++            s->unread = false;
++        }
++        sd_set(s, A_MCHP_SDADC_SWTRIG, 1, 0);
++        if (written & we & R_MCHP_SDADC_SWTRIG_START_MASK) {
++            sd_convert(s);
++        }
++    } else if ((ri->offset == A_MCHP_SDADC_CTRLC ||
++                ri->offset == A_MCHP_SDADC_CTRLA) && sd_freerun(s)) {
++        sd_convert(s);          /* free-running (and enabled) */
++    }
++}
++
++/* One line: RESRDY, OVERRUN, WINMON */
++static uint32_t sd_irq_lines(MchpRegBlock *rb)
++{
++    return (mchp_regfile_peek(&rb->rf, A_MCHP_SDADC_INTFLAG, 1) &
++            mchp_regfile_peek(&rb->rf, A_MCHP_SDADC_INTENSET, 1)) ? 1 : 0;
++}
++
++static void sd_reset_hold(MchpRegBlock *rb)
++{
++    MCHP_SDADC(rb)->unread = false;
++}
++
++/* "ain": "channel=mV,channel=mV" (a channel=-1 unsets it) */
++static char *sd_get_ain(Object *obj, Error **errp)
++{
++    MchpSdadcState *s = MCHP_SDADC(obj);
++    g_autoptr(GString) str = g_string_new(NULL);
++
++    for (unsigned i = 0; i < SD_NAIN; i++) {
++        if (s->ain_mv[i] >= 0) {
++            g_string_append_printf(str, "%s%u=%d", str->len ? "," : "", i,
++                                   s->ain_mv[i]);
++        }
++    }
++    return g_string_free(g_steal_pointer(&str), false);
++}
++
++static void sd_set_ain(Object *obj, const char *value, Error **errp)
++{
++    MchpSdadcState *s = MCHP_SDADC(obj);
++    g_auto(GStrv) items = g_strsplit(value, ",", -1);
++
++    for (unsigned i = 0; items[i]; i++) {
++        unsigned ch;
++        int mv;
++
++        if (!*items[i]) {
++            continue;
++        }
++        if (sscanf(items[i], "%u=%d", &ch, &mv) != 2 || ch >= SD_NAIN) {
++            error_setg(errp, "ain items must be channel=millivolts, "
++                       "channel 0-%d (2n: INNn, 2n+1: INPn)", SD_NAIN - 1);
++            return;
++        }
++        s->ain_mv[ch] = mv < 0 ? -1 : mv;
++    }
++}
++
++static void sd_get_i32(Object *obj, Visitor *v, const char *name,
++                       void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, opaque, errp);
++}
++
++static void sd_set_i32(Object *obj, Visitor *v, const char *name,
++                       void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, opaque, errp);
++}
++
++static void sd_init(Object *obj)
++{
++    MchpSdadcState *s = MCHP_SDADC(obj);
++
++    for (unsigned i = 0; i < SD_NAIN; i++) {
++        s->ain_mv[i] = -1;
++    }
++    s->vdd_mv = 3300;
++    s->arefb_mv = -1;
++    object_property_add_str(obj, "ain", sd_get_ain, sd_set_ain);
++    object_property_add(obj, "ain-default", "int32", sd_get_i32,
++                        sd_set_i32, NULL, &s->ain_default);
++    object_property_add(obj, "vdd", "int32", sd_get_i32, sd_set_i32, NULL,
++                        &s->vdd_mv);
++    object_property_add(obj, "arefb", "int32", sd_get_i32, sd_set_i32,
++                        NULL, &s->arefb_mv);
++}
++
++static const VMStateDescription vmstate_mchp_sdadc = {
++    .name = TYPE_MCHP_SDADC,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpSdadcState, 1,
++                       vmstate_mchp_regblock, MchpRegBlock),
++        VMSTATE_INT32_ARRAY(ain_mv, MchpSdadcState, SD_NAIN),
++        VMSTATE_INT32(ain_default, MchpSdadcState),
++        VMSTATE_INT32(vdd_mv, MchpSdadcState),
++        VMSTATE_INT32(arefb_mv, MchpSdadcState),
++        VMSTATE_BOOL(unread, MchpSdadcState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void sd_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_sdadc;
++    c->pre_read = sd_pre_read;
++    c->post_write = sd_post_write;
++    c->reset_hold = sd_reset_hold;
++    c->irq_lines = sd_irq_lines;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_sdadc_types[] = {
++    {
++        .name = TYPE_MCHP_SDADC,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpSdadcState),
++        .instance_init = sd_init,
++        .class_init = sd_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_sdadc_types)
+diff --git a/hw/adc/meson.build b/hw/adc/meson.build
+index 22ed667..6855e7e 100644
+--- a/hw/adc/meson.build
++++ b/hw/adc/meson.build
+@@ -3,5 +3,6 @@ system_ss.add(when: 'CONFIG_ASPEED_SOC', if_true: files('aspeed_adc.c'))
+ system_ss.add(when: 'CONFIG_NPCM7XX', if_true: files('npcm7xx_adc.c'))
+ system_ss.add(when: 'CONFIG_ZYNQ', if_true: files('zynq-xadc.c'))
+ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp3204.c'))
+-system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_adc.c', 'mchp_adc_u2247.c'))
++system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_adc.c', 'mchp_adc_u2247.c',
++  'mchp_sdadc_u2260.c'))
+ system_ss.add(when: 'CONFIG_AVR8X_ADC', if_true: files('avr8x_adc.c'))
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index 4b95bca..e25f43f 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -76,6 +76,7 @@ static const struct {
+     { "QSPI", TYPE_MCHP_QSPI },
+     { "RSTC", TYPE_MCHP_RSTC },
+     { "RTC", TYPE_MCHP_RTC, "U2250" },
++    { "SDADC", TYPE_MCHP_SDADC, "U2260" },
+     { "SERCOM", TYPE_MCHP_SERCOM },
+     { "SUPC", TYPE_MCHP_SUPC, "U2117" },
+     { "TC", TYPE_MCHP_TC },
+diff --git a/include/hw/adc/mchp_adc.h b/include/hw/adc/mchp_adc.h
+index f05e897..cfe1ffa 100644
+--- a/include/hw/adc/mchp_adc.h
++++ b/include/hw/adc/mchp_adc.h
+@@ -19,5 +19,10 @@
+ #define TYPE_MCHP_ADC "mchp-adc"
+ /* The PIC32CM JH/MC ADC (U2247): the same "ain", "ain-default", "vdd" */
+ #define TYPE_MCHP_ADC_U2247 "mchp-adc-u2247"
++/*
++ * The PIC32CM MC00 sigma-delta ADC (SDADC U2260): "ain" (2n: INNn, 2n+1:
++ * INPn), "ain-default", "vdd", "arefb"
++ */
++#define TYPE_MCHP_SDADC "mchp-sdadc-u2260"
+ 
+ #endif /* HW_ADC_MCHP_ADC_H */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/sdadc_u2260.h b/include/hw/mchp/gen/pic32cm1216mc00048/sdadc_u2260.h
+index 38f1d54..96987af 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/sdadc_u2260.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/sdadc_u2260.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/sdadc_u2260.yaml (sha1 eb888aa560f0)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,16 +23,18 @@ static const MchpRegInfo pic32cm1216mc00048_sdadc_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0xC3, .wmask = 0xC3, .rdz = 0x01,
+-        .syncbusy = 0x00000003 /* SYNCBUSY */, .flags = 0,
++        .enprot = 0xC0, .syncbusy = 0x00000003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "REFCTRL", .offset = 0x01, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x83, .wmask = 0x83, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x83, .wmask = 0x83,
++        .enprot = 0x83, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "CTRLB", .offset = 0x02, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x2000, .impl = 0xF7FF, .wmask = 0xF7FF,
+-        .flags = 0,
++        .enprot = 0xF7FF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
+@@ -41,12 +43,12 @@ static const MchpRegInfo pic32cm1216mc00048_sdadc_regs[] = {
+     {
+         .name = "INTENCLR", .offset = 0x05, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 5 /* INTENSET */, .reset = 0x00, .impl = 0x07,
+-        .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x07, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x06, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 5 /* INTENSET */, .reset = 0x00, .impl = 0x07,
+-        .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x07, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x07, .size = 1, .count = 1, .stride = 1,
+@@ -66,7 +68,7 @@ static const MchpRegInfo pic32cm1216mc00048_sdadc_regs[] = {
+     {
+         .name = "CTRLC", .offset = 0x0A, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01,
+-        .syncbusy = 0x00000004 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000004 /* SYNCBUSY */, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "WINCTRL", .offset = 0x0B, .size = 1, .count = 1, .stride = 1,
+@@ -100,7 +102,7 @@ static const MchpRegInfo pic32cm1216mc00048_sdadc_regs[] = {
+     {
+         .name = "SWTRIG", .offset = 0x1C, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .syncbusy = 0x00000400 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000400 /* SYNCBUSY */, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x20, .size = 4, .count = 1, .stride = 4,
+@@ -110,7 +112,7 @@ static const MchpRegInfo pic32cm1216mc00048_sdadc_regs[] = {
+     {
+         .name = "RESULT", .offset = 0x24, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "SEQCTRL", .offset = 0x28, .size = 1, .count = 1, .stride = 1,
+diff --git a/include/hw/mchp/gen/sdadc_u2260.h b/include/hw/mchp/gen/sdadc_u2260.h
+index b5a136b..c29760e 100644
+--- a/include/hw/mchp/gen/sdadc_u2260.h
++++ b/include/hw/mchp/gen/sdadc_u2260.h
+@@ -8,7 +8,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM1216MC00048
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/sdadc_u2260.yaml (sha1 eb888aa560f0)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+-- 
+2.53.0.windows.2
+

@@ -102,6 +102,10 @@ def test_device_pads_and_adc_channels():
     pads, ain = device_pads("atsame51j20a")
     assert "PB08" in pads and "RESET_N" not in pads
     assert ("/machine/soc/adc0", 2) in ain["PB08"]
+    # The MC00's SDADC: AIN1 is INN1 (PB08, "ain" 2) and INP1 (PB09, 3)
+    _, ain = device_pads("pic32cm1216mc00048")
+    assert ("/machine/soc/sdadc", 2) in ain["PB08"]
+    assert ("/machine/soc/sdadc", 3) in ain["PB09"]
 
 
 @pytest.mark.qemu
