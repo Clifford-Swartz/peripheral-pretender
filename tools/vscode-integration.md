@@ -24,6 +24,11 @@ and upper-case register names that the backlog uses.
 
 ## VS Code extension
 
+The extension exists: `vscode/` (see its README and `docs/handoff.md`). It bundles the engine and
+pp-qemu in a platform VSIX and shows the `tools.pp_web` board view in a panel. The **Run on Twin**
+and **Debug on twin** designs below with `tools.pp run --json` are still the plan for test and
+debug integration.
+
 - **Run on twin** command or test-controller item: spawn `py -m tools.pp run <elf> --json` with
   `cwd` = workspace root and parse stdout. Show `uart` in an output channel and map `exit_code` to
   pass/fail (124 = timeout, 125 = error with `qemu_stderr_tail`). Render

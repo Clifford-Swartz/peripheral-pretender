@@ -392,6 +392,34 @@ def test_watch_runs_each_new_build(tmp_path, monkeypatch):
     assert asyncio.run(scenario()) == [b"\x7fELF old", b"\x7fELF new"]
 
 
+def test_default_firmware(tmp_path, monkeypatch):
+    """A board runs its demo until given firmware; the PyKit, which has
+    none, its stock CircuitPython, fetched once (here: a stub)."""
+    from tools.pp import circuitpython
+    from tools.pp_web import server
+    mc00 = server.App("ev15n46a", None)
+    demo = ROOT / mc00.board["demo_elf"]
+    if demo.is_file():
+        assert asyncio.run(mc00.default_firmware()) == demo
+    monkeypatch.setenv("PP_CACHE", str(tmp_path))
+    fetched = []
+
+    def fetch(version, board):
+        fetched.append((version, board))
+        elf = circuitpython.elf_path(version, board)
+        elf.parent.mkdir(parents=True, exist_ok=True)
+        elf.write_bytes(b"\x7fELF")
+        return elf
+    monkeypatch.setattr(circuitpython, "fetch", fetch)
+    pykit = server.App("pykit", None)
+    first = asyncio.run(pykit.default_firmware())
+    assert first == circuitpython.elf_path(
+        pykit.board["circuitpython"]["version"],
+        pykit.board["circuitpython"]["board_id"])
+    assert asyncio.run(pykit.default_firmware()) == first
+    assert len(fetched) == 1                    # cached after the first
+
+
 @pytest.mark.qemu
 def test_session_button_g_and_7seg(qemu_path, qemu_machines):
     """clicks.elf: Button G Click presses on EXT1 count up on the 7seg Click

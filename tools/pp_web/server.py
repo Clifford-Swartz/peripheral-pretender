@@ -359,6 +359,27 @@ class App:
         elf = circuitpython.elf_path(cp["version"], cp["board_id"])
         return elf if elf.is_file() else None
 
+    async def default_firmware(self) -> Path | None:
+        """What the board runs until the user gives it firmware: its demo
+        (board.json "demo_elf", if built), else its stock CircuitPython,
+        downloaded once into the cache."""
+        demo = self.board.get("demo_elf")
+        if demo and (ROOT / demo).is_file():
+            return ROOT / demo
+        cp = self.board.get("circuitpython")
+        if not cp or self.circuitpython_elf():
+            return self.circuitpython_elf()
+        self.emit({"type": "status", "state": "idle",
+                   "text": f"downloading CircuitPython {cp['version']} "
+                           "(once)..."})
+        try:
+            return await asyncio.get_running_loop().run_in_executor(
+                None, circuitpython.fetch, cp["version"], cp["board_id"])
+        except (OSError, ValueError) as err:
+            self.emit({"type": "status", "state": "idle",
+                       "text": f"no CircuitPython: download failed ({err})"})
+            return None
+
     def files_message(self) -> dict:
         """The CIRCUITPY drive for the page: every file, and code.py."""
         if not self.drive:
@@ -412,21 +433,18 @@ class App:
                 self.session = None
             self.load_board(board)
             self.uart_log = ""
-            demo = ROOT / self.board["demo_elf"] if "demo_elf" in self.board else None
-            self.elf = demo if demo and demo.is_file() else \
-                self.circuitpython_elf()
+            self.elf = None
         self.emit({"type": "reset"})
         self.emit(self.board_message())
         self.emit({"type": "clicks", "clicks": self.clicks})
         self.emit(self.files_message())
         self.emit(self.bench_message())
         await self.bench_frame(None)
+        self.elf = await self.default_firmware()
         if self.elf:
             await self.run(self.elf)
         elif self.board.get("circuitpython"):
-            self.emit({"type": "status", "state": "idle",
-                       "text": "no CircuitPython: run py -m tools.pp."
-                               "circuitpython fetch"})
+            pass                        # default_firmware said why
         else:
             self.emit({"type": "status", "state": "idle",
                        "text": "no firmware: drop an ELF built for this board"})
@@ -709,8 +727,10 @@ class App:
 
     async def on_startup(self, app: web.Application) -> None:
         await self.bench_frame(None)
-        if self.elf is None and not self.watch:
-            self.elf = self.circuitpython_elf()
+        # A watched project's existing build wins (the watcher runs it);
+        # otherwise the board's default firmware
+        if self.elf is None and not (self.watch and newest_elf(self.watch)):
+            self.elf = await self.default_firmware()
         if self.elf:
             await self.run(self.elf)
         if self.watch:

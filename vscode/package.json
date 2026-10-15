@@ -1,0 +1,102 @@
+{
+  "name": "peripheral-pretender",
+  "displayName": "Peripheral Pretender",
+  "description": "Run firmware on a digital twin of Microchip boards: the board, its LEDs, buttons, console, Click boards and a parts bench, live in VS Code.",
+  "version": "0.1.0",
+  "publisher": "cliffordswartz",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Debuggers",
+    "Testing",
+    "Other"
+  ],
+  "keywords": [
+    "microchip",
+    "qemu",
+    "simulator",
+    "embedded",
+    "digital twin"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "peripheralPretender.open",
+        "title": "Open Board",
+        "category": "Twin"
+      },
+      {
+        "command": "peripheralPretender.runElf",
+        "title": "Run on Twin",
+        "category": "Twin"
+      },
+      {
+        "command": "peripheralPretender.stop",
+        "title": "Stop",
+        "category": "Twin"
+      },
+      {
+        "command": "peripheralPretender.showLog",
+        "title": "Show Engine Log",
+        "category": "Twin"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "peripheralPretender.runElf",
+          "when": "resourceExtname == .elf",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "peripheralPretender.runElf",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Peripheral Pretender",
+      "properties": {
+        "peripheralPretender.board": {
+          "type": "string",
+          "default": "",
+          "description": "Board to open (board id, e.g. ev15n46a). Empty: ask."
+        },
+        "peripheralPretender.watch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run each new build of the workspace (out/**/*.elf from MPLAB for VS Code, dist/**/*.elf from MPLAB X) on the twin."
+        },
+        "peripheralPretender.engineRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Development: a Peripheral Pretender checkout to run instead of the bundled engine."
+        },
+        "peripheralPretender.python": {
+          "type": "string",
+          "default": "",
+          "description": "Development: the Python to run engineRoot with (default: py on Windows, python3 elsewhere)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "package": "vsce package --target win32-x64 --skip-license",
+    "test": "node test/run.js"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.15",
+    "@types/vscode": "1.90.0",
+    "@vscode/test-electron": "2.4.1",
+    "@vscode/vsce": "3.2.1",
+    "typescript": "5.6.3"
+  }
+}
