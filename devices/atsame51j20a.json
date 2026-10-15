@@ -15801,7 +15801,14 @@
    "version": "1.0.1",
    "caption": "Direct Memory Access Controller",
    "core": false,
-   "overlay": null,
+   "overlay": {
+    "file": "overlays/dmac_u2503.yaml",
+    "sha1": "fed14b50059e98d9259cd462fbf1d2e16aa4b298",
+    "status": "applied",
+    "versions": [
+     "1.0.1"
+    ]
+   },
    "size": 576,
    "selector": null,
    "default_view": "",
@@ -15830,7 +15837,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control",
@@ -15888,8 +15898,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -16340,7 +16355,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Software Trigger Control",
@@ -16603,7 +16620,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "PRICTRL0",
@@ -16830,7 +16853,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Interrupt Pending",
@@ -16901,7 +16927,18 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "INTSTATUS",
@@ -16922,6 +16959,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -17191,6 +17229,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -17213,6 +17256,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -17482,6 +17526,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -17504,6 +17553,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -17773,6 +17823,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -17795,6 +17850,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -17864,6 +17920,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -17885,7 +17946,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Descriptor Memory Section Base Address",
@@ -17920,7 +17983,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Write-Back Memory Section Base Address",
@@ -17955,7 +18020,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -18145,8 +18212,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -18168,7 +18240,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -18199,7 +18273,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[0].CHPRILVL",
@@ -18387,7 +18467,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[0].CHINTENSET",
        "read_side_effect": false,
@@ -18424,6 +18505,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -18446,7 +18532,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[0].CHINTENSET",
        "read_side_effect": false,
@@ -18483,6 +18570,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -18504,9 +18596,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -18538,8 +18633,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -18561,7 +18666,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -18600,7 +18707,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[1].CHCTRLA",
@@ -18620,7 +18733,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -18810,8 +18925,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -18833,7 +18953,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -18864,7 +18986,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[1].CHPRILVL",
@@ -19052,7 +19180,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[1].CHINTENSET",
        "read_side_effect": false,
@@ -19089,6 +19218,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -19111,7 +19245,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[1].CHINTENSET",
        "read_side_effect": false,
@@ -19148,6 +19283,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -19169,9 +19309,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -19203,8 +19346,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -19226,7 +19379,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -19265,7 +19420,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[2].CHCTRLA",
@@ -19285,7 +19446,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -19475,8 +19638,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -19498,7 +19666,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -19529,7 +19699,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[2].CHPRILVL",
@@ -19717,7 +19893,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[2].CHINTENSET",
        "read_side_effect": false,
@@ -19754,6 +19931,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -19776,7 +19958,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[2].CHINTENSET",
        "read_side_effect": false,
@@ -19813,6 +19996,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -19834,9 +20022,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -19868,8 +20059,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -19891,7 +20092,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -19930,7 +20133,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[3].CHCTRLA",
@@ -19950,7 +20159,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -20140,8 +20351,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -20163,7 +20379,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -20194,7 +20412,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[3].CHPRILVL",
@@ -20382,7 +20606,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[3].CHINTENSET",
        "read_side_effect": false,
@@ -20419,6 +20644,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -20441,7 +20671,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[3].CHINTENSET",
        "read_side_effect": false,
@@ -20478,6 +20709,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -20499,9 +20735,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -20533,8 +20772,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -20556,7 +20805,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -20595,7 +20846,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[4].CHCTRLA",
@@ -20615,7 +20872,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -20805,8 +21064,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -20828,7 +21092,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -20859,7 +21125,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[4].CHPRILVL",
@@ -21047,7 +21319,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[4].CHINTENSET",
        "read_side_effect": false,
@@ -21084,6 +21357,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -21106,7 +21384,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[4].CHINTENSET",
        "read_side_effect": false,
@@ -21143,6 +21422,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -21164,9 +21448,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -21198,8 +21485,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -21221,7 +21518,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -21260,7 +21559,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[5].CHCTRLA",
@@ -21280,7 +21585,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -21470,8 +21777,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -21493,7 +21805,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -21524,7 +21838,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[5].CHPRILVL",
@@ -21712,7 +22032,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[5].CHINTENSET",
        "read_side_effect": false,
@@ -21749,6 +22070,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -21771,7 +22097,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[5].CHINTENSET",
        "read_side_effect": false,
@@ -21808,6 +22135,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -21829,9 +22161,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -21863,8 +22198,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -21886,7 +22231,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -21925,7 +22272,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[6].CHCTRLA",
@@ -21945,7 +22298,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -22135,8 +22490,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -22158,7 +22518,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -22189,7 +22551,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[6].CHPRILVL",
@@ -22377,7 +22745,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[6].CHINTENSET",
        "read_side_effect": false,
@@ -22414,6 +22783,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -22436,7 +22810,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[6].CHINTENSET",
        "read_side_effect": false,
@@ -22473,6 +22848,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -22494,9 +22874,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -22528,8 +22911,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -22551,7 +22944,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -22590,7 +22985,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[7].CHCTRLA",
@@ -22610,7 +23011,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -22800,8 +23203,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -22823,7 +23231,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -22854,7 +23264,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[7].CHPRILVL",
@@ -23042,7 +23458,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[7].CHINTENSET",
        "read_side_effect": false,
@@ -23079,6 +23496,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -23101,7 +23523,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[7].CHINTENSET",
        "read_side_effect": false,
@@ -23138,6 +23561,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -23159,9 +23587,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -23193,8 +23624,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -23216,7 +23657,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -23255,7 +23698,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[8].CHCTRLA",
@@ -23275,7 +23724,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -23465,8 +23916,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -23488,7 +23944,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -23519,7 +23977,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[8].CHPRILVL",
@@ -23707,7 +24171,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[8].CHINTENSET",
        "read_side_effect": false,
@@ -23744,6 +24209,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -23766,7 +24236,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[8].CHINTENSET",
        "read_side_effect": false,
@@ -23803,6 +24274,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -23824,9 +24300,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -23858,8 +24337,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -23881,7 +24370,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -23920,7 +24411,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[9].CHCTRLA",
@@ -23940,7 +24437,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -24130,8 +24629,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -24153,7 +24657,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -24184,7 +24690,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[9].CHPRILVL",
@@ -24372,7 +24884,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[9].CHINTENSET",
        "read_side_effect": false,
@@ -24409,6 +24922,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -24431,7 +24949,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[9].CHINTENSET",
        "read_side_effect": false,
@@ -24468,6 +24987,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -24489,9 +25013,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -24523,8 +25050,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -24546,7 +25083,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -24585,7 +25124,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[10].CHCTRLA",
@@ -24605,7 +25150,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -24795,8 +25342,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -24818,7 +25370,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -24849,7 +25403,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[10].CHPRILVL",
@@ -25037,7 +25597,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[10].CHINTENSET",
        "read_side_effect": false,
@@ -25074,6 +25635,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -25096,7 +25662,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[10].CHINTENSET",
        "read_side_effect": false,
@@ -25133,6 +25700,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -25154,9 +25726,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -25188,8 +25763,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -25211,7 +25796,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -25250,7 +25837,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[11].CHCTRLA",
@@ -25270,7 +25863,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -25460,8 +26055,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -25483,7 +26083,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -25514,7 +26116,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[11].CHPRILVL",
@@ -25702,7 +26310,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[11].CHINTENSET",
        "read_side_effect": false,
@@ -25739,6 +26348,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -25761,7 +26375,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[11].CHINTENSET",
        "read_side_effect": false,
@@ -25798,6 +26413,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -25819,9 +26439,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -25853,8 +26476,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -25876,7 +26509,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -25915,7 +26550,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[12].CHCTRLA",
@@ -25935,7 +26576,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -26125,8 +26768,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -26148,7 +26796,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -26179,7 +26829,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[12].CHPRILVL",
@@ -26367,7 +27023,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[12].CHINTENSET",
        "read_side_effect": false,
@@ -26404,6 +27061,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -26426,7 +27088,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[12].CHINTENSET",
        "read_side_effect": false,
@@ -26463,6 +27126,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -26484,9 +27152,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -26518,8 +27189,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -26541,7 +27222,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -26580,7 +27263,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[13].CHCTRLA",
@@ -26600,7 +27289,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -26790,8 +27481,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -26813,7 +27509,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -26844,7 +27542,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[13].CHPRILVL",
@@ -27032,7 +27736,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[13].CHINTENSET",
        "read_side_effect": false,
@@ -27069,6 +27774,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -27091,7 +27801,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[13].CHINTENSET",
        "read_side_effect": false,
@@ -27128,6 +27839,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -27149,9 +27865,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -27183,8 +27902,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -27206,7 +27935,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -27245,7 +27976,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[14].CHCTRLA",
@@ -27265,7 +28002,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -27455,8 +28194,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -27478,7 +28222,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -27509,7 +28255,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[14].CHPRILVL",
@@ -27697,7 +28449,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[14].CHINTENSET",
        "read_side_effect": false,
@@ -27734,6 +28487,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -27756,7 +28514,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[14].CHINTENSET",
        "read_side_effect": false,
@@ -27793,6 +28552,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -27814,9 +28578,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -27848,8 +28615,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -27871,7 +28648,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -27910,7 +28689,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[15].CHCTRLA",
@@ -27930,7 +28715,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -28120,8 +28907,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -28143,7 +28935,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -28174,7 +28968,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[15].CHPRILVL",
@@ -28362,7 +29162,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[15].CHINTENSET",
        "read_side_effect": false,
@@ -28399,6 +29200,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -28421,7 +29227,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[15].CHINTENSET",
        "read_side_effect": false,
@@ -28458,6 +29265,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -28479,9 +29291,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -28513,8 +29328,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -28536,7 +29361,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -28575,7 +29402,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[16].CHCTRLA",
@@ -28595,7 +29428,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -28785,8 +29620,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -28808,7 +29648,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -28839,7 +29681,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[16].CHPRILVL",
@@ -29027,7 +29875,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[16].CHINTENSET",
        "read_side_effect": false,
@@ -29064,6 +29913,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -29086,7 +29940,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[16].CHINTENSET",
        "read_side_effect": false,
@@ -29123,6 +29978,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -29144,9 +30004,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -29178,8 +30041,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -29201,7 +30074,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -29240,7 +30115,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[17].CHCTRLA",
@@ -29260,7 +30141,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -29450,8 +30333,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -29473,7 +30361,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -29504,7 +30394,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[17].CHPRILVL",
@@ -29692,7 +30588,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[17].CHINTENSET",
        "read_side_effect": false,
@@ -29729,6 +30626,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -29751,7 +30653,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[17].CHINTENSET",
        "read_side_effect": false,
@@ -29788,6 +30691,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -29809,9 +30717,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -29843,8 +30754,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -29866,7 +30787,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -29905,7 +30828,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[18].CHCTRLA",
@@ -29925,7 +30854,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -30115,8 +31046,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -30138,7 +31074,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -30169,7 +31107,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[18].CHPRILVL",
@@ -30357,7 +31301,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[18].CHINTENSET",
        "read_side_effect": false,
@@ -30394,6 +31339,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -30416,7 +31366,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[18].CHINTENSET",
        "read_side_effect": false,
@@ -30453,6 +31404,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -30474,9 +31430,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -30508,8 +31467,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -30531,7 +31500,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -30570,7 +31541,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[19].CHCTRLA",
@@ -30590,7 +31567,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -30780,8 +31759,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -30803,7 +31787,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -30834,7 +31820,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[19].CHPRILVL",
@@ -31022,7 +32014,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[19].CHINTENSET",
        "read_side_effect": false,
@@ -31059,6 +32052,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -31081,7 +32079,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[19].CHINTENSET",
        "read_side_effect": false,
@@ -31118,6 +32117,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -31139,9 +32143,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -31173,8 +32180,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -31196,7 +32213,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -31235,7 +32254,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[20].CHCTRLA",
@@ -31255,7 +32280,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -31445,8 +32472,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -31468,7 +32500,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -31499,7 +32533,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[20].CHPRILVL",
@@ -31687,7 +32727,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[20].CHINTENSET",
        "read_side_effect": false,
@@ -31724,6 +32765,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -31746,7 +32792,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[20].CHINTENSET",
        "read_side_effect": false,
@@ -31783,6 +32830,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -31804,9 +32856,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -31838,8 +32893,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -31861,7 +32926,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -31900,7 +32967,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[21].CHCTRLA",
@@ -31920,7 +32993,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -32110,8 +33185,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -32133,7 +33213,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -32164,7 +33246,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[21].CHPRILVL",
@@ -32352,7 +33440,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[21].CHINTENSET",
        "read_side_effect": false,
@@ -32389,6 +33478,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -32411,7 +33505,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[21].CHINTENSET",
        "read_side_effect": false,
@@ -32448,6 +33543,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -32469,9 +33569,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -32503,8 +33606,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -32526,7 +33639,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -32565,7 +33680,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[22].CHCTRLA",
@@ -32585,7 +33706,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -32775,8 +33898,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -32798,7 +33926,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -32829,7 +33959,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[22].CHPRILVL",
@@ -33017,7 +34153,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[22].CHINTENSET",
        "read_side_effect": false,
@@ -33054,6 +34191,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -33076,7 +34218,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[22].CHINTENSET",
        "read_side_effect": false,
@@ -33113,6 +34256,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -33134,9 +34282,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -33168,8 +34319,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -33191,7 +34352,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -33230,7 +34393,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[23].CHCTRLA",
@@ -33250,7 +34419,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -33440,8 +34611,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -33463,7 +34639,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -33494,7 +34672,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[23].CHPRILVL",
@@ -33682,7 +34866,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[23].CHINTENSET",
        "read_side_effect": false,
@@ -33719,6 +34904,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -33741,7 +34931,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[23].CHINTENSET",
        "read_side_effect": false,
@@ -33778,6 +34969,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -33799,9 +34995,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -33833,8 +35032,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -33856,7 +35065,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -33895,7 +35106,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[24].CHCTRLA",
@@ -33915,7 +35132,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -34105,8 +35324,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -34128,7 +35352,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -34159,7 +35385,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[24].CHPRILVL",
@@ -34347,7 +35579,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[24].CHINTENSET",
        "read_side_effect": false,
@@ -34384,6 +35617,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -34406,7 +35644,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[24].CHINTENSET",
        "read_side_effect": false,
@@ -34443,6 +35682,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -34464,9 +35708,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -34498,8 +35745,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -34521,7 +35778,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -34560,7 +35819,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[25].CHCTRLA",
@@ -34580,7 +35845,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -34770,8 +36037,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -34793,7 +36065,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -34824,7 +36098,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[25].CHPRILVL",
@@ -35012,7 +36292,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[25].CHINTENSET",
        "read_side_effect": false,
@@ -35049,6 +36330,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -35071,7 +36357,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[25].CHINTENSET",
        "read_side_effect": false,
@@ -35108,6 +36395,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -35129,9 +36421,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -35163,8 +36458,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -35186,7 +36491,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -35225,7 +36532,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[26].CHCTRLA",
@@ -35245,7 +36558,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -35435,8 +36750,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -35458,7 +36778,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -35489,7 +36811,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[26].CHPRILVL",
@@ -35677,7 +37005,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[26].CHINTENSET",
        "read_side_effect": false,
@@ -35714,6 +37043,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -35736,7 +37070,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[26].CHINTENSET",
        "read_side_effect": false,
@@ -35773,6 +37108,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -35794,9 +37134,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -35828,8 +37171,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -35851,7 +37204,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -35890,7 +37245,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[27].CHCTRLA",
@@ -35910,7 +37271,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -36100,8 +37463,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -36123,7 +37491,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -36154,7 +37524,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[27].CHPRILVL",
@@ -36342,7 +37718,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[27].CHINTENSET",
        "read_side_effect": false,
@@ -36379,6 +37756,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -36401,7 +37783,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[27].CHINTENSET",
        "read_side_effect": false,
@@ -36438,6 +37821,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -36459,9 +37847,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -36493,8 +37884,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -36516,7 +37917,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -36555,7 +37958,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[28].CHCTRLA",
@@ -36575,7 +37984,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -36765,8 +38176,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -36788,7 +38204,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -36819,7 +38237,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[28].CHPRILVL",
@@ -37007,7 +38431,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[28].CHINTENSET",
        "read_side_effect": false,
@@ -37044,6 +38469,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -37066,7 +38496,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[28].CHINTENSET",
        "read_side_effect": false,
@@ -37103,6 +38534,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -37124,9 +38560,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -37158,8 +38597,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -37181,7 +38630,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -37220,7 +38671,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[29].CHCTRLA",
@@ -37240,7 +38697,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -37430,8 +38889,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -37453,7 +38917,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -37484,7 +38950,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[29].CHPRILVL",
@@ -37672,7 +39144,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[29].CHINTENSET",
        "read_side_effect": false,
@@ -37709,6 +39182,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -37731,7 +39209,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[29].CHINTENSET",
        "read_side_effect": false,
@@ -37768,6 +39247,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -37789,9 +39273,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -37823,8 +39310,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -37846,7 +39343,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -37885,7 +39384,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[30].CHCTRLA",
@@ -37905,7 +39410,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -38095,8 +39602,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -38118,7 +39630,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -38149,7 +39663,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[30].CHPRILVL",
@@ -38337,7 +39857,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[30].CHINTENSET",
        "read_side_effect": false,
@@ -38374,6 +39895,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -38396,7 +39922,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[30].CHINTENSET",
        "read_side_effect": false,
@@ -38433,6 +39960,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -38454,9 +39986,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -38488,8 +40023,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -38511,7 +40056,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -38550,7 +40097,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[31].CHCTRLA",
@@ -38570,7 +40123,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control A",
@@ -38760,8 +40315,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -38783,7 +40343,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control B",
@@ -38814,7 +40376,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[31].CHPRILVL",
@@ -39002,7 +40570,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[31].CHINTENSET",
        "read_side_effect": false,
@@ -39039,6 +40608,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -39061,7 +40635,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[31].CHINTENSET",
        "read_side_effect": false,
@@ -39098,6 +40673,11 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -39119,9 +40699,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Channel n Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -39153,8 +40736,18 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -39176,7 +40769,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Status",
@@ -39215,7 +40810,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       }
      ],
      "reset_overrides": [],

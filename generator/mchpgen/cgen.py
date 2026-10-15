@@ -664,6 +664,10 @@ def device_header(ds: DeviceSem) -> str:
         f".revisions = {sym}_revisions",
         f".nrevisions = ARRAY_SIZE({sym}_revisions)",
     ]
+    if ds.dmac_triggers:
+        # DMAC trigger sources (DMAC_ID_*), for the DMAC model
+        items += [f".dmac_triggers = {sym}_dmac_triggers",
+                  f".ndmac_triggers = {SYM}_NUM_DMAC_TRIGGERS"]
     out += [f"    {item}," for item in items]
     out += ["};", "", f"#endif /* {g} */"]
     return "\n".join(out) + "\n"

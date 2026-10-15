@@ -39,6 +39,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0030 | MCP79411 RTCC with SRAM/EEPROM (`mchp-mcp79411`, two I2C addresses) and the RTC 6 Click (`rtc6`); qtests |
 | 0031 | 8x8 R/Y/B and Button R/Y Clicks (colour variants of 8x8 G and Button G); qtests |
 | 0032 | ATSAME51J20A (SAM E51, Cortex-M4F) through the generic SoC: instances with several NVIC lines, SAM D5x OSCCTRL/OSC32KCTRL/MCLK/NVMCTRL/TRNG, QSPI (serial memory mode, memory window), USB device controller with a built-in host (CDC ACM to a chardev), GCLK source numbering per family; SST26VF quad SPI flash; the `curiosity-circuitpython` board (PyKit Explorer); regenerated tables; qtest |
+| 0033 | SAM D5x DMAC (descriptors, peripheral-paced triggers, write-back; transfers start at the next status read); ST7789V TFT driver on `pp_panel`; WS2812 chain decoder; the PyKit Ruler on `curiosity-circuitpython` (display, NeoPixels, I2C pull-ups); DMAC triggers in `MchpDeviceInfo`; qtests |
 
 ## Setting it up
 

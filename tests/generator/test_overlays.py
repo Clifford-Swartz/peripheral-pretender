@@ -27,7 +27,7 @@ EXPECTED = {("SERCOM", "U2201"), ("PORT", "U2210"), ("OSCCTRL", "U2119"),
             # ATSAME51J20A (SAM E51: its own clock, NVM, QSPI, TRNG, USB IPs)
             ("OSCCTRL", "U2401"), ("OSC32KCTRL", "U2400"), ("MCLK", "U2408"),
             ("NVMCTRL", "U2409"), ("QSPI", "U2008"), ("TRNG", "U2242"),
-            ("USB", "U2222")}
+            ("USB", "U2222"), ("DMAC", "U2503")}
 
 
 def edited(tmp_path, name, change):

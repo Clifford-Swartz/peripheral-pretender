@@ -1,0 +1,3326 @@
+From 2d583c1cca0f7289f46006ec619aac6606b74c3c Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 14 Oct 2026 18:00:18 -0700
+Subject: [PATCH] hw/dma, hw/display, hw/misc: SAM D5x DMAC, ST7789, WS2812;
+ the PyKit Ruler
+
+DMAC U2503 (mchp-dmac): descriptors and write-back in SRAM, burst/block/
+transaction triggers paced by peripheral flags (SERCOM DRE/RXC, from the
+generated trigger table now in MchpDeviceInfo), software triggers, block
+actions, five IRQ lines; a started transfer runs at the next status read
+or 20 us later, never inside the starting write (firmware clears
+CHINTFLAG right after ENABLE). CircuitPython SPI writes and reads by DMA
+work.
+
+ST7789V TFT driver (st7789) with the pp_panel picture, MADCTL, 16/18-bit
+pixels, inversion and a backlight input. WS2812 chain (ws2812) decoding
+the data line by high time over bit period, with "pixels" and "gen".
+
+curiosity-circuitpython gains the PyKit Ruler: the 1.14" 135x240 IPS
+display on SERCOM0 (CS PA07, D/C PB14, active-low backlight PA06), five
+NeoPixels on PB22, the I2C pull-ups on PB30/PB31. The USB host polls
+every 125 us. qtests for the DMAC and the NeoPixels.
+
+Peripheral Pretender: AI-assisted, not for upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/arm/Kconfig                                |   2 +
+ hw/arm/atsame51j20a_device.h                  |   2 +
+ hw/arm/curiosity_circuitpython.c              |  95 +++
+ hw/arm/pic32cm1216mc00048_device.h            |   2 +
+ hw/arm/pic32cm5164jh01100_device.h            |   2 +
+ hw/arm/pic32cm_soc.c                          |  26 +
+ hw/display/Kconfig                            |   5 +
+ hw/display/meson.build                        |   1 +
+ hw/display/st7789.c                           | 417 +++++++++++++
+ hw/dma/mchp_dmac.c                            | 572 ++++++++++++++++++
+ hw/dma/meson.build                            |   1 +
+ hw/misc/Kconfig                               |   3 +
+ hw/misc/mchp_usb.c                            |  28 +-
+ hw/misc/meson.build                           |   1 +
+ hw/misc/ws2812.c                              | 234 +++++++
+ include/hw/display/st7789.h                   |  23 +
+ include/hw/dma/mchp_dmac.h                    |  35 ++
+ include/hw/mchp/gen/atsame51j20a/dmac_u2503.h | 468 +++++++-------
+ include/hw/mchp/gen/dmac_u2503.h              |   2 +-
+ include/hw/mchp/mchp_device.h                 |   2 +
+ include/hw/misc/ws2812.h                      |  20 +
+ tests/qtest/curiosity-cp-test.c               |  72 +++
+ 22 files changed, 1799 insertions(+), 214 deletions(-)
+ create mode 100644 hw/display/st7789.c
+ create mode 100644 hw/dma/mchp_dmac.c
+ create mode 100644 hw/misc/ws2812.c
+ create mode 100644 include/hw/display/st7789.h
+ create mode 100644 include/hw/dma/mchp_dmac.h
+ create mode 100644 include/hw/misc/ws2812.h
+
+diff --git a/hw/arm/Kconfig b/hw/arm/Kconfig
+index e741622..ab95b4b 100644
+--- a/hw/arm/Kconfig
++++ b/hw/arm/Kconfig
+@@ -705,6 +705,8 @@ config CURIOSITY_CIRCUITPYTHON
+     select LED
+     select PIC32CM_SOC
+     select SST26VF
++    select ST7789
++    select WS2812
+ 
+ config PIC32CM_SOC
+     bool
+diff --git a/hw/arm/atsame51j20a_device.h b/hw/arm/atsame51j20a_device.h
+index 6ad7ece..c0ca218 100644
+--- a/hw/arm/atsame51j20a_device.h
++++ b/hw/arm/atsame51j20a_device.h
+@@ -53,6 +53,8 @@ static const MchpDeviceInfo atsame51j20a_device = {
+     .nevents = ATSAME51J20A_NUM_EVENTS,
+     .revisions = atsame51j20a_revisions,
+     .nrevisions = ARRAY_SIZE(atsame51j20a_revisions),
++    .dmac_triggers = atsame51j20a_dmac_triggers,
++    .ndmac_triggers = ATSAME51J20A_NUM_DMAC_TRIGGERS,
+ };
+ 
+ #endif /* HW_ARM_ATSAME51J20A_DEVICE_H */
+diff --git a/hw/arm/curiosity_circuitpython.c b/hw/arm/curiosity_circuitpython.c
+index a8455f0..97487e2 100644
+--- a/hw/arm/curiosity_circuitpython.c
++++ b/hw/arm/curiosity_circuitpython.c
+@@ -13,12 +13,25 @@
+  *   FAT file system lives there).
+  * - Red LED D6 on PB23 (D13, active high through 1 kOhm).
+  * - USER button on PA27 (D3) to ground, 10 kOhm pull-up R20.
++ * - I2C (QWIIC J1, the Ruler's sensors): SDA PB31 / SCL PB30 on SERCOM5
++ *   pads 0/1, 4.7 kOhm pull-ups R18/R3.
+  * - USB-C (PA24/PA25): the USB device; the host's view of its first CDC
+  *   ACM interface (CircuitPython's REPL) is a serial port, see mchp-usb.
+  * - Debug UART (DEBUG_TX PA22, DEBUG_RX PA23): SERCOM3 pads 0/1.
+  * - BLE module UART (BLE_TX PA12, BLE_RX PA13): SERCOM2 pads 0/1 (the
+  *   RNBD451 itself is not modelled).
+  *
++ * The PyKit Ruler (EV82H04A, schematic 03-02-01326 rev 3, 2025-09-10)
++ * is part of the machine:
++ *
++ * - ST7789V 1.14" 135 x 240 IPS TFT (ER-TFT1.14-2) on SERCOM0 SPI
++ *   (LCD_MOSI PA04, LCD_SCK PA05), TFT_CS on PA07 (10 kOhm pull-up R17),
++ *   D/C on D4 = PB14, reset by a voltage supervisor (power-on only), the
++ *   backlight through a P-MOSFET whose gate LCD_BL = PA06 pulls low
++ *   (R23 pulls it high: dark). The picture is /machine/lcd ("frame").
++ * - Five WS2812B NeoPixels in one chain on PB22 (NEO_0): D3 on the
++ *   Curiosity board first, then D1-D4 on the Ruler (/machine/neopixels).
++ *
+  * Machine option console=usb (default) makes serial0 the USB console,
+  * serial1 the debug UART and serial2 the BLE UART; console=debug swaps the
+  * first two, for bare-metal images that print on the debug UART.
+@@ -38,6 +51,7 @@
+ #include "hw/arm/machines-qom.h"
+ #include "hw/arm/pic32cm_soc.h"
+ #include "hw/block/sst26vf.h"
++#include "hw/display/st7789.h"
+ #include "hw/core/boards.h"
+ #include "hw/core/irq.h"
+ #include "hw/core/loader.h"
+@@ -46,6 +60,7 @@
+ #include "hw/core/qdev-properties-system.h"
+ #include "hw/gpio/mchp_port.h"
+ #include "hw/misc/led.h"
++#include "hw/misc/ws2812.h"
+ #include "hw/ssi/mchp_qspi.h"
+ #include "hw/ssi/ssi.h"
+ #include "system/block-backend.h"
+@@ -57,6 +72,14 @@
+ 
+ #define CCP_LED_PIN         MCHP_PORT_PIN('B', 23)
+ #define CCP_USER_PIN        MCHP_PORT_PIN('A', 27)
++#define CCP_SCL_PIN         MCHP_PORT_PIN('B', 30)  /* 4.7 kOhm R3 */
++#define CCP_NEOPIXEL_PIN    MCHP_PORT_PIN('B', 22)  /* NEO_0 */
++#define CCP_NEOPIXELS       5                       /* D3, Ruler D1-D4 */
++#define CCP_LCD_CS_PIN      MCHP_PORT_PIN('A', 7)
++#define CCP_LCD_BL_PIN      MCHP_PORT_PIN('A', 6)   /* low: lit */
++#define CCP_LCD_DC_PIN      MCHP_PORT_PIN('B', 14)  /* D4 */
++#define CCP_LCD_SPI         "SERCOM0"
++#define CCP_SDA_PIN         MCHP_PORT_PIN('B', 31)  /* 4.7 kOhm R18 */
+ 
+ #define CCP_DEBUG_SERCOM    3       /* DEBUG_TX/RX (PA22/PA23) */
+ #define CCP_BLE_SERCOM      2       /* BLE_TX/RX (PA12/PA13) to the RNBD451 */
+@@ -73,8 +96,42 @@ struct CuriosityCpState {
+     qemu_irq user;
+     bool user_pressed;
+     bool console_debug;             /* serial0 is the debug UART */
++    DeviceState *lcd;
++    DeviceState *neopixels;
+ };
+ 
++/*
++ * Board glue from a PORT "pad" output (0, 1, or -1 while nothing drives
++ * it) to a logic input, with the level a pull resistor gives an undriven
++ * pad
++ */
++typedef struct CuriosityCpPad {
++    qemu_irq out;
++    int undriven;
++    bool invert;
++} CuriosityCpPad;
++
++static void curiosity_cp_pad(void *opaque, int n, int level)
++{
++    CuriosityCpPad *p = opaque;
++    int v = level < 0 ? p->undriven : level > 0;
++
++    qemu_set_irq(p->out, p->invert ? !v : v);
++}
++
++static void curiosity_cp_wire_pad(DeviceState *port, int pin, qemu_irq out,
++                                  int undriven, bool invert)
++{
++    CuriosityCpPad *p = g_new0(CuriosityCpPad, 1);
++
++    p->out = out;
++    p->undriven = undriven;
++    p->invert = invert;
++    qdev_connect_gpio_out_named(port, MCHP_PORT_PAD, pin,
++                                qemu_allocate_irq(curiosity_cp_pad, p, 0));
++    qemu_set_irq(out, invert ? !undriven : undriven);
++}
++
+ /* A pressed USER button pulls PA27 low; released, R20 pulls it high. */
+ static void curiosity_cp_update_user(CuriosityCpState *s)
+ {
+@@ -114,6 +171,40 @@ static void curiosity_cp_add_flash(CuriosityCpState *s)
+                                                        0));
+ }
+ 
++/* The PyKit Ruler's display and NeoPixels */
++static void curiosity_cp_add_ruler(CuriosityCpState *s)
++{
++    DeviceState *port = pic32cm_soc_periph(&s->soc, "PORT");
++    DeviceState *sercom = pic32cm_soc_periph(&s->soc, CCP_LCD_SPI);
++    SSIBus *spi = (SSIBus *)qdev_get_child_bus(sercom, "sercom0.spi");
++
++    s->lcd = qdev_new(TYPE_ST7789);
++    object_property_add_child(OBJECT(s), "lcd", OBJECT(s->lcd));
++    qdev_realize_and_unref(s->lcd, BUS(spi), &error_fatal);
++    /* TFT_CS idles high (R17); the backlight gate idles high (R23): dark */
++    curiosity_cp_wire_pad(port, CCP_LCD_CS_PIN,
++                          qdev_get_gpio_in_named(s->lcd, SSI_GPIO_CS, 0),
++                          1, false);
++    curiosity_cp_wire_pad(port, CCP_LCD_DC_PIN,
++                          qdev_get_gpio_in_named(s->lcd, ST7789_DC, 0),
++                          0, false);
++    curiosity_cp_wire_pad(port, CCP_LCD_BL_PIN,
++                          qdev_get_gpio_in_named(s->lcd, ST7789_BACKLIGHT, 0),
++                          1, true);
++    qemu_set_irq(qdev_get_gpio_in_named(port, MCHP_PORT_IN, CCP_LCD_CS_PIN),
++                 1);
++    qemu_set_irq(qdev_get_gpio_in_named(port, MCHP_PORT_IN, CCP_LCD_BL_PIN),
++                 1);
++
++    s->neopixels = qdev_new(TYPE_WS2812);
++    object_property_add_child(OBJECT(s), "neopixels", OBJECT(s->neopixels));
++    qdev_prop_set_uint32(s->neopixels, "count", CCP_NEOPIXELS);
++    qdev_realize_and_unref(s->neopixels, NULL, &error_fatal);
++    curiosity_cp_wire_pad(port, CCP_NEOPIXEL_PIN,
++                          qdev_get_gpio_in_named(s->neopixels, WS2812_DIN, 0),
++                          0, false);
++}
++
+ /*
+  * The UF2 bootloader's job: an image linked at the application area
+  * starts from its own vector table when nothing occupies 0.
+@@ -155,8 +246,12 @@ static void curiosity_cp_init(MachineState *machine)
+     qdev_connect_gpio_out_named(port, MCHP_PORT_PAD, CCP_LED_PIN,
+                                 qdev_get_gpio_in(DEVICE(s->led), 0));
+     s->user = qdev_get_gpio_in_named(port, MCHP_PORT_IN, CCP_USER_PIN);
++    /* The QWIIC/I2C pull-ups (CircuitPython checks for them) */
++    qemu_set_irq(qdev_get_gpio_in_named(port, MCHP_PORT_IN, CCP_SCL_PIN), 1);
++    qemu_set_irq(qdev_get_gpio_in_named(port, MCHP_PORT_IN, CCP_SDA_PIN), 1);
+     curiosity_cp_update_user(s);
+     curiosity_cp_add_flash(s);
++    curiosity_cp_add_ruler(s);
+ 
+     armv7m_load_kernel(s->soc.armv7m.cpu, machine->kernel_filename,
+                        s->soc.dev->flash_base, s->soc.dev->flash_size);
+diff --git a/hw/arm/pic32cm1216mc00048_device.h b/hw/arm/pic32cm1216mc00048_device.h
+index f04dbb4..0d8df9e 100644
+--- a/hw/arm/pic32cm1216mc00048_device.h
++++ b/hw/arm/pic32cm1216mc00048_device.h
+@@ -55,6 +55,8 @@ static const MchpDeviceInfo pic32cm1216mc00048_device = {
+     .nevents = PIC32CM1216MC00048_NUM_EVENTS,
+     .revisions = pic32cm1216mc00048_revisions,
+     .nrevisions = ARRAY_SIZE(pic32cm1216mc00048_revisions),
++    .dmac_triggers = pic32cm1216mc00048_dmac_triggers,
++    .ndmac_triggers = PIC32CM1216MC00048_NUM_DMAC_TRIGGERS,
+ };
+ 
+ #endif /* HW_ARM_PIC32CM1216MC00048_DEVICE_H */
+diff --git a/hw/arm/pic32cm5164jh01100_device.h b/hw/arm/pic32cm5164jh01100_device.h
+index 2733567..5dca537 100644
+--- a/hw/arm/pic32cm5164jh01100_device.h
++++ b/hw/arm/pic32cm5164jh01100_device.h
+@@ -55,6 +55,8 @@ static const MchpDeviceInfo pic32cm5164jh01100_device = {
+     .nevents = PIC32CM5164JH01100_NUM_EVENTS,
+     .revisions = pic32cm5164jh01100_revisions,
+     .nrevisions = ARRAY_SIZE(pic32cm5164jh01100_revisions),
++    .dmac_triggers = pic32cm5164jh01100_dmac_triggers,
++    .ndmac_triggers = PIC32CM5164JH01100_NUM_DMAC_TRIGGERS,
+ };
+ 
+ #endif /* HW_ARM_PIC32CM5164JH01100_DEVICE_H */
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index 5fc9b28..0579bbf 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -32,6 +32,7 @@
+ #include "hw/timer/mchp_tcc.h"
+ #include "hw/mchp/gen/rstc_u2239.h"
+ #include "hw/misc/mchp_sysctrl.h"
++#include "hw/dma/mchp_dmac.h"
+ #include "hw/misc/mchp_usb.h"
+ #include "hw/misc/unimp.h"
+ #include "hw/ssi/mchp_qspi.h"
+@@ -49,6 +50,7 @@ static const struct {
+     const char *ip_id;          /* NULL: any */
+ } pic32cm_models[] = {
+     { "DIVAS", TYPE_MCHP_DIVAS },
++    { "DMAC", TYPE_MCHP_DMAC, "U2503" },
+     { "DSU", TYPE_MCHP_DSU, "U2209" },
+     { "EIC", TYPE_MCHP_EIC },
+     { "EVSYS", TYPE_MCHP_EVSYS, "U2256" },
+@@ -559,6 +561,28 @@ static void pic32cm_map_qspi(Pic32cmSocState *s, SysBusDevice *sbd)
+     }
+ }
+ 
++/*
++ * DMAC triggers the model can pace: SERCOM TX while INTFLAG.DRE is set, RX
++ * while INTFLAG.RXC is (INTFLAG at 0x18 in every SERCOM mode)
++ */
++static void pic32cm_dmac_triggers(Pic32cmSocState *s, DeviceState *dmac)
++{
++    for (unsigned i = 0; i < s->dev->ndmac_triggers; i++) {
++        const MchpPeriphRef *ref = &s->dev->dmac_triggers[i];
++        const MchpInstanceInfo *info = pic32cm_info(s, ref->instance);
++
++        if (ref->id >= MCHP_DMAC_MAX_TRIGGERS ||
++            strcmp(info->module, "SERCOM")) {
++            continue;
++        }
++        if (!strcmp(ref->param, "DMAC_ID_TX")) {
++            mchp_dmac_set_trigger(dmac, ref->id, info->base + 0x18, 0x01);
++        } else if (!strcmp(ref->param, "DMAC_ID_RX")) {
++            mchp_dmac_set_trigger(dmac, ref->id, info->base + 0x18, 0x04);
++        }
++    }
++}
++
+ static bool pic32cm_realize_periph(Pic32cmSocState *s, uint8_t rev,
+                                    Error **errp)
+ {
+@@ -583,6 +607,8 @@ static bool pic32cm_realize_periph(Pic32cmSocState *s, uint8_t rev,
+             qdev_prop_set_uint8(dev, "revision", rev);
+         } else if (!strcmp(info->module, "SERCOM")) {
+             pic32cm_connect_sercom(s, dev, info);
++        } else if (object_dynamic_cast(OBJECT(dev), TYPE_MCHP_DMAC)) {
++            pic32cm_dmac_triggers(s, dev);
+         } else if (!strcmp(info->module, "USB") && s->usb_chr &&
+                    object_property_find(OBJECT(dev), "chardev")) {
+             qdev_prop_set_chr(dev, "chardev", s->usb_chr);
+diff --git a/hw/display/Kconfig b/hw/display/Kconfig
+index b3593fe..6d0858c 100644
+--- a/hw/display/Kconfig
++++ b/hw/display/Kconfig
+@@ -153,3 +153,8 @@ config MAC_PVG_PCI
+     bool
+     depends on MAC_PVG && PCI
+     default y if PCI_DEVICES
++
++config ST7789
++    bool
++    depends on MIKROBUS
++    select SSI
+diff --git a/hw/display/meson.build b/hw/display/meson.build
+index 93e9081..e6ae252 100644
+--- a/hw/display/meson.build
++++ b/hw/display/meson.build
+@@ -17,6 +17,7 @@ system_ss.add(when: 'CONFIG_SII9022', if_true: files('sii9022.c'))
+ system_ss.add(when: 'CONFIG_SSD0303', if_true: files('ssd0303.c'))
+ system_ss.add(when: 'CONFIG_SSD0323', if_true: files('ssd0323.c'))
+ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('pp_panel.c', 'ssd1351.c'))
++system_ss.add(when: 'CONFIG_ST7789', if_true: files('st7789.c'))
+ system_ss.add(when: 'CONFIG_XEN_BUS', if_true: files('xenfb.c'))
+ 
+ system_ss.add(when: 'CONFIG_VGA_PCI', if_true: files('vga-pci.c'))
+diff --git a/hw/display/st7789.c b/hw/display/st7789.c
+new file mode 100644
+index 0000000..9ab08b0
+--- /dev/null
++++ b/hw/display/st7789.c
+@@ -0,0 +1,417 @@
++/*
++ * Sitronix ST7789V 240x320 RGB TFT driver on an SSI bus
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * ST7789V data sheet v1.0 (2016), 4-line serial interface: a byte is a
++ * command while D/CX is low, its parameters and pixel data while D/CX is
++ * high. Modelled: SWRESET (01h), SLPIN/SLPOUT (10h/11h), INVOFF/INVON
++ * (20h/21h), DISPOFF/DISPON (28h/29h), CASET/RASET (2Ah/2Bh), RAMWR (2Ch)
++ * and RAMWRC (3Ch) into the 240 x 320 frame memory, MADCTL (36h: MY, MX,
++ * MV, RGB order) and COLMOD (3Ah: 16-bit 565 and 18-bit 666 pixels).
++ * Other commands take any parameters and leave the picture alone (porch,
++ * gate, power and gamma settings, partial and idle modes, scrolling).
++ * Frame memory write order (data sheet 8.12): the column counter runs
++ * first, MV exchanges the counters' axes, then MX and MY mirror them.
++ *
++ * The panel: "width" x "height" visible pixels starting at frame memory
++ * column "col-offset" and row "row-offset", shown "rotation" degrees
++ * clockwise (0, 90, 180, 270). The defaults are the PyKit Ruler's 1.14"
++ * IPS glass ER-TFT1.14-2 (135 x 240 at column 52, row 40, mounted
++ * landscape). "inverted" (default on, as on that IPS glass) shows the
++ * frame memory complemented unless INVON is set, which is why its
++ * drivers send INVON. Nothing is visible in reset, in sleep, with the
++ * display off or the backlight off. Not checked against a physical
++ * display.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/log.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/display/pp_panel.h"
++#include "hw/display/st7789.h"
++#include "hw/ssi/ssi.h"
++#include "migration/vmstate.h"
++
++#define ST7789_COLS         240
++#define ST7789_ROWS         320
++
++#define MADCTL_MY           BIT(7)
++#define MADCTL_MX           BIT(6)
++#define MADCTL_MV           BIT(5)
++#define MADCTL_BGR          BIT(3)
++
++OBJECT_DECLARE_SIMPLE_TYPE(St7789State, ST7789)
++
++struct St7789State {
++    SSIPeripheral parent_obj;
++
++    PpPanel panel;
++    uint32_t width;
++    uint32_t height;
++    uint32_t col_offset;
++    uint32_t row_offset;
++    uint32_t rotation;
++    bool inverted;
++
++    uint16_t ram[ST7789_COLS * ST7789_ROWS];   /* RGB565 */
++    uint8_t cmd;
++    uint8_t argc;
++    uint8_t args[4];
++    bool writing;               /* after RAMWR/RAMWRC */
++    uint8_t pix[3];
++    uint8_t npix;
++    uint16_t xs, xe, ys, ye;    /* CASET, RASET windows */
++    uint16_t x, y;              /* counters */
++    uint8_t madctl;
++    uint8_t colmod;
++    bool sleeping;
++    bool display_on;
++    bool invert_on;
++
++    bool dc;
++    bool in_reset;
++    bool backlight;
++};
++
++static void st7789_registers_reset(St7789State *s)
++{
++    s->cmd = 0;
++    s->argc = 0;
++    s->writing = false;
++    s->npix = 0;
++    s->xs = 0;
++    s->xe = ST7789_COLS - 1;
++    s->ys = 0;
++    s->ye = ST7789_ROWS - 1;
++    s->x = s->y = 0;
++    s->madctl = 0;
++    s->colmod = 0x66;
++    s->sleeping = true;
++    s->display_on = false;
++    s->invert_on = false;
++}
++
++/* The pixel at the counters into frame memory, then advance them */
++static void st7789_store(St7789State *s, uint16_t rgb)
++{
++    unsigned px, py;
++
++    if (s->madctl & MADCTL_MV) {
++        px = s->y;
++        py = s->x;
++    } else {
++        px = s->x;
++        py = s->y;
++    }
++    if (s->madctl & MADCTL_MX) {
++        px = ST7789_COLS - 1 - px;
++    }
++    if (s->madctl & MADCTL_MY) {
++        py = ST7789_ROWS - 1 - py;
++    }
++    if (s->madctl & MADCTL_BGR) {
++        rgb = (rgb & 0x07E0) | (rgb >> 11) | (rgb << 11);
++    }
++    if (px < ST7789_COLS && py < ST7789_ROWS) {
++        s->ram[py * ST7789_COLS + px] = rgb;
++    }
++    if (s->x < s->xe) {
++        s->x++;
++    } else {
++        s->x = s->xs;
++        s->y = s->y < s->ye ? s->y + 1 : s->ys;
++    }
++}
++
++static void st7789_data(St7789State *s, uint8_t val)
++{
++    if (s->writing) {
++        bool p18 = (s->colmod & 0x7) == 0x6;
++
++        s->pix[s->npix++] = val;
++        if (!p18 && s->npix == 2) {
++            st7789_store(s, s->pix[0] << 8 | s->pix[1]);
++            s->npix = 0;
++        } else if (p18 && s->npix == 3) {
++            st7789_store(s, pp_panel_rgb565(s->pix[0], s->pix[1], s->pix[2]));
++            s->npix = 0;
++        }
++        pp_panel_changed(&s->panel);
++        return;
++    }
++    if (s->argc < sizeof(s->args)) {
++        s->args[s->argc] = val;
++    }
++    s->argc++;
++    switch (s->cmd) {
++    case 0x2A:
++        if (s->argc == 4) {
++            s->xs = s->args[0] << 8 | s->args[1];
++            s->xe = s->args[2] << 8 | s->args[3];
++        }
++        break;
++    case 0x2B:
++        if (s->argc == 4) {
++            s->ys = s->args[0] << 8 | s->args[1];
++            s->ye = s->args[2] << 8 | s->args[3];
++        }
++        break;
++    case 0x36:
++        if (s->argc == 1) {
++            s->madctl = val;
++            pp_panel_changed(&s->panel);
++        }
++        break;
++    case 0x3A:
++        if (s->argc == 1) {
++            s->colmod = val;
++        }
++        break;
++    }
++}
++
++static void st7789_command(St7789State *s, uint8_t cmd)
++{
++    s->cmd = cmd;
++    s->argc = 0;
++    s->writing = false;
++    s->npix = 0;
++    switch (cmd) {
++    case 0x01:                  /* SWRESET: frame memory kept */
++        st7789_registers_reset(s);
++        break;
++    case 0x10:
++        s->sleeping = true;
++        break;
++    case 0x11:
++        s->sleeping = false;
++        break;
++    case 0x20:
++        s->invert_on = false;
++        break;
++    case 0x21:
++        s->invert_on = true;
++        break;
++    case 0x28:
++        s->display_on = false;
++        break;
++    case 0x29:
++        s->display_on = true;
++        break;
++    case 0x2C:                  /* RAMWR: from the window's start */
++        s->x = s->xs;
++        s->y = s->ys;
++        s->writing = true;
++        break;
++    case 0x3C:                  /* RAMWRC: where the last write stopped */
++        s->writing = true;
++        break;
++    }
++    pp_panel_changed(&s->panel);
++}
++
++static uint32_t st7789_transfer(SSIPeripheral *dev, uint32_t val)
++{
++    St7789State *s = ST7789(dev);
++
++    if (s->in_reset) {
++        return 0;
++    }
++    if (s->dc) {
++        st7789_data(s, val);
++    } else {
++        st7789_command(s, val);
++    }
++    return 0;
++}
++
++static void st7789_render(void *opaque, uint16_t *fb)
++{
++    St7789State *s = opaque;
++    bool lit = s->backlight && !s->in_reset && !s->sleeping && s->display_on;
++    uint32_t pw = s->width, ph = s->height;     /* glass, unrotated */
++    uint32_t vw = s->panel.width;               /* view */
++
++    for (uint32_t gy = 0; gy < ph; gy++) {
++        for (uint32_t gx = 0; gx < pw; gx++) {
++            uint32_t vx, vy, col = s->col_offset + gx, row = s->row_offset + gy;
++            uint16_t v = 0;
++
++            if (lit && col < ST7789_COLS && row < ST7789_ROWS) {
++                v = s->ram[row * ST7789_COLS + col];
++                if (s->inverted != s->invert_on) {
++                    v = ~v;
++                }
++            }
++            switch (s->rotation) {
++            case 90:
++                vx = ph - 1 - gy;
++                vy = gx;
++                break;
++            case 180:
++                vx = pw - 1 - gx;
++                vy = ph - 1 - gy;
++                break;
++            case 270:
++                vx = gy;
++                vy = pw - 1 - gx;
++                break;
++            default:
++                vx = gx;
++                vy = gy;
++                break;
++            }
++            fb[vy * vw + vx] = v;
++        }
++    }
++}
++
++static void st7789_set_dc(void *opaque, int n, int level)
++{
++    ST7789(opaque)->dc = level > 0;
++}
++
++static void st7789_set_reset(void *opaque, int n, int level)
++{
++    St7789State *s = opaque;
++    bool low = level == 0;
++
++    if (low && !s->in_reset) {
++        st7789_registers_reset(s);
++    }
++    s->in_reset = low;
++    pp_panel_changed(&s->panel);
++}
++
++static void st7789_set_backlight(void *opaque, int n, int level)
++{
++    St7789State *s = opaque;
++
++    s->backlight = level > 0;
++    pp_panel_changed(&s->panel);
++}
++
++static void st7789_realize(SSIPeripheral *dev, Error **errp)
++{
++    St7789State *s = ST7789(dev);
++    bool sideways = s->rotation == 90 || s->rotation == 270;
++
++    if (!s->width || !s->height ||
++        s->col_offset + s->width > ST7789_COLS ||
++        s->row_offset + s->height > ST7789_ROWS ||
++        s->rotation % 90 || s->rotation > 270) {
++        error_setg(errp, "the panel must lie within the 240 x 320 frame "
++                   "memory, rotated by 0, 90, 180 or 270 degrees");
++        return;
++    }
++    s->panel.width = sideways ? s->height : s->width;
++    s->panel.height = sideways ? s->width : s->height;
++    g_free(s->panel.fb);
++    s->panel.fb = g_new0(uint16_t, s->width * s->height);
++    qdev_init_gpio_in_named(DEVICE(dev), st7789_set_dc, ST7789_DC, 1);
++    qdev_init_gpio_in_named(DEVICE(dev), st7789_set_reset, ST7789_RESET, 1);
++    qdev_init_gpio_in_named(DEVICE(dev), st7789_set_backlight,
++                            ST7789_BACKLIGHT, 1);
++}
++
++static void st7789_reset(DeviceState *dev)
++{
++    St7789State *s = ST7789(dev);
++
++    st7789_registers_reset(s);
++    memset(s->ram, 0, sizeof(s->ram));
++    s->parent_obj.cs = true;
++    s->in_reset = false;
++}
++
++static void st7789_init(Object *obj)
++{
++    St7789State *s = ST7789(obj);
++
++    pp_panel_init(&s->panel, obj, 1, 1, st7789_render, s);
++}
++
++static void st7789_finalize(Object *obj)
++{
++    g_free(ST7789(obj)->panel.fb);
++}
++
++static int st7789_post_load(void *opaque, int version_id)
++{
++    pp_panel_changed(&ST7789(opaque)->panel);
++    return 0;
++}
++
++static const Property st7789_properties[] = {
++    DEFINE_PROP_UINT32("width", St7789State, width, 135),
++    DEFINE_PROP_UINT32("height", St7789State, height, 240),
++    DEFINE_PROP_UINT32("col-offset", St7789State, col_offset, 52),
++    DEFINE_PROP_UINT32("row-offset", St7789State, row_offset, 40),
++    DEFINE_PROP_UINT32("rotation", St7789State, rotation, 90),
++    DEFINE_PROP_BOOL("inverted", St7789State, inverted, true),
++};
++
++static const VMStateDescription vmstate_st7789 = {
++    .name = TYPE_ST7789,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .post_load = st7789_post_load,
++    .fields = (const VMStateField[]) {
++        VMSTATE_SSI_PERIPHERAL(parent_obj, St7789State),
++        VMSTATE_UINT16_ARRAY(ram, St7789State, ST7789_COLS * ST7789_ROWS),
++        VMSTATE_UINT8(cmd, St7789State),
++        VMSTATE_UINT8(argc, St7789State),
++        VMSTATE_UINT8_ARRAY(args, St7789State, 4),
++        VMSTATE_BOOL(writing, St7789State),
++        VMSTATE_UINT8_ARRAY(pix, St7789State, 3),
++        VMSTATE_UINT8(npix, St7789State),
++        VMSTATE_UINT16(xs, St7789State),
++        VMSTATE_UINT16(xe, St7789State),
++        VMSTATE_UINT16(ys, St7789State),
++        VMSTATE_UINT16(ye, St7789State),
++        VMSTATE_UINT16(x, St7789State),
++        VMSTATE_UINT16(y, St7789State),
++        VMSTATE_UINT8(madctl, St7789State),
++        VMSTATE_UINT8(colmod, St7789State),
++        VMSTATE_BOOL(sleeping, St7789State),
++        VMSTATE_BOOL(display_on, St7789State),
++        VMSTATE_BOOL(invert_on, St7789State),
++        VMSTATE_BOOL(dc, St7789State),
++        VMSTATE_BOOL(in_reset, St7789State),
++        VMSTATE_BOOL(backlight, St7789State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void st7789_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    SSIPeripheralClass *k = SSI_PERIPHERAL_CLASS(klass);
++
++    dc->desc = "ST7789V 240x320 RGB TFT driver";
++    dc->vmsd = &vmstate_st7789;
++    device_class_set_props(dc, st7789_properties);
++    device_class_set_legacy_reset(dc, st7789_reset);
++    k->realize = st7789_realize;
++    k->transfer = st7789_transfer;
++    k->cs_polarity = SSI_CS_LOW;
++}
++
++static const TypeInfo st7789_types[] = {
++    {
++        .name = TYPE_ST7789,
++        .parent = TYPE_SSI_PERIPHERAL,
++        .instance_size = sizeof(St7789State),
++        .instance_init = st7789_init,
++        .instance_finalize = st7789_finalize,
++        .class_init = st7789_class_init,
++    },
++};
++
++DEFINE_TYPES(st7789_types)
+diff --git a/hw/dma/mchp_dmac.c b/hw/dma/mchp_dmac.c
+new file mode 100644
+index 0000000..77eb04d
+--- /dev/null
++++ b/hw/dma/mchp_dmac.c
+@@ -0,0 +1,572 @@
++/*
++ * Microchip SAM D5x/E5x DMA controller (DMAC U2503)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Channels follow DS60001507 (DMAC chapter): enabling a channel fetches
++ * its first descriptor (BASEADDR + 16 * channel) into the write-back
++ * memory (WRBADDR + 16 * channel); each trigger then moves a burst
++ * (TRIGACT BURST, BURSTLEN + 1 beats), a block (BLOCK) or every block
++ * (TRANSACTION). With SRCINC/DSTINC the descriptor addresses are the end
++ * of the block. At the end of a block BLOCKACT may raise TCMPL and
++ * suspend the channel; the next descriptor (DESCADDR) is fetched, or, at
++ * the end of the transfer (DESCADDR 0), TCMPL is set and the channel
++ * disables itself (CircuitPython waits for TCMPL with BLOCKACT NOACT).
++ * An invalid descriptor raises TERR and CHSTATUS.FERR.
++ *
++ * A started transfer runs at the next read of a DMAC status register
++ * (CHINTFLAG, CHSTATUS, INTPEND, ...), or 20 us of virtual time later at
++ * the latest; never during the write that started it, because firmware
++ * clears CHINTFLAG right after setting ENABLE (CircuitPython, Harmony).
++ * It runs as fast as the triggers allow, at most a budget of beats per
++ * run; channels waiting for a trigger are looked at again every 100 us. Not
++ * modelled: priorities and arbitration (lowest channel first), CRC,
++ * events, the threshold, beat timing.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/dma/mchp_dmac.h"
++#include "hw/mchp/gen/dmac_u2503.h"
++#include "migration/vmstate.h"
++#include "system/address-spaces.h"
++#include "system/dma.h"
++
++#define DMAC_NCH            MCHP_DMAC_CHANNEL_COUNT
++#define DMAC_CH(ch, r)      (MCHP_DMAC_CHANNEL_OFFSET + \
++                             (ch) * MCHP_DMAC_CHANNEL_STRIDE + (r))
++#define DMAC_START_NS       20000       /* unless a status read comes first */
++#define DMAC_POLL_NS        100000      /* while waiting for a trigger */
++#define DMAC_BUDGET         65536       /* beats per run */
++
++#define CH_TERR             R_MCHP_DMAC_CHANNEL_CHINTFLAG_TERR_MASK
++#define CH_TCMPL            R_MCHP_DMAC_CHANNEL_CHINTFLAG_TCMPL_MASK
++#define CH_SUSP             R_MCHP_DMAC_CHANNEL_CHINTFLAG_SUSP_MASK
++
++#define TRIGACT_BLOCK       0
++#define TRIGACT_BURST       2
++#define TRIGACT_TRANSACTION 3
++
++typedef struct DmacTrigger {
++    hwaddr flag_addr;
++    uint8_t mask;               /* 0: not described, never ready */
++} DmacTrigger;
++
++/* A descriptor as in memory */
++typedef struct DmacDesc {
++    uint16_t btctrl;
++    uint16_t btcnt;
++    uint32_t srcaddr;
++    uint32_t dstaddr;
++    uint32_t descaddr;
++} DmacDesc;
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpDmacState, MCHP_DMAC)
++
++struct MchpDmacState {
++    MchpRegBlock parent_obj;
++
++    QEMUTimer *timer;
++    DmacTrigger trig[MCHP_DMAC_MAX_TRIGGERS];
++
++    uint32_t active;            /* channels with a fetched descriptor */
++    uint32_t suspended;
++    uint32_t ferr;              /* fetch error, CHSTATUS.FERR */
++    uint16_t block_beats[DMAC_NCH]; /* BTCNT of the current block */
++};
++
++static uint32_t dmac_reg(MchpDmacState *s, hwaddr off, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, off, size);
++}
++
++static void dmac_set_reg(MchpDmacState *s, hwaddr off, unsigned size,
++                         uint32_t v)
++{
++    mchp_regfile_poke(&MCHP_REGBLOCK(s)->rf, off, size, v);
++}
++
++static bool dmac_ch_enabled(MchpDmacState *s, unsigned ch)
++{
++    return FIELD_EX32(dmac_reg(s, DMAC_CH(ch, A_MCHP_DMAC_CHANNEL_CHCTRLA), 4),
++                      MCHP_DMAC_CHANNEL_CHCTRLA, ENABLE);
++}
++
++static void dmac_ch_disable(MchpDmacState *s, unsigned ch)
++{
++    hwaddr off = DMAC_CH(ch, A_MCHP_DMAC_CHANNEL_CHCTRLA);
++
++    dmac_set_reg(s, off, 4, dmac_reg(s, off, 4) &
++                 ~R_MCHP_DMAC_CHANNEL_CHCTRLA_ENABLE_MASK);
++    s->active &= ~BIT(ch);
++}
++
++static void dmac_ch_flag(MchpDmacState *s, unsigned ch, uint8_t flags)
++{
++    hwaddr off = DMAC_CH(ch, A_MCHP_DMAC_CHANNEL_CHINTFLAG);
++
++    dmac_set_reg(s, off, 1, dmac_reg(s, off, 1) | flags);
++}
++
++static hwaddr dmac_wb(MchpDmacState *s, unsigned ch)
++{
++    return dmac_reg(s, A_MCHP_DMAC_WRBADDR, 4) + 16 * ch;
++}
++
++static void dmac_load(hwaddr addr, DmacDesc *d)
++{
++    uint8_t b[16];
++
++    dma_memory_read(&address_space_memory, addr, b, sizeof(b),
++                    MEMTXATTRS_UNSPECIFIED);
++    d->btctrl = lduw_le_p(&b[0]);
++    d->btcnt = lduw_le_p(&b[2]);
++    d->srcaddr = ldl_le_p(&b[4]);
++    d->dstaddr = ldl_le_p(&b[8]);
++    d->descaddr = ldl_le_p(&b[12]);
++}
++
++static void dmac_store(hwaddr addr, const DmacDesc *d)
++{
++    uint8_t b[16];
++
++    stw_le_p(&b[0], d->btctrl);
++    stw_le_p(&b[2], d->btcnt);
++    stl_le_p(&b[4], d->srcaddr);
++    stl_le_p(&b[8], d->dstaddr);
++    stl_le_p(&b[12], d->descaddr);
++    dma_memory_write(&address_space_memory, addr, b, sizeof(b),
++                     MEMTXATTRS_UNSPECIFIED);
++}
++
++/* Fetch the descriptor at @addr into the write-back memory of @ch. */
++static bool dmac_fetch(MchpDmacState *s, unsigned ch, hwaddr addr)
++{
++    DmacDesc d;
++
++    dmac_load(addr, &d);
++    if (!FIELD_EX32(d.btctrl, MCHP_DMAC_DESCRIPTOR_BTCTRL, VALID)) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s: channel %u: invalid descriptor"
++                      " at 0x%" HWADDR_PRIx "\n", MCHP_REGBLOCK(s)->name, ch,
++                      addr);
++        s->ferr |= BIT(ch);
++        dmac_ch_flag(s, ch, CH_TERR);
++        dmac_ch_disable(s, ch);
++        return false;
++    }
++    dmac_store(dmac_wb(s, ch), &d);
++    s->block_beats[ch] = d.btcnt;
++    s->active |= BIT(ch);
++    return true;
++}
++
++static bool dmac_trigger_ready(MchpDmacState *s, unsigned ch)
++{
++    uint32_t ctrla = dmac_reg(s, DMAC_CH(ch, A_MCHP_DMAC_CHANNEL_CHCTRLA), 4);
++    unsigned src = FIELD_EX32(ctrla, MCHP_DMAC_CHANNEL_CHCTRLA, TRIGSRC);
++    uint8_t flags = 0;
++
++    if (dmac_reg(s, A_MCHP_DMAC_SWTRIGCTRL, 4) & BIT(ch)) {
++        return true;
++    }
++    if (!src || src >= MCHP_DMAC_MAX_TRIGGERS || !s->trig[src].mask) {
++        return false;
++    }
++    dma_memory_read(&address_space_memory, s->trig[src].flag_addr, &flags, 1,
++                    MEMTXATTRS_UNSPECIFIED);
++    return flags & s->trig[src].mask;
++}
++
++/* One beat of @ch; false: the channel ended or failed */
++static bool dmac_beat(MchpDmacState *s, unsigned ch, DmacDesc *d)
++{
++    unsigned size = 1 << FIELD_EX32(d->btctrl, MCHP_DMAC_DESCRIPTOR_BTCTRL,
++                                    BEATSIZE);
++    bool stepsrc = FIELD_EX32(d->btctrl, MCHP_DMAC_DESCRIPTOR_BTCTRL, STEPSEL);
++    unsigned step = 1 << FIELD_EX32(d->btctrl, MCHP_DMAC_DESCRIPTOR_BTCTRL,
++                                    STEPSIZE);
++    uint32_t total = s->block_beats[ch];
++    uint32_t k = total - d->btcnt;
++    uint32_t src = d->srcaddr, dst = d->dstaddr;
++    uint8_t buf[4];
++
++    if (size > 4) {
++        size = 4;               /* reserved BEATSIZE */
++    }
++    if (FIELD_EX32(d->btctrl, MCHP_DMAC_DESCRIPTOR_BTCTRL, SRCINC)) {
++        uint32_t inc = size * (stepsrc ? step : 1);
++
++        src = d->srcaddr - total * inc + k * inc;
++    }
++    if (FIELD_EX32(d->btctrl, MCHP_DMAC_DESCRIPTOR_BTCTRL, DSTINC)) {
++        uint32_t inc = size * (stepsrc ? 1 : step);
++
++        dst = d->dstaddr - total * inc + k * inc;
++    }
++    dma_memory_read(&address_space_memory, src, buf, size,
++                    MEMTXATTRS_UNSPECIFIED);
++    dma_memory_write(&address_space_memory, dst, buf, size,
++                     MEMTXATTRS_UNSPECIFIED);
++    d->btcnt--;
++    return true;
++}
++
++/* The block of @ch ended: block action, next descriptor or the end */
++static void dmac_block_end(MchpDmacState *s, unsigned ch, DmacDesc *d)
++{
++    unsigned act = FIELD_EX32(d->btctrl, MCHP_DMAC_DESCRIPTOR_BTCTRL,
++                              BLOCKACT);
++
++    dmac_store(dmac_wb(s, ch), d);
++    if (!d->descaddr) {
++        dmac_ch_flag(s, ch, CH_TCMPL);
++        dmac_ch_disable(s, ch);
++        return;
++    }
++    if (act & 1) {
++        dmac_ch_flag(s, ch, CH_TCMPL);
++    }
++    if (act & 2) {
++        dmac_ch_flag(s, ch, CH_SUSP);
++        s->suspended |= BIT(ch);
++    }
++    dmac_fetch(s, ch, d->descaddr);
++}
++
++/* Serve one trigger of @ch; returns the beats moved */
++static unsigned dmac_serve(MchpDmacState *s, unsigned ch, unsigned budget)
++{
++    uint32_t ctrla = dmac_reg(s, DMAC_CH(ch, A_MCHP_DMAC_CHANNEL_CHCTRLA), 4);
++    unsigned trigact = FIELD_EX32(ctrla, MCHP_DMAC_CHANNEL_CHCTRLA, TRIGACT);
++    unsigned beats = 0, limit;
++    DmacDesc d;
++
++    /* Taking a software trigger clears it */
++    dmac_set_reg(s, A_MCHP_DMAC_SWTRIGCTRL, 4,
++                 dmac_reg(s, A_MCHP_DMAC_SWTRIGCTRL, 4) & ~BIT(ch));
++    limit = trigact == TRIGACT_BURST ?
++            FIELD_EX32(ctrla, MCHP_DMAC_CHANNEL_CHCTRLA, BURSTLEN) + 1 :
++            budget;
++    while (beats < MIN(limit, budget) && (s->active & BIT(ch)) &&
++           !(s->suspended & BIT(ch))) {
++        dmac_load(dmac_wb(s, ch), &d);
++        if (d.btcnt) {
++            dmac_beat(s, ch, &d);
++            beats++;
++            dmac_store(dmac_wb(s, ch), &d);
++        }
++        if (!d.btcnt) {
++            dmac_block_end(s, ch, &d);
++            if (trigact == TRIGACT_BLOCK || trigact == TRIGACT_BURST) {
++                break;
++            }
++        }
++    }
++    return beats ? beats : 1;
++}
++
++static bool dmac_runnable(MchpDmacState *s, unsigned ch)
++{
++    return dmac_ch_enabled(s, ch) && (s->active & BIT(ch)) &&
++           !(s->suspended & BIT(ch));
++}
++
++static void dmac_run(MchpDmacState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    unsigned budget = DMAC_BUDGET;
++    bool waiting = false, progress = true;
++
++    if (!FIELD_EX32(dmac_reg(s, A_MCHP_DMAC_CTRL, 2), MCHP_DMAC_CTRL,
++                    DMAENABLE)) {
++        return;
++    }
++    while (progress && budget) {
++        progress = false;
++        for (unsigned ch = 0; ch < DMAC_NCH && budget; ch++) {
++            unsigned n;
++
++            if (!dmac_runnable(s, ch)) {
++                continue;
++            }
++            if (!dmac_trigger_ready(s, ch)) {
++                waiting = true;
++                continue;
++            }
++            n = dmac_serve(s, ch, budget);
++            budget -= MIN(n, budget);
++            progress = true;
++        }
++    }
++    mchp_regblock_update_irq(rb);
++    if (waiting || !budget) {
++        timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                  (budget ? DMAC_POLL_NS : DMAC_START_NS));
++    }
++}
++
++static void dmac_timer(void *opaque)
++{
++    dmac_run(MCHP_DMAC(opaque));
++}
++
++static void dmac_schedule(MchpDmacState *s)
++{
++    int64_t when = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + DMAC_START_NS;
++
++    if (!timer_pending(s->timer) || timer_expire_time_ns(s->timer) > when) {
++        timer_mod(s->timer, when);
++    }
++}
++
++void mchp_dmac_kick(DeviceState *dev)
++{
++    dmac_schedule(MCHP_DMAC(dev));
++}
++
++void mchp_dmac_set_trigger(DeviceState *dev, unsigned id, hwaddr flag_addr,
++                           uint8_t mask)
++{
++    MchpDmacState *s = MCHP_DMAC(dev);
++
++    assert(id < MCHP_DMAC_MAX_TRIGGERS);
++    s->trig[id].flag_addr = flag_addr;
++    s->trig[id].mask = mask;
++}
++
++static uint8_t dmac_ch_pending(MchpDmacState *s, unsigned ch)
++{
++    return dmac_reg(s, DMAC_CH(ch, A_MCHP_DMAC_CHANNEL_CHINTFLAG), 1) &
++           dmac_reg(s, DMAC_CH(ch, A_MCHP_DMAC_CHANNEL_CHINTENSET), 1);
++}
++
++/* Lines 0-3: channels 0-3; line 4: channels 4-31 */
++static uint32_t dmac_irq_lines(MchpRegBlock *rb)
++{
++    MchpDmacState *s = MCHP_DMAC(rb);
++    uint32_t lines = 0;
++
++    for (unsigned ch = 0; ch < DMAC_NCH; ch++) {
++        if (dmac_ch_pending(s, ch)) {
++            lines |= BIT(MIN(ch, 4));
++        }
++    }
++    return lines;
++}
++
++static bool dmac_irq_pending(MchpRegBlock *rb)
++{
++    return dmac_irq_lines(rb) != 0;
++}
++
++static uint32_t dmac_chstatus(MchpDmacState *s, unsigned ch)
++{
++    uint32_t st = 0;
++
++    if (dmac_runnable(s, ch)) {
++        st |= R_MCHP_DMAC_CHANNEL_CHSTATUS_BUSY_MASK;
++        if (dmac_trigger_ready(s, ch)) {
++            st |= R_MCHP_DMAC_CHANNEL_CHSTATUS_PEND_MASK;
++        }
++    }
++    if (s->ferr & BIT(ch)) {
++        st |= R_MCHP_DMAC_CHANNEL_CHSTATUS_FERR_MASK;
++    }
++    return st;
++}
++
++static uint32_t dmac_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                              unsigned idx, uint32_t stored, bool side_effects)
++{
++    MchpDmacState *s = MCHP_DMAC(rf->opaque);
++    uint32_t off = mchp_regfile_elem_offset(ri, idx);
++    uint32_t v = 0;
++
++    if (side_effects && timer_pending(s->timer)) {
++        /* Firmware looks: what was started has run by now */
++        timer_del(s->timer);
++        dmac_run(s);
++        stored = mchp_regfile_peek(rf, off, ri->size);
++    }
++
++    switch (off) {
++    case A_MCHP_DMAC_INTPEND:
++        for (unsigned ch = 0; ch < DMAC_NCH; ch++) {
++            uint8_t f = dmac_ch_pending(s, ch);
++
++            if (f) {
++                uint32_t st = dmac_chstatus(s, ch);
++
++                return ch | (uint32_t)f << R_MCHP_DMAC_INTPEND_TERR_SHIFT |
++                       (st & R_MCHP_DMAC_CHANNEL_CHSTATUS_PEND_MASK ?
++                        R_MCHP_DMAC_INTPEND_PEND_MASK : 0) |
++                       (st & R_MCHP_DMAC_CHANNEL_CHSTATUS_BUSY_MASK ?
++                        R_MCHP_DMAC_INTPEND_BUSY_MASK : 0) |
++                       (st & R_MCHP_DMAC_CHANNEL_CHSTATUS_FERR_MASK ?
++                        R_MCHP_DMAC_INTPEND_FERR_MASK : 0);
++            }
++        }
++        return 0;
++    case A_MCHP_DMAC_INTSTATUS:
++        for (unsigned ch = 0; ch < DMAC_NCH; ch++) {
++            v |= dmac_ch_pending(s, ch) ? BIT(ch) : 0;
++        }
++        return v;
++    case A_MCHP_DMAC_BUSYCH:
++    case A_MCHP_DMAC_PENDCH:
++        for (unsigned ch = 0; ch < DMAC_NCH; ch++) {
++            uint32_t st = dmac_chstatus(s, ch);
++
++            if (st & (off == A_MCHP_DMAC_BUSYCH ?
++                      R_MCHP_DMAC_CHANNEL_CHSTATUS_BUSY_MASK :
++                      R_MCHP_DMAC_CHANNEL_CHSTATUS_PEND_MASK)) {
++                v |= BIT(ch);
++            }
++        }
++        return v;
++    case A_MCHP_DMAC_ACTIVE:
++        return 0;               /* transfers run between accesses */
++    default:
++        break;
++    }
++    if (off >= MCHP_DMAC_CHANNEL_OFFSET &&
++        (off - MCHP_DMAC_CHANNEL_OFFSET) % MCHP_DMAC_CHANNEL_STRIDE ==
++        A_MCHP_DMAC_CHANNEL_CHSTATUS) {
++        return dmac_chstatus(s, (off - MCHP_DMAC_CHANNEL_OFFSET) /
++                                MCHP_DMAC_CHANNEL_STRIDE);
++    }
++    return stored;
++}
++
++static void dmac_ch_reset(MchpDmacState *s, unsigned ch)
++{
++    static const hwaddr regs[] = {
++        A_MCHP_DMAC_CHANNEL_CHCTRLA, A_MCHP_DMAC_CHANNEL_CHCTRLB,
++        A_MCHP_DMAC_CHANNEL_CHPRILVL, A_MCHP_DMAC_CHANNEL_CHEVCTRL,
++        A_MCHP_DMAC_CHANNEL_CHINTENSET, A_MCHP_DMAC_CHANNEL_CHINTFLAG,
++    };
++
++    for (unsigned i = 0; i < ARRAY_SIZE(regs); i++) {
++        dmac_set_reg(s, DMAC_CH(ch, regs[i]), 1, 0);
++    }
++    dmac_set_reg(s, DMAC_CH(ch, A_MCHP_DMAC_CHANNEL_CHCTRLA), 4, 0);
++    s->active &= ~BIT(ch);
++    s->suspended &= ~BIT(ch);
++    s->ferr &= ~BIT(ch);
++}
++
++static void dmac_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                            unsigned idx, uint32_t old, uint32_t written,
++                            uint32_t we)
++{
++    MchpDmacState *s = MCHP_DMAC(rf->opaque);
++    uint32_t off = mchp_regfile_elem_offset(ri, idx);
++    unsigned ch;
++    uint32_t reg;
++
++    if (off == A_MCHP_DMAC_INTPEND) {
++        /* Writing TERR/TCMPL/SUSP clears them in channel ID */
++        ch = FIELD_EX32(written, MCHP_DMAC_INTPEND, ID);
++        reg = DMAC_CH(ch, A_MCHP_DMAC_CHANNEL_CHINTFLAG);
++        dmac_set_reg(s, reg, 1, dmac_reg(s, reg, 1) &
++                     ~((written & we) >> R_MCHP_DMAC_INTPEND_TERR_SHIFT & 7));
++        dmac_set_reg(s, A_MCHP_DMAC_INTPEND, 2, 0);
++    } else if (off >= MCHP_DMAC_CHANNEL_OFFSET) {
++        ch = (off - MCHP_DMAC_CHANNEL_OFFSET) / MCHP_DMAC_CHANNEL_STRIDE;
++        reg = (off - MCHP_DMAC_CHANNEL_OFFSET) % MCHP_DMAC_CHANNEL_STRIDE;
++        if (reg == A_MCHP_DMAC_CHANNEL_CHCTRLA) {
++            uint32_t now = dmac_reg(s, off, 4);
++
++            if (written & we & R_MCHP_DMAC_CHANNEL_CHCTRLA_SWRST_MASK) {
++                dmac_ch_reset(s, ch);
++            } else if ((now & R_MCHP_DMAC_CHANNEL_CHCTRLA_ENABLE_MASK) &&
++                       !(old & R_MCHP_DMAC_CHANNEL_CHCTRLA_ENABLE_MASK)) {
++                s->ferr &= ~BIT(ch);
++                s->suspended &= ~BIT(ch);
++                dmac_fetch(s, ch, dmac_reg(s, A_MCHP_DMAC_BASEADDR, 4) +
++                                  16 * ch);
++            } else if (!(now & R_MCHP_DMAC_CHANNEL_CHCTRLA_ENABLE_MASK)) {
++                s->active &= ~BIT(ch);
++            }
++        } else if (reg == A_MCHP_DMAC_CHANNEL_CHCTRLB) {
++            switch (FIELD_EX32(written, MCHP_DMAC_CHANNEL_CHCTRLB, CMD)) {
++            case 1:                     /* SUSPEND */
++                s->suspended |= BIT(ch);
++                dmac_ch_flag(s, ch, CH_SUSP);
++                break;
++            case 2:                     /* RESUME */
++                s->suspended &= ~BIT(ch);
++                break;
++            }
++            dmac_set_reg(s, off, 1, 0);
++        }
++    }
++    dmac_schedule(s);
++}
++
++static void dmac_reset_hold(MchpRegBlock *rb)
++{
++    MchpDmacState *s = MCHP_DMAC(rb);
++
++    timer_del(s->timer);
++    s->active = s->suspended = s->ferr = 0;
++    memset(s->block_beats, 0, sizeof(s->block_beats));
++}
++
++static void dmac_init(Object *obj)
++{
++    MchpDmacState *s = MCHP_DMAC(obj);
++
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, dmac_timer, s);
++}
++
++static void dmac_finalize(Object *obj)
++{
++    timer_free(MCHP_DMAC(obj)->timer);
++}
++
++static const VMStateDescription vmstate_mchp_dmac = {
++    .name = TYPE_MCHP_DMAC,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpDmacState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_TIMER_PTR(timer, MchpDmacState),
++        VMSTATE_UINT32(active, MchpDmacState),
++        VMSTATE_UINT32(suspended, MchpDmacState),
++        VMSTATE_UINT32(ferr, MchpDmacState),
++        VMSTATE_UINT16_ARRAY(block_beats, MchpDmacState, DMAC_NCH),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void dmac_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_dmac;
++    c->pre_read = dmac_pre_read;
++    c->post_write = dmac_post_write;
++    c->reset_hold = dmac_reset_hold;
++    c->irq_pending = dmac_irq_pending;
++    c->irq_lines = dmac_irq_lines;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_dmac_types[] = {
++    {
++        .name = TYPE_MCHP_DMAC,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpDmacState),
++        .instance_init = dmac_init,
++        .instance_finalize = dmac_finalize,
++        .class_init = dmac_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_dmac_types)
+diff --git a/hw/dma/meson.build b/hw/dma/meson.build
+index cc7810b..642f46e 100644
+--- a/hw/dma/meson.build
++++ b/hw/dma/meson.build
+@@ -12,3 +12,4 @@ system_ss.add(when: 'CONFIG_OMAP', if_true: files('omap_dma.c', 'soc_dma.c'))
+ system_ss.add(when: 'CONFIG_RASPI', if_true: files('bcm2835_dma.c'))
+ system_ss.add(when: 'CONFIG_SIFIVE_PDMA', if_true: files('sifive_pdma.c'))
+ system_ss.add(when: 'CONFIG_XLNX_CSU_DMA', if_true: files('xlnx_csu_dma.c'))
++system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_dmac.c'))
+diff --git a/hw/misc/Kconfig b/hw/misc/Kconfig
+index 08167c4..380d9f9 100644
+--- a/hw/misc/Kconfig
++++ b/hw/misc/Kconfig
+@@ -203,6 +203,9 @@ config MCHP_PFSOC_DMC
+ config MCHP_REGFILE
+     bool
+ 
++config WS2812
++    bool
++
+ config MIKROBUS
+     bool
+     select I2C
+diff --git a/hw/misc/mchp_usb.c b/hw/misc/mchp_usb.c
+index 0df02d7..185fa46 100644
+--- a/hw/misc/mchp_usb.c
++++ b/hw/misc/mchp_usb.c
+@@ -14,13 +14,13 @@
+  * in bank 0 of endpoint 0 with RXSTP.
+  *
+  * There is no USB bus in this machine, so the controller carries its own
+- * host, clocked by 1 ms frames of virtual time while the device is
+- * attached: a bus reset (EORST), enumeration (device descriptor,
++ * host, polling every 125 us of virtual time while the device is attached
++ * (SOF and FNUM every 1 ms): a bus reset (EORST), enumeration (device descriptor,
+  * SET_ADDRESS, configuration descriptor, product string,
+  * SET_CONFIGURATION), then for the first CDC ACM interface
+  * SET_LINE_CODING (115200 8N1) and SET_CONTROL_LINE_STATE (DTR | RTS), as
+  * a terminal program opening the port would. After that it moves one
+- * transfer per frame and direction between the CDC data endpoints and the
++ * transfer per poll and direction between the CDC data endpoints and the
+  * "chardev". Other interfaces (mass storage, HID, MIDI) are enumerated but
+  * never used. Interrupt lines: 0 = everything but SOF and transfer
+  * completes, 1 = SOF, 2 = TRCPT0, 3 = TRCPT1 (DS USB interrupt table).
+@@ -50,7 +50,8 @@
+ #define USB_EP_REG(ep, r)   (MCHP_USB_DEVICE_DEVICE_ENDPOINT_OFFSET + \
+                              (ep) * MCHP_USB_DEVICE_DEVICE_ENDPOINT_STRIDE + \
+                              (r))
+-#define USB_FRAME_NS        1000000             /* full speed: 1 ms */
++#define USB_TICK_NS         125000              /* host polls per 125 us */
++#define USB_TICKS_PER_FRAME 8                   /* full speed: 1 ms frames */
+ #define USB_EP0_SIZE        64
+ #define USB_RX_FIFO         512
+ #define USB_CTL_BUF         1024
+@@ -139,6 +140,7 @@ struct MchpUsbState {
+     Fifo8 rx;                       /* chardev input for the CDC OUT EP */
+ 
+     uint16_t fnum;
++    uint8_t tick;                   /* host ticks into the frame */
+     bool swrst_busy;                /* SYNCBUSY.SWRST reads 1 once */
+ 
+     /* Built-in host */
+@@ -642,10 +644,13 @@ static void usb_frame(void *opaque)
+         s->host = HOST_DETACHED;
+         return;                     /* the timer restarts on attach */
+     }
+-    s->fnum = (s->fnum + 1) & 0x7FF;
+-    usb_poke(s, A_MCHP_USB_DEVICE_INTFLAG, 2,
+-             usb_peek(s, A_MCHP_USB_DEVICE_INTFLAG, 2) |
+-             R_MCHP_USB_DEVICE_INTFLAG_SOF_MASK);
++    if (++s->tick >= USB_TICKS_PER_FRAME) {
++        s->tick = 0;
++        s->fnum = (s->fnum + 1) & 0x7FF;
++        usb_poke(s, A_MCHP_USB_DEVICE_INTFLAG, 2,
++                 usb_peek(s, A_MCHP_USB_DEVICE_INTFLAG, 2) |
++                 R_MCHP_USB_DEVICE_INTFLAG_SOF_MASK);
++    }
+ 
+     if (s->wait) {
+         s->wait--;
+@@ -653,7 +658,7 @@ static void usb_frame(void *opaque)
+         switch (s->host) {
+         case HOST_DETACHED:
+             s->host = HOST_ATTACHING;
+-            s->wait = 20;           /* debounce, as a hub does */
++            s->wait = 8;            /* debounce, as a hub does (short) */
+             break;
+         case HOST_ATTACHING:
+             usb_bus_reset(s);
+@@ -686,14 +691,14 @@ static void usb_frame(void *opaque)
+         }
+     }
+     mchp_regblock_update_irq(rb);
+-    timer_mod(s->frame, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + USB_FRAME_NS);
++    timer_mod(s->frame, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + USB_TICK_NS);
+ }
+ 
+ static void usb_kick(MchpUsbState *s)
+ {
+     if (usb_attached(s) && !timer_pending(s->frame)) {
+         timer_mod(s->frame, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+-                  USB_FRAME_NS);
++                  USB_TICK_NS);
+     }
+ }
+ 
+@@ -849,6 +854,7 @@ static const VMStateDescription vmstate_mchp_usb = {
+         VMSTATE_TIMER_PTR(frame, MchpUsbState),
+         VMSTATE_FIFO8(rx, MchpUsbState),
+         VMSTATE_UINT16(fnum, MchpUsbState),
++        VMSTATE_UINT8(tick, MchpUsbState),
+         VMSTATE_BOOL(swrst_busy, MchpUsbState),
+         VMSTATE_UINT8(host, MchpUsbState),
+         VMSTATE_UINT8(wait, MchpUsbState),
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 29293cf..becf1b2 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -26,6 +26,7 @@ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files(
+   'click_button.c',
+   'click_buzzer.c',
+ ))
++system_ss.add(when: 'CONFIG_WS2812', if_true: files('ws2812.c'))
+ system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files(
+   'mchp_clock.c',
+   'mchp_edbg_dgi.c',
+diff --git a/hw/misc/ws2812.c b/hw/misc/ws2812.c
+new file mode 100644
+index 0000000..0821f79
+--- /dev/null
++++ b/hw/misc/ws2812.c
+@@ -0,0 +1,234 @@
++/*
++ * A chain of WS2812-compatible RGB LEDs (NeoPixels) on one data line
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The data line ("din", a GPIO input fed from a pad) carries 24 bits per
++ * LED, green, red, blue, most significant bit first; each bit is a high
++ * pulse whose length gives its value (about 0.3 of the bit period for a
++ * 0, 0.6 for a 1). The first LED keeps the first 24 bits and passes the
++ * rest on; a low line for longer than the reset time latches every LED.
++ *
++ * Bits are told apart by the share of the bit period the line is high
++ * (rising edge to rising edge), so the absolute speed does not matter:
++ * firmware that bit-bangs the line at a tenth of the real rate still
++ * decodes. Times are QEMU_CLOCK_VIRTUAL; run with -icount for
++ * instruction-exact pulses (otherwise host time, which a translation
++ * stall can distort). Front ends poll "gen" and read "pixels": one
++ * RRGGBB hex value per LED, separated by spaces. The colour each LED
++ * shows is the latched value (FR5050RGB4C-F1A: WS2812B timing). Not
++ * modelled: the 280 us reset of newer parts, the data-out line.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/misc/ws2812.h"
++#include "migration/vmstate.h"
++
++#define WS2812_MAX_LEDS     64
++#define WS2812_RESET_NS     50000       /* latch after 50 us low */
++#define WS2812_ONE_SHARE    45          /* % of the period: 1 above */
++
++OBJECT_DECLARE_SIMPLE_TYPE(Ws2812State, WS2812)
++
++struct Ws2812State {
++    DeviceState parent_obj;
++
++    uint32_t count;
++    QEMUTimer *latch;
++
++    uint32_t shown[WS2812_MAX_LEDS];    /* latched 0xRRGGBB */
++    uint32_t shift[WS2812_MAX_LEDS];    /* GRB words being received */
++    uint32_t nbits;
++    uint32_t gen;
++
++    bool level;
++    int64_t rise;                       /* last rising edge */
++    int64_t high_ns;                    /* high time of the pending bit */
++    int64_t period_ns;                  /* last measured bit period */
++    bool pending;                       /* a bit waits for its period */
++};
++
++static void ws2812_push(Ws2812State *s, bool one)
++{
++    uint32_t led = s->nbits / 24;
++
++    if (led < s->count) {
++        s->shift[led] = s->shift[led] << 1 | one;
++    }
++    s->nbits++;
++}
++
++static void ws2812_classify(Ws2812State *s, int64_t period)
++{
++    if (period > 0) {
++        ws2812_push(s, s->high_ns * 100 > period * WS2812_ONE_SHARE);
++        s->period_ns = period;
++    }
++    s->pending = false;
++}
++
++/* The line stayed low: latch what arrived */
++static void ws2812_latch(void *opaque)
++{
++    Ws2812State *s = opaque;
++    uint32_t leds;
++
++    if (s->pending) {
++        /* The last bit has no next edge: its period is the previous one */
++        ws2812_classify(s, s->period_ns ? s->period_ns : 3 * s->high_ns);
++    }
++    leds = MIN(s->nbits / 24, s->count);
++    for (uint32_t i = 0; i < leds; i++) {
++        uint32_t grb = s->shift[i] & 0xFFFFFF;
++        uint32_t rgb = (grb & 0x00FF00) << 8 | (grb & 0xFF0000) >> 8 |
++                       (grb & 0x0000FF);
++
++        if (s->shown[i] != rgb) {
++            s->shown[i] = rgb;
++            s->gen++;
++        }
++    }
++    s->nbits = 0;
++    memset(s->shift, 0, sizeof(s->shift));
++}
++
++static void ws2812_din(void *opaque, int n, int level)
++{
++    Ws2812State *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    bool high = level > 0;
++
++    if (high == s->level) {
++        return;
++    }
++    s->level = high;
++    if (high) {
++        timer_del(s->latch);
++        if (s->pending) {
++            ws2812_classify(s, now - s->rise);
++        }
++        s->rise = now;
++    } else {
++        s->high_ns = now - s->rise;
++        s->pending = true;
++        timer_mod(s->latch, now + WS2812_RESET_NS);
++    }
++}
++
++static void ws2812_get_pixels(Object *obj, Visitor *v, const char *name,
++                              void *opaque, Error **errp)
++{
++    Ws2812State *s = WS2812(obj);
++    g_autoptr(GString) str = g_string_new(NULL);
++    char *p;
++
++    for (uint32_t i = 0; i < s->count; i++) {
++        g_string_append_printf(str, "%s%06X", i ? " " : "", s->shown[i]);
++    }
++    p = str->str;
++    visit_type_str(v, name, &p, errp);
++}
++
++static void ws2812_get_gen(Object *obj, Visitor *v, const char *name,
++                           void *opaque, Error **errp)
++{
++    uint32_t gen = WS2812(obj)->gen;
++
++    visit_type_uint32(v, name, &gen, errp);
++}
++
++static void ws2812_realize(DeviceState *dev, Error **errp)
++{
++    Ws2812State *s = WS2812(dev);
++
++    if (!s->count || s->count > WS2812_MAX_LEDS) {
++        error_setg(errp, "count must be 1-%d", WS2812_MAX_LEDS);
++    }
++}
++
++static void ws2812_reset(DeviceState *dev)
++{
++    Ws2812State *s = WS2812(dev);
++
++    timer_del(s->latch);
++    memset(s->shown, 0, sizeof(s->shown));
++    memset(s->shift, 0, sizeof(s->shift));
++    s->nbits = 0;
++    s->level = false;
++    s->pending = false;
++    s->period_ns = 0;
++    s->gen++;
++}
++
++static void ws2812_init(Object *obj)
++{
++    Ws2812State *s = WS2812(obj);
++
++    s->latch = timer_new_ns(QEMU_CLOCK_VIRTUAL, ws2812_latch, s);
++    qdev_init_gpio_in_named(DEVICE(obj), ws2812_din, WS2812_DIN, 1);
++    object_property_add(obj, "pixels", "str", ws2812_get_pixels, NULL, NULL,
++                        NULL);
++    object_property_add(obj, "gen", "uint32", ws2812_get_gen, NULL, NULL,
++                        NULL);
++}
++
++static void ws2812_finalize(Object *obj)
++{
++    timer_free(WS2812(obj)->latch);
++}
++
++static const Property ws2812_properties[] = {
++    DEFINE_PROP_UINT32("count", Ws2812State, count, 1),
++};
++
++static const VMStateDescription vmstate_ws2812 = {
++    .name = TYPE_WS2812,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_TIMER_PTR(latch, Ws2812State),
++        VMSTATE_UINT32_ARRAY(shown, Ws2812State, WS2812_MAX_LEDS),
++        VMSTATE_UINT32_ARRAY(shift, Ws2812State, WS2812_MAX_LEDS),
++        VMSTATE_UINT32(nbits, Ws2812State),
++        VMSTATE_UINT32(gen, Ws2812State),
++        VMSTATE_BOOL(level, Ws2812State),
++        VMSTATE_INT64(rise, Ws2812State),
++        VMSTATE_INT64(high_ns, Ws2812State),
++        VMSTATE_INT64(period_ns, Ws2812State),
++        VMSTATE_BOOL(pending, Ws2812State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void ws2812_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->desc = "WS2812 RGB LED chain";
++    dc->realize = ws2812_realize;
++    dc->vmsd = &vmstate_ws2812;
++    device_class_set_props(dc, ws2812_properties);
++    device_class_set_legacy_reset(dc, ws2812_reset);
++}
++
++static const TypeInfo ws2812_types[] = {
++    {
++        .name = TYPE_WS2812,
++        .parent = TYPE_DEVICE,
++        .instance_size = sizeof(Ws2812State),
++        .instance_init = ws2812_init,
++        .instance_finalize = ws2812_finalize,
++        .class_init = ws2812_class_init,
++    },
++};
++
++DEFINE_TYPES(ws2812_types)
+diff --git a/include/hw/display/st7789.h b/include/hw/display/st7789.h
+new file mode 100644
+index 0000000..a7b1283
+--- /dev/null
++++ b/include/hw/display/st7789.h
+@@ -0,0 +1,23 @@
++/*
++ * Sitronix ST7789V 240x320 RGB TFT driver on an SSI bus
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * GPIO inputs: "dc" (D/CX: 1 data, 0 command), "reset" (RESX, active
++ * low), "backlight" (1: lit), plus the SSI chip select. The panel picture
++ * is a PpPanel ("frame", "frame-gen"; see pp_panel.h).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_DISPLAY_ST7789_H
++#define HW_DISPLAY_ST7789_H
++
++#define TYPE_ST7789 "st7789"
++
++#define ST7789_DC "dc"
++#define ST7789_RESET "reset"
++#define ST7789_BACKLIGHT "backlight"
++
++#endif /* HW_DISPLAY_ST7789_H */
+diff --git a/include/hw/dma/mchp_dmac.h b/include/hw/dma/mchp_dmac.h
+new file mode 100644
+index 0000000..f1c1569
+--- /dev/null
++++ b/include/hw/dma/mchp_dmac.h
+@@ -0,0 +1,35 @@
++/*
++ * Microchip SAM D5x/E5x DMA controller (DMAC U2503)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * An mchp-regblock (five NVIC lines: channels 0-3, then the rest). A
++ * peripheral trigger is ready while the trigger's flag reads set in the
++ * peripheral's register (SERCOM INTFLAG.DRE for TX, RXC for RX); the SoC
++ * describes each trigger with mchp_dmac_set_trigger() before realize.
++ * Triggers nobody described never fire; software triggers always work.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_DMA_MCHP_DMAC_H
++#define HW_DMA_MCHP_DMAC_H
++
++#include "hw/misc/mchp_regblock.h"
++
++#define TYPE_MCHP_DMAC "mchp-dmac"
++
++#define MCHP_DMAC_MAX_TRIGGERS  128
++
++/*
++ * Trigger @id (CHCTRLA.TRIGSRC) is ready while the byte at @flag_addr has
++ * a bit of @mask set.
++ */
++void mchp_dmac_set_trigger(DeviceState *dmac, unsigned id, hwaddr flag_addr,
++                           uint8_t mask);
++
++/* Look again at the triggers (a peripheral's flags may have changed). */
++void mchp_dmac_kick(DeviceState *dmac);
++
++#endif /* HW_DMA_MCHP_DMAC_H */
+diff --git a/include/hw/mchp/gen/atsame51j20a/dmac_u2503.h b/include/hw/mchp/gen/atsame51j20a/dmac_u2503.h
+index 7e70350..cbf2f01 100644
+--- a/include/hw/mchp/gen/atsame51j20a/dmac_u2503.h
++++ b/include/hw/mchp/gen/atsame51j20a/dmac_u2503.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/dmac_u2503.yaml (sha1 fed14b50059e)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,7 +23,7 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CTRL", .offset = 0x00, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x0F03, .wmask = 0x0F03,
+-        .rdz = 0x0001, .flags = 0,
++        .rdz = 0x0001, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CRCCTRL", .offset = 0x02, .size = 2, .count = 1, .stride = 2,
+@@ -51,7 +51,7 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "SWTRIGCTRL", .offset = 0x10, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "PRICTRL0", .offset = 0x14, .size = 4, .count = 1, .stride = 4,
+@@ -61,47 +61,47 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "INTPEND", .offset = 0x20, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xF71F, .wmask = 0xF71F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "INTSTATUS", .offset = 0x24, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "BUSYCH", .offset = 0x28, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "PENDCH", .offset = 0x2C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "ACTIVE", .offset = 0x30, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFF9F0F,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "BASEADDR", .offset = 0x34, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "WRBADDR", .offset = 0x38, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "CHANNEL[0].CHCTRLA", .offset = 0x40, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[0].CHCTRLB", .offset = 0x44, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[0].CHPRILVL", .offset = 0x45, .size = 1, .count = 1,
+@@ -116,32 +116,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[0].CHINTENCLR", .offset = 0x4C, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 20 /* CHANNEL[0].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[0].CHINTENSET", .offset = 0x4D, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 20 /* CHANNEL[0].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[0].CHINTFLAG", .offset = 0x4E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[0].CHSTATUS", .offset = 0x4F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[1].CHCTRLA", .offset = 0x50, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[1].CHCTRLB", .offset = 0x54, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[1].CHPRILVL", .offset = 0x55, .size = 1, .count = 1,
+@@ -156,32 +158,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[1].CHINTENCLR", .offset = 0x5C, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 28 /* CHANNEL[1].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[1].CHINTENSET", .offset = 0x5D, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 28 /* CHANNEL[1].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[1].CHINTFLAG", .offset = 0x5E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[1].CHSTATUS", .offset = 0x5F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[2].CHCTRLA", .offset = 0x60, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[2].CHCTRLB", .offset = 0x64, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[2].CHPRILVL", .offset = 0x65, .size = 1, .count = 1,
+@@ -196,32 +200,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[2].CHINTENCLR", .offset = 0x6C, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 36 /* CHANNEL[2].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[2].CHINTENSET", .offset = 0x6D, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 36 /* CHANNEL[2].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[2].CHINTFLAG", .offset = 0x6E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[2].CHSTATUS", .offset = 0x6F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[3].CHCTRLA", .offset = 0x70, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[3].CHCTRLB", .offset = 0x74, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[3].CHPRILVL", .offset = 0x75, .size = 1, .count = 1,
+@@ -236,32 +242,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[3].CHINTENCLR", .offset = 0x7C, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 44 /* CHANNEL[3].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[3].CHINTENSET", .offset = 0x7D, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 44 /* CHANNEL[3].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[3].CHINTFLAG", .offset = 0x7E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[3].CHSTATUS", .offset = 0x7F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[4].CHCTRLA", .offset = 0x80, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[4].CHCTRLB", .offset = 0x84, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[4].CHPRILVL", .offset = 0x85, .size = 1, .count = 1,
+@@ -276,32 +284,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[4].CHINTENCLR", .offset = 0x8C, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 52 /* CHANNEL[4].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[4].CHINTENSET", .offset = 0x8D, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 52 /* CHANNEL[4].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[4].CHINTFLAG", .offset = 0x8E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[4].CHSTATUS", .offset = 0x8F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[5].CHCTRLA", .offset = 0x90, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[5].CHCTRLB", .offset = 0x94, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[5].CHPRILVL", .offset = 0x95, .size = 1, .count = 1,
+@@ -316,32 +326,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[5].CHINTENCLR", .offset = 0x9C, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 60 /* CHANNEL[5].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[5].CHINTENSET", .offset = 0x9D, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 60 /* CHANNEL[5].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[5].CHINTFLAG", .offset = 0x9E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[5].CHSTATUS", .offset = 0x9F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[6].CHCTRLA", .offset = 0xA0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[6].CHCTRLB", .offset = 0xA4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[6].CHPRILVL", .offset = 0xA5, .size = 1, .count = 1,
+@@ -356,32 +368,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[6].CHINTENCLR", .offset = 0xAC, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 68 /* CHANNEL[6].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[6].CHINTENSET", .offset = 0xAD, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 68 /* CHANNEL[6].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[6].CHINTFLAG", .offset = 0xAE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[6].CHSTATUS", .offset = 0xAF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[7].CHCTRLA", .offset = 0xB0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[7].CHCTRLB", .offset = 0xB4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[7].CHPRILVL", .offset = 0xB5, .size = 1, .count = 1,
+@@ -396,32 +410,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[7].CHINTENCLR", .offset = 0xBC, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 76 /* CHANNEL[7].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[7].CHINTENSET", .offset = 0xBD, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 76 /* CHANNEL[7].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[7].CHINTFLAG", .offset = 0xBE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[7].CHSTATUS", .offset = 0xBF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[8].CHCTRLA", .offset = 0xC0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[8].CHCTRLB", .offset = 0xC4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[8].CHPRILVL", .offset = 0xC5, .size = 1, .count = 1,
+@@ -436,32 +452,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[8].CHINTENCLR", .offset = 0xCC, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 84 /* CHANNEL[8].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[8].CHINTENSET", .offset = 0xCD, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 84 /* CHANNEL[8].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[8].CHINTFLAG", .offset = 0xCE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[8].CHSTATUS", .offset = 0xCF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[9].CHCTRLA", .offset = 0xD0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[9].CHCTRLB", .offset = 0xD4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[9].CHPRILVL", .offset = 0xD5, .size = 1, .count = 1,
+@@ -476,32 +494,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[9].CHINTENCLR", .offset = 0xDC, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 92 /* CHANNEL[9].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[9].CHINTENSET", .offset = 0xDD, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 92 /* CHANNEL[9].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[9].CHINTFLAG", .offset = 0xDE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[9].CHSTATUS", .offset = 0xDF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[10].CHCTRLA", .offset = 0xE0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[10].CHCTRLB", .offset = 0xE4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[10].CHPRILVL", .offset = 0xE5, .size = 1, .count = 1,
+@@ -516,32 +536,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[10].CHINTENCLR", .offset = 0xEC, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 100 /* CHANNEL[10].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[10].CHINTENSET", .offset = 0xED, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 100 /* CHANNEL[10].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[10].CHINTFLAG", .offset = 0xEE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[10].CHSTATUS", .offset = 0xEF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[11].CHCTRLA", .offset = 0xF0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[11].CHCTRLB", .offset = 0xF4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[11].CHPRILVL", .offset = 0xF5, .size = 1, .count = 1,
+@@ -556,32 +578,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[11].CHINTENCLR", .offset = 0xFC, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 108 /* CHANNEL[11].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[11].CHINTENSET", .offset = 0xFD, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 108 /* CHANNEL[11].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[11].CHINTFLAG", .offset = 0xFE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[11].CHSTATUS", .offset = 0xFF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[12].CHCTRLA", .offset = 0x100, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[12].CHCTRLB", .offset = 0x104, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[12].CHPRILVL", .offset = 0x105, .size = 1, .count = 1,
+@@ -596,32 +620,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[12].CHINTENCLR", .offset = 0x10C, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 116 /* CHANNEL[12].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[12].CHINTENSET", .offset = 0x10D, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 116 /* CHANNEL[12].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[12].CHINTFLAG", .offset = 0x10E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[12].CHSTATUS", .offset = 0x10F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[13].CHCTRLA", .offset = 0x110, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[13].CHCTRLB", .offset = 0x114, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[13].CHPRILVL", .offset = 0x115, .size = 1, .count = 1,
+@@ -636,32 +662,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[13].CHINTENCLR", .offset = 0x11C, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 124 /* CHANNEL[13].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[13].CHINTENSET", .offset = 0x11D, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 124 /* CHANNEL[13].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[13].CHINTFLAG", .offset = 0x11E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[13].CHSTATUS", .offset = 0x11F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[14].CHCTRLA", .offset = 0x120, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[14].CHCTRLB", .offset = 0x124, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[14].CHPRILVL", .offset = 0x125, .size = 1, .count = 1,
+@@ -676,32 +704,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[14].CHINTENCLR", .offset = 0x12C, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 132 /* CHANNEL[14].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[14].CHINTENSET", .offset = 0x12D, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 132 /* CHANNEL[14].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[14].CHINTFLAG", .offset = 0x12E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[14].CHSTATUS", .offset = 0x12F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[15].CHCTRLA", .offset = 0x130, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[15].CHCTRLB", .offset = 0x134, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[15].CHPRILVL", .offset = 0x135, .size = 1, .count = 1,
+@@ -716,32 +746,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[15].CHINTENCLR", .offset = 0x13C, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 140 /* CHANNEL[15].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[15].CHINTENSET", .offset = 0x13D, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 140 /* CHANNEL[15].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[15].CHINTFLAG", .offset = 0x13E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[15].CHSTATUS", .offset = 0x13F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[16].CHCTRLA", .offset = 0x140, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[16].CHCTRLB", .offset = 0x144, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[16].CHPRILVL", .offset = 0x145, .size = 1, .count = 1,
+@@ -756,32 +788,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[16].CHINTENCLR", .offset = 0x14C, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 148 /* CHANNEL[16].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[16].CHINTENSET", .offset = 0x14D, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 148 /* CHANNEL[16].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[16].CHINTFLAG", .offset = 0x14E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[16].CHSTATUS", .offset = 0x14F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[17].CHCTRLA", .offset = 0x150, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[17].CHCTRLB", .offset = 0x154, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[17].CHPRILVL", .offset = 0x155, .size = 1, .count = 1,
+@@ -796,32 +830,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[17].CHINTENCLR", .offset = 0x15C, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 156 /* CHANNEL[17].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[17].CHINTENSET", .offset = 0x15D, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 156 /* CHANNEL[17].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[17].CHINTFLAG", .offset = 0x15E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[17].CHSTATUS", .offset = 0x15F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[18].CHCTRLA", .offset = 0x160, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[18].CHCTRLB", .offset = 0x164, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[18].CHPRILVL", .offset = 0x165, .size = 1, .count = 1,
+@@ -836,32 +872,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[18].CHINTENCLR", .offset = 0x16C, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 164 /* CHANNEL[18].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[18].CHINTENSET", .offset = 0x16D, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 164 /* CHANNEL[18].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[18].CHINTFLAG", .offset = 0x16E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[18].CHSTATUS", .offset = 0x16F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[19].CHCTRLA", .offset = 0x170, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[19].CHCTRLB", .offset = 0x174, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[19].CHPRILVL", .offset = 0x175, .size = 1, .count = 1,
+@@ -876,32 +914,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[19].CHINTENCLR", .offset = 0x17C, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 172 /* CHANNEL[19].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[19].CHINTENSET", .offset = 0x17D, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 172 /* CHANNEL[19].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[19].CHINTFLAG", .offset = 0x17E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[19].CHSTATUS", .offset = 0x17F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[20].CHCTRLA", .offset = 0x180, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[20].CHCTRLB", .offset = 0x184, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[20].CHPRILVL", .offset = 0x185, .size = 1, .count = 1,
+@@ -916,32 +956,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[20].CHINTENCLR", .offset = 0x18C, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 180 /* CHANNEL[20].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[20].CHINTENSET", .offset = 0x18D, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 180 /* CHANNEL[20].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[20].CHINTFLAG", .offset = 0x18E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[20].CHSTATUS", .offset = 0x18F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[21].CHCTRLA", .offset = 0x190, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[21].CHCTRLB", .offset = 0x194, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[21].CHPRILVL", .offset = 0x195, .size = 1, .count = 1,
+@@ -956,32 +998,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[21].CHINTENCLR", .offset = 0x19C, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 188 /* CHANNEL[21].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[21].CHINTENSET", .offset = 0x19D, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 188 /* CHANNEL[21].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[21].CHINTFLAG", .offset = 0x19E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[21].CHSTATUS", .offset = 0x19F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[22].CHCTRLA", .offset = 0x1A0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[22].CHCTRLB", .offset = 0x1A4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[22].CHPRILVL", .offset = 0x1A5, .size = 1, .count = 1,
+@@ -996,32 +1040,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[22].CHINTENCLR", .offset = 0x1AC, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 196 /* CHANNEL[22].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[22].CHINTENSET", .offset = 0x1AD, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 196 /* CHANNEL[22].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[22].CHINTFLAG", .offset = 0x1AE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[22].CHSTATUS", .offset = 0x1AF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[23].CHCTRLA", .offset = 0x1B0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[23].CHCTRLB", .offset = 0x1B4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[23].CHPRILVL", .offset = 0x1B5, .size = 1, .count = 1,
+@@ -1036,32 +1082,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[23].CHINTENCLR", .offset = 0x1BC, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 204 /* CHANNEL[23].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[23].CHINTENSET", .offset = 0x1BD, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 204 /* CHANNEL[23].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[23].CHINTFLAG", .offset = 0x1BE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[23].CHSTATUS", .offset = 0x1BF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[24].CHCTRLA", .offset = 0x1C0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[24].CHCTRLB", .offset = 0x1C4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[24].CHPRILVL", .offset = 0x1C5, .size = 1, .count = 1,
+@@ -1076,32 +1124,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[24].CHINTENCLR", .offset = 0x1CC, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 212 /* CHANNEL[24].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[24].CHINTENSET", .offset = 0x1CD, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 212 /* CHANNEL[24].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[24].CHINTFLAG", .offset = 0x1CE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[24].CHSTATUS", .offset = 0x1CF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[25].CHCTRLA", .offset = 0x1D0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[25].CHCTRLB", .offset = 0x1D4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[25].CHPRILVL", .offset = 0x1D5, .size = 1, .count = 1,
+@@ -1116,32 +1166,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[25].CHINTENCLR", .offset = 0x1DC, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 220 /* CHANNEL[25].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[25].CHINTENSET", .offset = 0x1DD, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 220 /* CHANNEL[25].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[25].CHINTFLAG", .offset = 0x1DE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[25].CHSTATUS", .offset = 0x1DF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[26].CHCTRLA", .offset = 0x1E0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[26].CHCTRLB", .offset = 0x1E4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[26].CHPRILVL", .offset = 0x1E5, .size = 1, .count = 1,
+@@ -1156,32 +1208,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[26].CHINTENCLR", .offset = 0x1EC, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 228 /* CHANNEL[26].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[26].CHINTENSET", .offset = 0x1ED, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 228 /* CHANNEL[26].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[26].CHINTFLAG", .offset = 0x1EE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[26].CHSTATUS", .offset = 0x1EF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[27].CHCTRLA", .offset = 0x1F0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[27].CHCTRLB", .offset = 0x1F4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[27].CHPRILVL", .offset = 0x1F5, .size = 1, .count = 1,
+@@ -1196,32 +1250,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[27].CHINTENCLR", .offset = 0x1FC, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 236 /* CHANNEL[27].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[27].CHINTENSET", .offset = 0x1FD, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 236 /* CHANNEL[27].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[27].CHINTFLAG", .offset = 0x1FE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[27].CHSTATUS", .offset = 0x1FF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[28].CHCTRLA", .offset = 0x200, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[28].CHCTRLB", .offset = 0x204, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[28].CHPRILVL", .offset = 0x205, .size = 1, .count = 1,
+@@ -1236,32 +1292,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[28].CHINTENCLR", .offset = 0x20C, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 244 /* CHANNEL[28].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[28].CHINTENSET", .offset = 0x20D, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 244 /* CHANNEL[28].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[28].CHINTFLAG", .offset = 0x20E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[28].CHSTATUS", .offset = 0x20F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[29].CHCTRLA", .offset = 0x210, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[29].CHCTRLB", .offset = 0x214, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[29].CHPRILVL", .offset = 0x215, .size = 1, .count = 1,
+@@ -1276,32 +1334,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[29].CHINTENCLR", .offset = 0x21C, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 252 /* CHANNEL[29].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[29].CHINTENSET", .offset = 0x21D, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 252 /* CHANNEL[29].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[29].CHINTFLAG", .offset = 0x21E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[29].CHSTATUS", .offset = 0x21F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[30].CHCTRLA", .offset = 0x220, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[30].CHCTRLB", .offset = 0x224, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[30].CHPRILVL", .offset = 0x225, .size = 1, .count = 1,
+@@ -1316,32 +1376,34 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[30].CHINTENCLR", .offset = 0x22C, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 260 /* CHANNEL[30].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[30].CHINTENSET", .offset = 0x22D, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 260 /* CHANNEL[30].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[30].CHINTFLAG", .offset = 0x22E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[30].CHSTATUS", .offset = 0x22F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "CHANNEL[31].CHCTRLA", .offset = 0x230, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x3F307F43,
+-        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0x3F307F43, .rdz = 0x00000001, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[31].CHCTRLB", .offset = 0x234, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[31].CHPRILVL", .offset = 0x235, .size = 1, .count = 1,
+@@ -1356,22 +1418,24 @@ static const MchpRegInfo atsame51j20a_dmac_regs[] = {
+     {
+         .name = "CHANNEL[31].CHINTENCLR", .offset = 0x23C, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 268 /* CHANNEL[31].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[31].CHINTENSET", .offset = 0x23D, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 268 /* CHANNEL[31].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[31].CHINTFLAG", .offset = 0x23E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .w1c = 0x07, .flags = 0,
++        .w1c = 0x07, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[31].CHSTATUS", .offset = 0x23F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+ };
+ #define ATSAME51J20A_DMAC_NREGS 271
+diff --git a/include/hw/mchp/gen/dmac_u2503.h b/include/hw/mchp/gen/dmac_u2503.h
+index 226b9c8..d3464cd 100644
+--- a/include/hw/mchp/gen/dmac_u2503.h
++++ b/include/hw/mchp/gen/dmac_u2503.h
+@@ -8,7 +8,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: ATSAME51J20A
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/dmac_u2503.yaml (sha1 fed14b50059e)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/mchp_device.h b/include/hw/mchp/mchp_device.h
+index e6fd85c..c9dafc6 100644
+--- a/include/hw/mchp/mchp_device.h
++++ b/include/hw/mchp/mchp_device.h
+@@ -171,6 +171,8 @@ typedef struct MchpDeviceInfo {
+     unsigned nevents;
+     const MchpSiliconRev *revisions; /* the first is the default */
+     unsigned nrevisions;
++    const MchpPeriphRef *dmac_triggers; /* DMAC trigger sources, by id */
++    unsigned ndmac_triggers;
+ } MchpDeviceInfo;
+ 
+ /*
+diff --git a/include/hw/misc/ws2812.h b/include/hw/misc/ws2812.h
+new file mode 100644
+index 0000000..21713fb
+--- /dev/null
++++ b/include/hw/misc/ws2812.h
+@@ -0,0 +1,20 @@
++/*
++ * A chain of WS2812-compatible RGB LEDs (NeoPixels) on one data line
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Property "count": LEDs in the chain. GPIO input "din": the data line.
++ * Read-only properties "pixels" (RRGGBB per LED, space separated) and
++ * "gen" (bumped when a latched colour changes).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_WS2812_H
++#define HW_MISC_WS2812_H
++
++#define TYPE_WS2812 "ws2812"
++#define WS2812_DIN "din"
++
++#endif /* HW_MISC_WS2812_H */
+diff --git a/tests/qtest/curiosity-cp-test.c b/tests/qtest/curiosity-cp-test.c
+index f94df7a..e559c2d 100644
+--- a/tests/qtest/curiosity-cp-test.c
++++ b/tests/qtest/curiosity-cp-test.c
+@@ -26,6 +26,8 @@
+ #define NVMCTRL         0x41004000
+ #define PORT            0x41008000
+ #define TRNG            0x42002800
++#define DMAC            0x4100A000
++#define SRAM            0x20000000
+ #define QSPI            0x42003400
+ #define QSPI_AHB        0x04000000
+ #define SCB_CPUID       0xE000ED00
+@@ -218,6 +220,74 @@ static void test_usb_reset(void)
+     qtest_quit(qts);
+ }
+ 
++/* Memory to memory with a software trigger, block action interrupt */
++static void test_dmac(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++    uint32_t desc = SRAM + 0x1000, wb = SRAM + 0x1200;
++    uint32_t src = SRAM + 0x2000, dst = SRAM + 0x3000;
++
++    for (unsigned i = 0; i < 16; i++) {
++        qtest_writeb(qts, src + i, 0xA0 + i);
++    }
++    /* Channel 0 descriptor: VALID, BLOCKACT INT, bytes, SRCINC, DSTINC */
++    qtest_writew(qts, desc + 0x0, 0x0C09);
++    qtest_writew(qts, desc + 0x2, 16);
++    qtest_writel(qts, desc + 0x4, src + 16);    /* end addresses */
++    qtest_writel(qts, desc + 0x8, dst + 16);
++    qtest_writel(qts, desc + 0xC, 0);
++    qtest_writel(qts, DMAC + 0x34, desc);       /* BASEADDR */
++    qtest_writel(qts, DMAC + 0x38, wb);         /* WRBADDR */
++    qtest_writew(qts, DMAC + 0x00, 0x0F02);     /* DMAENABLE, all levels */
++    qtest_writel(qts, DMAC + 0x40, 0x00300002); /* TRANSACTION, ENABLE */
++    qtest_writeb(qts, DMAC + 0x4E, 0xFF);       /* clear old flags */
++    g_assert_cmphex(qtest_readb(qts, dst), ==, 0);
++    qtest_writel(qts, DMAC + 0x10, 1);          /* SWTRIG0 */
++    qtest_clock_step(qts, 100000);
++    for (unsigned i = 0; i < 16; i++) {
++        g_assert_cmphex(qtest_readb(qts, dst + i), ==, 0xA0 + i);
++    }
++    g_assert_cmphex(qtest_readb(qts, DMAC + 0x4E) & 0x2, ==, 0x2);  /* TCMPL */
++    g_assert_cmphex(qtest_readl(qts, DMAC + 0x40) & 0x2, ==, 0);    /* off */
++    g_assert_cmphex(qtest_readw(qts, wb + 0x2), ==, 0);             /* BTCNT */
++    qtest_quit(qts);
++}
++
++/* NeoPixel chain on PB22: one 24-bit GRB word per LED */
++static void ws2812_send(QTestState *qts, const uint8_t *grb, unsigned n)
++{
++    for (unsigned i = 0; i < n; i++) {
++        for (int b = 7; b >= 0; b--) {
++            bool one = grb[i] >> b & 1;
++
++            qtest_writel(qts, PB + P_OUTSET, 1u << 22);
++            qtest_clock_step(qts, one ? 700 : 350);
++            qtest_writel(qts, PB + P_OUTCLR, 1u << 22);
++            qtest_clock_step(qts, one ? 550 : 900);
++        }
++    }
++    qtest_clock_step(qts, 100000);              /* reset: latch */
++}
++
++static void test_neopixels(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++    static const uint8_t grb[] = {
++        0x00, 0xFF, 0x00,   0xFF, 0x00, 0x00,   0x00, 0x00, 0xFF,
++        0x10, 0x20, 0x30,   0x80, 0x01, 0x7F,
++    };
++    QDict *rsp;
++
++    qtest_writel(qts, PB + P_DIRSET, 1u << 22);
++    ws2812_send(qts, grb, sizeof(grb));
++    rsp = qtest_qmp(qts, "{ 'execute': 'qom-get', 'arguments':"
++                    " { 'path': '/machine/neopixels', 'property': 'pixels' } }");
++    g_assert_cmpstr(qdict_get_str(rsp, "return"), ==,
++                    "FF0000 00FF00 0000FF 201030 01807F");
++    qobject_unref(rsp);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+@@ -228,5 +298,7 @@ int main(int argc, char **argv)
+     qtest_add_func("curiosity-cp/qspi-flash", test_qspi_flash);
+     qtest_add_func("curiosity-cp/trng", test_trng);
+     qtest_add_func("curiosity-cp/usb-reset", test_usb_reset);
++    qtest_add_func("curiosity-cp/dmac", test_dmac);
++    qtest_add_func("curiosity-cp/neopixels", test_neopixels);
+     return g_test_run();
+ }
+-- 
+2.53.0.windows.2
+

@@ -1,0 +1,35 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for DMAC U2503 (SAM D5x/E5x, 32 channels, five IRQ
+# lines). The mchp-dmac model moves beats between descriptors in SRAM and
+# the bus, paced by the trigger flags of the peripherals.
+ip: DMAC
+id: U2503
+versions: ["1.0.1"]
+references:
+  - "DS60001507 (SAM D5x/E5x data sheet) DMAC chapter: descriptors, triggers, write-back"
+registers:
+  CTRL:
+    pac_protected: true
+    self_clearing: [SWRST]
+    hooks: [post_write]           # DMAENABLE starts pending channels
+  SWTRIGCTRL: {hooks: [post_write]}
+  INTPEND:
+    dynamic: true                 # lowest channel with a pending interrupt
+    hooks: [post_write]           # writing its flags clears that channel's
+  INTSTATUS: {dynamic: true}
+  BUSYCH: {dynamic: true}
+  PENDCH: {dynamic: true}
+  ACTIVE: {dynamic: true}
+  BASEADDR: {pac_protected: true}
+  WRBADDR: {pac_protected: true}
+  CHCTRLA:
+    self_clearing: [SWRST]
+    hooks: [post_write]           # ENABLE starts the channel
+  CHCTRLB: {hooks: [post_write]}  # CMD suspend/resume
+  CHINTENCLR: {hooks: [post_write]}
+  CHINTENSET: {hooks: [post_write]}
+  CHINTFLAG:
+    w1c: all
+    hooks: [pre_read, post_write] # a read lets started transfers run first
+  CHSTATUS: {dynamic: true}
