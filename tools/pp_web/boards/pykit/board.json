@@ -15,6 +15,241 @@
     "board_id": "microchip_curiosity_circuitpython",
     "drive": "circuitpy"
   },
+  "view_mm": {"origin": [0, 40.8], "size": [306.6, 100]},
+  "pin_headers": [
+    {
+      "id": "J9T",
+      "name": "J9 pins 25-1",
+      "first_mm": [
+        187.3,
+        35.2
+      ],
+      "step_mm": [
+        2.5979,
+        0
+      ],
+      "also_mm": [
+        [
+          0,
+          -2.8
+        ]
+      ],
+      "pins": [
+        [
+          "GND",
+          "GND"
+        ],
+        [
+          "GND",
+          "GND"
+        ],
+        [
+          "PA14",
+          "BLE_CLR"
+        ],
+        [
+          "PA16",
+          "SD_MOSI"
+        ],
+        [
+          "PA17",
+          "SD_SCK"
+        ],
+        [
+          "PA18",
+          "SD_MISO"
+        ],
+        [
+          "PA19",
+          "SD_CS"
+        ],
+        [
+          "PA22",
+          "DEBUG_TX"
+        ],
+        [
+          "PA23",
+          "DEBUG_RX"
+        ],
+        [
+          "PB00",
+          "D8 IMU_INT"
+        ],
+        [
+          "GND",
+          "GND"
+        ],
+        [
+          "PB01",
+          "D9 IMU_ADDR"
+        ],
+        [
+          "PB02",
+          "D10 MOSI"
+        ],
+        [
+          "PB03",
+          "D11 SCK"
+        ],
+        [
+          "PB04",
+          "A0"
+        ],
+        [
+          "PB05",
+          "A1"
+        ],
+        [
+          "PB06",
+          "A2"
+        ],
+        [
+          "PB07",
+          "A3"
+        ],
+        [
+          "PB08",
+          "A4"
+        ],
+        [
+          "PB09",
+          "A5 CAP1"
+        ],
+        [
+          "PA04",
+          "LCD_MOSI"
+        ],
+        [
+          "PA05",
+          "LCD_SCK"
+        ],
+        [
+          "PA06",
+          "LCD_BL"
+        ],
+        [
+          "PA07",
+          "LCD_CS"
+        ],
+        [
+          "3V3",
+          "+3V3"
+        ]
+      ]
+    },
+    {
+      "id": "J9B",
+      "name": "J9 pins 26-48",
+      "first_mm": [
+        192.55,
+        9.2
+      ],
+      "step_mm": [
+        2.5955,
+        0
+      ],
+      "also_mm": [
+        [
+          0,
+          -2.8
+        ]
+      ],
+      "pins": [
+        [
+          "PA13",
+          "BLE_RX"
+        ],
+        [
+          "PA12",
+          "BLE_TX"
+        ],
+        [
+          "PB13",
+          "CAN_RX"
+        ],
+        [
+          "PB12",
+          "CAN_TX"
+        ],
+        [
+          "PB30",
+          "SCL"
+        ],
+        [
+          "PB31",
+          "SDA"
+        ],
+        [
+          "PB23",
+          "D13 LED"
+        ],
+        [
+          null,
+          "NEO_1-4"
+        ],
+        [
+          "GND",
+          "GND"
+        ],
+        [
+          "PB17",
+          "D7"
+        ],
+        [
+          "PB16",
+          "D6"
+        ],
+        [
+          "PB15",
+          "D5"
+        ],
+        [
+          "PB14",
+          "D4 LCD_DC"
+        ],
+        [
+          "PA27",
+          "D3"
+        ],
+        [
+          "PA21",
+          "D2"
+        ],
+        [
+          "PA20",
+          "D1"
+        ],
+        [
+          "PA15",
+          "D0"
+        ],
+        [
+          "PA03",
+          "VREF"
+        ],
+        [
+          null,
+          "RESET"
+        ],
+        [
+          "GND",
+          "GND"
+        ],
+        [
+          "PA02",
+          "DAC"
+        ],
+        [
+          "3V3",
+          "+3V3"
+        ],
+        [
+          "5V",
+          "VBUS"
+        ]
+      ]
+    }
+  ],
   "leds": [
     {"id": "D13", "ref": "D6", "at_mm": [283.3, 24.1], "pin": "PB23",
      "active_low": false, "color": "#ff2a2a"}

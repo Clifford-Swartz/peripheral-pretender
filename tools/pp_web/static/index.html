@@ -23,18 +23,18 @@
         <div id="board">
           <img id="board-img" alt="Board">
           <div id="overlays"></div>
+          <svg id="bench-svg" preserveAspectRatio="none"></svg>
         </div>
       </section>
       <section id="bench-pane" hidden>
         <div class="bench-bar">
-          <button id="bench-toggle" title="Show or hide the bench">Bench</button>
-          <select id="bench-add" title="Add a part"></select>
-          <select id="bench-pin" title="Add a pad or rail to wire to"></select>
+          <b class="bench-title">Parts</b>
+          <select id="bench-add" title="Add a part beside the board"></select>
+          <select id="bench-pin" title="A tag for a pad or rail with no header hole"></select>
           <span id="bench-props"></span>
           <span id="bench-warn"></span>
-          <button id="bench-clear" title="Remove every part">Clear</button>
+          <button id="bench-clear" title="Remove every part and wire">Clear</button>
         </div>
-        <svg id="bench-svg"></svg>
       </section>
     </div>
     <section id="side">

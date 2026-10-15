@@ -209,9 +209,11 @@ class App:
             data = json.loads(saved.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             data = {}
+        self.holes = benchlib.header_holes(self.board)
         self.bench = benchlib.Bench(data, vdd=self.board.get("vdd", 3.3),
                                     pad_max_ma=self.board.get("pad_max_ma",
-                                                              20.0))
+                                                              20.0),
+                                    holes=self.holes)
         self.bench_view = ""
         self.bench_frame_last: dict = {}
         self.bench_applied: dict[str, str] = {}     # PORT group -> value
@@ -380,7 +382,8 @@ class App:
                                   "terminals": d["terminals"],
                                   "props": d["props"]}
                               for t, d in benchlib.PARTS.items()},
-                "bench_pins": self.bench_pins()}
+                "bench_pins": self.bench_pins(),
+                "bench_holes": self.holes}
 
     async def select_board(self, board: str) -> None:
         """Switch boards: the twin stops, the page redraws, and the board's

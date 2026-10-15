@@ -164,3 +164,42 @@ def test_bench_button_and_led_on_the_mc00(qemu_path, qemu_machines,
     assert flips(states[:slow]) >= 4, [lit(m) for _, m in states[:slow]]
     assert flips(states[slow:]) > 2 * flips(states[:slow])
     assert json.dumps(states[-1][1])                # serialisable
+
+
+def _board(name):
+    return json.loads((ROOT / "tools" / "pp_web" / "boards" / name /
+                       "board.json").read_text(encoding="utf-8"))
+
+
+def test_header_holes_mc00_and_pykit():
+    from tools.pp_web.bench import header_holes
+    mc00 = header_holes(_board("ev15n46a"))
+    # Arduino D13 is PA19 (user guide Table 4-6); EXT1 pin 9 is IRQ, PB02
+    assert mc00["hole:J801.6"]["net"] == "pin:PA19"
+    assert mc00["hole:EXT1.9"]["net"] == "pin:PB02"
+    assert mc00["hole:EXT1.20"]["net"] == "rail:3V3"
+    assert mc00["hole:EXT1.1"]["net"] is None           # ID: no wire
+    # EXT1's holes are centred on the header's position
+    xs = [h["at_mm"][0] for k, h in mc00.items() if k.startswith("hole:EXT1")]
+    ys = [h["at_mm"][1] for k, h in mc00.items() if k.startswith("hole:EXT1")]
+    ext1 = next(h for h in _board("ev15n46a")["headers"] if h["id"] == "EXT1")
+    assert (min(xs) + max(xs)) / 2 == pytest.approx(ext1["at_mm"][0], abs=0.2)
+    assert (min(ys) + max(ys)) / 2 == pytest.approx(ext1["at_mm"][1], abs=0.2)
+    pykit = header_holes(_board("pykit"))
+    assert pykit["hole:J9B.17"]["label"] == "D0"
+    assert pykit["hole:J9B.17"]["net"] == pykit["hole:J9B.17a"]["net"] == \
+        "pin:PA15"
+    assert len(pykit) == 2 * (25 + 23)
+
+
+def test_wire_into_a_header_hole():
+    from tools.pp_web.bench import header_holes
+    holes = header_holes(_board("ev15n46a"))
+    b = Bench({"parts": [part("button", "sw", pressed=True)],
+               "wires": [["sw.a", "hole:J804.3"], ["sw.b", "hole:J801.7"],
+                         ["sw.a", "hole:EXT1.1"]]},        # ID: dropped
+              holes=holes)
+    assert b.data["wires"] == [["sw.a", "hole:J804.3"],
+                               ["sw.b", "hole:J801.7"]]
+    # D2 (PA20) through the button to J801's GND pin, against the pull-up
+    assert b.solve({"PA20": Pad(pull=1)}).inputs == {"PA20": 0}

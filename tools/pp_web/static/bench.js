@@ -1,27 +1,34 @@
 // Peripheral Pretender parts bench. Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
 //
-// Parts on an SVG bench below the board, wired to the board's pads and
-// rails. The server solves the circuit (bench.py) and sends "benchstate";
-// this draws it: LED glow, motor spin, servo horn, meter readings, net
-// voltages. Editing: drag parts and tags, click a terminal then another
-// to wire them, select a part or wire and press Delete (or right-click
-// it), hold a button, drag a pot's knob, double-click a switch.
+// Parts on the board itself: an SVG layer over the board picture, in the
+// stage's millimetres. Parts sit on or beside the board and jumper wires
+// run from their legs into the holes of the board's headers (board.json
+// "pin_headers", sent as "bench_holes"), to pad tags or to rail tags. The
+// server solves the circuit (bench.py) and sends "benchstate"; this draws
+// it: LED glow, motor spin, servo horn, meter readings, wire voltages.
+//
+// Editing: drag parts and tags; click a part's leg, then a header hole
+// (or another leg or tag) to run a wire; select a part or wire and press
+// Delete, or right-click it. While it runs: hold a button, drag a pot's
+// knob, double-click a switch.
 "use strict";
 
 const Bench = (() => {
   const SVGNS = "http://www.w3.org/2000/svg";
-  let lib = {}, pins = [], data = { parts: [], wires: [], anchors: {} };
+  let lib = {}, pins = [], holes = {}, data = { parts: [], wires: [], anchors: {} };
   let solved = { parts: {}, pads: {}, nets: {}, warnings: [] };
-  let svg, layerWires, layerParts, rubber;
-  let wiring = null, selected = null, drag = null;
+  let svg, layerHoles, layerWires, layerParts, rubber;
+  let wiring = null, selected = null, drag = null, held = false;
+  let stage = { x0: 0, y0: 0, w: 100, h: 100 };   // the board's view, mm
   const spin = {};                       // motor id -> angle
-  let held = false;                      // a button or knob is held
 
-  // Terminal offsets and the drawing of each part type, at (0, 0)
+  // Terminal offsets and the drawing of each part type, at (0, 0), in
+  // drawing units (one screen pixel each: see unit())
   const SHAPES = {
     resistor: { terms: { a: [-40, 0], b: [40, 0] }, draw: (p) =>
       `<path class="lead" d="M-40 0H-24M24 0H40"/>
        <rect class="body" x="-24" y="-8" width="48" height="16" rx="4"/>
+       <path class="band" d="M-16 -8V8M-9 -8V8M-2 -8V8M14 -8V8"/>
        <text y="-13">${fmtOhms(p.ohms)}</text>` },
     led: { terms: { a: [-32, 0], k: [32, 0] }, draw: (p) =>
       `<circle class="glow" r="22" fill="${LED_COLORS[p.color] || "#f33"}"/>
@@ -51,9 +58,8 @@ const Bench = (() => {
        <rect class="hit" x="-18" y="-18" width="36" height="24"/>
        <text y="-21">switch: ${p.on ? "on" : "off"}</text>` },
     pot: { terms: { a: [-40, 0], b: [40, 0], w: [0, 34] }, draw: (p) =>
-      `<path class="lead" d="M-40 0H-24M24 0H40M0 34V${14}"/>
+      `<path class="lead" d="M-40 0H-24M24 0H40M0 34V14"/>
        <rect class="body" x="-24" y="-8" width="48" height="16" rx="4"/>
-       <path class="wiper" d="M${-20 + 40 * p.position} 14L${-24 + 40 * p.position} 22H${-16 + 40 * p.position}Z"/>
        <rect class="track" x="-22" y="-3" width="44" height="6" rx="3"/>
        <circle class="knob pot-knob" cx="${-20 + 40 * p.position}" r="7"/>
        <text y="-13">${fmtOhms(p.ohms)} pot</text>` },
@@ -63,8 +69,9 @@ const Bench = (() => {
        <g class="rotor"><path d="M0 -17V17M-17 0H17" class="blade"/><circle r="4" class="hub"/></g>
        <text y="-27">motor</text>` },
     nmos: { terms: { g: [-36, 0], d: [16, -32], s: [16, 32] }, draw: () =>
-      `<path class="lead" d="M-36 0H-8M-8 -12V12M-2 -14V14M-2 -9H16V-32M-2 9H16V32M-2 0H16"/>
-       <path class="lead arrow" d="M4 -4L-2 0L4 4"/>
+      `<rect class="hitbox" x="-30" y="-26" width="50" height="52"/>
+       <path class="lead" d="M-36 0H-8M-8 -12V12M-2 -14V14M-2 -9H16V-32M-2 9H16V32M-2 0H16"/>
+       <path class="lead" d="M4 -4L-2 0L4 4"/>
        <text x="22" y="4" text-anchor="start">N-FET</text>` },
     servo: { terms: { sig: [-44, -12], vcc: [-44, 0], gnd: [-44, 12] }, draw: () =>
       `<path class="lead" d="M-44 -12H-26M-44 0H-26M-44 12H-26"/>
@@ -77,9 +84,11 @@ const Bench = (() => {
        <text class="reading" y="4">-- V</text>
        <text class="pm" x="-24" y="34">+</text><text class="pm" x="24" y="34">−</text>` },
   };
+  const TAG_TERM = [34, 0];
   const LED_COLORS = { red: "#ff3b2f", yellow: "#ffd21a", orange: "#ff8c1a",
                        green: "#2bff55", blue: "#3b82ff", white: "#ffffff" };
   const RAIL_COLORS = { "3V3": "#ff6b5e", "5V": "#ffae42", GND: "#6f7c8c" };
+  const WIRE_COLORS = ["#e8322d", "#2d7fe8", "#2bbf55", "#f0b400", "#b05cff", "#ff7a1a"];
 
   function fmtOhms(r) {
     return r >= 1e6 ? `${+(r / 1e6).toFixed(2)} MΩ` : r >= 1e3 ? `${+(r / 1e3).toFixed(2)} kΩ`
@@ -93,23 +102,36 @@ const Bench = (() => {
     return e;
   }
 
-  // Where an end is drawn, in bench coordinates
+  // Millimetres per drawing unit: parts keep their size on screen
+  function unit() {
+    const w = svg && svg.getBoundingClientRect().width;
+    return w ? stage.w / w : 0.2;
+  }
+  // Board coordinates (mm, y up) to the stage's (mm from top-left)
+  function fromBoard([x, y]) { return [x - stage.x0, stage.y0 - y]; }
+
   function endPos(end) {
+    if (end.startsWith("hole:")) return holes[end] ? holes[end].at : null;
+    const u = unit();
     if (end.startsWith("pin:") || end.startsWith("rail:")) {
       const at = data.anchors[end];
-      return at ? [at[0] + 34, at[1]] : null;     // tags wire from the right
+      return at ? [at[0] + TAG_TERM[0] * u, at[1] + TAG_TERM[1] * u] : null;
     }
     const [pid, term] = end.split(".");
     const p = data.parts.find((x) => x.id === pid);
-    const off = p && SHAPES[p.type].terms[term];
-    return off ? [p.x + off[0], p.y + off[1]] : null;
+    const off = p && SHAPES[p.type] && SHAPES[p.type].terms[term];
+    return off ? [p.x + off[0] * u, p.y + off[1] * u] : null;
   }
 
-  function netVolts(end) { return solved.nets[end]; }
-  function voltColor(v) {
-    if (v == null) return "#55606e";
-    const t = Math.max(0, Math.min(1, v / 5));
-    return `hsl(${210 - 210 * t}, ${40 + 50 * t}%, ${45 + 10 * t}%)`;
+  function netVolts(end) {
+    if (end.startsWith("hole:") && holes[end]) end = holes[end].net;
+    return solved.nets[end];
+  }
+  function endName(end) {
+    const h = holes[end];
+    if (!h) return end;
+    const net = h.net.split(":")[1];
+    return `${end.slice(5)} ${h.label}${h.label === net ? "" : ` (${net})`}`;
   }
 
   function commit() { send({ type: "bench", bench: data }); }
@@ -123,27 +145,24 @@ const Bench = (() => {
     return `${stem}${n}`;
   }
 
-  // A free spot near the top left, stepping right then down
+  // A free spot for a new part: the stage's free area beside the board
+  // (or below it), stepping across then down
   function freeSpot() {
-    const box = svg.getBoundingClientRect();
+    const u = unit(), dx = 140 * u, dy = 90 * u;
     const taken = [...data.parts.map((p) => [p.x, p.y]), ...Object.values(data.anchors)];
-    for (let y = 60; y < 2000; y += 90) {
-      for (let x = 170; x < Math.max(400, box.width - 60); x += 120) {
-        if (!taken.some(([a, b]) => Math.abs(a - x) < 90 && Math.abs(b - y) < 70)) return [x, y];
+    // Beside the board when the stage has room there, else below it,
+    // starting under the headers so the wires stay short
+    const hx = Object.values(holes).map((h) => h.at[0]);
+    const area = board && board.size_mm && stage.w - board.size_mm[0] > 30
+      ? [board.origin_mm[0] - stage.x0 + board.size_mm[0] + 8, 10]
+      : [hx.length ? Math.max(5, Math.min(...hx) - 30 * u) : 10,
+         (board ? board.size_mm[1] : 0) + 12 * u];
+    for (let y = area[1] + dy / 2; y < stage.h - dy / 3; y += dy) {
+      for (let x = area[0] + dx / 2; x < stage.w - dx / 3; x += dx) {
+        if (!taken.some(([a, b]) => Math.abs(a - x) < dx * 0.8 && Math.abs(b - y) < dy * 0.8)) return [x, y];
       }
     }
-    return [170, 60];
-  }
-
-  // The first free row in the tag column on the left (then a second one)
-  function freeTagSpot() {
-    const taken = Object.values(data.anchors);
-    for (let x = 50; x < 1000; x += 90) {
-      for (let y = 40; y < 1000; y += 46) {
-        if (!taken.some(([a, b]) => Math.abs(a - x) < 70 && Math.abs(b - y) < 36)) return [x, y];
-      }
-    }
-    return [50, 40];
+    return [area[0] + dx / 2, area[1] + dy / 2];
   }
 
   function addPart(type) {
@@ -157,7 +176,7 @@ const Bench = (() => {
 
   function addAnchor(end) {
     if (data.anchors[end]) return;
-    data.anchors[end] = freeTagSpot();
+    data.anchors[end] = freeSpot();
     commit();
     render();
   }
@@ -180,13 +199,14 @@ const Bench = (() => {
     render();
   }
 
-  function toBench(e) {
+  function toStage(e) {
     const r = svg.getBoundingClientRect();
-    return [e.clientX - r.left, e.clientY - r.top];
+    return [(e.clientX - r.left) / r.width * stage.w, (e.clientY - r.top) / r.height * stage.h];
   }
 
-  function startWire(end, e) {
+  function clickEnd(end, e) {
     e.stopPropagation();
+    e.preventDefault();
     if (wiring && wiring !== end) {
       const pair = [wiring, end];
       if (!data.wires.some(([a, b]) => (a === pair[0] && b === pair[1]) || (a === pair[1] && b === pair[0]))) {
@@ -205,27 +225,43 @@ const Bench = (() => {
     const t = el("circle", { class: "term", cx: x, cy: y, r: 5 });
     t.dataset.end = end;
     if (wiring === end) t.classList.add("armed");
-    const v = netVolts(end);
-    const title = el("title");
-    title.textContent = `${end}${v != null ? ` · ${fmtV(v)}` : ""}`;
-    t.appendChild(title);
-    t.addEventListener("pointerdown", (e) => startWire(end, e));
+    t.appendChild(el("title"));
+    t.addEventListener("pointerdown", (e) => clickEnd(end, e));
     g.appendChild(t);
   }
 
-  // Drag the element's object (a part or a tag) by pointer
+  // Drag a part or a tag by pointer; the window follows the pointer so
+  // the layer itself can let clicks through to the board
   function draggable(g, getPos, setPos) {
     g.addEventListener("pointerdown", (e) => {
       if (e.button !== 0 || e.target.classList.contains("term")) return;
-      const [x0, y0] = toBench(e), [px, py] = getPos();
+      e.stopPropagation();
+      const [x0, y0] = toStage(e), [px, py] = getPos();
       drag = { dx: px - x0, dy: py - y0, moved: false, setPos };
-      try { svg.setPointerCapture(e.pointerId); } catch (_) { /* synthetic */ }
     });
   }
 
+  function renderHoles() {
+    const u = unit();
+    const used = new Set(data.wires.flat());
+    for (const [end, h] of Object.entries(holes)) {
+      if (!h.net) continue;
+      const c = el("circle", { class: "hole", cx: h.at[0], cy: h.at[1], r: Math.max(0.75, 5 * u) });
+      c.dataset.end = end;
+      if (used.has(end)) c.classList.add("used");
+      if (wiring === end) c.classList.add("armed");
+      const title = el("title");
+      title.textContent = endName(end);
+      c.appendChild(title);
+      c.addEventListener("pointerdown", (e) => clickEnd(end, e));
+      layerHoles.appendChild(c);
+    }
+  }
+
   function renderAnchors() {
+    const u = unit();
     for (const [end, at] of Object.entries(data.anchors)) {
-      const g = el("g", { class: "tag", transform: `translate(${at[0]},${at[1]})` });
+      const g = el("g", { class: "tag", transform: `translate(${at[0]},${at[1]}) scale(${u})` });
       g.dataset.end = end;
       const isPin = end.startsWith("pin:"), name = end.slice(isPin ? 4 : 5);
       const info = isPin ? pins.find((p) => p.pad === name) : null;
@@ -245,23 +281,22 @@ const Bench = (() => {
       const title = el("title");
       title.textContent = `${label} (right-click to remove)`;
       g.appendChild(title);
-      terminal(g, end, 34, 0);
+      terminal(g, end, ...TAG_TERM);
       layerParts.appendChild(g);
     }
   }
 
   function renderParts() {
+    const u = unit();
     for (const p of data.parts) {
       const shape = SHAPES[p.type];
       if (!shape) continue;
-      const g = el("g", { class: `part bp-${p.type}`, transform: `translate(${p.x},${p.y})` },
+      const g = el("g", { class: `part bp-${p.type}`, transform: `translate(${p.x},${p.y}) scale(${u})` },
                    shape.draw(p));
       g.dataset.id = p.id;
       if (selected && selected.part === p.id) g.classList.add("selected");
-      const st = solved.parts[p.id] || {};
-      if (st.warn) g.classList.add("warn");
       const title = el("title");
-      title.textContent = `${p.id}: ${lib[p.type].name}${st.warn ? ` — ${st.warn}` : ""}`;
+      title.textContent = `${p.id}: ${lib[p.type].name}`;
       g.prepend(title);
       draggable(g, () => [p.x, p.y], (x, y) => { p.x = x; p.y = y; });
       g.addEventListener("click", (e) => {
@@ -282,7 +317,7 @@ const Bench = (() => {
     if (p.type === "button") {
       const cap = g.querySelector(".cap");
       const press = (down) => {
-        if (p.pressed === down) return;
+        if (!!p.pressed === down) return;
         p.pressed = down;
         held = down;
         g.classList.toggle("down", down);
@@ -314,8 +349,8 @@ const Bench = (() => {
       });
       knob.addEventListener("pointermove", (e) => {
         if (!knob.dataset.held) return;
-        const [x] = toBench(e);
-        const pos = Math.max(0, Math.min(1, (x - p.x + 20) / 40));
+        const [x] = toStage(e);
+        const pos = Math.max(0, Math.min(1, ((x - p.x) / unit() + 20) / 40));
         p.position = pos;
         knob.setAttribute("cx", -20 + 40 * pos);
         const now = performance.now();
@@ -335,22 +370,29 @@ const Bench = (() => {
     }
   }
 
+  // Jumper wires: a sagging curve between the ends, coloured per wire,
+  // with a thin core showing the voltage
   function renderWires() {
+    const u = unit();
     data.wires.forEach(([a, b], i) => {
       const pa = endPos(a), pb = endPos(b);
       if (!pa || !pb) return;
-      const mx = (pa[0] + pb[0]) / 2;
-      const d = `M${pa[0]} ${pa[1]}H${mx}V${pb[1]}H${pb[0]}`;
-      const v = netVolts(a);
+      const len = Math.hypot(pb[0] - pa[0], pb[1] - pa[1]);
+      const mx = (pa[0] + pb[0]) / 2, my = (pa[1] + pb[1]) / 2 + Math.min(len * 0.25, 60 * u);
+      const d = `M${pa[0]} ${pa[1]}Q${mx} ${my} ${pb[0]} ${pb[1]}`;
       const g = el("g", { class: "wire" });
       g.appendChild(el("path", { d, class: "wire-hit" }));
-      const line = el("path", { d, class: "wire-line", stroke: voltColor(v) });
-      line.dataset.end = a;
-      g.appendChild(line);
+      g.appendChild(el("path", { d, class: "wire-line", stroke: WIRE_COLORS[i % WIRE_COLORS.length] }));
+      const core = el("path", { d, class: "wire-core" });
+      core.dataset.end = a;
+      g.appendChild(core);
+      for (const [x, y] of [pa, pb]) g.appendChild(el("circle", { class: "wire-end", cx: x, cy: y, r: 3.5 * u }));
       if (selected && selected.wire === i) g.classList.add("selected");
       const title = el("title");
-      title.textContent = `${a} — ${b}${v != null ? ` · ${fmtV(v)}` : ""} (right-click to remove)`;
+      title.dataset.ends = `${endName(a)} — ${endName(b)}`;
+      title.dataset.end = a;
       g.appendChild(title);
+      g.addEventListener("pointerdown", (e) => e.stopPropagation());
       g.addEventListener("click", (e) => { e.stopPropagation(); selected = { wire: i }; render(); });
       g.addEventListener("contextmenu", (e) => {
         e.preventDefault(); selected = { wire: i }; removeSelected();
@@ -359,8 +401,15 @@ const Bench = (() => {
     });
   }
 
+  function voltColor(v) {
+    if (v == null) return "#55606e";
+    const t = Math.max(0, Math.min(1, v / 5));
+    return `hsl(${210 - 210 * t}, ${40 + 50 * t}%, ${45 + 15 * t}%)`;
+  }
+
   // The solved state on the drawn parts, without rebuilding them
   function paint() {
+    if (!layerParts) return;
     for (const g of layerParts.querySelectorAll(".part")) {
       const p = data.parts.find((x) => x.id === g.dataset.id);
       const st = solved.parts[g.dataset.id] || {};
@@ -386,10 +435,12 @@ const Bench = (() => {
         horn.setAttribute("transform", `rotate(${st.angle != null ? st.angle - 90 : 0})`);
         horn.classList.toggle("idle", st.angle == null);
       }
-      if (p.type === "motor") g.dataset.rpm = st.rpm || 0;
-      const lbl = g.querySelector("text");
-      if (p.type === "motor" && lbl) lbl.textContent = st.rpm ? `motor ${st.rpm} rpm` : "motor";
+      if (p.type === "motor") {
+        g.dataset.rpm = st.rpm || 0;
+        g.querySelector("text").textContent = st.rpm ? `motor ${st.rpm} rpm` : "motor";
+      }
       g.classList.toggle("warn", !!st.warn);
+      g.querySelector("title").textContent = `${p.id}: ${lib[p.type].name}${st.warn ? ` — ${st.warn}` : ""}`;
     }
     for (const g of layerParts.querySelectorAll(".tag")) {
       const end = g.dataset.end, isPin = end.startsWith("pin:");
@@ -408,12 +459,21 @@ const Bench = (() => {
       rect.classList.toggle("warn", !!(pad && pad.warn));
       g.querySelector(".tag-sub").textContent = sub;
     }
-    for (const line of layerWires.querySelectorAll(".wire-line")) {
-      line.setAttribute("stroke", voltColor(netVolts(line.dataset.end)));
+    for (const core of layerWires.querySelectorAll(".wire-core")) {
+      core.setAttribute("stroke", voltColor(netVolts(core.dataset.end)));
     }
-    for (const t of layerParts.querySelectorAll(".term")) {
+    for (const t of layerWires.querySelectorAll("title")) {
       const v = netVolts(t.dataset.end);
-      t.querySelector("title").textContent = `${t.dataset.end}${v != null ? ` · ${fmtV(v)}` : ""}`;
+      t.textContent = `${t.dataset.ends}${v != null ? ` · ${fmtV(v)}` : ""} (right-click to remove)`;
+    }
+    for (const t of svg.querySelectorAll(".term, .hole")) {
+      const v = netVolts(t.dataset.end), title = t.querySelector("title");
+      if (title) title.textContent = `${endName(t.dataset.end)}${v != null ? ` · ${fmtV(v)}` : ""}`;
+    }
+    for (const h of layerHoles.querySelectorAll(".hole")) {
+      const net = holes[h.dataset.end].net;
+      const pad = net.startsWith("pin:") && solved.pads[net.slice(4)];
+      h.classList.toggle("high", !!pad && pad.volts > 1.65);
     }
     const warn = document.getElementById("bench-warn");
     if (warn) warn.textContent = (solved.warnings || []).join(" · ");
@@ -421,8 +481,9 @@ const Bench = (() => {
 
   function render() {
     if (!svg) return;
-    layerWires.textContent = "";
-    layerParts.textContent = "";
+    svg.classList.toggle("wiring", !!wiring);
+    for (const l of [layerHoles, layerWires, layerParts]) l.textContent = "";
+    renderHoles();
     renderWires();
     renderAnchors();
     renderParts();
@@ -436,8 +497,9 @@ const Bench = (() => {
     box.textContent = "";
     const p = selected && selected.part && data.parts.find((x) => x.id === selected.part);
     if (!p) {
-      box.innerHTML = wiring ? `<span class="muted">wiring from <b>${wiring}</b>: click another terminal (Esc cancels)</span>`
-        : `<span class="muted">click a terminal, then another, to wire them; right-click removes</span>`;
+      box.innerHTML = wiring
+        ? `<span class="muted">wire from <b>${endName(wiring)}</b>: click a header hole, a leg or a tag (Esc cancels)</span>`
+        : `<span class="muted">click a part's leg, then a hole on the board's headers, to wire it; right-click removes</span>`;
       return;
     }
     const head = document.createElement("b");
@@ -494,13 +556,13 @@ const Bench = (() => {
       Object.entries(lib).map(([t, d]) => `<option value="${t}">${d.name}</option>`).join("");
     add.onchange = () => { if (add.value) addPart(add.value); add.value = ""; };
     const pin = document.getElementById("bench-pin");
-    pin.innerHTML = `<option value="">+ pin…</option>` +
+    pin.innerHTML = `<option value="">+ pin tag…</option>` +
       `<optgroup label="Rails">${["3V3", "5V", "GND"].map((r) => `<option value="rail:${r}">${r}</option>`).join("")}</optgroup>` +
       `<optgroup label="Pads">${pins.map((p) => `<option value="pin:${p.pad}">${p.pad}${p.label ? ` (${p.label})` : ""}${p.adc ? " · ADC" : ""}</option>`).join("")}</optgroup>`;
     pin.onchange = () => { if (pin.value) addAnchor(pin.value); pin.value = ""; };
     document.getElementById("bench-clear").onclick = () => {
       if (!data.parts.length && !Object.keys(data.anchors).length) return;
-      if (!confirm("Clear the bench?")) return;
+      if (!confirm("Remove every part and wire?")) return;
       data = { parts: [], wires: [], anchors: {} };
       selected = wiring = null;
       commit();
@@ -510,27 +572,29 @@ const Bench = (() => {
 
   function init() {
     svg = document.getElementById("bench-svg");
+    layerHoles = el("g");
     layerWires = el("g");
     layerParts = el("g");
     rubber = el("path", { class: "rubber" });
-    svg.append(layerWires, rubber, layerParts);
-    svg.addEventListener("pointermove", (e) => {
-      const [x, y] = toBench(e);
+    svg.append(layerWires, layerParts, layerHoles, rubber);
+    window.addEventListener("pointermove", (e) => {
+      if (!svg) return;
+      const [x, y] = toStage(e);
       if (drag) {
         drag.moved = true;
-        drag.setPos(Math.round(x + drag.dx), Math.round(y + drag.dy));
+        drag.setPos(x + drag.dx, y + drag.dy);
         render();
       }
-      if (wiring) {
-        const p = endPos(wiring);
-        if (p) rubber.setAttribute("d", `M${p[0]} ${p[1]}L${x} ${y}`);
-      } else rubber.setAttribute("d", "");
+      const p = wiring && endPos(wiring);
+      rubber.setAttribute("d", p ? `M${p[0]} ${p[1]}L${x} ${y}` : "");
     });
-    svg.addEventListener("pointerup", () => {
+    window.addEventListener("pointerup", () => {
       if (drag && drag.moved) commit();
       setTimeout(() => { drag = null; }, 0);
     });
-    svg.addEventListener("click", () => {
+    // A click on the board (not on a part, hole or wire) ends wiring and
+    // drops the selection
+    document.getElementById("board").addEventListener("click", () => {
       if (wiring || selected) { wiring = null; selected = null; render(); }
     });
     document.addEventListener("keydown", (e) => {
@@ -540,17 +604,24 @@ const Bench = (() => {
         e.preventDefault(); removeSelected();
       }
     });
-    document.getElementById("bench-toggle").addEventListener("click", () => {
-      document.getElementById("bench-pane").classList.toggle("collapsed");
-    });
+    new ResizeObserver(() => render()).observe(svg);
     requestAnimationFrame(animate);
   }
 
+  let board = null;
   return {
     init,
     board(msg) {
+      board = msg.board;
       lib = msg.bench_lib || {};
       pins = msg.bench_pins || [];
+      const v = board.view_mm || { origin: board.origin_mm, size: board.size_mm };
+      stage = { x0: v.origin[0], y0: v.origin[1], w: v.size[0], h: v.size[1] };
+      svg.setAttribute("viewBox", `0 0 ${stage.w} ${stage.h}`);
+      holes = {};
+      for (const [end, h] of Object.entries(msg.bench_holes || {})) {
+        holes[end] = { ...h, at: fromBoard(h.at_mm) };
+      }
       document.getElementById("bench-pane").hidden = !Object.keys(lib).length;
       buildBar();
       render();
@@ -560,9 +631,8 @@ const Bench = (() => {
       // button or knob under the pointer
       if (drag || held) return;
       data = { parts: b.parts || [], wires: b.wires || [], anchors: b.anchors || {} };
-      // A bench written by hand or by a script may leave tags unplaced
       for (const end of data.wires.flat()) {
-        if (!data.anchors[end] && /^(pin|rail):/.test(end)) data.anchors[end] = freeTagSpot();
+        if (!data.anchors[end] && /^(pin|rail):/.test(end)) data.anchors[end] = freeSpot();
       }
       if (selected && selected.part && !data.parts.some((p) => p.id === selected.part)) selected = null;
       render();

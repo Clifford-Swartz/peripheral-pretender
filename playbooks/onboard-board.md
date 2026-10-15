@@ -278,8 +278,20 @@ and note. CircuitPython boards: the REPL comparison in "CircuitPython boards" in
 5. **The board's own parts** (a display, NeoPixels, an IMU, a speaker) go in `board.json`
    `"parts"`, each with the QOM path of its device: see "Board parts" in
    `tools/pp_web/README.md`. The page polls their properties with the Click ones.
+6. **Header holes** (`"pin_headers"`), so parts on the page plug into the board's own pins: every
+   header a user can wire to (Arduino, EXT, power, a Curiosity Nano's edge pins). Per header:
+   `first_mm` (pin 1's centre, board coordinates), `step_mm` (to the next pin), `pins` in
+   pin-number order as `[net, label]` (a pad, `GND`, `3V3`, `5V`, or `null` for ID/RESET/NC),
+   `cols: 2` with `col_mm` for a 2-row header numbered across (EXT: odd pins left), `also_mm`
+   for a second hole per pin. Sources, in this order: the pick-and-place file and Gerbers for
+   positions; else measure the pads on `top.png` (find the pad colour's squares or rings with
+   scipy `ndimage.label`, then fit first hole and pitch: see `boards/ev15n46a`, `boards/pykit`).
+   Pinouts from the user guide's connector tables or the schematic, and check the silkscreen
+   order on the image (which end is pin 1). `test_header_holes_*` in `tests/web/test_bench.py`
+   checks a header's holes are centred on its `at_mm`; add the board there.
 
-**Gate 4:** web tests green; a screenshot of the board on the page in the report.
+**Gate 4:** web tests green; a screenshot of the board on the page in the report, with a part
+wired into a header hole.
 
 ## Phase 5: Hand-back
 

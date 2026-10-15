@@ -65,14 +65,18 @@ MPLAB, and with `--watch` on that folder the page follows every build.
 
 ## The parts bench
 
-Below the board is a bench for everyday parts: resistors, LEDs (and an RGB LED), a diode,
-a push button, a switch, a potentiometer, a DC motor, a logic-level N-MOSFET, a servo and a
-voltmeter. Wire them to the board's pads and to 3V3, 5V and GND:
+Everyday parts plug into the board itself: resistors, LEDs (and an RGB LED), a diode, a push
+button, a switch, a potentiometer, a DC motor, a logic-level N-MOSFET, a servo and a voltmeter.
+They sit on or beside the board picture, and jumper wires run from their legs into the holes of
+the board's headers (`board.json` `"pin_headers"`: the Arduino, EXT and power headers on the
+MC00, J9 on the PyKit), each tied to its pad or to GND, 3V3 or 5V:
 
-- **+ pin…** puts a pad (with its board name and whether it has an ADC channel) or a rail on
-  the bench as a tag; **+ part…** adds a part.
-- Click a terminal, then another, to wire them (Esc cancels). Drag parts and tags. Select a
-  part to edit its values in the bar; right-click (or select and Delete) to remove things.
+- **+ part…** (the toolbar under the board) adds a part beside the board. Click one of its legs,
+  then a header hole (hover shows the pin's name, pad and voltage); Esc cancels. A leg can
+  also go to another leg.
+- **+ pin tag…** puts a pad with no header hole (or a rail) on the page as a tag to wire to.
+- Drag parts and tags. Select a part to edit its values in the toolbar; right-click (or select
+  and Delete) to remove things. Wires in use light their holes (red while the pad is high).
 - While the twin runs: hold a button, drag a pot's knob, double-click a switch. LEDs glow with
   their current, a motor spins at its speed, a servo's horn follows its pulse width (a 50 Hz
   frame is assumed), the meter reads, wires are coloured by voltage and hovering shows it.
@@ -89,17 +93,19 @@ that changes in time (capacitors, inductors, motor inertia). That is the analog 
 ngspice, later.
 
 Each board's bench is kept in `~/.pp_web/bench-<board>.json` (or `PP_WEB_BENCH_DIR`), and
-`--bench <file>` starts with one, so a bench can live in a project and run headless. Example,
+`--bench <file>` starts with one, so a bench can live in a project and run headless. Part
+positions are millimetres from the top-left corner of the page's stage (the board's `view_mm`). Example,
 on the PyKit with a `code.py` that reads D0 and A4 and lights D1:
 
 ```json
-{"parts": [{"id": "sw1", "type": "button", "x": 250, "y": 50},
-           {"id": "pot1", "type": "pot", "x": 250, "y": 150, "position": 0.25},
-           {"id": "r1", "type": "resistor", "x": 250, "y": 250, "ohms": 330},
-           {"id": "led1", "type": "led", "x": 380, "y": 250, "color": "green"}],
- "wires": [["pin:PA15", "sw1.a"], ["sw1.b", "rail:GND"],
-           ["rail:3V3", "pot1.a"], ["pot1.b", "rail:GND"], ["pot1.w", "pin:PB08"],
-           ["pin:PA20", "r1.a"], ["r1.b", "led1.a"], ["led1.k", "rail:GND"]]}
+{"parts": [{"id": "sw1", "type": "button", "x": 190, "y": 52},
+           {"id": "r1", "type": "resistor", "x": 220, "y": 52, "ohms": 330},
+           {"id": "led1", "type": "led", "x": 245, "y": 52, "color": "green"},
+           {"id": "pot1", "type": "pot", "x": 270, "y": 52, "position": 0.25}],
+ "wires": [["sw1.a", "hole:J9B.17"], ["sw1.b", "hole:J9B.20"],
+           ["r1.a", "hole:J9B.16"], ["r1.b", "led1.a"], ["led1.k", "hole:J9B.9"],
+           ["pot1.a", "hole:J9T.25"], ["pot1.b", "hole:J9T.11"],
+           ["pot1.w", "hole:J9T.19"]]}
 ```
 
 It is a local, single-user prototype: one twin is shared by every open page. Hosting

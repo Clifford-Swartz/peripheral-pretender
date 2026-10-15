@@ -4,9 +4,11 @@ circuit each frame.
 
 A bench is JSON: {"parts": [{"id", "type", "x", "y", <props>}], "wires":
 [[end, end], ...], "anchors": {end: [x, y]}}. An end is a part terminal
-("r1.a"), a pad ("pin:PA05") or a rail ("rail:3V3", "rail:5V", "rail:GND").
-Wires join ends into nets; anchors are where the page draws a pad or rail
-tag (x, y as the page places parts, in bench pixels).
+("r1.a"), a pad ("pin:PA05"), a rail ("rail:3V3", "rail:5V", "rail:GND")
+or a hole in one of the board's headers ("hole:J801.6", which the board
+ties to a pad or rail: see header_holes()). Wires join ends into nets;
+anchors are where the page draws a pad or rail tag. Positions (parts,
+anchors) are millimetres on the page's stage, from its top-left corner.
 
 Each frame the twin's pads become sources: a pad the MCU drives is VDD or
 0 V behind its output resistance (a PWM pad is solved high and low and the
@@ -85,9 +87,40 @@ def new_part(ptype: str, pid: str, x: float = 0, y: float = 0) -> dict:
             **PARTS[ptype]["props"]}
 
 
-def clean(bench: dict) -> dict:
+def header_holes(board: dict) -> dict[str, dict]:
+    """The holes of the board's headers (board.json "pin_headers"): {end:
+    {"net", "label", "at_mm"}}, net a pad or rail end, at_mm in board
+    coordinates. A header gives its first hole, the step to the next pin,
+    the pins in order as [net, label] (net a pad name, GND, 3V3, 5V, or
+    null for no connection), optionally "cols" (2: pins alternate between
+    two columns "col_mm" apart) and "also_mm" (more holes per pin, offsets
+    from the first: a header with a breakout row)."""
+    holes = {}
+    for h in board.get("pin_headers", []):
+        cols = h.get("cols", 1)
+        for i, (net, label) in enumerate(h["pins"]):
+            if net in ("GND", "3V3", "5V"):
+                end = f"rail:{net}"
+            elif net:
+                end = f"pin:{net}"
+            else:
+                end = None
+            row, col = divmod(i, cols)
+            x = h["first_mm"][0] + row * h["step_mm"][0] +                 col * h.get("col_mm", [0, 0])[0]
+            y = h["first_mm"][1] + row * h["step_mm"][1] +                 col * h.get("col_mm", [0, 0])[1]
+            for k, (dx, dy) in enumerate([(0, 0)] + h.get("also_mm", [])):
+                key = f"hole:{h['id']}.{i + 1}" + ("" if not k else
+                                                    "abcdefgh"[k - 1])
+                holes[key] = {"net": end, "label": label,
+                              "at_mm": [round(x + dx, 3), round(y + dy, 3)]}
+    return holes
+
+
+def clean(bench: dict, holes: dict | None = None) -> dict:
     """@bench with unknown parts, properties and dangling wires dropped,
-    and every property of the right type (it comes from the page)."""
+    and every property of the right type (it comes from the page). Hole
+    ends must be among @holes and connected."""
+    holes = holes or {}
     parts, ids = [], set()
     for p in bench.get("parts", []):
         spec = PARTS.get(p.get("type"))
@@ -116,6 +149,8 @@ def clean(bench: dict) -> dict:
         parts.append(part)
 
     def ok(end: str) -> bool:
+        if end.startswith("hole:"):
+            return bool(holes.get(end, {}).get("net"))
         if end.startswith("pin:"):
             pad = end[4:]
             return len(pad) >= 3 and pad[0] == "P" and pad[1].isalpha() and \
@@ -217,18 +252,22 @@ class Bench:
     """A bench and the state it carries between frames (input hysteresis)."""
 
     def __init__(self, bench: dict | None = None, vdd: float = 3.3,
-                 pad_max_ma: float = 20.0):
+                 pad_max_ma: float = 20.0, holes: dict | None = None):
         self.vdd = vdd
+        self.holes = holes or {}
         self.pad_max = pad_max_ma / 1000
         self.levels: dict[str, int] = {}
         self.set(bench or {})
 
     def set(self, bench: dict) -> None:
-        self.data = clean(bench)
+        self.data = clean(bench, self.holes)
         nets = _Nets()
         nets.find("rail:GND")
         for a, b in self.data["wires"]:
             nets.join(a, b)
+            for end in (a, b):              # a hole is its pad or rail
+                if end.startswith("hole:"):
+                    nets.join(end, self.holes[end]["net"])
         for p in self.data["parts"]:
             for t in PARTS[p["type"]]["terminals"]:
                 nets.find(f"{p['id']}.{t}")
