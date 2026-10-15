@@ -3,7 +3,10 @@
 QEMU-based digital twin of Microchip MCU peripherals, growing toward board-level simulation that
 customers can scale to their own boards. Targets: PIC32CM5164JH01100 on the PIC32CM JH01
 Curiosity Pro (EV81X90A, machine `pic32cm-jh01-cpro`) and PIC32CM1216MC00048 on the PIC32CM MC00
-Curiosity Pro (EV15N46A, `pic32cm-mc00-cpro`). A personal side project; MIT License.
+Curiosity Pro (EV15N46A, `pic32cm-mc00-cpro`); AVR64EA48 on the AVR64EA48 Curiosity Nano (EV66E56A,
+`avr64ea48-cnano`, QEMU's AVR build) on a Curiosity Nano Base for Click boards; ATSAME51J20A on the
+Curiosity CircuitPython board of the Curiosity PyKit Explorer (`curiosity-circuitpython`, running stock
+CircuitPython). A personal side project; MIT License.
 
 **Start here:** `docs/handoff.md` (status, setup, next steps), then `docs/design/v0-vertical-slice.md`
 (the build contract: architecture, interfaces, acceptance criteria). Background:
@@ -35,8 +38,8 @@ falls short.
   output in `build/<board>/`.
 - `tools/pp` (runner CLI), `tools/pp_mcp` (MCP server), `harness/` (silicon comparison via
   pyOCD/EDBG), `tests/`.
-- `scripts/fetch_packs.py` — pins and fetches the PIC32CM-JH DFP 1.3.221, PIC32CM-MC DFP 1.4.67 and
-  CMSIS 6.1.0 into `~/.mchp_packs`.
+- `scripts/fetch_packs.py` — pins and fetches the device packs (PIC32CM-JH, PIC32CM-MC, AVR-Ex, SAME51)
+  and CMSIS into `~/.mchp_packs`.
 
 ## Rules
 
