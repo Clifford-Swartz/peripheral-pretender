@@ -48,6 +48,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0039 | U2247 ADC checked on MC00 silicon (`APP=adc`): INTREF is SUPC VREF (1.024 V at reset) and converts only with VREF.VREFOE (else START stays set), INTVCC0 = VDDANA/1.6 (DFP right, data sheet table wrong), REFCTRL enable-protected |
 | 0040 | PIC32CM JH/MC DAC (U2214): 10-bit, INTREF/VDDANA/VREFA, VOUT on PA02 (`vout` property for front ends), read back by ADC0 AIN0 and used as the ADC's DAC reference; checked on MC00 silicon (`APP=dac`); `dac_u2214` overlay |
 | 0041 | AVR8X 12-bit differential ADC (AVR64EA48): single/8-bit/series/burst with accumulation and scaling, differential, window, three vectors; AIN0-31 (`ain`), VDD/10, temperature sensor via SIGROW calibration; all references; overlay |
+| 0042 | AVR8X ADC checked on AVR64EA48 silicon (`APP=adc`): an internal reference above VDD acts as VDD; the desk kit's SIGROW TEMPSENSE0/1 in the device descriptor |
 
 ## Setting it up
 

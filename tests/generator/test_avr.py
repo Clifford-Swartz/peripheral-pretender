@@ -50,4 +50,7 @@ def test_avr_headers_and_json(avr):
     doc = json.loads(jsongen.device_json(avr))
     assert doc["core"]["type"] == "avrxt"
     assert doc["core"]["signature"] == [0x1E, 0x96, 0x1E]
-    assert "nvm_rows" not in doc and doc["data_rows"] == []
+    # The only data row: the desk kit's temperature sensor calibration
+    assert "nvm_rows" not in doc
+    rows = [(r["addr"], r["bytes"]) for r in doc["data_rows"]]
+    assert rows == [(0x1104, [0xCE, 0xFD, 0x7E, 0xEC])]

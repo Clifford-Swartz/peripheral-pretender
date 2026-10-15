@@ -310,10 +310,11 @@ the DAC (`tests/web/test_bench.py`).
 **AVR64EA48 ADC (2026-10-15):** patch 0041; `firmware/avr-hello` `APP=adc` checks the references,
 modes (8-bit, left-adjust, 16-sample burst, differential) and RESRDY, and passes on the twin
 (`tests/golden/test_avr64ea48_silicon.py::test_adc_checks_pass`). Bench pots reach it through
-`ain` like the ARM ADCs. **Open:** run `adc` on the Nano's silicon (its nEDBG needs a replug after
-the DGI incident), then copy its SIGROW TEMPSENSE0/1 into `profiles/avr64ea48.yaml` data rows so
-the twin's temperature reading matches. avr-gcc (XC8 4.00) drops `(void)ADC0.RESULT;`: read into a
-volatile.
+`ain` like the ARM ADCs. Checked on the Nano's silicon (patch 0042, `golden/avr64ea48-b1/
+adc-silicon.txt`): all checks pass on both; silicon showed an internal reference above VDD acts as
+VDD (4.096 V at 3.3 V). The kit's SIGROW TEMPSENSE0/1 are data rows in `profiles/avr64ea48.yaml`,
+so the twin's temperature reading converts as the kit's. avr-gcc (XC8 4.00) drops
+`(void)ADC0.RESULT;`: read into a volatile.
 
 ## EDBG data gateway (DGI) and a Data Visualizer panel (2026-10-15)
 

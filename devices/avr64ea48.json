@@ -28508,5 +28508,16 @@
   "generators": [],
   "users": []
  },
- "data_rows": []
+ "data_rows": [
+  {
+   "addr": 4356,
+   "bytes": [
+    206,
+    253,
+    126,
+    236
+   ],
+   "what": "SIGROW.TEMPSENSE0/1 of the desk EV66E56A"
+  }
+ ]
 }

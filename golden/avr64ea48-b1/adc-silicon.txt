@@ -1,0 +1,14 @@
+PP adc: AVR64EA48 on AVR64EA48 Curiosity Nano
+vdd10/1v024 result=0x00000529 vdd_mv=0x0CE7
+vdd10/vdd result=0x00000199 expect=0x00000199 ok
+vdd10/2v048 result=0x00000294 expect=0x00000294 ok
+vdd10/2v500 result=0x0000021F expect=0x0000021D ok
+vdd10/4v096 result=0x00000199 expect=0x00000199 ok
+gnd/1v024 result=0x00000007 expect=0x00000000 ok
+8bit result=0x00000052 expect=0x00000052 ok
+leftadj result=0x000052E0 expect=0x00005290 ok
+burst16 result=0x000052AC expect=0x00005290 ok
+diff vdd10-gnd result=0x00000293 expect=0x00000294 ok
+resrdy before=0x01 after_read=0x00 ok
+temp result=0x00000AE6 sigrow_tempsense0=0xFDCE sigrow_tempsense1=0xEC7E
+PP:EXIT 00

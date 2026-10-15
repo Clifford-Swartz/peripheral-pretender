@@ -13,3 +13,9 @@ references:
 # SYSCFG.REVID per silicon revision (MAJOR in bits 7:4, 'A' = 1); default
 # first
 silicon_revisions: {B1: 0x21}
+# SIGROW.TEMPSENSE0/1 (temperature sensor slope and offset, signed): this
+# kit's factory values, read on silicon 2026-10-15 by firmware/avr-hello
+# APP=adc, so the twin's temperature reading converts like the kit's
+data_rows:
+  - {addr: 0x1104, bytes: [0xCE, 0xFD, 0x7E, 0xEC],
+     what: "SIGROW.TEMPSENSE0/1 of the desk EV66E56A"}

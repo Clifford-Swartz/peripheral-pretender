@@ -20,3 +20,13 @@ part: `-global pic32cm1216mc00048-soc.silicon-rev=A1 -global
 pic32cm1216mc00048-soc.serial-number=F79A74AF51524B5939202020FF190418`.
 `tests/golden/test_mc00_silicon.py` lists the register differences that are
 allowed, with the reason for each.
+
+## `avr64ea48-b1/`
+
+AVR64EA48 Curiosity Nano (EV66E56A), AVR64EA48 rev B1, nEDBG MCHP3428021800000314,
+programmed by drag and drop (`py -m harness.nano_run <hex> --allow-program --out ...`).
+
+| file | content | how |
+|---|---|---|
+| `*-vcom.bin` | VCOM bytes of `firmware/avr-hello` apps, 2026-10-14 | compared byte for byte by `tests/golden/test_avr64ea48_silicon.py` |
+| `adc-silicon.txt` | VCOM bytes of `APP=adc` (VDD 3.31 V, 2026-10-15) | a record: the codes follow the supply; the twin passes the same checks (`test_adc_checks_pass`). Its SIGROW TEMPSENSE0/1 (0xFDCE, 0xEC7E) are in `profiles/avr64ea48.yaml` |

@@ -98,9 +98,10 @@ int main(void)
     check("vdd10/2v500", adc_convert(ADC_REFSEL_2V500_gc, ADC_MUXPOS_VDD10_gc,
                                      ADC_MODE_SINGLE_12BIT_gc),
           vdd_mv * 4095UL / 25000UL, 12);
+    /* A reference above VDD acts as VDD (silicon: 4.096 V at VDD 3.3 V) */
     check("vdd10/4v096", adc_convert(ADC_REFSEL_4V096_gc, ADC_MUXPOS_VDD10_gc,
                                      ADC_MODE_SINGLE_12BIT_gc),
-          vdd_mv * 4095UL / 40960UL, 12);
+          vdd_mv < 4096U ? 409UL : vdd_mv * 4095UL / 40960UL, 12);
     check("gnd/1v024", adc_convert(ADC_REFSEL_1V024_gc, ADC_MUXPOS_GND_gc,
                                    ADC_MODE_SINGLE_12BIT_gc), 0, 8);
     check("8bit", adc_convert(ADC_REFSEL_1V024_gc, ADC_MUXPOS_VDD10_gc,
