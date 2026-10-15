@@ -350,7 +350,22 @@ The script smoke-tests the staged engine with no MSYS2 or system Python on PATH.
 open the MC00, the page answers, a posted ELF runs on the bundled QEMU, and Stop leaves no QEMU
 (the extension kills the engine's process tree; a plain kill would orphan QEMU). Run `npm test`
 with `ELECTRON_RUN_AS_NODE` unset (VS Code's terminals set it). The test passes paths through
-8.3 names, because test-electron breaks on the spaces in this repo's path.
+8.3 names, because test-electron breaks on the spaces in this repo's path. To poke at the
+webview's DOM, `PP_CDP_PORT=9333 PP_SUITE_HOLD=<file> npm test` holds the panel open with Chrome
+DevTools on that port (the page is in the `#active-frame` iframe of the `vscode-webview://`
+target) until `<file>` exists.
+
+Board switching (0.1.2, after the owner saw the page stick on "switching board"): not
+reproduced, in a browser or in a VS Code webview, but every way it could stick is closed:
+QEMU's QMP `quit`, its exit and the DGI sign-off are bounded (`session.STOP_S`, 2 s for DGI); a
+switch to the board already shown answers instead of staying silent; and the `--watch` scan
+(1 s on this repo, every second, on the event loop) walks only real folders (no hidden ones,
+no `node_modules`) in a thread, now 30 ms. Each switch logs its steps with times
+(`[pp_web] board <id>: ...`). The extension's channel is a log channel, so VS Code keeps it under
+`%APPDATA%/Code/logs/*/window*/exthost/cliffordswartz.peripheral-pretender/`. The server sends
+`Cache-Control: no-cache` for the page and its scripts, so a browser never keeps a stale page
+after an update. The page shrinks gracefully: below 760 px the board takes the width on top and
+the page scrolls; above, the side panel scrolls on its own; below 520 px the title hides.
 
 Commands: **Twin: Open Board** (pick a board), **Switch Board** (also the status-bar item;
 restarts the engine on the new board), **Run on Twin** (Explorer context on `.elf`, or

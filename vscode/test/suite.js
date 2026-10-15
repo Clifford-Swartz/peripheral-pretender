@@ -52,6 +52,14 @@ async function run() {
     assert.match(await page.text(), /<html/i);
     console.log(`[suite] engine on ${port}, page served`);
 
+    /* PP_SUITE_HOLD=<file>: keep the panel open until <file> exists, for
+       poking at the webview from outside (test/run.js PP_CDP_PORT) */
+    if (process.env.PP_SUITE_HOLD) {
+        console.log("[suite] holding");
+        await until("hold released",
+                    () => fs.existsSync(process.env.PP_SUITE_HOLD), 600000);
+    }
+
     const elf = path.join(ext.extensionPath, "engine", "app", "firmware",
                           "hello", "build", "pic32cm_mc00_cpro", "blinky.elf");
     const r = await fetch(`http://127.0.0.1:${port}/api/firmware`, {

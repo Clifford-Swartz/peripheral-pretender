@@ -41,6 +41,8 @@ async function main() {
                 "--extensions-dir", path.join(profile, "ext"),
                 "--disable-workspace-trust",
                 "--skip-welcome",
+                ...(process.env.PP_CDP_PORT ?
+                    [`--remote-debugging-port=${process.env.PP_CDP_PORT}`] : []),
                 profile,
             ],
         });

@@ -39,7 +39,7 @@ engine that runs it. Nothing else to install.
 ```
 py scripts/build_vsix.py            # stages vscode/engine, smoke-tests it, packages the VSIX
 cd vscode && npm test               # end to end in a downloaded VS Code
-code --install-extension vscode/peripheral-pretender-win32-x64-0.1.1.vsix
+code --install-extension vscode/peripheral-pretender-win32-x64-0.1.2.vsix
 ```
 
 Windows x64 only so far. The bundle holds QEMU (GPL-2.0-or-later) built from the pp-qemu fork,

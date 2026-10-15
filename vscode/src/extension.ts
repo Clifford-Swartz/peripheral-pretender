@@ -30,7 +30,7 @@ interface Board {
 
 let engine: Engine | undefined;
 let panel: vscode.WebviewPanel | undefined;
-let log: vscode.OutputChannel;
+let log: vscode.LogOutputChannel;     /* also saved under the exthost logs */
 let status: vscode.StatusBarItem;
 
 /* Where the engine lives and how to start it */
@@ -288,7 +288,8 @@ export interface Api {
 }
 
 export function activate(ctx: vscode.ExtensionContext): Api {
-    log = vscode.window.createOutputChannel("Peripheral Pretender");
+    log = vscode.window.createOutputChannel("Peripheral Pretender",
+                                            { log: true });
     status = vscode.window.createStatusBarItem(
         vscode.StatusBarAlignment.Left, 50);
     ctx.subscriptions.push(

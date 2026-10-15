@@ -11,16 +11,20 @@
 body {
   margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
-  height: 100vh; display: flex; flex-direction: column;
+  height: 100vh; height: 100dvh; display: flex; flex-direction: column;
+  overflow: hidden;
 }
 header {
-  display: flex; align-items: center; gap: 16px; padding: 10px 16px;
-  background: var(--panel); border-bottom: 1px solid #262c34;
+  display: flex; align-items: center; gap: 12px; padding: 8px 16px; min-width: 0;
+  background: var(--panel); border-bottom: 1px solid #262c34; flex: none;
 }
-header h1 { font-size: 16px; margin: 0; letter-spacing: .3px; }
+header h1 { font-size: 16px; margin: 0; letter-spacing: .3px; white-space: nowrap; }
 #board-select { background: #232a33; color: var(--text); border: 1px solid #2c333c;
-  border-radius: 6px; padding: 4px 8px; font: inherit; max-width: 50vw; }
-.status { margin-left: auto; padding: 2px 10px; border-radius: 10px; font-size: 12px; }
+  border-radius: 6px; padding: 4px 8px; font: inherit; min-width: 0; flex: 0 1 auto;
+  max-width: 100%; text-overflow: ellipsis; }
+.status { margin-left: auto; padding: 2px 10px; border-radius: 10px; font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+  max-width: 40%; flex: 0 1 auto; }
 .status.idle { background: #2a3038; color: var(--muted); }
 .status.running { background: #173d26; color: var(--ok); }
 .status.stopped, .status.error { background: #43191a; color: #ff8a86; }
@@ -53,8 +57,9 @@ main { flex: 1; display: flex; min-height: 0; }
 }
 .button:hover .tag { opacity: 1; }
 #side {
-  width: 420px; max-width: 45vw; display: flex; flex-direction: column; gap: 10px;
-  padding: 16px; background: var(--panel); border-left: 1px solid #262c34;
+  width: clamp(300px, 34vw, 420px); flex: none; display: flex; flex-direction: column;
+  gap: 10px; padding: 16px; background: var(--panel); border-left: 1px solid #262c34;
+  overflow-y: auto; min-height: 0;
 }
 #drop {
   border: 2px dashed #3a434e; border-radius: 8px; padding: 18px; text-align: center;
@@ -128,10 +133,24 @@ h2 small { color: var(--muted); font-weight: normal; }
 .click-7seg svg { width: 100%; height: 100%; display: block; overflow: visible; }
 .click-7seg [data-bit] { fill: var(--seg); opacity: .07;
   filter: drop-shadow(0 0 .35px var(--seg)); }
-@media (max-width: 800px) {
-  main { flex-direction: column; }
-  #side { width: auto; max-width: none; border-left: 0; }
-  #board-pane { flex: none; height: 70vh; }
+/* Narrow (a VS Code side panel, a phone): the board on top, the rest
+   below it, and the page scrolls */
+@media (max-width: 760px) {
+  body { height: auto; min-height: 100vh; overflow: auto; }
+  main { flex-direction: column; flex: none; }
+  #left { flex: none; }
+  /* The board takes the width; the pane is as tall as the board (app.js
+     sizes #board to the pane, which has no height of its own here) */
+  #board-pane { flex: none; height: auto; padding: 8px; container-type: inline-size; }
+  #board { width: 100% !important; }
+  #side { width: auto; border-left: 0; border-top: 1px solid #262c34; overflow: visible;
+    padding: 12px; }
+  #console { min-height: 160px; max-height: 40vh; }
+  header { padding: 6px 10px; gap: 8px; }
+}
+@media (max-width: 520px) {
+  header h1 { display: none; }
+  .status { max-width: 45%; }
 }
 
 /* The parts bench (bench.js): a toolbar below the board, the parts on it */

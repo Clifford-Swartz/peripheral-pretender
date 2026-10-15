@@ -61,7 +61,10 @@ BOARDS = HERE / "boards"
 MAX_ELF = 4 * 1024 * 1024
 ROOT = HERE.parents[1]
 WATCH_S = 1.0
-WATCH_GLOBS = ("**/out/**/*.elf", "**/dist/**/*.elf")
+# Build output: any .elf under an out/ (MPLAB for VS Code) or dist/
+# (MPLAB X) folder of the watched project
+WATCH_DIRS = {"out", "dist"}
+WATCH_SKIP = {"node_modules", "__pycache__", "venv"}
 DEVICES = ROOT / "devices"
 
 
@@ -99,8 +102,24 @@ def newest_elf(target: Path) -> Path | None:
     """The newest build output of a project folder, or @target itself."""
     if target.is_file():
         return target
-    found = [p for g in WATCH_GLOBS for p in target.glob(g) if p.is_file()]
-    return max(found, key=lambda p: p.stat().st_mtime, default=None)
+    best, best_mtime = None, -1.0
+    for top, dirs, files in os.walk(target):
+        # Not build output, and slow to walk (a workspace with an extension
+        # in it has node_modules and a downloaded VS Code)
+        dirs[:] = [d for d in dirs if d not in WATCH_SKIP and
+                   not d.startswith(".")]
+        rel = Path(top).relative_to(target).parts
+        if not set(rel) & WATCH_DIRS:
+            continue
+        for name in files:
+            if name.endswith(".elf"):
+                try:
+                    mtime = os.stat(os.path.join(top, name)).st_mtime
+                except OSError:
+                    continue            # being rewritten
+                if mtime > best_mtime:
+                    best, best_mtime = Path(top) / name, mtime
+    return best
 CLICKS = json.loads((HERE / "clicks.json").read_text(encoding="utf-8"))
 ADAPTERS = json.loads((HERE / "adapters.json").read_text(encoding="utf-8"))
 
@@ -425,12 +444,24 @@ class App:
         """Switch boards: the twin stops, the page redraws, and the board's
         demo firmware (board.json "demo_elf", if built) starts."""
         if board == self.board["id"] or not (BOARDS / board / "board.json").is_file():
+            # Nothing to switch: the page still waits for an answer
+            self.emit(self.board_message())
+            self.emit(self.status_message())
             return
+        t0 = asyncio.get_running_loop().time()
+
+        def step(what: str) -> None:
+            print(f"[pp_web] board {board}: {what} "
+                  f"({asyncio.get_running_loop().time() - t0:.2f} s)",
+                  flush=True)
+        step("switching")
         async with self.lock:
             await self._stop_dgi()
+            step("DGI stopped")
             if self.session:
                 await self.session.stop()
                 self.session = None
+            step("twin stopped")
             self.load_board(board)
             self.uart_log = ""
             self.elf = None
@@ -441,13 +472,22 @@ class App:
         self.emit(self.bench_message())
         await self.bench_frame(None)
         self.elf = await self.default_firmware()
+        step(f"starting {self.elf.name if self.elf else 'no firmware'}")
         if self.elf:
             await self.run(self.elf)
+            step("running")
         elif self.board.get("circuitpython"):
             pass                        # default_firmware said why
         else:
             self.emit({"type": "status", "state": "idle",
                        "text": "no firmware: drop an ELF built for this board"})
+
+    def status_message(self) -> dict:
+        if self.session:
+            return {"type": "status", "state": "running",
+                    "elf": self.session.elf.name}
+        return {"type": "status", "state": "idle",
+                "text": "no firmware: drop an ELF built for this board"}
 
     def machine(self) -> str:
         opts = [f"{slot}={c['id']}" for slot, c in self.clicks.items() if c]
@@ -629,8 +669,7 @@ class App:
         if self.bench_view:
             await ws.send_str(self.bench_view)
         if self.session:
-            await ws.send_str(json.dumps({"type": "status", "state": "running",
-                                          "elf": self.session.elf.name}))
+            await ws.send_str(json.dumps(self.status_message()))
             await ws.send_str(json.dumps({"type": "uart", "data": self.uart_log}))
             await ws.send_str(json.dumps({"type": "pins",
                                           "pins": self.session.pins}))
@@ -695,14 +734,16 @@ class App:
         """Run each new build of the watched project once it is complete
         (unchanged for one poll); a copy, so the linker can overwrite it."""
         seen = pending = None
-        if self.elf is None and (first := newest_elf(self.watch)):
+        # The walk can take a while on a big workspace: off the event loop
+        first = await asyncio.to_thread(newest_elf, self.watch)
+        if self.elf is None and first:
             seen = (first, first.stat().st_mtime_ns, first.stat().st_size)
             await self._load(first)
-        elif first := newest_elf(self.watch):
+        elif first:
             seen = (first, first.stat().st_mtime_ns, first.stat().st_size)
         while True:
             await asyncio.sleep(WATCH_S)
-            elf = newest_elf(self.watch)
+            elf = await asyncio.to_thread(newest_elf, self.watch)
             try:
                 now = elf and (elf, elf.stat().st_mtime_ns, elf.stat().st_size)
             except OSError:
@@ -729,7 +770,8 @@ class App:
         await self.bench_frame(None)
         # A watched project's existing build wins (the watcher runs it);
         # otherwise the board's default firmware
-        if self.elf is None and not (self.watch and newest_elf(self.watch)):
+        if self.elf is None and not (
+                self.watch and await asyncio.to_thread(newest_elf, self.watch)):
             self.elf = await self.default_firmware()
         if self.elf:
             await self.run(self.elf)
@@ -742,6 +784,16 @@ class App:
         await self._stop_dgi()
         if self.session:
             await self.session.stop()
+
+
+@web.middleware
+async def revalidate(request: web.Request, handler) -> web.StreamResponse:
+    """The page and its scripts are checked on every load (a 304 when they
+    have not changed), so an updated engine never runs a stale page."""
+    resp = await handler(request)
+    if request.path == "/" or request.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 async def part_image(request: web.Request) -> web.StreamResponse:
@@ -757,7 +809,8 @@ def make_app(board: str = "ev15n46a", elf: Path | None = None,
              watch: Path | None = None,
              bench: Path | None = None) -> web.Application:
     state = App(board, elf, watch, bench)
-    app = web.Application(client_max_size=MAX_ELF + 1024)
+    app = web.Application(client_max_size=MAX_ELF + 1024,
+                          middlewares=[revalidate])
     app.add_routes([
         web.get("/", state.index),
         web.get("/board/{name}", state.board_file),

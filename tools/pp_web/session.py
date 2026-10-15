@@ -25,6 +25,7 @@ from tools.pp.qemu import elf_target, find_qemu, machine_target, qemu_env
 
 POLL_S = 1 / 30
 QMP_LINE_LIMIT = 4 * 1024 * 1024
+STOP_S = 3.0                    # the most stopping QEMU may take per step
 PORT_PATH = "/machine/soc/port"
 # Terminal control sequences (CircuitPython sets the window title with
 # OSC and moves the cursor with CSI); the page shows plain text
@@ -284,11 +285,13 @@ class Session:
     async def stop(self) -> None:
         for t in self.tasks:
             t.cancel()
+        # Bounded: a QEMU that does not answer must not stall a board switch
         if self.qmp:
             with contextlib.suppress(Exception):
-                await self.qmp.execute("quit")
+                await asyncio.wait_for(self.qmp.execute("quit"), STOP_S)
             self.qmp.close()
         if self.proc and self.proc.returncode is None:
             with contextlib.suppress(ProcessLookupError):
                 self.proc.kill()
-            await self.proc.wait()
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self.proc.wait(), STOP_S)

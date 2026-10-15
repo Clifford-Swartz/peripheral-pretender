@@ -84,7 +84,8 @@ class DgiView:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self.task
         if self.client:
-            with contextlib.suppress(OSError, DgiError,
+            # Bounded: the twin's QEMU may be on its way out
+            with contextlib.suppress(OSError, DgiError, asyncio.TimeoutError,
                                      asyncio.IncompleteReadError):
-                await self.client.sign_off()
+                await asyncio.wait_for(self.client.sign_off(), 2.0)
             self.client.close()
