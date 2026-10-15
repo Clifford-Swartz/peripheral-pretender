@@ -50,14 +50,73 @@ The API modules also use `board.NEOPIX`, `board.BOOST_ENABLE` and `board.LCD_*`.
 not in the upstream definition read here, so the kit runs a newer or Microchip-specific
 CircuitPython build. Read the real board's `boot_out.txt` for its version.
 
-## Open questions
+## Open questions (answered 2026-10-14)
 
-1. **Which IMU?** `imu_sensor.py` says BNO085 (I2C 0x4A/0x4B, adafruit_bno08x). `reg_peek_poke.py`
-   and the bundled `adafruit_icm20x` library say ICM-20948 (0x69). Ruler revisions may differ:
-   check with an I2C scan on the real kit.
-2. **Design files** (schematic, Gerbers) for the Curiosity CircuitPython board and the Ruler. The
-   blog (March 2026) said "not yet available"; check the product pages.
-3. **The kit's CircuitPython version and build**, and the NeoPixel pin (PB22 vs `NEOPIX`).
+1. **Which IMU?** Both. The Ruler carries an ICM-20948 at 0x69 (schematic EV82H04A rev 3, U3). The
+   kit on the desk also answers at 0x4A: a BNO085 breakout on the QWIIC connector, not on either
+   schematic (the owner is asking where it comes from). The kit's own `code.py` uses the BNO085.
+2. **Design files.** Schematics exist (Curiosity CircuitPython 02-01318 rev 3, 2025-09-05; PyKit
+   Ruler 03-02-01326 rev 3, 2025-09-10; under `C:/pp/pykit/`). No Gerbers or pick-and-place: the
+   product pages for EV82H04A and EV78P89A redirect to the development-tool listing. The board art
+   is composed from the renders in the workshop slides (`tools/pp_web/boards/pykit/make_art.py`).
+3. **The kit's CircuitPython:** see "The kit on the desk" below. The NeoPixel pin is PB22
+   (`board.NEOPIXEL`), one chain of five: D3 on the Curiosity board, then D1-D4 on the Ruler.
+
+## The kit on the desk (read-only REPL probes, 2026-10-14)
+
+Probed with `py -m harness.cp_repl` (Ctrl-C, REPL lines, then always Ctrl-D so its `code.py` runs
+again; nothing written). Transcripts: `C:/pp/trial-pykit/work/kit_probe1.txt`, `kit_probe2.txt`.
+
+| What | Kit |
+|---|---|
+| `boot_out.txt` / banner | Adafruit CircuitPython 10.1.0-alpha.0-2-g706c4b2abf on 2025-10-27; Microchip Curiosity CircuitPython with same51j20 |
+| `sys.implementation` | version (10, 1, 0), `_mpy` 774, `_build` microchip_curiosity_circuitpython |
+| `os.uname()` | sysname/nodename `same51j20`, release 10.1.0 |
+| USB | composite 04D8:E52B: CDC (REPL), mass storage (CIRCUITPY), HID, audio, MIDI |
+| `cpu.frequency` | 120000000 |
+| `cpu.uid` | f3 e5 04 00 54 32 50 53 20 20 20 41 21 36 10 ff |
+| `cpu.temperature`, `cpu.voltage` | 36.331 C, 3.30354 V |
+| `cpu.reset_reason` | UNKNOWN |
+| I2C scan (`board.I2C()`) | 0x4A (BNO085, QWIIC), 0x69 (ICM-20948) |
+| `os.statvfs('/')` | (2048, 2048, 2036, 956, 956, 0, 0, 0, 0, 255): 4 MiB flash, FAT with 2036 clusters of 2 KiB |
+| `storage.getmount('/').label` | CIRCUITPY |
+| Auto-reload | off (the kit's `code.py` turns it off) |
+| `dir(board)` | A0-A5, BLE_CLR/RX/TX, CAN_RX/STDBY/TX, CAP1, CS, D0-D13 (no D12), DAC, DEBUG_RX/TX, I2C, IMU_ADDR, IMU_INT, LCD_BL/CS/MOSI/SCK, LCD_SPI, LED, MISO, MOSI, NEOPIXEL, SCK, SCL, SDA, SD_CS/MISO/MOSI/SCK, SD_SPI, SPI, UART, VREF, board_id |
+
+RNBD451 on `busio.UART(board.BLE_TX, board.BLE_RX, 115200)`:
+
+| Sent | Reply |
+|---|---|
+| `$$$` | `CMD> ` |
+| `V\r\n` | `RNBD451 V1.0.0.10 Jul 20 2022 (c)Microchip Technology Inc\r\nCMD> ` |
+| `D\r\n` | (first lines lost in the 64-byte UART buffer) `..._IMU`, `Connected=no`, `Authen=2`, `Features=0080`, `Services=C0`, `CMD> ` |
+| `---\r\n` | `END\r\n` |
+
+The kit's `code.py` (the owner's robot-arm project, backed up at
+`C:/pp/pykit/device-backup-2026-10-14`) reads the BNO085, configures the RNBD451 and streams
+orientation over BLE.
+
+## The twin against the kit
+
+The twin runs Adafruit's official 10.1.4 build for the board, unmodified (the kit runs a
+10.1.0 alpha). Same lines through `py -m tools.pp.circuitpython run <drive> --lines ...`:
+
+| What | Twin | Same as the kit? |
+|---|---|---|
+| USB | 04D8:E52B, the same interface list | yes |
+| `cpu.frequency` | 120000000 | yes |
+| `cpu.uid` | the kit's (profile `serial_default`) | yes |
+| `cpu.temperature`, `cpu.voltage` | 25.0 C, 3.29963 V | no: the ADC model's die temperature defaults to 25 C (property `temperature`); the TEMP_LOG calibration row is a placeholder |
+| I2C scan | 0x4A, 0x69 with `bno085=on` (0x69 alone without) | yes |
+| `os.statvfs('/')` | 2048-byte blocks, 2036 clusters | yes (the image is formatted as CircuitPython formats it) |
+| RNBD451 replies | as in the table above | yes (from the kit) |
+| The kit's own `code.py` (a copy) | runs: IMU ready, BLE configured, streaming, "[MOTOR] p=-0.0 r=-0.0 y=180.0" | yes |
+| `dir(board)` | the same names | yes |
+
+Known differences: prints made before the host opens the CDC port (DTR) are dropped, as on a
+real PC; the first `code.py` lines can be missing from the console. Not modelled: CAN, SD card,
+capacitive touch, the BME680/APDS-9999 plug-ins, BLE radio traffic (the module answers commands
+only).
 
 ## What a twin needs, hardest first
 

@@ -10,6 +10,8 @@ things, and they disagree more often than you would expect.
 | **ATDF / DFP** (`~/.mchp_packs`) | Register layout, addresses, IRQs, signals, events, pin mux | Known errors, listed in `docs/research/microchip-data.md` |
 | **MPLAB simulator** (MDB, `Hwtool SIM`) | Mature 8-bit PIC and AVR families | For PIC32CM (JH01, MC00) it is **beta** and stops in clock init (see below) |
 | **Harmony / MCC examples** | Real code paths a customer runs | They test the model only as far as the example exercises it |
+| **CircuitPython on the kit** (REPL, read-only) | Identity, clocks, buses, file system geometry, attached parts (I2C scan), module replies | Only what Python exposes; the kit may run another CircuitPython build than the stock one on the twin |
+| **CircuitPython's source** (`ports/atmel-samd`, TinyUSB) | What the firmware under test waits for and in which order | It is one client; other firmware may rely on other details |
 
 Precedence: **silicon > datasheet > ATDF**. The MPLAB simulator ranks below the datasheet: use it
 where the kit is not available, and only for families where it is mature.

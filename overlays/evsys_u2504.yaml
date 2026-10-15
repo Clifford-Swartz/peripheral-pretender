@@ -1,0 +1,26 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for EVSYS U2504 (SAM D5x/E5x, 32 channels, five IRQ
+# lines: channels 0-3 and the rest). The mchp-evsys-u2504 model routes
+# generators to users and flags events on the synchronous paths.
+ip: EVSYS
+id: U2504
+versions: ["1.0.0"]
+references:
+  - "DS60001507 (SAM D5x/E5x data sheet) EVSYS chapter"
+registers:
+  CTRLA:
+    pac_protected: true
+    self_clearing: [SWRST]
+    hooks: [post_write]           # SWRST
+  SWEVT: {hooks: [post_write]}    # a software event on each channel set
+  INTPEND: {dynamic: true}
+  INTSTATUS: {dynamic: true}
+  BUSYCH: {dynamic: true}
+  READYUSR: {dynamic: true}
+  USER: {pac_protected: true, hooks: [post_write]}
+  CHANNEL: {pac_protected: true, hooks: [post_write]}
+  CHINTENCLR: {alias: {storage: CHINTENSET, op: clear}, hooks: [post_write]}
+  CHINTENSET: {alias: {storage: CHINTENSET, op: set}, hooks: [post_write]}
+  CHINTFLAG: {w1c: all, hooks: [post_write]}
+  CHSTATUS: {dynamic: true}

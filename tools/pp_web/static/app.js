@@ -113,7 +113,69 @@ function buildBoard(b, cat, ads) {
     el.addEventListener("pointercancel", () => press(false));
     layer.appendChild(el);
   }
+  buildParts(b);
   buildSlots();
+  // The hint names this board's buttons
+  const names = b.buttons.map((x) => `<b>${x.id}</b>`);
+  $("hint").innerHTML = names.length ? `Click ${names.join(" and ")} on the board` +
+    ((b.parts || []).some((p) => p.sticks) ? "; drag the stick to tilt it." : ".") : "";
+  $("files-head").hidden = $("files").hidden = !b.circuitpython;
+}
+
+// The board's own parts (board.json "parts"): a display panel, NeoPixels
+// and an IMU to tilt, drawn like their Click counterparts; their state
+// comes under "<part>.<property>" in the polled properties
+function buildParts(b) {
+  const layer = $("overlays");
+  for (const part of b.parts || []) {
+    const d = part.display;
+    if (d && d.type === "panel") {
+      const cv = document.createElement("canvas");
+      cv.className = "click-panel";
+      cv.width = d.width;
+      cv.height = d.height;
+      cv.dataset.prop = `${part.id}.${d.property}`;
+      cv.title = part.name || part.id;
+      place(cv, d.at_mm, d.size_mm);
+      cv.style.transform = "translate(-50%, -50%)";
+      layer.appendChild(cv);
+    }
+    const px = part.pixels;
+    if (px) {
+      px.at_mm.forEach((at, i) => {
+        const el = document.createElement("div");
+        el.className = "pixel";
+        el.dataset.prop = `${part.id}.${px.property}`;
+        el.dataset.index = i;
+        el.title = `${part.name || part.id} #${i}`;
+        place(el, at, [px.size_mm, px.size_mm]);
+        layer.appendChild(el);
+      });
+    }
+    const au = part.audio;
+    if (au) {
+      // A speaker: the DAC's waveform played in the browser
+      const el = document.createElement("div");
+      el.className = "click-sound board-sound";
+      el.dataset.prop = `${part.id}.${au.property}`;
+      el.title = `${part.name || part.id} (click to mute or unmute)`;
+      el.innerHTML = "<i></i><i></i><span></span>";
+      el.addEventListener("click", () => {
+        muted = !muted;
+        updateClickParts();
+      });
+      place(el, au.at_mm, [au.size_mm, au.size_mm]);
+      el.style.transform = "translate(-50%, -50%)";
+      layer.appendChild(el);
+    }
+    for (const st of part.sticks || []) {
+      const el = makeStick({ part: part.id }, st, $("board-img"));
+      place(el, st.at_mm, [st.size_mm, st.size_mm]);
+      el.style.transform = "translate(-50%, -50%)";
+      el.classList.add("board-stick");
+      layer.appendChild(el);
+    }
+  }
 }
 
 // One row per extension header: a Click picker, then the plugged Click's
@@ -291,7 +353,7 @@ function drawClick(stack, h, id, def) {
   // double-click levels it)
   art.dataset.rot = rot;
   for (const st of def.sticks || []) {
-    put(makeStick(h.slot, st, art), [st.at_mm[0] - st.size_mm / 2,
+    put(makeStick({ slot: h.slot }, st, art), [st.at_mm[0] - st.size_mm / 2,
                                      st.at_mm[1] + st.size_mm / 2],
         st.size_mm, st.size_mm);
   }
@@ -405,12 +467,34 @@ function updateClickParts() {
     shownFrames.set(cv, frame);
     drawPanel(cv, frame);
   }
+  // NeoPixels: "RRGGBB RRGGBB ..." per chain, glowing at their colour
+  for (const el of document.querySelectorAll(".pixel")) {
+    const hex = String(clickState[el.dataset.prop] || "").split(" ")[Number(el.dataset.index)] || "000000";
+    if (el.dataset.hex === hex) continue;
+    el.dataset.hex = hex;
+    const v = parseInt(hex, 16) || 0, r = v >> 16, g = (v >> 8) & 255, bl = v & 255;
+    const peak = Math.max(r, g, bl), k = peak ? 255 / peak : 0;
+    el.style.background = `radial-gradient(circle, #fff 0 10%, rgb(${r * k},${g * k},${bl * k}) 30%, transparent 72%)`;
+    el.style.opacity = peak ? Math.min(1, 0.25 + peak / 160) : 0;
+  }
   for (const el of document.querySelectorAll(".click-text")) {
     const t = el.querySelector("text"), v = String(clickState[el.dataset.prop] ?? "");
     if (t.textContent !== v) t.textContent = v;
   }
+  // Speakers: each new chunk of the DAC's waveform is queued to play
+  for (const el of document.querySelectorAll(".board-sound")) {
+    const chunk = String(clickState[el.dataset.prop] || "");
+    const seq = chunk.split(" ", 2)[1];
+    if (chunk && seq !== el.dataset.seq) {
+      el.dataset.seq = seq;
+      el.dataset.until = String(performance.now() + 300);
+      if (!muted) playPcm(chunk);
+    }
+    el.classList.toggle("on", performance.now() < Number(el.dataset.until || 0));
+    el.classList.toggle("muted", muted);
+  }
   const sounding = new Set();
-  for (const el of document.querySelectorAll(".click-sound")) {
+  for (const el of document.querySelectorAll(".click-sound:not(.board-sound)")) {
     const hz = Number(clickState[el.dataset.prop] || 0);
     const duty = Number(clickState[el.dataset.duty] || 0) / 1000;
     const on = hz >= 20 && hz <= 20000;
@@ -436,8 +520,9 @@ function updateClickParts() {
   }
 }
 
-// A stick control on a Click (see drawClick); sends {"type": "stick"}
-function makeStick(slot, st, art) {
+// A stick control on a Click (see drawClick) or a board part; @target
+// is {slot} or {part}; sends {"type": "stick"}
+function makeStick(target, st, art) {
   const el = document.createElement("div"), knob = document.createElement("b");
   const tilt = st.mode === "tilt";
   el.className = tilt ? "click-stick tilt" : "click-stick";
@@ -448,7 +533,11 @@ function makeStick(slot, st, art) {
   const show = () => {
     knob.style.left = `${50 + pos[0] * 50}%`;
     knob.style.top = `${50 - pos[1] * 50}%`;
-    if (tilt) {
+    if (tilt && target.part) {
+      // The whole board leans; it is wide, so tilt it gently
+      art.style.transform = `translate(-50%, -50%) perspective(160em) ` +
+        `rotateY(${pos[0] * 12}deg) rotateX(${pos[1] * 25}deg)`;
+    } else if (tilt) {
       const r = Number(art.dataset.rot || 0);
       art.style.transform = `translate(-50%, -50%) rotate(${r}deg) perspective(60em) ` +
         `rotateY(${pos[0] * 30}deg) rotateX(${pos[1] * 30}deg)`;
@@ -458,7 +547,7 @@ function makeStick(slot, st, art) {
     const now = performance.now();
     if (!force && now - last < 30) return;
     last = now;
-    send({ type: "stick", slot, id: st.id, x: pos[0], y: pos[1],
+    send({ type: "stick", ...target, id: st.id, x: pos[0], y: pos[1],
            ...(st.press_property ? { pressed } : {}) });
   };
   // Screen offset from the stick's centre to stick units (-1..1, y up),
@@ -558,6 +647,35 @@ function tone(slot, hz, duty) {
   } catch (_) { /* no audio */ }
 }
 
+// A chunk of a DAC's waveform, "<rate> <seq> <base64 of signed 16-bit
+// little-endian samples>", queued after the previous one. The DC level
+// (the DAC idles at mid-scale) is filtered out; a queue that runs more
+// than half a second behind starts again.
+let pcmNext = 0, pcmDc = 0;
+function playPcm(chunk) {
+  try {
+    const ctx = audioCtx();
+    const [rate, , b64] = chunk.split(" ");
+    const raw = atob(b64), n = raw.length >> 1;
+    if (!n) return;
+    const buf = ctx.createBuffer(1, n, Number(rate)), data = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) {
+      let v = raw.charCodeAt(2 * i) | (raw.charCodeAt(2 * i + 1) << 8);
+      if (v & 0x8000) v -= 0x10000;
+      pcmDc += (v - pcmDc) * 0.0005;
+      data[i] = Math.max(-1, Math.min(1, (v - pcmDc) / 32768 * 0.5));
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    if (pcmNext < ctx.currentTime || pcmNext > ctx.currentTime + 0.5) {
+      pcmNext = ctx.currentTime + 0.08;
+    }
+    src.start(pcmNext);
+    pcmNext += buf.duration;
+  } catch (_) { /* no audio */ }
+}
+
 // A relay's click, from a short burst of noise
 function tick() {
   try {
@@ -607,8 +725,18 @@ function appendUart(text) {
   if (stick) c.scrollTop = c.scrollHeight;
 }
 
+// The CIRCUITPY drive (CircuitPython boards): its files, and code.py to
+// edit; saving restarts the twin with the new file
+function showFiles(msg) {
+  if (!msg.files) return;
+  $("file-list").textContent = msg.files.filter((f) => !f.dir)
+    .map((f) => `${f.path} (${f.size} B)`).join("\n");
+  if (document.activeElement !== $("code-py")) $("code-py").value = msg.code || "";
+}
+
 function handle(msg) {
   switch (msg.type) {
+  case "files": showFiles(msg); break;
   case "board":
     if (msg.boards) {
       const sel = $("board-select");
@@ -652,6 +780,11 @@ $("send").addEventListener("submit", (e) => {
   e.preventDefault();
   send({ type: "uart", data: $("send-text").value + "\r\n" });
   $("send-text").value = "";
+});
+
+$("save-code").addEventListener("click", () => {
+  setStatus("idle", "saving code.py, restarting");
+  send({ type: "save-file", path: "code.py", text: $("code-py").value });
 });
 
 $("board-select").addEventListener("change", (e) => {

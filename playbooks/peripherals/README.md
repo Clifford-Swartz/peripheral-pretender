@@ -11,6 +11,7 @@ changing or reusing a model. When you learn something new against silicon, add i
 | SERCOM (USART, SPI host, I2C host) | U2201 | [sercom.md](sercom.md) |
 | EVSYS (event system) | U2256 | [evsys.md](evsys.md) |
 | Cortex-M0+ core and MPU | | [core.md](core.md) |
+| SAM D5x: DMAC, USB (with a host), QSPI, DAC, EVSYS, clocks, ADC | U2503, U2222, U2008, U2502, U2504, ... | [samd5x.md](samd5x.md) |
 
 General method for a new model, in this order:
 

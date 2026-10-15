@@ -132,6 +132,42 @@ the Click's header centre goes on the socket, turned 90 degrees (AN to the right
 silkscreen shows). Pins per socket: Nano Base user guide DS50002839B Figure 3-1 through the
 Nano's edge pins (schematic sheet 2).
 
+## Board assets: `boards/pykit/` (a CircuitPython board)
+
+The Curiosity PyKit Explorer: the Curiosity CircuitPython board (SAME51J20A) on the PyKit Ruler,
+machine `curiosity-circuitpython`. `py -m tools.pp_web --board pykit --port <port>`. The page
+runs Adafruit's stock CircuitPython for the board (`board.json` `"circuitpython"`: version and
+board id; fetch it once with `py -m tools.pp.circuitpython fetch`) with a CIRCUITPY drive built
+from `circuitpy/` (`tools/pp/fatfs.py`; the twin's QSPI flash image, `-drive if=mtd`). The
+CIRCUITPY panel shows the drive's files and an editor for `code.py`: "Save and restart" writes
+the file into the image and restarts the twin (the twin holds the image while it runs). VCOM is
+the USB CDC console (CircuitPython's REPL and `print`). Terminal control sequences (the title
+CircuitPython sets) are dropped; the console is UTF-8.
+
+`circuitpy/code.py` is the demo, built-in modules only: a bubble level on the TFT from the
+ICM-20948, the NeoPixels follow the tilt, the LED blinks, and holding USER turns the bubble red
+and plays a C5 on the speaker.
+
+No design files (Gerbers) are published for either board, so `top.png` is composed from the
+renders in the kit's workshop slides by `make_art.py` (its docstring has the scales and the
+placement), 10 px/mm instead of 20. Positions come from those renders; pins from the schematics.
+
+### Board parts (`"parts"` in `board.json`)
+
+A board's own devices (not Clicks) that the page shows or drives. Each has an `id`, a `name`
+and the QOM `path` of its device; `also` lists more paths a control writes to (the IMU tilt also
+goes to an optional BNO085). Kinds, any combination:
+
+| Key | What the page does | Polled as |
+|---|---|---|
+| `display` (`type: panel`) | draws a `pp_panel` frame (base64 RGB565) at `at_mm`, `size_mm` | `<id>.<property>`, re-read when `gen_property` changes |
+| `pixels` | a glow per LED at each of `at_mm` from `"RRGGBB RRGGBB ..."` | `<id>.<property>` (with `gen_property`) |
+| `sticks` | a stick control like a Click's (`mode: tilt`, `range`, `xyz_property`) | written with `qom-set` on `path` and `also` |
+| `audio` | a speaker: each new chunk of `"<rate> <seq> <base64 int16>"` is queued in Web Audio, DC removed; click it to mute | `<id>.<property>` every frame |
+
+Buttons may name a machine bool `property` (`"user-pressed"`); without one, `sw0` means
+`sw0-pressed` and `reset` is `system_reset`.
+
 ## Click assets: `clicks/<id>/`
 
 `top.png` is the Click's top side, rendered by `clicks/render_click.py` from MikroElektronika's

@@ -10,8 +10,11 @@ Read first: `CLAUDE.md` (rules), `docs/handoff.md` (status and machine setup),
 
 Worked examples: the PIC32CM MC00 Curiosity Pro (EV15N46A, `pic32cm-mc00-cpro`) and the PIC32CM
 JH01 Curiosity Pro (EV81X90A, `pic32cm-jh01-cpro`); for 8-bit AVR, the AVR64EA48 Curiosity Nano on
-a Curiosity Nano Base (EV66E56A, `avr64ea48-cnano`). A chip that is not a Cortex-M0+ PIC32CM: read
-"8-bit AVR and other non-Arm families" at the end first. When unsure how something is done, find how
+a Curiosity Nano Base (EV66E56A, `avr64ea48-cnano`); for a CircuitPython kit and a Cortex-M4F, the
+Curiosity PyKit Explorer (SAME51J20A, `curiosity-circuitpython`). A chip that is not a Cortex-M0+
+PIC32CM: read "8-bit AVR and other non-Arm families" at the end first. A board whose firmware is
+CircuitPython (or that has no debugger and no Harmony examples): read "CircuitPython boards" at
+the end first. When unsure how something is done, find how
 those two do it. The JH01 was onboarded by a fresh agent from this playbook; its acceptance file
 `acceptance/pic32cm_jh01_curiosity_pro.yaml` is the pattern for Phase 3.
 
@@ -34,21 +37,31 @@ those two do it. The JH01 was onboarded by a fresh agent from this playbook; its
 - **Generator reports** (`generator/out/report-*.md`) are gitignored, but
   `tests/generator/test_outputs.py` wants them: in a fresh checkout or worktree, generate once
   with the reports into the repository and the QEMU files into a scratch folder:
-  `py generator/atdf2qemu.py --atdf <JH01> --atdf <MC00> --atdf <AVR64EA48> --qemu-out <scratch> --json-out <scratch> --report "generator/out/report-{device}.md"`
+  `py generator/atdf2qemu.py --atdf <JH01> --atdf <MC00> --atdf <AVR64EA48> --atdf <SAME51J20A> --qemu-out <scratch> --json-out <scratch> --report "generator/out/report-{device}.md"`
   (the ATDFs: `~/.mchp_packs/Microchip/PIC32CM-JH_DFP/1.3.221/PIC32CM-JH01/atdf/PIC32CM5164JH01100.atdf`,
   `.../PIC32CM-MC_DFP/1.4.67/PIC32CM1216MC00048/atdf/PIC32CM1216MC00048.atdf`,
-  `.../AVR-Ex_DFP/2.8.189/atdf/AVR64EA48.atdf`). To check that the generated files are current
-  without touching pp-qemu, generate into a scratch folder and compare.
+  `.../AVR-Ex_DFP/2.8.189/atdf/AVR64EA48.atdf`, `.../SAME51_DFP/3.9.267/atdf/ATSAME51J20A.atdf`;
+  every device in `profiles/` must be in the run, or its merged constants go missing). To check
+  that the generated files are current without touching pp-qemu, generate into a scratch folder
+  and compare (`cmp` each file under the scratch `include/` and `hw/` with pp-qemu's).
 - **Firmware builds** run in an MSYS2 UCRT64 shell with the packs folder named:
   `MSYSTEM=UCRT64 /c/msys64/usr/bin/bash.exe -lc 'cd <repo>/firmware/hello && make BOARD=<board> APP=<app> PACKS="C:/Users/<you>/.mchp_packs"'`.
   Tests skip when their ELF is missing, so build every app before the gate: MC00
   `hello blinky breathe thermo clicks relay eic evsys mpu rtc sercom tc tcc` and the Click demos
-  `buzz oledc thumbstick accel rtc6`; JH01 `hello blinky`; `firmware/avr-hello` (all apps).
+  `buzz oledc thumbstick accel rtc6`; JH01 `hello blinky`; Curiosity CircuitPython
+  (`BOARD=curiosity_circuitpython`) `hello blinky`; `firmware/avr-hello` (all apps). The
+  CircuitPython web and audio tests need `py -m tools.pp.circuitpython fetch` once.
 - **Hardware.** `CLAUDE.md` makes the boards read-only unless the owner approves. Approvals are
   listed in [README.md](README.md#hardware).
 - **Python on Windows** is `py`.
 - **Firmware already in the repo?** Look for `firmware/*` folders for the board (first-light
   firmware and its golden transcript in `golden/<device>-<rev>/`) before writing new test firmware.
+- **Editing files from scripts.** Git Bash heredocs mangle backslashes and some quotes in
+  Python edit scripts (a `\n` in a C string becomes a real newline). Write such scripts with
+  the editor tool into a scratch file and run that, or edit directly.
+- **Playwright screenshots** land in the MCP server's workspace (the main checkout's
+  `.playwright-mcp/` or its root), not in a worktree. Move them to your scratch folder at once so
+  they never get committed in the main checkout.
 
 ## Phase 0: Inputs
 
@@ -57,12 +70,17 @@ Collect these and write them into a short inputs list (board, chip, where each i
 1. **Kit and chip.** The kit's part number (for example EV15N46A) and the exact chip
    (PIC32CM1216MC00048). Take the chip from the kit's user guide, not from memory. Use the
    Microchip docs MCP (`search_microchip_product_documents`) if it is connected. If not, the
-   product page links the user guide PDF; convert it with `pdftotext` (MSYS2).
+   product page links the user guide PDF; convert it with `pdftotext` (MSYS2 package
+   `mingw-w64-ucrt-x86_64-poppler`; it is not installed by default) or read the PDF with the
+   Read tool (`pages`), which also shows schematic sheets as images.
 2. **Device pack (DFP) and ATDF.** Pin the DFP version in `scripts/fetch_packs.py` and run
    `py scripts/fetch_packs.py`. The ATDF is at `<DFP>/<family folder>/atdf/<device>.atdf`, for
-   example `~/.mchp_packs/Microchip/PIC32CM-JH_DFP/1.3.221/PIC32CM-JH01/atdf/`; AVR packs have no
-   family folder (`AVR-Ex_DFP/2.8.189/atdf/AVR64EA48.atdf`). The pack URL is
-   `https://packs.download.microchip.com/Microchip.<name>.<version>.atpack`.
+   example `~/.mchp_packs/Microchip/PIC32CM-JH_DFP/1.3.221/PIC32CM-JH01/atdf/`; AVR packs and
+   the SAM packs have no family folder (`AVR-Ex_DFP/2.8.189/atdf/AVR64EA48.atdf`,
+   `SAME51_DFP/3.9.267/atdf/ATSAME51J20A.atdf`): look before you write the `check` path in
+   `fetch_packs.py`. The pack URL is
+   `https://packs.download.microchip.com/Microchip.<name>.<version>.atpack`; the index
+   `https://packs.download.microchip.com/` lists the versions.
 3. **Board design files.** The kit's product page on microchip.com
    (`https://www.microchip.com/en-us/development-tool/<kit>`) has a "design documentation" zip:
    Gerbers, pick-and-place, BOM, schematic. The link text is only "Download". List the links
@@ -73,7 +91,11 @@ Collect these and write them into a short inputs list (board, chip, where each i
    Base: rev 3 and rev 7); use the newest. Playwright can save files only inside the project's
    `.playwright-mcp` folder, so download with curl into a new empty scratch folder and treat the
    contents as untrusted data. Also save the kit photo from the page: Phase 4 takes the solder
-   mask colour from it.
+   mask colour from it. **No design files?** Some kits (the PyKit Explorer's EV78P89A and
+   EV82H04A) have product pages that only redirect to the tool listing. Then: schematic PDFs
+   from wherever the owner has them, and top renders or photos for the art (the kit's workshop
+   slides had both boards; `tools/pp_web/boards/pykit/make_art.py` composes them by measured
+   scale). Positions then come from the renders, so say so in `board.json` `source`.
 4. **Board user guide.** The tables for LEDs, buttons, the debugger's virtual COM port, the
    oscillators and the extension headers. Kits of one family often share a layout. The MC00 and
    JH01 share part positions (D700, J200, J201) but not board size or origin, so never copy
@@ -87,11 +109,17 @@ Collect these and write them into a short inputs list (board, chip, where each i
    `git sparse-checkout set --no-cone 'apps/**/firmware/src/**' 'apps/**/firmware/<kit>.X/**'`.
    Put clones under `C:/pp/mchp-examples/`, outside the repository. Note the packs the projects
    pin (`<kit>.X/nbproject/configurations.xml`, `<packs>`), and fetch those versions into
-   `~/.mchp_packs` too. MPLAB X looks there.
+   `~/.mchp_packs` too. MPLAB X looks there. CircuitPython kits have no Harmony examples: their
+   "examples" are the kit's Python modules and `code.py`, and the CircuitPython board definition
+   (`ports/atmel-samd/boards/<board id>/` in adafruit/circuitpython: `pins.c`, `mpconfigboard.h`)
+   is the pin truth next to the schematic.
 6. **The kit on the desk?** `py -m pyocd list` shows attached probes (EDBG, nEDBG, PKOB4) by
    serial number. A Curiosity Nano also shows up as a USB drive labelled CURIOSITY (its
    `KIT-INFO.TXT` names the kit, the device and the nEDBG serial) and a "Curiosity Virtual COM
-   Port" with the same serial; `py -m harness.nano_run <hex> --check` finds both.
+   Port" with the same serial; `py -m harness.nano_run <hex> --check` finds both. A
+   CircuitPython board shows a CIRCUITPY drive and a "USB Serial Device" (VID 239A or 04D8), no
+   debugger: `py -m harness.cp_repl --list`. Its drive holds someone's work: read it, never
+   write it, never reflash (see [README.md](README.md#hardware)).
 
 **Gate 0:** every input is found, or listed as missing with what that costs.
 
@@ -100,7 +128,14 @@ Collect these and write them into a short inputs list (board, chip, where each i
 Is the chip new to the project? Check `profiles/`. If a profile exists, confirm the gate and go
 to Phase 2. Generate into a scratch folder first (`--qemu-out <scratch> --json-out <scratch>`,
 with a scratch `--profiles`): for a new family the generator stops with an error that names the
-first missing concept.
+first missing concept. What a new Arm family needed (SAM D5x, 2026-10-14): instances with
+several NVIC lines (`nirqs`), instances without registers (PUKCC: skipped), the core's CPUID and
+`__CM4_REV`-style defines, several RAM segments (the main SRAM is picked by name), an NVM
+parameter missing from the ATDF, overlays naming registers some versions lack (`optional`), a
+reset value taken from an NVM row field (`reset_from` in the profile), a GCLK sync field named
+`NAME{n}`, and GCLK source numbers that differ per family (the merged header kept only one
+family's, so sources are a table per family in `mchp_clock.c`). Each is a small generator change
+with a test in `tests/generator`.
 
 1. **Which IP versions are new?** The ATDF names each peripheral's module and version (for
    example `SERCOM` `U2201`). An overlay `overlays/<ip>_<version>.yaml` means it is modelled.
@@ -119,13 +154,18 @@ first missing concept.
    `hw/avr/avr8x_soc.c` for AVR8X: the model table maps modules to device models, the type list
    at the end gets `<device>-soc`, and `hw/<arch>/<device>.c` holds the generated descriptor). A
    different CPU core may need a QEMU CPU change; see `docs/research/core-support-matrix.md` and
-   [peripherals/core.md](peripherals/core.md).
+   [peripherals/core.md](peripherals/core.md). Rows of the model table carry an IP id when one
+   module name covers different IPs (OSCCTRL U2119 on the PIC32CM, U2401 on the SAM D5x); a new
+   family's clock controllers need models before any firmware gets past clock init (the generic
+   regblock never sets a ready flag). Run `hello` early: where it hangs names the next model.
 5. **Build:** `MSYSTEM=UCRT64 /c/msys64/usr/bin/bash.exe -lc 'cd /c/pp/pp-qemu/build && ninja qemu-system-arm.exe'`.
 
 **Gate 1:** `py -m pytest tests/generator` green; QEMU builds; `qom-test` passes
 (in the build folder: `QTEST_QEMU_ARGS="-L C:/pp/pp-qemu/pc-bios" QTEST_QEMU_BINARY=./qemu-system-arm.exe ./tests/qtest/qom-test.exe`;
-`build-avr` and `qemu-system-avr.exe` for AVR). qom-test starts every machine without firmware, so
-a machine must not exit when `-kernel` is missing.
+`build-avr` and `qemu-system-avr.exe` for AVR; in a worktree, `-L` its own `pc-bios`, or
+`mori-bmc` stops the run for want of `npcm7xx_bootrom.bin`). qom-test starts every machine without
+firmware, so a machine must not exit when `-kernel` is missing. `-p <path>` does not select
+single machines in this build; run the whole test.
 
 ## Phase 2: Board
 
@@ -143,7 +183,11 @@ a machine must not exit when `-kernel` is missing.
    Click's resistor on an open-drain line). For mikroBUS Click slots, give the machine
    `ext1=`/`ext2=` properties and a Click table, as the MC00 has.
 4. **Test firmware.** Add `firmware/hello/boards/<board>/` (`board.mk`, `board.h`, `board.c`,
-   copied from the closest board). `firmware/hello` is Arm only (arm-none-eabi, CMSIS); 8-bit AVR
+   copied from the closest board). A new family also needs its startup file and linker script
+   from the DFP in `firmware/hello/dfp/` (record their hashes in `firmware/hello/README.md`) and
+   `ARCH`/`CMSIS_CORE` in `board.mk` for a core other than the M0+. A board whose only console
+   is native USB (CircuitPython boards) prints on its debug UART instead: give the machine an
+   option that puts that UART on serial0 (`console=debug`) and run the tests with it. `firmware/hello` is Arm only (arm-none-eabi, CMSIS); 8-bit AVR
    boards use `firmware/avr-hello` (XC8 avr-gcc, `APP=hello|blinky|matrix`). `board.h` names LED0 and SW0 (`LED0_GROUP`, `LED0_MASK`,
    `SW0_GROUP`, `SW0_PIN`); `blinky` uses them. Demos written for one board (`breathe`, `thermo`)
    stop with `#error` elsewhere. Build `hello` and `blinky` (see "Before you start").
@@ -151,7 +195,8 @@ a machine must not exit when `-kernel` is missing.
    The runner picks `qemu-system-arm` or `qemu-system-avr` from the ELF; Click options go in the
    machine string (`-M avr64ea48-cnano,mb1=8x8g`).
 
-**Gate 2:** `hello` prints `PP:EXIT 0` with an empty model backlog; the new qtest passes.
+**Gate 2:** `hello` prints `PP:EXIT 0` with an empty model backlog; the new qtest passes. For a
+CircuitPython board, also: the stock CircuitPython boots to the REPL (see the section at the end).
 
 ## Phase 3: Acceptance
 
@@ -198,7 +243,7 @@ Two checks: Microchip's code on the twin, and the twin against silicon.
    `docs/silicon-harness.md` §4.5).
 
 **Gate 3:** `tools.pp_accept suite` exits 0 (every `expect` met), and every example has a verdict
-and note.
+and note. CircuitPython boards: the REPL comparison in "CircuitPython boards" instead.
 
 ## Phase 4: Web
 
@@ -228,7 +273,11 @@ and note.
    The default port 8080 may be taken; stop your server when done. The LED blinks at 2 Hz, and
    holding SW0 gives 8 Hz and "SW0 pressed".
 4. **Web tests.** Add the board to `tests/web/test_pp_web.py` like EV81X90A: a board description
-   test and a blinky session test.
+   test and a blinky session test (a CircuitPython board: a session that runs its demo
+   `code.py`, like `test_session_pykit_circuitpython`).
+5. **The board's own parts** (a display, NeoPixels, an IMU, a speaker) go in `board.json`
+   `"parts"`, each with the QOM path of its device: see "Board parts" in
+   `tools/pp_web/README.md`. The page polls their properties with the Click ones.
 
 **Gate 4:** web tests green; a screenshot of the board on the page in the report.
 
@@ -236,7 +285,9 @@ and note.
 
 1. Update docs: `docs/handoff.md` (status), `qemu/README.md` (patch table), the machine's rst
    doc in pp-qemu, `tools/pp_web/README.md`.
-2. pp-qemu: commit, export the patch: `git format-patch -1 --start-number <N> -o qemu/patches`.
+2. pp-qemu: commit, export the patch: `git format-patch -1 --start-number <N> -o qemu/patches`
+   (N: one more than the highest number in `qemu/patches`), and add its row to the table in
+   `qemu/README.md`.
 3. Run everything: `PP_QEMU=C:/pp/pp-qemu/build/qemu-system-arm.exe PP_QEMU_SRC=C:/pp/pp-qemu PP_MSYS2_BIN=C:/msys64/ucrt64/bin py -m pytest tests harness/tests`
    (add `PP_QEMU_AVR=<checkout>/build-avr/qemu-system-avr.exe` when that build is not beside
    `PP_QEMU`'s; the AVR tests skip when no AVR build has the machine).
@@ -278,3 +329,39 @@ differs.
   fuses or lock bits from the playbook: the tool refuses such images.
 - **Simulator.** MPLAB SIM runs avr-gcc ELFs directly but its UART I/O stays silent for AVR8X;
   `harness.mdb_sim` reads the USART stores instead. It does not implement SIGROW (reads 0) or REVID.
+
+## CircuitPython boards
+
+Learned on the Curiosity PyKit Explorer (SAME51J20A, 2026-10-14). Everything above applies; this
+is what differs. The firmware under test is Adafruit's stock CircuitPython for the board,
+unmodified; the twin must run it as the kit does.
+
+- **Firmware.** `py -m tools.pp.circuitpython fetch [--version V]` downloads the board's UF2
+  from downloads.circuitpython.org and converts it to an ELF (`tools/pp/uf2.py`), cached in
+  `~/.pp_cache/circuitpython`. CircuitPython lives at 0x4000 behind the UF2 bootloader; the
+  machine starts such an image the way the bootloader does when nothing is loaded at 0. Add the
+  board id (`BOARD_ID`) and machine there for a new board.
+- **The drive.** CIRCUITPY is a FAT file system in the board's external flash (QSPI SST26 on
+  the PyKit). `tools/pp/fatfs.py` builds, reads and changes the image on the host, formatted as
+  CircuitPython formats it (check `os.statvfs('/')` against the kit); the machine loads it with
+  `-drive if=mtd`. No USB mass-storage host is modelled.
+- **The console** is USB CDC only. The USB device model has a built-in host that enumerates the
+  device and opens the first CDC ACM port; its data is serial0. Check the USB IDs and interface
+  list it logs ("usb: configured ...") against the kit.
+- **Run:** `py -m tools.pp.circuitpython run <folder with code.py> --lines "import board" "print(dir(board))"`.
+- **Acceptance** is a comparison, not `tools.pp_accept`: send the same REPL lines to the kit
+  (`py -m harness.cp_repl --port <COM> ...`, read-only: Ctrl-C, the lines, then always Ctrl-D so
+  the kit's `code.py` runs again; lines that write are refused) and to the twin, and tabulate:
+  banner, `os.uname()`, `cpu.frequency`, `cpu.uid` (put the kit's serial in the profile's
+  `serial_default`), `cpu.temperature`/`voltage`, `dir(board)`, an I2C scan, `os.statvfs('/')`,
+  replies of UART modules. Then run the kit's own `code.py` (copy it from a backup of the
+  drive, never by writing to the kit) on the twin. Record the table in
+  `docs/research/<kit>.md`.
+- **Gaps show as hangs, not backlog lines.** CircuitPython waits on flags (DMA TCMPL, SYNCBUSY,
+  USB SWRST) in loops. When the REPL stops answering, read the CPU state over QMP
+  (`human-monitor-command` `info registers`), disassemble around the PC from the ELF's flash
+  segment (`arm-none-eabi-objdump -D -b binary -m arm -M force-thumb --adjust-vma=0x4000`), and
+  match the loop to `ports/atmel-samd` in the CircuitPython source. Long runs find races:
+  run a demo for several minutes with input changes (see `playbooks/peripherals/samd5x.md`).
+- **Web:** `board.json` `"circuitpython"` (version, board id, `drive` folder with the demo
+  `code.py`) makes the page run CircuitPython with that drive and show the CIRCUITPY editor.

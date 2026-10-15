@@ -12,8 +12,10 @@ and driven-low time; their differences are the duty cycles the page shows
 from __future__ import annotations
 
 import asyncio
+import codecs
 import contextlib
 import json
+import re
 import socket
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,7 +24,24 @@ from typing import Callable
 from tools.pp.qemu import elf_target, find_qemu, machine_target, qemu_env
 
 POLL_S = 1 / 30
+QMP_LINE_LIMIT = 4 * 1024 * 1024
 PORT_PATH = "/machine/soc/port"
+# Terminal control sequences (CircuitPython sets the window title with
+# OSC and moves the cursor with CSI); the page shows plain text
+TERM_ESC = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"
+                      r"|\x1b\[[0-9;?]*[ -/]*[@-~]")
+TERM_PARTIAL = re.compile(r"\x1b(?:\][^\x07\x1b]*\x1b?"
+                          r"|\[[0-9;?]*[ -/]*)?$")
+
+
+def plain_text(pending: str, chunk: str) -> tuple[str, str]:
+    """@pending + @chunk without terminal control sequences; a sequence
+    cut at the end of the chunk is held back (the second value)."""
+    text = TERM_ESC.sub("", pending + chunk)
+    cut = TERM_PARTIAL.search(text)
+    if cut:
+        return text[:cut.start()], text[cut.start():]
+    return text, ""
 
 
 def free_port() -> int:
@@ -44,7 +63,9 @@ class Qmp:
         deadline = loop.time() + timeout
         while True:
             try:
-                reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                # A panel's frame is one long line (a 240x135 TFT: 86 KiB)
+                reader, writer = await asyncio.open_connection(
+                    "127.0.0.1", port, limit=QMP_LINE_LIMIT)
                 break
             except OSError:
                 if loop.time() > deadline:
@@ -89,9 +110,12 @@ class Session:
     emit: Callable[[dict], None]
     groups: tuple[str, ...] = ("a", "b")
     extra_args: tuple[str, ...] = ()        # more QEMU arguments (-d, -D)
-    # Click properties: (slot, property) or (slot, property, generation
-    # property), the last read only when the generation changes
+    # Properties the page shows: (key, QOM path, property) or (key, path,
+    # property, generation property), the last read only when the
+    # generation changes; key is "<slot or part>.<property>"
     watch: list[tuple[str, ...]] = field(default_factory=list)
+    # The board's external flash image (-drive if=mtd): a CIRCUITPY drive
+    drive: Path | None = None
     click_state: dict[str, object] = field(default_factory=dict)
     proc: asyncio.subprocess.Process | None = None
     qmp: Qmp | None = None
@@ -114,6 +138,8 @@ class Session:
                             "server=on,wait=on",
                 "-serial", "chardev:vcom",
                 "-qmp", f"tcp:127.0.0.1:{qmp_port},server=on,wait=off",
+                *(["-drive", f"if=mtd,format=raw,file={self.drive}"]
+                  if self.drive else []),
                 *self.extra_args]
         self.proc = await asyncio.create_subprocess_exec(
             *args, env=qemu_env(), stdout=asyncio.subprocess.DEVNULL,
@@ -138,8 +164,14 @@ class Session:
                 await asyncio.sleep(0.1)
 
     async def _uart(self, reader: asyncio.StreamReader) -> None:
+        # UTF-8 (CircuitPython's banner has an emoji), control sequences
+        # dropped
+        dec = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        pending = ""
         while data := await reader.read(4096):
-            self.emit({"type": "uart", "data": data.decode("latin-1")})
+            text, pending = plain_text(pending, dec.decode(data))
+            if text:
+                self.emit({"type": "uart", "data": text})
 
     async def _poll(self) -> None:
         """Per-pad [driven-high, driven-low] fractions and every pad's
@@ -168,8 +200,7 @@ class Session:
                 self.levels = levels
                 self.emit({"type": "levels", "levels": levels})
             state = {}
-            for slot, prop, *gen in self.watch:
-                key, path = f"{slot}.{prop}", f"/machine/{slot}-click"
+            for key, path, prop, *gen in self.watch:
                 if gen:
                     g = await self.qmp.execute("qom-get", path=path,
                                                property=gen[0])
@@ -190,12 +221,24 @@ class Session:
         self.emit({"type": "status", "state": "stopped", "code": code,
                    "stderr": err.decode(errors="replace")[-2000:]})
 
-    async def press(self, button: str, pressed: bool) -> None:
-        if button == "sw0":
+    async def press(self, button: str, pressed: bool,
+                    prop: str | None = None) -> None:
+        """Press or release a board button: "reset", or a machine bool
+        property (@prop; "sw0" means "sw0-pressed")."""
+        if button == "reset":
+            if pressed:
+                await self.qmp.execute("system_reset")
+            return
+        prop = prop or ("sw0-pressed" if button == "sw0" else None)
+        if prop:
             await self.qmp.execute("qom-set", path="/machine",
-                                   property="sw0-pressed", value=pressed)
-        elif button == "reset" and pressed:
-            await self.qmp.execute("system_reset")
+                                   property=prop, value=pressed)
+
+    async def set_prop(self, path: str, prop: str,
+                       value: int | bool | str) -> None:
+        """Set QOM property @prop of @path (a part on the board)."""
+        await self.qmp.execute("qom-set", path=path, property=prop,
+                               value=value)
 
     async def set_click(self, slot: str, prop: str,
                         value: int | bool | str) -> None:

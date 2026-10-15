@@ -14779,7 +14779,14 @@
    "version": "1.0.0",
    "caption": "Digital-to-Analog Converter",
    "core": false,
-   "overlay": null,
+   "overlay": {
+    "file": "overlays/dac_u2502.yaml",
+    "sha1": "d618e8c69010cd56312a9b352d6f6847ac60ddaf",
+    "status": "applied",
+    "versions": [
+     "1.0.0"
+    ]
+   },
    "size": 32,
    "selector": null,
    "default_view": "",
@@ -14791,7 +14798,7 @@
      "irq": {
       "flag": "INTFLAG",
       "enable": "INTENSET",
-      "source": "heuristic"
+      "source": "overlay"
      },
      "registers": [
       {
@@ -14812,7 +14819,10 @@
        "syncbusy": 3,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control A",
@@ -14838,8 +14848,18 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
+         "enprot",
+         "overlay",
+         "all except SWRST, ENABLE = 0x0"
         ],
         [
          "sync",
@@ -14862,11 +14882,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 7,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control B",
@@ -14910,7 +14932,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0x7"
+        ]
+       ]
       },
       {
        "name": "EVCTRL",
@@ -14926,11 +14954,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 255,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Event Control",
@@ -15001,7 +15031,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0xFF"
+        ]
+       ]
       },
       {
        "name": "INTENCLR",
@@ -15022,6 +15058,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_CLEAR"
        ],
        "alias_of": "INTENSET",
@@ -15097,8 +15134,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "clear -> INTENSET"
         ]
        ]
       },
@@ -15121,6 +15158,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_SET"
        ],
        "alias_of": "INTENSET",
@@ -15196,8 +15234,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "set -> INTENSET"
         ]
        ]
       },
@@ -15293,8 +15331,8 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:INTFLAG: all fields W1C (0xFF)"
+         "overlay",
+         "all = 0xFF"
         ]
        ]
       },
@@ -15317,6 +15355,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -15362,6 +15401,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -15449,8 +15493,8 @@
         ],
         [
          "dynamic",
-         "heuristic",
-         "register named *SYNCBUSY: dynamic, reads 0"
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -15468,11 +15512,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 61423,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "DAC n Control",
@@ -15671,7 +15717,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0xEFEF"
+        ]
+       ]
       },
       {
        "name": "DATA",
@@ -15692,6 +15744,7 @@
        "sync_register": "SYNCBUSY",
        "sync_per_element": true,
        "flags": [
+        "HOOK_POST_WRITE",
         "WRITE_ONLY"
        ],
        "alias_of": null,
@@ -15713,6 +15766,11 @@
          "access",
          "atdf",
          "WRITE_ONLY, reads 0 (ATDF rw=W)"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ],
         [
          "sync",
@@ -15740,6 +15798,7 @@
        "sync_register": "SYNCBUSY",
        "sync_per_element": true,
        "flags": [
+        "HOOK_POST_WRITE",
         "WRITE_ONLY"
        ],
        "alias_of": null,
@@ -15761,6 +15820,11 @@
          "access",
          "atdf",
          "WRITE_ONLY, reads 0 (ATDF rw=W)"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ],
         [
          "sync",
@@ -15823,6 +15887,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -15844,6 +15909,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       }
@@ -46411,7 +46481,14 @@
    "version": "1.0.0",
    "caption": "Event System Interface",
    "core": false,
-   "overlay": null,
+   "overlay": {
+    "file": "overlays/evsys_u2504.yaml",
+    "sha1": "334ac021306ff78a4c61b237af91d424bdc6e825",
+    "status": "applied",
+    "versions": [
+     "1.0.0"
+    ]
+   },
    "size": 556,
    "selector": null,
    "default_view": "",
@@ -46440,7 +46517,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control",
@@ -46458,8 +46538,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -46482,6 +46567,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "HOOK_POST_WRITE",
         "WRITE_ONLY"
        ],
        "alias_of": null,
@@ -46751,6 +46837,11 @@
          "access",
          "atdf",
          "WRITE_ONLY, reads 0 (ATDF rw=W)"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -46815,7 +46906,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel Pending Interrupt",
@@ -46862,7 +46955,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ]
+       ]
       },
       {
        "name": "INTSTATUS",
@@ -46883,6 +46982,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -46992,6 +47092,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -47014,6 +47119,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -47123,6 +47229,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -47145,6 +47256,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -47259,6 +47371,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -47280,7 +47397,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -47364,7 +47484,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[0].CHINTENCLR",
@@ -47385,7 +47511,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[0].CHINTENSET",
        "read_side_effect": false,
@@ -47412,8 +47539,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -47436,7 +47568,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[0].CHINTENSET",
        "read_side_effect": false,
@@ -47463,8 +47596,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -47486,7 +47624,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -47512,8 +47652,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -47536,6 +47681,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -47565,6 +47711,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -47586,7 +47737,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -47670,7 +47824,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[1].CHINTENCLR",
@@ -47691,7 +47851,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[1].CHINTENSET",
        "read_side_effect": false,
@@ -47718,8 +47879,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -47742,7 +47908,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[1].CHINTENSET",
        "read_side_effect": false,
@@ -47769,8 +47936,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -47792,7 +47964,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -47818,8 +47992,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -47842,6 +48021,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -47871,6 +48051,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -47892,7 +48077,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -47976,7 +48164,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[2].CHINTENCLR",
@@ -47997,7 +48191,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[2].CHINTENSET",
        "read_side_effect": false,
@@ -48024,8 +48219,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -48048,7 +48248,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[2].CHINTENSET",
        "read_side_effect": false,
@@ -48075,8 +48276,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -48098,7 +48304,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -48124,8 +48332,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -48148,6 +48361,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -48177,6 +48391,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -48198,7 +48417,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -48282,7 +48504,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[3].CHINTENCLR",
@@ -48303,7 +48531,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[3].CHINTENSET",
        "read_side_effect": false,
@@ -48330,8 +48559,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -48354,7 +48588,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[3].CHINTENSET",
        "read_side_effect": false,
@@ -48381,8 +48616,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -48404,7 +48644,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -48430,8 +48672,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -48454,6 +48701,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -48483,6 +48731,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -48504,7 +48757,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -48588,7 +48844,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[4].CHINTENCLR",
@@ -48609,7 +48871,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[4].CHINTENSET",
        "read_side_effect": false,
@@ -48636,8 +48899,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -48660,7 +48928,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[4].CHINTENSET",
        "read_side_effect": false,
@@ -48687,8 +48956,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -48710,7 +48984,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -48736,8 +49012,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -48760,6 +49041,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -48789,6 +49071,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -48810,7 +49097,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -48894,7 +49184,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[5].CHINTENCLR",
@@ -48915,7 +49211,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[5].CHINTENSET",
        "read_side_effect": false,
@@ -48942,8 +49239,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -48966,7 +49268,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[5].CHINTENSET",
        "read_side_effect": false,
@@ -48993,8 +49296,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -49016,7 +49324,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -49042,8 +49352,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -49066,6 +49381,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -49095,6 +49411,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -49116,7 +49437,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -49200,7 +49524,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[6].CHINTENCLR",
@@ -49221,7 +49551,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[6].CHINTENSET",
        "read_side_effect": false,
@@ -49248,8 +49579,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -49272,7 +49608,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[6].CHINTENSET",
        "read_side_effect": false,
@@ -49299,8 +49636,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -49322,7 +49664,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -49348,8 +49692,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -49372,6 +49721,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -49401,6 +49751,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -49422,7 +49777,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -49506,7 +49864,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[7].CHINTENCLR",
@@ -49527,7 +49891,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[7].CHINTENSET",
        "read_side_effect": false,
@@ -49554,8 +49919,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -49578,7 +49948,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[7].CHINTENSET",
        "read_side_effect": false,
@@ -49605,8 +49976,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -49628,7 +50004,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -49654,8 +50032,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -49678,6 +50061,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -49707,6 +50091,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -49728,7 +50117,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -49812,7 +50204,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[8].CHINTENCLR",
@@ -49833,7 +50231,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[8].CHINTENSET",
        "read_side_effect": false,
@@ -49860,8 +50259,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -49884,7 +50288,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[8].CHINTENSET",
        "read_side_effect": false,
@@ -49911,8 +50316,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -49934,7 +50344,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -49960,8 +50372,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -49984,6 +50401,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -50013,6 +50431,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -50034,7 +50457,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -50118,7 +50544,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[9].CHINTENCLR",
@@ -50139,7 +50571,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[9].CHINTENSET",
        "read_side_effect": false,
@@ -50166,8 +50599,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -50190,7 +50628,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[9].CHINTENSET",
        "read_side_effect": false,
@@ -50217,8 +50656,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -50240,7 +50684,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -50266,8 +50712,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -50290,6 +50741,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -50319,6 +50771,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -50340,7 +50797,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -50424,7 +50884,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[10].CHINTENCLR",
@@ -50445,7 +50911,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[10].CHINTENSET",
        "read_side_effect": false,
@@ -50472,8 +50939,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -50496,7 +50968,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[10].CHINTENSET",
        "read_side_effect": false,
@@ -50523,8 +50996,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -50546,7 +51024,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -50572,8 +51052,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -50596,6 +51081,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -50625,6 +51111,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -50646,7 +51137,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -50730,7 +51224,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[11].CHINTENCLR",
@@ -50751,7 +51251,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[11].CHINTENSET",
        "read_side_effect": false,
@@ -50778,8 +51279,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -50802,7 +51308,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[11].CHINTENSET",
        "read_side_effect": false,
@@ -50829,8 +51336,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -50852,7 +51364,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -50878,8 +51392,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -50902,6 +51421,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -50931,6 +51451,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -50952,7 +51477,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -51036,7 +51564,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[12].CHINTENCLR",
@@ -51057,7 +51591,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[12].CHINTENSET",
        "read_side_effect": false,
@@ -51084,8 +51619,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -51108,7 +51648,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[12].CHINTENSET",
        "read_side_effect": false,
@@ -51135,8 +51676,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -51158,7 +51704,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -51184,8 +51732,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -51208,6 +51761,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -51237,6 +51791,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -51258,7 +51817,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -51342,7 +51904,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[13].CHINTENCLR",
@@ -51363,7 +51931,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[13].CHINTENSET",
        "read_side_effect": false,
@@ -51390,8 +51959,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -51414,7 +51988,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[13].CHINTENSET",
        "read_side_effect": false,
@@ -51441,8 +52016,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -51464,7 +52044,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -51490,8 +52072,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -51514,6 +52101,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -51543,6 +52131,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -51564,7 +52157,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -51648,7 +52244,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[14].CHINTENCLR",
@@ -51669,7 +52271,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[14].CHINTENSET",
        "read_side_effect": false,
@@ -51696,8 +52299,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -51720,7 +52328,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[14].CHINTENSET",
        "read_side_effect": false,
@@ -51747,8 +52356,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -51770,7 +52384,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -51796,8 +52412,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -51820,6 +52441,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -51849,6 +52471,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -51870,7 +52497,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -51954,7 +52584,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[15].CHINTENCLR",
@@ -51975,7 +52611,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[15].CHINTENSET",
        "read_side_effect": false,
@@ -52002,8 +52639,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -52026,7 +52668,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[15].CHINTENSET",
        "read_side_effect": false,
@@ -52053,8 +52696,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -52076,7 +52724,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -52102,8 +52752,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -52126,6 +52781,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -52155,6 +52811,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -52176,7 +52837,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -52260,7 +52924,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[16].CHINTENCLR",
@@ -52281,7 +52951,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[16].CHINTENSET",
        "read_side_effect": false,
@@ -52308,8 +52979,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -52332,7 +53008,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[16].CHINTENSET",
        "read_side_effect": false,
@@ -52359,8 +53036,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -52382,7 +53064,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -52408,8 +53092,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -52432,6 +53121,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -52461,6 +53151,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -52482,7 +53177,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -52566,7 +53264,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[17].CHINTENCLR",
@@ -52587,7 +53291,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[17].CHINTENSET",
        "read_side_effect": false,
@@ -52614,8 +53319,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -52638,7 +53348,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[17].CHINTENSET",
        "read_side_effect": false,
@@ -52665,8 +53376,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -52688,7 +53404,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -52714,8 +53432,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -52738,6 +53461,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -52767,6 +53491,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -52788,7 +53517,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -52872,7 +53604,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[18].CHINTENCLR",
@@ -52893,7 +53631,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[18].CHINTENSET",
        "read_side_effect": false,
@@ -52920,8 +53659,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -52944,7 +53688,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[18].CHINTENSET",
        "read_side_effect": false,
@@ -52971,8 +53716,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -52994,7 +53744,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -53020,8 +53772,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -53044,6 +53801,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -53073,6 +53831,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -53094,7 +53857,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -53178,7 +53944,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[19].CHINTENCLR",
@@ -53199,7 +53971,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[19].CHINTENSET",
        "read_side_effect": false,
@@ -53226,8 +53999,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -53250,7 +54028,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[19].CHINTENSET",
        "read_side_effect": false,
@@ -53277,8 +54056,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -53300,7 +54084,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -53326,8 +54112,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -53350,6 +54141,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -53379,6 +54171,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -53400,7 +54197,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -53484,7 +54284,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[20].CHINTENCLR",
@@ -53505,7 +54311,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[20].CHINTENSET",
        "read_side_effect": false,
@@ -53532,8 +54339,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -53556,7 +54368,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[20].CHINTENSET",
        "read_side_effect": false,
@@ -53583,8 +54396,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -53606,7 +54424,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -53632,8 +54452,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -53656,6 +54481,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -53685,6 +54511,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -53706,7 +54537,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -53790,7 +54624,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[21].CHINTENCLR",
@@ -53811,7 +54651,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[21].CHINTENSET",
        "read_side_effect": false,
@@ -53838,8 +54679,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -53862,7 +54708,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[21].CHINTENSET",
        "read_side_effect": false,
@@ -53889,8 +54736,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -53912,7 +54764,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -53938,8 +54792,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -53962,6 +54821,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -53991,6 +54851,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -54012,7 +54877,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -54096,7 +54964,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[22].CHINTENCLR",
@@ -54117,7 +54991,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[22].CHINTENSET",
        "read_side_effect": false,
@@ -54144,8 +55019,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -54168,7 +55048,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[22].CHINTENSET",
        "read_side_effect": false,
@@ -54195,8 +55076,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -54218,7 +55104,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -54244,8 +55132,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -54268,6 +55161,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -54297,6 +55191,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -54318,7 +55217,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -54402,7 +55304,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[23].CHINTENCLR",
@@ -54423,7 +55331,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[23].CHINTENSET",
        "read_side_effect": false,
@@ -54450,8 +55359,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -54474,7 +55388,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[23].CHINTENSET",
        "read_side_effect": false,
@@ -54501,8 +55416,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -54524,7 +55444,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -54550,8 +55472,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -54574,6 +55501,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -54603,6 +55531,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -54624,7 +55557,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -54708,7 +55644,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[24].CHINTENCLR",
@@ -54729,7 +55671,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[24].CHINTENSET",
        "read_side_effect": false,
@@ -54756,8 +55699,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -54780,7 +55728,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[24].CHINTENSET",
        "read_side_effect": false,
@@ -54807,8 +55756,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -54830,7 +55784,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -54856,8 +55812,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -54880,6 +55841,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -54909,6 +55871,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -54930,7 +55897,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -55014,7 +55984,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[25].CHINTENCLR",
@@ -55035,7 +56011,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[25].CHINTENSET",
        "read_side_effect": false,
@@ -55062,8 +56039,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -55086,7 +56068,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[25].CHINTENSET",
        "read_side_effect": false,
@@ -55113,8 +56096,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -55136,7 +56124,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -55162,8 +56152,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -55186,6 +56181,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -55215,6 +56211,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -55236,7 +56237,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -55320,7 +56324,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[26].CHINTENCLR",
@@ -55341,7 +56351,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[26].CHINTENSET",
        "read_side_effect": false,
@@ -55368,8 +56379,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -55392,7 +56408,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[26].CHINTENSET",
        "read_side_effect": false,
@@ -55419,8 +56436,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -55442,7 +56464,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -55468,8 +56492,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -55492,6 +56521,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -55521,6 +56551,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -55542,7 +56577,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -55626,7 +56664,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[27].CHINTENCLR",
@@ -55647,7 +56691,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[27].CHINTENSET",
        "read_side_effect": false,
@@ -55674,8 +56719,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -55698,7 +56748,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[27].CHINTENSET",
        "read_side_effect": false,
@@ -55725,8 +56776,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -55748,7 +56804,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -55774,8 +56832,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -55798,6 +56861,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -55827,6 +56891,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -55848,7 +56917,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -55932,7 +57004,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[28].CHINTENCLR",
@@ -55953,7 +57031,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[28].CHINTENSET",
        "read_side_effect": false,
@@ -55980,8 +57059,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -56004,7 +57088,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[28].CHINTENSET",
        "read_side_effect": false,
@@ -56031,8 +57116,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -56054,7 +57144,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -56080,8 +57172,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -56104,6 +57201,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -56133,6 +57231,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -56154,7 +57257,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -56238,7 +57344,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[29].CHINTENCLR",
@@ -56259,7 +57371,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[29].CHINTENSET",
        "read_side_effect": false,
@@ -56286,8 +57399,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -56310,7 +57428,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[29].CHINTENSET",
        "read_side_effect": false,
@@ -56337,8 +57456,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -56360,7 +57484,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -56386,8 +57512,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -56410,6 +57541,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -56439,6 +57571,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -56460,7 +57597,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -56544,7 +57684,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[30].CHINTENCLR",
@@ -56565,7 +57711,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[30].CHINTENSET",
        "read_side_effect": false,
@@ -56592,8 +57739,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -56616,7 +57768,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[30].CHINTENSET",
        "read_side_effect": false,
@@ -56643,8 +57796,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -56666,7 +57824,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -56692,8 +57852,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -56716,6 +57881,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -56745,6 +57911,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -56766,7 +57937,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Control",
@@ -56850,7 +58024,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHANNEL[31].CHINTENCLR",
@@ -56871,7 +58051,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "ALIAS_CLEAR",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[31].CHINTENSET",
        "read_side_effect": false,
@@ -56898,8 +58079,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "clear -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -56922,7 +58108,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "ALIAS_SET",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHANNEL[31].CHINTENSET",
        "read_side_effect": false,
@@ -56949,8 +58136,13 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+         "overlay",
+         "set -> CHINTENSET"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -56972,7 +58164,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel n Interrupt Flag Status and Clear",
@@ -56998,8 +58192,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x3)"
+         "overlay",
+         "all = 0x3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -57022,6 +58221,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -57051,6 +58251,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -57072,7 +58277,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "User Multiplexer n",
@@ -57087,7 +58295,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       }
      ],
      "reset_overrides": [],

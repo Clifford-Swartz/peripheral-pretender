@@ -1,0 +1,46 @@
+{
+  "id": "pykit",
+  "name": "Curiosity PyKit Explorer (CircuitPython)",
+  "machine": "curiosity-circuitpython",
+  "vcom": "USB CDC: the CircuitPython REPL and print()",
+  "source": "No design files are published; composed from the kit's workshop renders (PyKit Ruler 04-12387 rev 4, Curiosity CircuitPython 04-12379 rev 4) by make_art.py; positions from those renders, pins from the schematics (EV78P89A rev 3, EV82H04A rev 3)",
+  "image": "top.png",
+  "px_per_mm": 10,
+  "origin_mm": [0, 40.8],
+  "size_mm": [306.6, 40.8],
+  "circuitpython": {
+    "version": "10.1.4",
+    "board_id": "microchip_curiosity_circuitpython",
+    "drive": "circuitpy"
+  },
+  "leds": [
+    {"id": "D13", "ref": "D6", "at_mm": [283.3, 24.1], "pin": "PB23",
+     "active_low": false, "color": "#ff2a2a"}
+  ],
+  "buttons": [
+    {"id": "USER", "ref": "USER", "at_mm": [173.1, 31.0],
+     "size_mm": [6.4, 3.6], "action": "user", "property": "user-pressed"},
+    {"id": "RESET", "ref": "RESET", "at_mm": [284.7, 29.2],
+     "size_mm": [6.4, 3.6], "action": "reset"}
+  ],
+  "headers": [],
+  "parts": [
+    {"id": "lcd", "name": "ST7789 1.14\" TFT", "path": "/machine/lcd",
+     "display": {"type": "panel", "property": "frame",
+                 "gen_property": "frame-gen", "width": 240, "height": 135,
+                 "at_mm": [97.3, 20.8], "size_mm": [24.9, 14.0]}},
+    {"id": "neopixels", "name": "NeoPixels (D3 on the Curiosity board, D1-D4 on the Ruler)",
+     "path": "/machine/neopixels",
+     "pixels": {"property": "pixels", "gen_property": "gen", "size_mm": 5.4,
+                "at_mm": [[209.3, 21.6], [63.6, 24.1], [63.6, 16.8],
+                          [69.7, 16.8], [69.7, 24.1]]}},
+    {"id": "speaker", "name": "Speaker SP1 (class-D amplifier on DAC0, PA02)",
+     "path": "/machine/soc/dac",
+     "audio": {"property": "audio", "at_mm": [50.7, 19.9], "size_mm": 9}},
+    {"id": "imu", "name": "ICM-20948 IMU (and a BNO085 if plugged)",
+     "path": "/machine/imu", "also": ["/machine/qwiic-bno085"],
+     "sticks": [{"id": "tilt", "mode": "tilt", "label": "Tilt the PyKit",
+                 "range": 1000, "xyz_property": "accel",
+                 "at_mm": [186.0, 17.6], "size_mm": 9}]}
+  ]
+}

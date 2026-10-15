@@ -263,3 +263,36 @@ part B, reuse its `COREB` prompt and pass in the reports from `docs/handoff/agen
   NMI/compact vector table, cycle timing (busy-wait delays under `-icount shift=auto` run fast);
   SIGROW serial number and TEMPSENSE from silicon into `profiles/avr64ea48.yaml` `data_rows`;
   the 8x8 G Click's physical LED order (the schematic's is used).
+
+## Curiosity PyKit Explorer (CircuitPython, 2026-10-14)
+
+The first CircuitPython kit and the first Cortex-M4F: the Curiosity CircuitPython board
+(EV78P89A, ATSAME51J20A) on the PyKit Ruler (EV82H04A), machine `curiosity-circuitpython`
+(patches 0032-0035). Research and the kit's facts: `docs/research/pykit-explorer.md`.
+
+- **Chip:** SAME51_DFP 3.9.267 (`scripts/fetch_packs.py`), profile `profiles/atsame51j20a.yaml`,
+  new overlays for the SAM D5x clocks, NVMCTRL, QSPI, TRNG, USB, DMAC, ADC, DAC and EVSYS. The
+  generator learned instances with several NVIC lines, register-less instances (PUKCC), the M4
+  core defines, several RAM segments, per-device `reset_from` and per-family GCLK sources.
+- **Firmware:** `make -C firmware/hello BOARD=curiosity_circuitpython` (`hello`, `blinky`; console
+  on the debug UART, so the e2e test runs `-M curiosity-circuitpython,console=debug`).
+- **CircuitPython:** the stock build runs unmodified. `py -m tools.pp.circuitpython fetch` caches
+  Adafruit's UF2 and its ELF (`tools/pp/uf2.py`); `... run <folder with code.py>` boots it with a
+  CIRCUITPY image (`tools/pp/fatfs.py`) and talks to the REPL.
+- **Console design:** CircuitPython has its REPL only on USB, so the USB device model carries a
+  built-in host that enumerates the device and opens the first CDC ACM port (DTR); its data is
+  QEMU's serial0. Prints made before the port opens are dropped, as with a real PC.
+- **File system design:** no mass-storage host. The SST26VF032B flash image (`-drive if=mtd`)
+  is built and read on the host side with `tools/pp/fatfs.py`, formatted the way CircuitPython
+  formats it; the web page edits `code.py` in the image and restarts the twin.
+- **Web:** `py -m tools.pp_web --board pykit` (see `tools/pp_web/README.md`): live TFT, the five
+  NeoPixels, a tilt stick for the IMU (and the optional BNO085), USER/RESET, the speaker in the
+  browser (DAC samples paced by a TC through DMA and EVSYS, as CircuitPython's `audioio` and
+  `synthio` do), the CIRCUITPY editor.
+- **Kit checks** (read-only REPL, `py -m harness.cp_repl`): identity, UID, 120 MHz, USB IDs, I2C
+  scan, file system geometry, board names and the RNBD451's replies match the twin; the kit's
+  own robot-arm `code.py` runs on the twin. The die temperature does not (25 C default vs 36 C).
+- **Open:** BLE as a "phone" panel on the page (the RNBD451 model has `central-*` properties for
+  it); BME680/APDS-9999 plug-ins; SD card (`ssi-sd`); CAN; capacitive touch; the TEMP_LOG
+  calibration row from silicon; USB mass storage (a drive the host OS could mount); the BNO085
+  is not on the schematics (the owner is asking).

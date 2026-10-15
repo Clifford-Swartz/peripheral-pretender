@@ -1,0 +1,29 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for DAC U2502 (SAM D5x/E5x, two 12-bit channels). The
+# mchp-dac model converts at once: DATA, or DATABUF at a START event when
+# EVCTRL.STARTEIx is set (CircuitPython's audioio paces it with a TC).
+ip: DAC
+id: U2502
+versions: ["1.0.0"]
+references:
+  - "DS60001507 (SAM D5x/E5x data sheet) DAC chapter"
+registers:
+  CTRLA:
+    pac_protected: true
+    enable_protected: {all_except: [SWRST, ENABLE]}
+    self_clearing: [SWRST]
+    hooks: [post_write]           # SWRST, ENABLE
+  CTRLB: {pac_protected: true, enable_protected: all}
+  EVCTRL: {pac_protected: true, enable_protected: all}
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: all
+    irq_source: {enable: INTENSET}
+  STATUS: {dynamic: true}         # READYx while the channel is enabled
+  SYNCBUSY: {dynamic: true}       # instant synchronization
+  DACCTRL: {pac_protected: true, enable_protected: all}
+  DATA: {hooks: [post_write]}     # converts now
+  DATABUF: {hooks: [post_write]}  # converts now, or at the next START
+  RESULT: {dynamic: true}

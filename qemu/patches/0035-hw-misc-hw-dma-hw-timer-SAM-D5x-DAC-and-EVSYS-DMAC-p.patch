@@ -1,0 +1,2741 @@
+From d52c5e5e76508ae4f5f7d1d12f20ec884615602c Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 14 Oct 2026 20:00:57 -0700
+Subject: [PATCH] hw/misc, hw/dma, hw/timer: SAM D5x DAC and EVSYS; DMAC pulsed
+ triggers
+
+The speaker of the PyKit Ruler, played the way CircuitPython's audioio
+and synthio drive it:
+
+- mchp-dac (DAC U2502): two channels converting at once, DATABUF at a
+  START event when EVCTRL.STARTEIx is set; properties value0/value1 and
+  "audio", the output since the previous read as PCM for front ends.
+- mchp-evsys-u2504 (EVSYS U2504): asynchronous and synchronous paths,
+  EVD/OVR flags, the five interrupt lines; same GPIO names as mchp-evsys
+  so the SoC wires its event table to either.
+- DMAC: triggers pulsed by a TC overflow (one pending per channel; a run
+  for pulses serves only the channels that took one, never a channel
+  firmware has just enabled and is about to clear the flags of), and
+  block events (CHEVCTRL.EVOE, EVOSEL BLOCK) after the next descriptor
+  is fetched. The DMAC tells each TC whether a channel waits for its
+  overflow; the TC then serves every overflow, even far behind.
+- mchp_event_time_ns(): the virtual time of the event a late timer is
+  serving, so the DAC's timeline keeps the spacing of a burst of TC
+  overflows.
+- Regenerated DAC and EVSYS tables (overlays), curiosity-cp qtest
+  (dac-audio), board doc docs/system/arm/curiosity-circuitpython.rst.
+
+Peripheral Pretender: AI-assisted; not for submission to upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/curiosity-circuitpython.rst   |  88 ++++
+ docs/system/target-arm.rst                    |   1 +
+ hw/arm/curiosity_circuitpython.c              |   2 +
+ hw/arm/pic32cm_soc.c                          |  36 +-
+ hw/dma/mchp_dmac.c                            | 134 +++++-
+ hw/misc/mchp_dac.c                            | 305 +++++++++++++
+ hw/misc/mchp_evsys5x.c                        | 326 ++++++++++++++
+ hw/misc/mchp_regblock.c                       |  13 +
+ hw/misc/meson.build                           |   2 +
+ hw/timer/mchp_tc.c                            |  42 +-
+ include/hw/dma/mchp_dmac.h                    |  10 +
+ include/hw/mchp/gen/atsame51j20a/dac_u2502.h  |  25 +-
+ .../hw/mchp/gen/atsame51j20a/evsys_u2504.h    | 401 ++++++++++--------
+ include/hw/mchp/gen/dac_u2502.h               |   2 +-
+ include/hw/mchp/gen/evsys_u2504.h             |   2 +-
+ include/hw/misc/mchp_dac.h                    |  23 +
+ include/hw/misc/mchp_evsys.h                  |   2 +
+ include/hw/misc/mchp_regblock.h               |  10 +
+ include/hw/timer/mchp_tc.h                    |   6 +
+ tests/qtest/curiosity-cp-test.c               |  86 ++++
+ 20 files changed, 1311 insertions(+), 205 deletions(-)
+ create mode 100644 docs/system/arm/curiosity-circuitpython.rst
+ create mode 100644 hw/misc/mchp_dac.c
+ create mode 100644 hw/misc/mchp_evsys5x.c
+ create mode 100644 include/hw/misc/mchp_dac.h
+
+diff --git a/docs/system/arm/curiosity-circuitpython.rst b/docs/system/arm/curiosity-circuitpython.rst
+new file mode 100644
+index 0000000..cf52096
+--- /dev/null
++++ b/docs/system/arm/curiosity-circuitpython.rst
+@@ -0,0 +1,88 @@
++Microchip Curiosity CircuitPython / PyKit Explorer (``curiosity-circuitpython``)
++================================================================================
++
++.. note::
++   Peripheral Pretender: a personal project in a downstream fork
++   of QEMU. AI-assisted code; not for submission to upstream QEMU.
++
++The Curiosity PyKit Explorer is a CircuitPython kit: the Curiosity
++CircuitPython board (EV78P89A) on the PyKit Ruler baseboard (EV82H04A). The
++controller is an ATSAME51J20A: an Arm Cortex-M4F at up to 120 MHz with
++1 MiB of flash, 256 KiB of SRAM and 8 KiB of backup RAM, here with a
++32.768 kHz crystal and no main crystal.
++
++The SoC model (``atsame51j20a-soc``) is the generic PIC32CM SoC model (see
++:doc:`pic32cm-jh01-cpro`) built from the ATSAME51J20A device description:
++the CPU is ``cortex-m4`` (CPUID 0x410FC241, r0p1, with the FPU), and
++peripherals are QOM children of ``/machine/soc`` named after their instance.
++
++Modelled SAM D5x peripherals
++""""""""""""""""""""""""""""
++
++Besides the PORT, SERCOM (USART, SPI, I2C host), EIC, TC, TCC, RTC, WDT,
++PAC and DSU models shared with the PIC32CM devices:
++
++- OSCCTRL (XOSC0/1, DFLL48M, two FDPLL200M), OSC32KCTRL, MCLK, GCLK (12
++  generators; source numbering of the SAM D5x), NVMCTRL (READY, commands
++  logged), TRNG.
++- QSPI in serial memory mode, with the AHB window at 0x04000000; an SST26VF
++  quad SPI flash behind it.
++- USB device controller with a built-in host: it enumerates the device and
++  opens the first CDC ACM interface (115200 8N1, DTR and RTS), whose data is
++  a QEMU serial port. CircuitPython's REPL appears there. Mass storage,
++  HID, audio and MIDI interfaces are enumerated but not used.
++- DMAC: descriptors, write-back memory, software triggers and peripheral
++  triggers (SERCOM DRE/RXC flags; TC overflows as pulses), block events.
++- EVSYS (U2504): asynchronous and synchronous paths, EVD/OVR flags and the
++  five interrupt lines.
++- ADC (instant conversions; pins from the ``ain`` property, the supply and
++  the temperature sensor), DAC (two channels, START events; the ``audio``
++  property described below).
++
++Board
++"""""
++
++- QSPI flash: SST26VF032B (4 MiB), contents from ``-drive if=mtd,index=0``
++  (a raw image; CircuitPython keeps its CIRCUITPY FAT file system there).
++- Red LED D13 on PB23 (QEMU LED device). USER button on PA27 to ground with
++  a 10 kOhm pull-up: the machine property ``user-pressed``.
++- ``-serial`` options: with ``console=usb`` (default) serial0 is the USB
++  CDC console, serial1 the debug UART (SERCOM3, PA22/PA23), serial2 the
++  RNBD451 BLE module's UART (SERCOM2). ``console=debug`` swaps the first
++  two, for bare-metal test images that print on the debug UART.
++- RNBD451 BLE module (``rnbd451``): command mode (``$$$``), ``V``, ``D``,
++  ``---``, with the replies of the module on the kit; its reset on PA14.
++- The UF2 bootloader occupies the first 16 KiB on the real board. When
++  nothing is loaded at address 0, the machine starts an image linked at
++  0x4000 the way the bootloader does, so CircuitPython's ELF runs as is.
++
++The PyKit Ruler:
++
++- ST7789V 1.14" 240 x 135 TFT on SERCOM0 SPI (PA04/PA05, CS PA07, D/C PB14,
++  backlight PA06 active low). Its picture is ``/machine/lcd``: properties
++  ``frame`` (base64 RGB565) and ``frame-gen``.
++- Five WS2812B NeoPixels in one chain on PB22: ``/machine/neopixels``,
++  property ``pixels`` (``RRGGBB`` per LED) and ``gen``.
++- ICM-20948 IMU (with its AK09916 magnetometer) at I2C address 0x69:
++  ``/machine/imu``, properties ``accel`` (mg, ``"x y z"``), ``gyro``,
++  ``mag``.
++- ``bno085=on`` adds a BNO085 breakout at 0x4A on the QWIIC connector
++  (``/machine/qwiic-bno085``), as on the kit this model was checked against.
++- Speaker: DAC0 (PA02) drives the amplifier. ``/machine/soc/dac`` has
++  ``value0``/``value1`` (12-bit output codes) and ``audio``: each read
++  returns the output since the previous read as ``"<rate> <seq> <base64>"``
++  (signed 16-bit samples at ``audio-rate``, default 22050 Hz, mid-scale
++  0), or an empty string while the output does not change.
++
++Running CircuitPython
++"""""""""""""""""""""
++
++.. code-block:: bash
++
++  $ qemu-system-arm -M curiosity-circuitpython \
++      -kernel adafruit-circuitpython-microchip_curiosity_circuitpython-10.1.4.elf \
++      -drive if=mtd,format=raw,file=circuitpy.img \
++      -serial stdio -display none -icount shift=auto,sleep=on
++
++The ELF is Adafruit's UF2 converted (``tools/pp/uf2.py`` in Peripheral
++Pretender); ``tools/pp/fatfs.py`` builds and reads the drive image.
+diff --git a/docs/system/target-arm.rst b/docs/system/target-arm.rst
+index 8609fec..cc3c08f 100644
+--- a/docs/system/target-arm.rst
++++ b/docs/system/target-arm.rst
+@@ -89,6 +89,7 @@ Board-specific documentation
+    arm/exynos
+    arm/musicpal
+    arm/kzm
++   arm/curiosity-circuitpython
+    arm/pic32cm-jh01-cpro
+    arm/pic32cm-mc00-cpro
+    arm/nrf
+diff --git a/hw/arm/curiosity_circuitpython.c b/hw/arm/curiosity_circuitpython.c
+index 0366a45..d925c71 100644
+--- a/hw/arm/curiosity_circuitpython.c
++++ b/hw/arm/curiosity_circuitpython.c
+@@ -34,6 +34,8 @@
+  *   Curiosity board first, then D1-D4 on the Ruler (/machine/neopixels).
+  * - ICM-20948 IMU behind the 1.8 V I2C level shifter at 69h (SDO/AD0
+  *   pulled up, R1), /machine/imu ("accel", "gyro", "mag").
++ * - The class-D amplifier and speaker SP1 on DAC0 (PA02): what they play
++ *   is the DAC's output, /machine/soc/dac ("value0", "audio").
+  *
+  * Machine option bno085=on plugs a BNO085 breakout (I2C 4Ah) into the
+  * QWIIC connector, as on the kit on the desk (/machine/qwiic-bno085).
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index 93972ef..e3fad61 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -25,6 +25,7 @@
+ #include "hw/core/qdev-properties-system.h"
+ #include "hw/core/split-irq.h"
+ #include "hw/gpio/mchp_port.h"
++#include "hw/misc/mchp_dac.h"
+ #include "hw/misc/mchp_eic.h"
+ #include "hw/misc/mchp_evsys.h"
+ #include "hw/rtc/mchp_rtc.h"
+@@ -51,11 +52,13 @@ static const struct {
+     const char *ip_id;          /* NULL: any */
+ } pic32cm_models[] = {
+     { "ADC", TYPE_MCHP_ADC, "U2500" },
++    { "DAC", TYPE_MCHP_DAC, "U2502" },
+     { "DIVAS", TYPE_MCHP_DIVAS },
+     { "DMAC", TYPE_MCHP_DMAC, "U2503" },
+     { "DSU", TYPE_MCHP_DSU, "U2209" },
+     { "EIC", TYPE_MCHP_EIC },
+     { "EVSYS", TYPE_MCHP_EVSYS, "U2256" },
++    { "EVSYS", TYPE_MCHP_EVSYS_U2504, "U2504" },
+     { "GCLK", TYPE_MCHP_GCLK },
+     { "MCLK", TYPE_MCHP_MCLK, "U2234" },
+     { "MCLK", TYPE_MCHP_SAME5X_MCLK, "U2408" },
+@@ -585,6 +588,34 @@ static void pic32cm_dmac_triggers(Pic32cmSocState *s, DeviceState *dmac)
+     }
+ }
+ 
++/*
++ * DMAC triggers pulsed by their peripheral: a TC's overflow (DMAC_ID_OVF)
++ * goes to DMAC input "trigger"[id]; the DMAC tells the TC whether a
++ * channel waits for it, so that the TC only then runs to every overflow
++ */
++static void pic32cm_dmac_pulses(Pic32cmSocState *s)
++{
++    DeviceState *dmac = pic32cm_soc_periph(s, "DMAC");
++
++    if (!dmac || !object_dynamic_cast(OBJECT(dmac), TYPE_MCHP_DMAC)) {
++        return;
++    }
++    for (unsigned i = 0; i < s->dev->ndmac_triggers; i++) {
++        const MchpPeriphRef *ref = &s->dev->dmac_triggers[i];
++        DeviceState *dev = pic32cm_soc_periph(s, ref->instance);
++
++        if (ref->id >= MCHP_DMAC_MAX_TRIGGERS || !dev ||
++            !object_dynamic_cast(OBJECT(dev), TYPE_MCHP_TC) ||
++            strcmp(ref->param, "DMAC_ID_OVF")) {
++            continue;
++        }
++        qdev_connect_gpio_out_named(dev, MCHP_TC_OVF_DMA, 0,
++            qdev_get_gpio_in_named(dmac, MCHP_DMAC_TRIGGER, ref->id));
++        qdev_connect_gpio_out_named(dmac, MCHP_DMAC_TRIGGER_WANTED, ref->id,
++            qdev_get_gpio_in_named(dev, MCHP_TC_OVF_DMA_WANTED, 0));
++    }
++}
++
+ static bool pic32cm_realize_periph(Pic32cmSocState *s, uint8_t rev,
+                                    Error **errp)
+ {
+@@ -722,7 +753,9 @@ static void pic32cm_connect_events(Pic32cmSocState *s)
+ {
+     DeviceState *evsys = pic32cm_soc_periph(s, "EVSYS");
+ 
+-    if (!evsys || !object_dynamic_cast(OBJECT(evsys), TYPE_MCHP_EVSYS)) {
++    if (!evsys || (!object_dynamic_cast(OBJECT(evsys), TYPE_MCHP_EVSYS) &&
++                   !object_dynamic_cast(OBJECT(evsys),
++                                        TYPE_MCHP_EVSYS_U2504))) {
+         return;
+     }
+     for (unsigned i = 0; i < s->dev->nevents; i++) {
+@@ -894,6 +927,7 @@ static void pic32cm_soc_realize(DeviceState *dev, Error **errp)
+     pic32cm_connect_resets(s);
+     pic32cm_connect_eic(s);
+     pic32cm_connect_events(s);
++    pic32cm_dmac_pulses(s);
+     pic32cm_connect_pads(s);
+ }
+ 
+diff --git a/hw/dma/mchp_dmac.c b/hw/dma/mchp_dmac.c
+index 77eb04d..65d74a7 100644
+--- a/hw/dma/mchp_dmac.c
++++ b/hw/dma/mchp_dmac.c
+@@ -20,9 +20,14 @@
+  * the latest; never during the write that started it, because firmware
+  * clears CHINTFLAG right after setting ENABLE (CircuitPython, Harmony).
+  * It runs as fast as the triggers allow, at most a budget of beats per
+- * run; channels waiting for a trigger are looked at again every 100 us. Not
+- * modelled: priorities and arbitration (lowest channel first), CRC,
+- * events, the threshold, beat timing.
++ * run; channels waiting for a trigger are looked at again every 100 us.
++ * Pulsed triggers (a TC overflow) are served when they come, one pending
++ * per channel as CHSTATUS.PEND. A block ending with CHEVCTRL.EVOE and
++ * BTCTRL.EVOSEL BLOCK pulses the channel's event output, after the next
++ * descriptor is in the write-back memory (CircuitPython's audio refills
++ * the buffer that descriptor's DESCADDR names). Not modelled: priorities
++ * and arbitration (lowest channel first), CRC, event inputs, other event
++ * output selections, the threshold, beat timing.
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -30,6 +35,7 @@
+ #include "qemu/osdep.h"
+ #include "qemu/log.h"
+ #include "qemu/timer.h"
++#include "hw/core/irq.h"
+ #include "hw/dma/mchp_dmac.h"
+ #include "hw/mchp/gen/dmac_u2503.h"
+ #include "migration/vmstate.h"
+@@ -77,6 +83,10 @@ struct MchpDmacState {
+     uint32_t suspended;
+     uint32_t ferr;              /* fetch error, CHSTATUS.FERR */
+     uint16_t block_beats[DMAC_NCH]; /* BTCNT of the current block */
++    uint8_t pulses[DMAC_NCH];   /* a pulsed trigger is pending */
++    uint8_t wanted[MCHP_DMAC_MAX_TRIGGERS];
++    qemu_irq trig_wanted[MCHP_DMAC_MAX_TRIGGERS];
++    qemu_irq ch_event[DMAC_NCH];
+ };
+ 
+ static uint32_t dmac_reg(MchpDmacState *s, hwaddr off, unsigned size)
+@@ -170,7 +180,7 @@ static bool dmac_trigger_ready(MchpDmacState *s, unsigned ch)
+     unsigned src = FIELD_EX32(ctrla, MCHP_DMAC_CHANNEL_CHCTRLA, TRIGSRC);
+     uint8_t flags = 0;
+ 
+-    if (dmac_reg(s, A_MCHP_DMAC_SWTRIGCTRL, 4) & BIT(ch)) {
++    if (dmac_reg(s, A_MCHP_DMAC_SWTRIGCTRL, 4) & BIT(ch) || s->pulses[ch]) {
+         return true;
+     }
+     if (!src || src >= MCHP_DMAC_MAX_TRIGGERS || !s->trig[src].mask) {
+@@ -221,20 +231,29 @@ static void dmac_block_end(MchpDmacState *s, unsigned ch, DmacDesc *d)
+     unsigned act = FIELD_EX32(d->btctrl, MCHP_DMAC_DESCRIPTOR_BTCTRL,
+                               BLOCKACT);
+ 
++    bool event = FIELD_EX32(d->btctrl, MCHP_DMAC_DESCRIPTOR_BTCTRL, EVOSEL) ==
++                 MCHP_DMAC_DESCRIPTOR_BTCTRL_EVOSEL_BLOCK &&
++                 FIELD_EX32(dmac_reg(s, DMAC_CH(ch,
++                                     A_MCHP_DMAC_CHANNEL_CHEVCTRL), 1),
++                            MCHP_DMAC_CHANNEL_CHEVCTRL, EVOE);
++
+     dmac_store(dmac_wb(s, ch), d);
+     if (!d->descaddr) {
+         dmac_ch_flag(s, ch, CH_TCMPL);
+         dmac_ch_disable(s, ch);
+-        return;
+-    }
+-    if (act & 1) {
+-        dmac_ch_flag(s, ch, CH_TCMPL);
++    } else {
++        if (act & 1) {
++            dmac_ch_flag(s, ch, CH_TCMPL);
++        }
++        if (act & 2) {
++            dmac_ch_flag(s, ch, CH_SUSP);
++            s->suspended |= BIT(ch);
++        }
++        dmac_fetch(s, ch, d->descaddr);
+     }
+-    if (act & 2) {
+-        dmac_ch_flag(s, ch, CH_SUSP);
+-        s->suspended |= BIT(ch);
++    if (event) {
++        qemu_irq_pulse(s->ch_event[ch]);
+     }
+-    dmac_fetch(s, ch, d->descaddr);
+ }
+ 
+ /* Serve one trigger of @ch; returns the beats moved */
+@@ -245,7 +264,10 @@ static unsigned dmac_serve(MchpDmacState *s, unsigned ch, unsigned budget)
+     unsigned beats = 0, limit;
+     DmacDesc d;
+ 
+-    /* Taking a software trigger clears it */
++    /* Taking a software trigger clears it; else a pulse is taken */
++    if (!(dmac_reg(s, A_MCHP_DMAC_SWTRIGCTRL, 4) & BIT(ch)) && s->pulses[ch]) {
++        s->pulses[ch]--;
++    }
+     dmac_set_reg(s, A_MCHP_DMAC_SWTRIGCTRL, 4,
+                  dmac_reg(s, A_MCHP_DMAC_SWTRIGCTRL, 4) & ~BIT(ch));
+     limit = trigact == TRIGACT_BURST ?
+@@ -275,7 +297,35 @@ static bool dmac_runnable(MchpDmacState *s, unsigned ch)
+            !(s->suspended & BIT(ch));
+ }
+ 
+-static void dmac_run(MchpDmacState *s)
++/* Tell the pulsed triggers which of them an enabled channel waits for */
++static void dmac_update_wanted(MchpDmacState *s)
++{
++    uint8_t want[MCHP_DMAC_MAX_TRIGGERS] = { 0 };
++
++    for (unsigned ch = 0; ch < DMAC_NCH; ch++) {
++        uint32_t ctrla = dmac_reg(s, DMAC_CH(ch, A_MCHP_DMAC_CHANNEL_CHCTRLA),
++                                  4);
++        unsigned src = FIELD_EX32(ctrla, MCHP_DMAC_CHANNEL_CHCTRLA, TRIGSRC);
++
++        if (dmac_ch_enabled(s, ch) && src < MCHP_DMAC_MAX_TRIGGERS) {
++            want[src] = 1;
++        }
++    }
++    for (unsigned id = 1; id < MCHP_DMAC_MAX_TRIGGERS; id++) {
++        if (want[id] != s->wanted[id]) {
++            s->wanted[id] = want[id];
++            qemu_set_irq(s->trig_wanted[id], want[id]);
++        }
++    }
++}
++
++/*
++ * Serve the channels in @mask as far as their triggers allow. A run for
++ * pulsed triggers only serves the channels that took a pulse: it can come
++ * between two instructions of firmware that has just enabled another
++ * channel and is about to clear its CHINTFLAG.
++ */
++static void dmac_run_channels(MchpDmacState *s, uint32_t mask)
+ {
+     MchpRegBlock *rb = MCHP_REGBLOCK(s);
+     unsigned budget = DMAC_BUDGET;
+@@ -290,7 +340,7 @@ static void dmac_run(MchpDmacState *s)
+         for (unsigned ch = 0; ch < DMAC_NCH && budget; ch++) {
+             unsigned n;
+ 
+-            if (!dmac_runnable(s, ch)) {
++            if (!(mask & BIT(ch)) || !dmac_runnable(s, ch)) {
+                 continue;
+             }
+             if (!dmac_trigger_ready(s, ch)) {
+@@ -303,12 +353,21 @@ static void dmac_run(MchpDmacState *s)
+         }
+     }
+     mchp_regblock_update_irq(rb);
++    dmac_update_wanted(s);
++    if (mask != UINT32_MAX) {
++        return;                 /* the others keep their schedule */
++    }
+     if (waiting || !budget) {
+         timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                   (budget ? DMAC_POLL_NS : DMAC_START_NS));
+     }
+ }
+ 
++static void dmac_run(MchpDmacState *s)
++{
++    dmac_run_channels(s, UINT32_MAX);
++}
++
+ static void dmac_timer(void *opaque)
+ {
+     dmac_run(MCHP_DMAC(opaque));
+@@ -323,6 +382,30 @@ static void dmac_schedule(MchpDmacState *s)
+     }
+ }
+ 
++/* A pulsed trigger: one pending per channel that selects it */
++static void dmac_trigger_in(void *opaque, int id, int level)
++{
++    MchpDmacState *s = opaque;
++    uint32_t pulsed = 0;
++
++    if (level <= 0) {
++        return;
++    }
++    for (unsigned ch = 0; ch < DMAC_NCH; ch++) {
++        uint32_t ctrla = dmac_reg(s, DMAC_CH(ch, A_MCHP_DMAC_CHANNEL_CHCTRLA),
++                                  4);
++
++        if (dmac_runnable(s, ch) &&
++            FIELD_EX32(ctrla, MCHP_DMAC_CHANNEL_CHCTRLA, TRIGSRC) == id) {
++            s->pulses[ch] = 1;
++            pulsed |= BIT(ch);
++        }
++    }
++    if (pulsed) {
++        dmac_run_channels(s, pulsed);
++    }
++}
++
+ void mchp_dmac_kick(DeviceState *dev)
+ {
+     dmac_schedule(MCHP_DMAC(dev));
+@@ -454,6 +537,7 @@ static void dmac_ch_reset(MchpDmacState *s, unsigned ch)
+         dmac_set_reg(s, DMAC_CH(ch, regs[i]), 1, 0);
+     }
+     dmac_set_reg(s, DMAC_CH(ch, A_MCHP_DMAC_CHANNEL_CHCTRLA), 4, 0);
++    s->pulses[ch] = 0;
+     s->active &= ~BIT(ch);
+     s->suspended &= ~BIT(ch);
+     s->ferr &= ~BIT(ch);
+@@ -505,6 +589,7 @@ static void dmac_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+             dmac_set_reg(s, off, 1, 0);
+         }
+     }
++    dmac_update_wanted(s);
+     dmac_schedule(s);
+ }
+ 
+@@ -515,6 +600,12 @@ static void dmac_reset_hold(MchpRegBlock *rb)
+     timer_del(s->timer);
+     s->active = s->suspended = s->ferr = 0;
+     memset(s->block_beats, 0, sizeof(s->block_beats));
++    memset(s->pulses, 0, sizeof(s->pulses));
++}
++
++static void dmac_reset_exit(MchpRegBlock *rb)
++{
++    dmac_update_wanted(MCHP_DMAC(rb));
+ }
+ 
+ static void dmac_init(Object *obj)
+@@ -522,6 +613,12 @@ static void dmac_init(Object *obj)
+     MchpDmacState *s = MCHP_DMAC(obj);
+ 
+     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, dmac_timer, s);
++    qdev_init_gpio_in_named(DEVICE(obj), dmac_trigger_in, MCHP_DMAC_TRIGGER,
++                            MCHP_DMAC_MAX_TRIGGERS);
++    qdev_init_gpio_out_named(DEVICE(obj), s->trig_wanted,
++                             MCHP_DMAC_TRIGGER_WANTED, MCHP_DMAC_MAX_TRIGGERS);
++    qdev_init_gpio_out_named(DEVICE(obj), s->ch_event, MCHP_DMAC_CH_EVENT,
++                             DMAC_NCH);
+ }
+ 
+ static void dmac_finalize(Object *obj)
+@@ -531,8 +628,8 @@ static void dmac_finalize(Object *obj)
+ 
+ static const VMStateDescription vmstate_mchp_dmac = {
+     .name = TYPE_MCHP_DMAC,
+-    .version_id = 1,
+-    .minimum_version_id = 1,
++    .version_id = 2,
++    .minimum_version_id = 2,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpDmacState, 1, vmstate_mchp_regblock,
+                        MchpRegBlock),
+@@ -541,6 +638,8 @@ static const VMStateDescription vmstate_mchp_dmac = {
+         VMSTATE_UINT32(suspended, MchpDmacState),
+         VMSTATE_UINT32(ferr, MchpDmacState),
+         VMSTATE_UINT16_ARRAY(block_beats, MchpDmacState, DMAC_NCH),
++        VMSTATE_UINT8_ARRAY(pulses, MchpDmacState, DMAC_NCH),
++        VMSTATE_UINT8_ARRAY(wanted, MchpDmacState, MCHP_DMAC_MAX_TRIGGERS),
+         VMSTATE_END_OF_LIST()
+     },
+ };
+@@ -553,6 +652,7 @@ static void dmac_class_init(ObjectClass *klass, const void *data)
+     c->pre_read = dmac_pre_read;
+     c->post_write = dmac_post_write;
+     c->reset_hold = dmac_reset_hold;
++    c->reset_exit = dmac_reset_exit;
+     c->irq_pending = dmac_irq_pending;
+     c->irq_lines = dmac_irq_lines;
+     c->log_writes = false;
+diff --git a/hw/misc/mchp_dac.c b/hw/misc/mchp_dac.c
+new file mode 100644
+index 0000000..8c66c67
+--- /dev/null
++++ b/hw/misc/mchp_dac.c
+@@ -0,0 +1,305 @@
++/*
++ * Microchip SAM D5x/E5x DAC (DAC U2502)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Two 12-bit channels as in DS60001507 (DAC chapter), converting at once:
++ * a write of DATAx sets output x; so does a write of DATABUFx, unless
++ * EVCTRL.STARTEIx is set, when the buffered value goes out at the next
++ * START event (EVSYS user START0/1; CircuitPython's audioio starts a
++ * conversion at every overflow of a TC and refills DATABUF by DMA). With
++ * DACCTRLx.LEFTADJ the code is the top 12 bits of the 16-bit value.
++ * STATUS.READYx reads 1 while the DAC and channel x are enabled; RESULTx
++ * is the output code. Not modelled: references (codes, not volts),
++ * oversampling and the interpolation filter, refresh, the EMPTY and
++ * RESRDY flags, events and DMA triggers, the conversion time.
++ *
++ * The page plays channel 0 as sound: every output change is kept with
++ * its virtual time (mchp_event_time_ns(): a late burst of TC overflows
++ * keeps its spacing); reading "audio" turns the changes since the last read
++ * into a sample-and-hold waveform at "audio-rate" Hz, as "<rate> <seq>
++ * <base64 of signed 16-bit little-endian samples>" (code 2048 is 0), at
++ * most the last 250 ms; it reads "" while the output does not change.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "qemu/timer.h"
++#include "hw/core/irq.h"
++#include "hw/misc/mchp_dac.h"
++#include "hw/mchp/gen/dac_u2502.h"
++#include "migration/vmstate.h"
++
++#define DAC_NCH             2
++#define DAC_RING            16384       /* output changes kept */
++#define DAC_AUDIO_SPAN_NS   (250 * SCALE_MS)
++#define DAC_MID             2048
++
++typedef struct DacChange {
++    int64_t t;                  /* QEMU_CLOCK_VIRTUAL ns */
++    uint16_t code;
++} DacChange;
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpDacState, MCHP_DAC)
++
++struct MchpDacState {
++    MchpRegBlock parent_obj;
++
++    uint16_t out[DAC_NCH];      /* output codes */
++    uint16_t databuf[DAC_NCH];  /* DATABUF waiting for START (write-only) */
++    uint32_t audio_rate;
++
++    /* Channel 0 changes not yet turned into audio */
++    DacChange ring[DAC_RING];
++    unsigned head, count;
++    uint16_t audio_code;        /* the output at audio_next */
++    int64_t audio_next;         /* time of the next audio sample */
++    uint32_t audio_seq;
++};
++
++static uint32_t dac_reg(MchpDacState *s, hwaddr off, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, off, size);
++}
++
++static bool dac_enabled(MchpDacState *s)
++{
++    return FIELD_EX32(dac_reg(s, A_MCHP_DAC_CTRLA, 1), MCHP_DAC_CTRLA, ENABLE);
++}
++
++static uint32_t dac_dacctrl(MchpDacState *s, unsigned ch)
++{
++    return dac_reg(s, A_MCHP_DAC_DACCTRL + 2 * ch, 2);
++}
++
++static bool dac_ch_ready(MchpDacState *s, unsigned ch)
++{
++    return dac_enabled(s) &&
++           FIELD_EX32(dac_dacctrl(s, ch), MCHP_DAC_DACCTRL, ENABLE);
++}
++
++/* The 12-bit code of a DATA/DATABUF value of channel @ch */
++static uint16_t dac_code(MchpDacState *s, unsigned ch, uint32_t value)
++{
++    if (FIELD_EX32(dac_dacctrl(s, ch), MCHP_DAC_DACCTRL, LEFTADJ)) {
++        return (value >> 4) & 0xFFF;
++    }
++    return value & 0xFFF;
++}
++
++static void dac_output(MchpDacState *s, unsigned ch, uint16_t code)
++{
++    DacChange *c;
++
++    if (!dac_ch_ready(s, ch) || s->out[ch] == code) {
++        return;
++    }
++    s->out[ch] = code;
++    if (ch) {
++        return;
++    }
++    if (s->count == DAC_RING) {
++        /* Nobody listens: the oldest change is the past */
++        s->audio_code = s->ring[s->head].code;
++        s->head = (s->head + 1) % DAC_RING;
++        s->count--;
++    }
++    c = &s->ring[(s->head + s->count) % DAC_RING];
++    c->t = mchp_event_time_ns();
++    c->code = code;
++    s->count++;
++}
++
++static void dac_start_event(void *opaque, int ch, int level)
++{
++    MchpDacState *s = opaque;
++
++    if (level <= 0 || ch >= DAC_NCH) {
++        return;
++    }
++    if (!(dac_reg(s, A_MCHP_DAC_EVCTRL, 1) &
++          (R_MCHP_DAC_EVCTRL_STARTEI0_MASK << ch))) {
++        return;
++    }
++    dac_output(s, ch, dac_code(s, ch, s->databuf[ch]));
++}
++
++static uint32_t dac_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                             unsigned idx, uint32_t stored, bool side_effects)
++{
++    MchpDacState *s = MCHP_DAC(rf->opaque);
++    uint32_t v = 0;
++
++    switch (ri->offset) {
++    case A_MCHP_DAC_STATUS:
++        for (unsigned ch = 0; ch < DAC_NCH; ch++) {
++            if (dac_ch_ready(s, ch)) {
++                v |= (R_MCHP_DAC_STATUS_READY0_MASK |
++                      R_MCHP_DAC_STATUS_EOC0_MASK) << ch;
++            }
++        }
++        return v;
++    case A_MCHP_DAC_SYNCBUSY:
++        return 0;
++    case A_MCHP_DAC_RESULT:
++        return idx < DAC_NCH ? s->out[idx] : 0;
++    default:
++        return stored;
++    }
++}
++
++static void dac_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                           unsigned idx, uint32_t old, uint32_t written,
++                           uint32_t we)
++{
++    MchpDacState *s = MCHP_DAC(rf->opaque);
++    uint32_t v = mchp_regfile_get(rf, ri, idx);
++
++    if (idx >= DAC_NCH) {
++        return;
++    }
++    switch (ri->offset) {
++    case A_MCHP_DAC_DATA:
++        dac_output(s, idx, dac_code(s, idx, v));
++        break;
++    case A_MCHP_DAC_DATABUF:
++        s->databuf[idx] = v;
++        if (!(dac_reg(s, A_MCHP_DAC_EVCTRL, 1) &
++              (R_MCHP_DAC_EVCTRL_STARTEI0_MASK << idx))) {
++            dac_output(s, idx, dac_code(s, idx, v));
++        }
++        break;
++    }
++}
++
++static char *dac_get_audio(Object *obj, Error **errp)
++{
++    MchpDacState *s = MCHP_DAC(obj);
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    int64_t start = MAX(s->audio_next, now - DAC_AUDIO_SPAN_NS);
++    uint64_t n, rate = MAX(s->audio_rate, 1000);
++    g_autofree uint8_t *pcm = NULL;
++    g_autofree char *b64 = NULL;
++
++    /* Changes before the window only set where it starts */
++    while (s->count && s->ring[s->head].t <= start) {
++        s->audio_code = s->ring[s->head].code;
++        s->head = (s->head + 1) % DAC_RING;
++        s->count--;
++    }
++    if (!s->count || now <= start) {
++        s->audio_next = MAX(start, now);
++        return g_strdup("");
++    }
++    n = muldiv64(now - start, rate, NANOSECONDS_PER_SECOND);
++    pcm = g_malloc(2 * n + 2);
++    for (uint64_t i = 0; i < n; i++) {
++        int64_t t = start + muldiv64(i, NANOSECONDS_PER_SECOND, rate);
++
++        while (s->count && s->ring[s->head].t <= t) {
++            s->audio_code = s->ring[s->head].code;
++            s->head = (s->head + 1) % DAC_RING;
++            s->count--;
++        }
++        stw_le_p(&pcm[2 * i], (uint16_t)(((int)s->audio_code - DAC_MID) * 16));
++    }
++    s->audio_next = start + muldiv64(n, NANOSECONDS_PER_SECOND, rate);
++    b64 = g_base64_encode(pcm, 2 * n);
++    return g_strdup_printf("%" PRIu64 " %u %s", rate, ++s->audio_seq, b64);
++}
++
++static void dac_get_value(Object *obj, Visitor *v, const char *name,
++                          void *opaque, Error **errp)
++{
++    uint32_t value = *(uint16_t *)opaque;
++
++    visit_type_uint32(v, name, &value, errp);
++}
++
++static void dac_get_rate(Object *obj, Visitor *v, const char *name,
++                         void *opaque, Error **errp)
++{
++    visit_type_uint32(v, name, &MCHP_DAC(obj)->audio_rate, errp);
++}
++
++static void dac_set_rate(Object *obj, Visitor *v, const char *name,
++                         void *opaque, Error **errp)
++{
++    uint32_t rate;
++
++    if (!visit_type_uint32(v, name, &rate, errp)) {
++        return;
++    }
++    if (rate < 1000 || rate > 192000) {
++        error_setg(errp, "audio-rate must be 1000-192000 Hz");
++        return;
++    }
++    MCHP_DAC(obj)->audio_rate = rate;
++}
++
++static void dac_reset_hold(MchpRegBlock *rb)
++{
++    MchpDacState *s = MCHP_DAC(rb);
++
++    memset(s->out, 0, sizeof(s->out));
++    memset(s->databuf, 0, sizeof(s->databuf));
++    s->head = s->count = 0;
++    s->audio_code = 0;
++    s->audio_next = 0;
++}
++
++static void dac_init(Object *obj)
++{
++    MchpDacState *s = MCHP_DAC(obj);
++
++    s->audio_rate = 22050;
++    qdev_init_gpio_in_named(DEVICE(obj), dac_start_event,
++                            MCHP_DAC_START_EVENT_IN, DAC_NCH);
++    object_property_add(obj, "value0", "uint32", dac_get_value, NULL, NULL,
++                        &s->out[0]);
++    object_property_add(obj, "value1", "uint32", dac_get_value, NULL, NULL,
++                        &s->out[1]);
++    object_property_add(obj, "audio-rate", "uint32", dac_get_rate,
++                        dac_set_rate, NULL, NULL);
++    object_property_add_str(obj, "audio", dac_get_audio, NULL);
++}
++
++static const VMStateDescription vmstate_mchp_dac = {
++    .name = TYPE_MCHP_DAC,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpDacState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_UINT16_ARRAY(out, MchpDacState, DAC_NCH),
++        VMSTATE_UINT16_ARRAY(databuf, MchpDacState, DAC_NCH),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void dac_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_dac;
++    c->pre_read = dac_pre_read;
++    c->post_write = dac_post_write;
++    c->reset_hold = dac_reset_hold;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_dac_types[] = {
++    {
++        .name = TYPE_MCHP_DAC,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpDacState),
++        .instance_init = dac_init,
++        .class_init = dac_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_dac_types)
+diff --git a/hw/misc/mchp_evsys5x.c b/hw/misc/mchp_evsys5x.c
+new file mode 100644
+index 0000000..511037d
+--- /dev/null
++++ b/hw/misc/mchp_evsys5x.c
+@@ -0,0 +1,326 @@
++/*
++ * Microchip SAM D5x/E5x Event System (EVSYS U2504)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Follows DS60001507 (EVSYS chapter): channel n routes generator
++ * CHANNEL.EVGEN (or a software event, SWEVT) to the users whose USER
++ * register holds n + 1. On the asynchronous path the users follow the
++ * generator's level; on the synchronous and resynchronized paths an edge
++ * selected by EDGSEL is an event: it sets CHINTFLAG.EVD (OVR when EVD was
++ * still set) and pulses the users. IRQ lines: EVSYS_0..3 for channels
++ * 0-3, EVSYS_OTHER for the rest. Users are always ready (CHSTATUS.RDYUSR,
++ * READYUSR); channels never busy.
++ *
++ * Not modelled: the channels' generic clocks, priorities and INTPEND
++ * arbitration beyond the lowest channel, ONDEMAND and RUNSTDBY, event
++ * latency.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "hw/core/irq.h"
++#include "hw/misc/mchp_evsys.h"
++#include "hw/mchp/gen/evsys_u2504.h"
++#include "migration/vmstate.h"
++
++#define EV_NCH          MCHP_EVSYS_CHANNEL_COUNT
++#define EV_NUSERS       MCHP_EVSYS_USER_COUNT
++#define EV_CH(ch, r)    (MCHP_EVSYS_CHANNEL_OFFSET + \
++                         (ch) * MCHP_EVSYS_CHANNEL_STRIDE + (r))
++#define EV_EVD          R_MCHP_EVSYS_CHANNEL_CHINTFLAG_EVD_MASK
++#define EV_OVR          R_MCHP_EVSYS_CHANNEL_CHINTFLAG_OVR_MASK
++
++enum {
++    EV_PATH_SYNC,
++    EV_PATH_RESYNC,
++    EV_PATH_ASYNC,
++};
++
++enum {
++    EV_EDGE_NONE,
++    EV_EDGE_RISING,
++    EV_EDGE_FALLING,
++    EV_EDGE_BOTH,
++};
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpEvsys5xState, MCHP_EVSYS_U2504)
++
++struct MchpEvsys5xState {
++    MchpRegBlock parent_obj;
++
++    qemu_irq user[EV_NUSERS];
++    uint64_t gen_level[MCHP_EVSYS_MAX_GENERATORS / 64];
++    uint8_t user_level[EV_NUSERS];
++};
++
++static uint32_t ev_reg(MchpEvsys5xState *s, hwaddr off, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, off, size);
++}
++
++static void ev_set_reg(MchpEvsys5xState *s, hwaddr off, unsigned size,
++                       uint32_t v)
++{
++    mchp_regfile_poke(&MCHP_REGBLOCK(s)->rf, off, size, v);
++}
++
++static uint32_t ev_channel(MchpEvsys5xState *s, unsigned ch)
++{
++    return ev_reg(s, EV_CH(ch, A_MCHP_EVSYS_CHANNEL_CHANNEL), 4);
++}
++
++static unsigned ev_path(MchpEvsys5xState *s, unsigned ch)
++{
++    return FIELD_EX32(ev_channel(s, ch), MCHP_EVSYS_CHANNEL_CHANNEL, PATH);
++}
++
++static bool ev_gen_level(MchpEvsys5xState *s, unsigned gen)
++{
++    return gen && gen < MCHP_EVSYS_MAX_GENERATORS &&
++           extract64(s->gen_level[gen / 64], gen % 64, 1);
++}
++
++static unsigned ev_user_channel(MchpEvsys5xState *s, unsigned u)
++{
++    return FIELD_EX32(ev_reg(s, A_MCHP_EVSYS_USER + 4 * u, 4),
++                      MCHP_EVSYS_USER, CHANNEL);
++}
++
++static void ev_set_user(MchpEvsys5xState *s, unsigned u, bool level)
++{
++    if (s->user_level[u] != level) {
++        s->user_level[u] = level;
++        qemu_set_irq(s->user[u], level);
++    }
++}
++
++/* Users of asynchronous channels follow the generator; others idle at 0 */
++static void ev_update_users(MchpEvsys5xState *s)
++{
++    for (unsigned u = 0; u < EV_NUSERS; u++) {
++        unsigned sel = ev_user_channel(s, u), ch = sel - 1;
++        bool level = sel && ch < EV_NCH && ev_path(s, ch) >= EV_PATH_ASYNC &&
++                     ev_gen_level(s, FIELD_EX32(ev_channel(s, ch),
++                                                MCHP_EVSYS_CHANNEL_CHANNEL,
++                                                EVGEN));
++
++        ev_set_user(s, u, level);
++    }
++}
++
++/* An event on synchronous/resynchronized channel @ch */
++static void ev_event(MchpEvsys5xState *s, unsigned ch)
++{
++    hwaddr off = EV_CH(ch, A_MCHP_EVSYS_CHANNEL_CHINTFLAG);
++    uint8_t flags = ev_reg(s, off, 1);
++
++    ev_set_reg(s, off, 1, flags | EV_EVD | (flags & EV_EVD ? EV_OVR : 0));
++    for (unsigned u = 0; u < EV_NUSERS; u++) {
++        if (ev_user_channel(s, u) == ch + 1) {
++            qemu_irq_pulse(s->user[u]);
++        }
++    }
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++static void ev_edge(MchpEvsys5xState *s, unsigned ch, bool rising)
++{
++    unsigned edge = FIELD_EX32(ev_channel(s, ch), MCHP_EVSYS_CHANNEL_CHANNEL,
++                               EDGSEL);
++
++    if (ev_path(s, ch) >= EV_PATH_ASYNC) {
++        return;
++    }
++    if (edge == EV_EDGE_BOTH ||
++        edge == (rising ? EV_EDGE_RISING : EV_EDGE_FALLING)) {
++        ev_event(s, ch);
++    }
++}
++
++static void ev_set_generator(void *opaque, int gen, int level)
++{
++    MchpEvsys5xState *s = opaque;
++
++    if (!gen || gen >= MCHP_EVSYS_MAX_GENERATORS ||
++        ev_gen_level(s, gen) == (level > 0)) {
++        return;
++    }
++    s->gen_level[gen / 64] = deposit64(s->gen_level[gen / 64], gen % 64, 1,
++                                       level > 0);
++    for (unsigned ch = 0; ch < EV_NCH; ch++) {
++        if (FIELD_EX32(ev_channel(s, ch), MCHP_EVSYS_CHANNEL_CHANNEL,
++                       EVGEN) == gen) {
++            ev_edge(s, ch, level > 0);
++        }
++    }
++    ev_update_users(s);
++}
++
++static void ev_set_user_busy(void *opaque, int u, int level)
++{
++    /* Users are always ready */
++}
++
++static void ev_swevt(MchpEvsys5xState *s, uint32_t channels)
++{
++    for (unsigned ch = 0; ch < EV_NCH; ch++) {
++        if (!(channels & BIT(ch))) {
++            continue;
++        }
++        if (ev_path(s, ch) >= EV_PATH_ASYNC) {
++            for (unsigned u = 0; u < EV_NUSERS; u++) {
++                if (ev_user_channel(s, u) == ch + 1) {
++                    qemu_irq_pulse(s->user[u]);
++                }
++            }
++            continue;
++        }
++        ev_edge(s, ch, true);
++        ev_edge(s, ch, false);
++    }
++}
++
++static uint8_t ev_pending(MchpEvsys5xState *s, unsigned ch)
++{
++    return ev_reg(s, EV_CH(ch, A_MCHP_EVSYS_CHANNEL_CHINTFLAG), 1) &
++           ev_reg(s, EV_CH(ch, A_MCHP_EVSYS_CHANNEL_CHINTENSET), 1);
++}
++
++static uint32_t ev_irq_lines(MchpRegBlock *rb)
++{
++    MchpEvsys5xState *s = MCHP_EVSYS_U2504(rb);
++    uint32_t lines = 0;
++
++    for (unsigned ch = 0; ch < EV_NCH; ch++) {
++        if (ev_pending(s, ch)) {
++            lines |= BIT(MIN(ch, 4));
++        }
++    }
++    return lines;
++}
++
++static bool ev_irq_pending(MchpRegBlock *rb)
++{
++    return ev_irq_lines(rb) != 0;
++}
++
++static uint32_t ev_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                            unsigned idx, uint32_t stored, bool side_effects)
++{
++    MchpEvsys5xState *s = MCHP_EVSYS_U2504(rf->opaque);
++    uint32_t off = mchp_regfile_elem_offset(ri, idx);
++    uint32_t v = 0;
++
++    switch (off) {
++    case A_MCHP_EVSYS_INTPEND:
++        for (unsigned ch = 0; ch < EV_NCH; ch++) {
++            uint8_t f = ev_reg(s, EV_CH(ch, A_MCHP_EVSYS_CHANNEL_CHINTFLAG), 1);
++
++            if (f) {
++                return ch | (f & EV_OVR ? R_MCHP_EVSYS_INTPEND_OVR_MASK : 0) |
++                       (f & EV_EVD ? R_MCHP_EVSYS_INTPEND_EVD_MASK : 0) |
++                       R_MCHP_EVSYS_INTPEND_READY_MASK;
++            }
++        }
++        return R_MCHP_EVSYS_INTPEND_READY_MASK;
++    case A_MCHP_EVSYS_INTSTATUS:
++        for (unsigned ch = 0; ch < EV_NCH; ch++) {
++            v |= ev_pending(s, ch) ? BIT(ch) : 0;
++        }
++        return v;
++    case A_MCHP_EVSYS_BUSYCH:
++        return 0;
++    case A_MCHP_EVSYS_READYUSR:
++        return UINT32_MAX;
++    default:
++        break;
++    }
++    if (off >= MCHP_EVSYS_CHANNEL_OFFSET &&
++        (off - MCHP_EVSYS_CHANNEL_OFFSET) % MCHP_EVSYS_CHANNEL_STRIDE ==
++        A_MCHP_EVSYS_CHANNEL_CHSTATUS) {
++        return R_MCHP_EVSYS_CHANNEL_CHSTATUS_RDYUSR_MASK;
++    }
++    return stored;
++}
++
++static void ev_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                          unsigned idx, uint32_t old, uint32_t written,
++                          uint32_t we)
++{
++    MchpEvsys5xState *s = MCHP_EVSYS_U2504(rf->opaque);
++
++    switch (ri->offset) {
++    case A_MCHP_EVSYS_SWEVT:
++        ev_swevt(s, written & we);
++        mchp_regfile_set(rf, ri, idx, 0);
++        break;
++    default:
++        ev_update_users(s);
++        break;
++    }
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++static void ev_reset_hold(MchpRegBlock *rb)
++{
++    MchpEvsys5xState *s = MCHP_EVSYS_U2504(rb);
++
++    for (unsigned u = 0; u < EV_NUSERS; u++) {
++        ev_set_user(s, u, false);
++    }
++}
++
++static void ev_init(Object *obj)
++{
++    MchpEvsys5xState *s = MCHP_EVSYS_U2504(obj);
++    DeviceState *dev = DEVICE(obj);
++
++    qdev_init_gpio_in_named(dev, ev_set_generator, MCHP_EVSYS_GENERATOR,
++                            MCHP_EVSYS_MAX_GENERATORS);
++    qdev_init_gpio_in_named(dev, ev_set_user_busy, MCHP_EVSYS_USER_BUSY,
++                            EV_NUSERS);
++    qdev_init_gpio_out_named(dev, s->user, MCHP_EVSYS_USER, EV_NUSERS);
++}
++
++static const VMStateDescription vmstate_mchp_evsys5x = {
++    .name = TYPE_MCHP_EVSYS_U2504,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpEvsys5xState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_UINT64_ARRAY(gen_level, MchpEvsys5xState,
++                             MCHP_EVSYS_MAX_GENERATORS / 64),
++        VMSTATE_UINT8_ARRAY(user_level, MchpEvsys5xState, EV_NUSERS),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void ev_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_evsys5x;
++    c->pre_read = ev_pre_read;
++    c->post_write = ev_post_write;
++    c->reset_hold = ev_reset_hold;
++    c->irq_pending = ev_irq_pending;
++    c->irq_lines = ev_irq_lines;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_evsys5x_types[] = {
++    {
++        .name = TYPE_MCHP_EVSYS_U2504,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpEvsys5xState),
++        .instance_init = ev_init,
++        .class_init = ev_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_evsys5x_types)
+diff --git a/hw/misc/mchp_regblock.c b/hw/misc/mchp_regblock.c
+index 2d0284c..287d1c1 100644
+--- a/hw/misc/mchp_regblock.c
++++ b/hw/misc/mchp_regblock.c
+@@ -200,6 +200,19 @@ static uint32_t mchp_regblock_pending_flags(MchpRegBlock *s)
+            mchp_regfile_get(&s->rf, mchp_regblock_storage(s, s->intenset), 0);
+ }
+ 
++static int64_t mchp_event_time = -1;
++
++int64_t mchp_event_time_ns(void)
++{
++    return mchp_event_time >= 0 ? mchp_event_time :
++           qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++}
++
++void mchp_event_time_set(int64_t ns)
++{
++    mchp_event_time = ns;
++}
++
+ void mchp_regblock_update_irq(MchpRegBlock *s)
+ {
+     MchpRegBlockClass *c = MCHP_REGBLOCK_GET_CLASS(s);
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index e9c785d..f99a1a3 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -32,7 +32,9 @@ system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files(
+   'mchp_clock.c',
+   'mchp_edbg_dgi.c',
+   'mchp_eic.c',
++  'mchp_dac.c',
+   'mchp_evsys.c',
++  'mchp_evsys5x.c',
+   'mchp_same5x.c',
+   'mchp_usb.c',
+   'mchp_sysctrl.c',
+diff --git a/hw/timer/mchp_tc.c b/hw/timer/mchp_tc.c
+index b08dbf1..6158dd7 100644
+--- a/hw/timer/mchp_tc.c
++++ b/hw/timer/mchp_tc.c
+@@ -28,7 +28,8 @@
+  *
+  * Counting is event driven on QEMU_CLOCK_VIRTUAL: the timer fires at the
+  * next overflow or compare match only while that changes something (a flag
+- * not yet set, one-shot, a pending buffer, an event output).
++ * not yet set, one-shot, a pending buffer, an event output, a DMAC channel
++ * triggered by the overflow).
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -63,8 +64,13 @@
+ #define F(reg, field)   R_MCHP_TC_COUNT16_##reg##_##field##_MASK
+ 
+ #define MCHP_TC_CHANNELS    2
+-/* Periods skipped at once when the timer fires late */
++/*
++ * Events served at once when the timer fires late, beyond which the
++ * counter jumps to now; with a DMAC channel paced by the overflows every
++ * one is served (CircuitPython's audio: one sample each), within a limit
++ */
+ #define MCHP_TC_MAX_STEPS   64
++#define MCHP_TC_MAX_DMA_STEPS 65536
+ 
+ OBJECT_DECLARE_SIMPLE_TYPE(MchpTcState, MCHP_TC)
+ 
+@@ -73,6 +79,8 @@ struct MchpTcState {
+ 
+     QEMUTimer *timer;
+     qemu_irq ovf_event;
++    qemu_irq ovf_dma;
++    bool dma_wanted;            /* a DMAC channel waits for ovf_dma */
+     qemu_irq mc_event[MCHP_TC_CHANNELS];
+     qemu_irq evu_busy;
+     bool ev_level;              /* the event input */
+@@ -287,6 +295,7 @@ static void mchp_tc_step(MchpTcState *s, uint64_t n, bool ovf,
+     bool down = mchp_tc_down(s);
+ 
+     s->t_base = mchp_tc_tick_time(s, n);
++    mchp_event_time_set(s->t_base);
+     if (ovf) {
+         s->count = down ? mchp_tc_top(s) : 0;
+     } else {
+@@ -305,6 +314,9 @@ static void mchp_tc_step(MchpTcState *s, uint64_t n, bool ovf,
+         if (evctrl & F(EVCTRL, OVFEO)) {
+             qemu_irq_pulse(s->ovf_event);
+         }
++        if (s->dma_wanted) {
++            qemu_irq_pulse(s->ovf_dma);
++        }
+         if (!(mchp_tc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, LUPD))) {
+             mchp_tc_update_buffers(s);
+         }
+@@ -312,6 +324,7 @@ static void mchp_tc_step(MchpTcState *s, uint64_t n, bool ovf,
+             mchp_tc_stop(s, s->count);
+         }
+     }
++    mchp_event_time_set(-1);
+     trace_mchp_tc_event(MCHP_REGBLOCK(s)->name, s->count, flags);
+     mchp_tc_mod_reg(s, A_INTFLAG, 1, 0, flags);
+ }
+@@ -335,7 +348,8 @@ static bool mchp_tc_quiet(MchpTcState *s, const uint64_t match[])
+            !(mchp_tc_reg(s, A_STATUS, 1) &
+              (F(STATUS, PERBUFV) | F(STATUS, CCBUFV0) | F(STATUS, CCBUFV1))) &&
+            !(mchp_tc_reg(s, A_EVCTRL, 2) &
+-             (F(EVCTRL, OVFEO) | F(EVCTRL, MCEO0) | F(EVCTRL, MCEO1)));
++             (F(EVCTRL, OVFEO) | F(EVCTRL, MCEO0) | F(EVCTRL, MCEO1))) &&
++           !s->dma_wanted;
+ }
+ 
+ /* The counter value at t_base + @ticks, without events (closed form) */
+@@ -369,16 +383,18 @@ static void mchp_tc_advance(MchpTcState *s, int64_t now)
+     for (unsigned steps = 0;
+          s->running && mchp_tc_hz(s) && !mchp_tc_counts_events(s); steps++) {
+         uint64_t ovf, match[MCHP_TC_CHANNELS], next;
+-        bool at[MCHP_TC_CHANNELS];
++        bool at[MCHP_TC_CHANNELS], quiet;
+ 
+         mchp_tc_next(s, &ovf, match);
+-        if (mchp_tc_quiet(s, match) || steps >= MCHP_TC_MAX_STEPS) {
++        quiet = mchp_tc_quiet(s, match);
++        if (quiet || steps >= (s->dma_wanted ? MCHP_TC_MAX_DMA_STEPS :
++                               MCHP_TC_MAX_STEPS)) {
+             /* Nothing to do on the way, or too far behind: jump to now */
+             uint64_t ticks = mchp_tc_ticks(s, now);
+ 
+             s->count = mchp_tc_value(s, ticks);
+             s->t_base = mchp_tc_tick_time(s, ticks);
+-            if (steps < MCHP_TC_MAX_STEPS) {
++            if (quiet) {
+                 timer_del(s->timer);
+                 return;
+             }
+@@ -695,10 +711,24 @@ static bool mchp_tc_realize(MchpRegBlock *rb, Error **errp)
+     return true;
+ }
+ 
++static void mchp_tc_set_dma_wanted(void *opaque, int n, int level)
++{
++    MchpTcState *s = opaque;
++
++    if (s->dma_wanted != (level > 0)) {
++        mchp_tc_sync(s);
++        s->dma_wanted = level > 0;
++        mchp_tc_sync(s);
++    }
++}
++
+ static void mchp_tc_init(Object *obj)
+ {
+     MchpTcState *s = MCHP_TC(obj);
+ 
++    qdev_init_gpio_in_named(DEVICE(obj), mchp_tc_set_dma_wanted,
++                            MCHP_TC_OVF_DMA_WANTED, 1);
++    qdev_init_gpio_out_named(DEVICE(obj), &s->ovf_dma, MCHP_TC_OVF_DMA, 1);
+     qdev_init_gpio_out_named(DEVICE(obj), &s->ovf_event, MCHP_TC_OVF_EVENT, 1);
+     qdev_init_gpio_out_named(DEVICE(obj), s->mc_event, MCHP_TC_MC_EVENT,
+                              MCHP_TC_CHANNELS);
+diff --git a/include/hw/dma/mchp_dmac.h b/include/hw/dma/mchp_dmac.h
+index f1c1569..eec90cd 100644
+--- a/include/hw/dma/mchp_dmac.h
++++ b/include/hw/dma/mchp_dmac.h
+@@ -29,6 +29,16 @@
+ void mchp_dmac_set_trigger(DeviceState *dmac, unsigned id, hwaddr flag_addr,
+                            uint8_t mask);
+ 
++/*
++ * GPIOs: input "trigger"[id] is a trigger pulsed by its peripheral (a TC
++ * overflow) rather than a flag; output "trigger-wanted"[id] is high while
++ * an enabled channel selects trigger id; output "ch-event"[n] pulses at
++ * the end of a block of channel n (CHEVCTRL.EVOE, BTCTRL.EVOSEL BLOCK).
++ */
++#define MCHP_DMAC_TRIGGER "trigger"
++#define MCHP_DMAC_TRIGGER_WANTED "trigger-wanted"
++#define MCHP_DMAC_CH_EVENT "ch-event"
++
+ /* Look again at the triggers (a peripheral's flags may have changed). */
+ void mchp_dmac_kick(DeviceState *dmac);
+ 
+diff --git a/include/hw/mchp/gen/atsame51j20a/dac_u2502.h b/include/hw/mchp/gen/atsame51j20a/dac_u2502.h
+index 8c6073c..fadb33b 100644
+--- a/include/hw/mchp/gen/atsame51j20a/dac_u2502.h
++++ b/include/hw/mchp/gen/atsame51j20a/dac_u2502.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/dac_u2502.yaml (sha1 d618e8c69010)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,25 +23,28 @@ static const MchpRegInfo atsame51j20a_dac_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03, .rdz = 0x01,
+-        .syncbusy = 0x00000003 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLB", .offset = 0x01, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x02, .impl = 0x07, .wmask = 0x07, .flags = 0,
++        .alias_of = -1, .reset = 0x02, .impl = 0x07, .wmask = 0x07,
++        .enprot = 0x07, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x02, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
++        .enprot = 0xFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 4 /* INTENSET */, .reset = 0x00, .impl = 0xFF,
+-        .wmask = 0xFF, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0xFF, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x05, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 4 /* INTENSET */, .reset = 0x00, .impl = 0xFF,
+-        .wmask = 0xFF, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0xFF, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x06, .size = 1, .count = 1, .stride = 1,
+@@ -51,7 +54,7 @@ static const MchpRegInfo atsame51j20a_dac_regs[] = {
+     {
+         .name = "STATUS", .offset = 0x07, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x08, .size = 4, .count = 1, .stride = 4,
+@@ -61,19 +64,19 @@ static const MchpRegInfo atsame51j20a_dac_regs[] = {
+     {
+         .name = "DACCTRL", .offset = 0x0C, .size = 2, .count = 2, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xEFEF, .wmask = 0xEFEF,
+-        .flags = 0,
++        .enprot = 0xEFEF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "DATA", .offset = 0x10, .size = 2, .count = 2, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFFFF, .wmask = 0xFFFF,
+         .rdz = 0xFFFF, .syncbusy = 0x00000004 /* SYNCBUSY, << element */,
+-        .flags = MCHP_F_WRITE_ONLY,
++        .flags = MCHP_F_HOOK_POST_WRITE | MCHP_F_WRITE_ONLY,
+     },
+     {
+         .name = "DATABUF", .offset = 0x14, .size = 2, .count = 2, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFFFF, .wmask = 0xFFFF,
+         .rdz = 0xFFFF, .syncbusy = 0x00000010 /* SYNCBUSY, << element */,
+-        .flags = MCHP_F_WRITE_ONLY,
++        .flags = MCHP_F_HOOK_POST_WRITE | MCHP_F_WRITE_ONLY,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x18, .size = 1, .count = 1, .stride = 1,
+@@ -82,7 +85,7 @@ static const MchpRegInfo atsame51j20a_dac_regs[] = {
+     {
+         .name = "RESULT", .offset = 0x1C, .size = 2, .count = 2, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFFFF, .wmask = 0x0000,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+ };
+ #define ATSAME51J20A_DAC_NREGS 13
+diff --git a/include/hw/mchp/gen/atsame51j20a/evsys_u2504.h b/include/hw/mchp/gen/atsame51j20a/evsys_u2504.h
+index 91498c4..03f45ba 100644
+--- a/include/hw/mchp/gen/atsame51j20a/evsys_u2504.h
++++ b/include/hw/mchp/gen/atsame51j20a/evsys_u2504.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/evsys_u2504.yaml (sha1 334ac021306f)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,12 +23,13 @@ static const MchpRegInfo atsame51j20a_evsys_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01, .rdz = 0x01,
+-        .flags = 0,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "SWEVT", .offset = 0x04, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .rdz = 0xFFFFFFFF, .flags = MCHP_F_WRITE_ONLY,
++        .wmask = 0xFFFFFFFF, .rdz = 0xFFFFFFFF,
++        .flags = MCHP_F_HOOK_POST_WRITE | MCHP_F_WRITE_ONLY,
+     },
+     {
+         .name = "PRICTRL", .offset = 0x08, .size = 1, .count = 1, .stride = 1,
+@@ -37,827 +38,891 @@ static const MchpRegInfo atsame51j20a_evsys_regs[] = {
+     {
+         .name = "INTPEND", .offset = 0x10, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x4000, .impl = 0xC30F, .wmask = 0xC30F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "INTSTATUS", .offset = 0x14, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00000FFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "BUSYCH", .offset = 0x18, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00000FFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "READYUSR", .offset = 0x1C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0xFFFFFFFF, .impl = 0xFFFFFFFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[0].CHANNEL", .offset = 0x20, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[0].CHINTENCLR", .offset = 0x24, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 9 /* CHANNEL[0].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[0].CHINTENSET", .offset = 0x25, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 9 /* CHANNEL[0].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[0].CHINTFLAG", .offset = 0x26, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[0].CHSTATUS", .offset = 0x27, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[1].CHANNEL", .offset = 0x28, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[1].CHINTENCLR", .offset = 0x2C, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 14 /* CHANNEL[1].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[1].CHINTENSET", .offset = 0x2D, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 14 /* CHANNEL[1].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[1].CHINTFLAG", .offset = 0x2E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[1].CHSTATUS", .offset = 0x2F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[2].CHANNEL", .offset = 0x30, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[2].CHINTENCLR", .offset = 0x34, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 19 /* CHANNEL[2].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[2].CHINTENSET", .offset = 0x35, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 19 /* CHANNEL[2].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[2].CHINTFLAG", .offset = 0x36, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[2].CHSTATUS", .offset = 0x37, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[3].CHANNEL", .offset = 0x38, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[3].CHINTENCLR", .offset = 0x3C, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 24 /* CHANNEL[3].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[3].CHINTENSET", .offset = 0x3D, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 24 /* CHANNEL[3].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[3].CHINTFLAG", .offset = 0x3E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[3].CHSTATUS", .offset = 0x3F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[4].CHANNEL", .offset = 0x40, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[4].CHINTENCLR", .offset = 0x44, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 29 /* CHANNEL[4].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[4].CHINTENSET", .offset = 0x45, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 29 /* CHANNEL[4].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[4].CHINTFLAG", .offset = 0x46, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[4].CHSTATUS", .offset = 0x47, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[5].CHANNEL", .offset = 0x48, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[5].CHINTENCLR", .offset = 0x4C, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 34 /* CHANNEL[5].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[5].CHINTENSET", .offset = 0x4D, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 34 /* CHANNEL[5].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[5].CHINTFLAG", .offset = 0x4E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[5].CHSTATUS", .offset = 0x4F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[6].CHANNEL", .offset = 0x50, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[6].CHINTENCLR", .offset = 0x54, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 39 /* CHANNEL[6].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[6].CHINTENSET", .offset = 0x55, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 39 /* CHANNEL[6].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[6].CHINTFLAG", .offset = 0x56, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[6].CHSTATUS", .offset = 0x57, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[7].CHANNEL", .offset = 0x58, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[7].CHINTENCLR", .offset = 0x5C, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 44 /* CHANNEL[7].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[7].CHINTENSET", .offset = 0x5D, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 44 /* CHANNEL[7].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[7].CHINTFLAG", .offset = 0x5E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[7].CHSTATUS", .offset = 0x5F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[8].CHANNEL", .offset = 0x60, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[8].CHINTENCLR", .offset = 0x64, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 49 /* CHANNEL[8].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[8].CHINTENSET", .offset = 0x65, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 49 /* CHANNEL[8].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[8].CHINTFLAG", .offset = 0x66, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[8].CHSTATUS", .offset = 0x67, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[9].CHANNEL", .offset = 0x68, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[9].CHINTENCLR", .offset = 0x6C, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 54 /* CHANNEL[9].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[9].CHINTENSET", .offset = 0x6D, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 54 /* CHANNEL[9].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[9].CHINTFLAG", .offset = 0x6E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[9].CHSTATUS", .offset = 0x6F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[10].CHANNEL", .offset = 0x70, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[10].CHINTENCLR", .offset = 0x74, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 59 /* CHANNEL[10].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[10].CHINTENSET", .offset = 0x75, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 59 /* CHANNEL[10].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[10].CHINTFLAG", .offset = 0x76, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[10].CHSTATUS", .offset = 0x77, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[11].CHANNEL", .offset = 0x78, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[11].CHINTENCLR", .offset = 0x7C, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 64 /* CHANNEL[11].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[11].CHINTENSET", .offset = 0x7D, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 64 /* CHANNEL[11].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[11].CHINTFLAG", .offset = 0x7E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[11].CHSTATUS", .offset = 0x7F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[12].CHANNEL", .offset = 0x80, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[12].CHINTENCLR", .offset = 0x84, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 69 /* CHANNEL[12].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[12].CHINTENSET", .offset = 0x85, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 69 /* CHANNEL[12].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[12].CHINTFLAG", .offset = 0x86, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[12].CHSTATUS", .offset = 0x87, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[13].CHANNEL", .offset = 0x88, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[13].CHINTENCLR", .offset = 0x8C, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 74 /* CHANNEL[13].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[13].CHINTENSET", .offset = 0x8D, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 74 /* CHANNEL[13].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[13].CHINTFLAG", .offset = 0x8E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[13].CHSTATUS", .offset = 0x8F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[14].CHANNEL", .offset = 0x90, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[14].CHINTENCLR", .offset = 0x94, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 79 /* CHANNEL[14].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[14].CHINTENSET", .offset = 0x95, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 79 /* CHANNEL[14].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[14].CHINTFLAG", .offset = 0x96, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[14].CHSTATUS", .offset = 0x97, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[15].CHANNEL", .offset = 0x98, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[15].CHINTENCLR", .offset = 0x9C, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 84 /* CHANNEL[15].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[15].CHINTENSET", .offset = 0x9D, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 84 /* CHANNEL[15].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[15].CHINTFLAG", .offset = 0x9E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[15].CHSTATUS", .offset = 0x9F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[16].CHANNEL", .offset = 0xA0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[16].CHINTENCLR", .offset = 0xA4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 89 /* CHANNEL[16].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[16].CHINTENSET", .offset = 0xA5, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 89 /* CHANNEL[16].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[16].CHINTFLAG", .offset = 0xA6, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[16].CHSTATUS", .offset = 0xA7, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[17].CHANNEL", .offset = 0xA8, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[17].CHINTENCLR", .offset = 0xAC, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 94 /* CHANNEL[17].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[17].CHINTENSET", .offset = 0xAD, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 94 /* CHANNEL[17].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[17].CHINTFLAG", .offset = 0xAE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[17].CHSTATUS", .offset = 0xAF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[18].CHANNEL", .offset = 0xB0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[18].CHINTENCLR", .offset = 0xB4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 99 /* CHANNEL[18].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[18].CHINTENSET", .offset = 0xB5, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 99 /* CHANNEL[18].CHINTENSET */, .reset = 0x00,
+-        .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[18].CHINTFLAG", .offset = 0xB6, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[18].CHSTATUS", .offset = 0xB7, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[19].CHANNEL", .offset = 0xB8, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[19].CHINTENCLR", .offset = 0xBC, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 104 /* CHANNEL[19].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[19].CHINTENSET", .offset = 0xBD, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 104 /* CHANNEL[19].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[19].CHINTFLAG", .offset = 0xBE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[19].CHSTATUS", .offset = 0xBF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[20].CHANNEL", .offset = 0xC0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[20].CHINTENCLR", .offset = 0xC4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 109 /* CHANNEL[20].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[20].CHINTENSET", .offset = 0xC5, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 109 /* CHANNEL[20].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[20].CHINTFLAG", .offset = 0xC6, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[20].CHSTATUS", .offset = 0xC7, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[21].CHANNEL", .offset = 0xC8, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[21].CHINTENCLR", .offset = 0xCC, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 114 /* CHANNEL[21].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[21].CHINTENSET", .offset = 0xCD, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 114 /* CHANNEL[21].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[21].CHINTFLAG", .offset = 0xCE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[21].CHSTATUS", .offset = 0xCF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[22].CHANNEL", .offset = 0xD0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[22].CHINTENCLR", .offset = 0xD4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 119 /* CHANNEL[22].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[22].CHINTENSET", .offset = 0xD5, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 119 /* CHANNEL[22].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[22].CHINTFLAG", .offset = 0xD6, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[22].CHSTATUS", .offset = 0xD7, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[23].CHANNEL", .offset = 0xD8, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[23].CHINTENCLR", .offset = 0xDC, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 124 /* CHANNEL[23].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[23].CHINTENSET", .offset = 0xDD, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 124 /* CHANNEL[23].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[23].CHINTFLAG", .offset = 0xDE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[23].CHSTATUS", .offset = 0xDF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[24].CHANNEL", .offset = 0xE0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[24].CHINTENCLR", .offset = 0xE4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 129 /* CHANNEL[24].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[24].CHINTENSET", .offset = 0xE5, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 129 /* CHANNEL[24].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[24].CHINTFLAG", .offset = 0xE6, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[24].CHSTATUS", .offset = 0xE7, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[25].CHANNEL", .offset = 0xE8, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[25].CHINTENCLR", .offset = 0xEC, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 134 /* CHANNEL[25].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[25].CHINTENSET", .offset = 0xED, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 134 /* CHANNEL[25].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[25].CHINTFLAG", .offset = 0xEE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[25].CHSTATUS", .offset = 0xEF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[26].CHANNEL", .offset = 0xF0, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[26].CHINTENCLR", .offset = 0xF4, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 139 /* CHANNEL[26].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[26].CHINTENSET", .offset = 0xF5, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 139 /* CHANNEL[26].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[26].CHINTFLAG", .offset = 0xF6, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[26].CHSTATUS", .offset = 0xF7, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[27].CHANNEL", .offset = 0xF8, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[27].CHINTENCLR", .offset = 0xFC, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 144 /* CHANNEL[27].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[27].CHINTENSET", .offset = 0xFD, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 144 /* CHANNEL[27].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[27].CHINTFLAG", .offset = 0xFE, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[27].CHSTATUS", .offset = 0xFF, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[28].CHANNEL", .offset = 0x100, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[28].CHINTENCLR", .offset = 0x104, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 149 /* CHANNEL[28].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[28].CHINTENSET", .offset = 0x105, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 149 /* CHANNEL[28].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[28].CHINTFLAG", .offset = 0x106, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[28].CHSTATUS", .offset = 0x107, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[29].CHANNEL", .offset = 0x108, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[29].CHINTENCLR", .offset = 0x10C, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 154 /* CHANNEL[29].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[29].CHINTENSET", .offset = 0x10D, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 154 /* CHANNEL[29].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[29].CHINTFLAG", .offset = 0x10E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[29].CHSTATUS", .offset = 0x10F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[30].CHANNEL", .offset = 0x110, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[30].CHINTENCLR", .offset = 0x114, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 159 /* CHANNEL[30].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[30].CHINTENSET", .offset = 0x115, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 159 /* CHANNEL[30].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[30].CHINTFLAG", .offset = 0x116, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[30].CHSTATUS", .offset = 0x117, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "CHANNEL[31].CHANNEL", .offset = 0x118, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00008000, .impl = 0x0000CF7F,
+-        .wmask = 0x0000CF7F, .flags = 0,
++        .wmask = 0x0000CF7F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[31].CHINTENCLR", .offset = 0x11C, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 164 /* CHANNEL[31].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_CLEAR,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[31].CHINTENSET", .offset = 0x11D, .size = 1,
+         .count = 1, .stride = 1, .alias_of = 164 /* CHANNEL[31].CHINTENSET */,
+-        .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = MCHP_F_ALIAS_SET,
++        .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[31].CHINTFLAG", .offset = 0x11E, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .w1c = 0x03, .flags = 0,
++        .w1c = 0x03, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHANNEL[31].CHSTATUS", .offset = 0x11F, .size = 1, .count = 1,
+         .stride = 1, .alias_of = -1, .reset = 0x01, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "USER", .offset = 0x120, .size = 4, .count = 67, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000003F,
+-        .wmask = 0x0000003F, .flags = 0,
++        .wmask = 0x0000003F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+ };
+ #define ATSAME51J20A_EVSYS_NREGS 168
+diff --git a/include/hw/mchp/gen/dac_u2502.h b/include/hw/mchp/gen/dac_u2502.h
+index 121a9e2..0183dd3 100644
+--- a/include/hw/mchp/gen/dac_u2502.h
++++ b/include/hw/mchp/gen/dac_u2502.h
+@@ -8,7 +8,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: ATSAME51J20A
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/dac_u2502.yaml (sha1 d618e8c69010)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/evsys_u2504.h b/include/hw/mchp/gen/evsys_u2504.h
+index bb05650..124962d 100644
+--- a/include/hw/mchp/gen/evsys_u2504.h
++++ b/include/hw/mchp/gen/evsys_u2504.h
+@@ -8,7 +8,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: ATSAME51J20A
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/evsys_u2504.yaml (sha1 334ac021306f)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/misc/mchp_dac.h b/include/hw/misc/mchp_dac.h
+new file mode 100644
+index 0000000..b1cf146
+--- /dev/null
++++ b/include/hw/misc/mchp_dac.h
+@@ -0,0 +1,23 @@
++/*
++ * Microchip SAM D5x/E5x DAC (DAC U2502)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * An mchp-regblock. GPIO inputs "start-event-in"[0..1] (EVSYS users
++ * START0/1). Properties: "value0", "value1" (the outputs, 12-bit codes,
++ * read-only) and "audio" (channel 0 as sound, see mchp_dac.c), sampled at
++ * "audio-rate" Hz.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_MCHP_DAC_H
++#define HW_MISC_MCHP_DAC_H
++
++#include "hw/misc/mchp_regblock.h"
++
++#define TYPE_MCHP_DAC "mchp-dac"
++#define MCHP_DAC_START_EVENT_IN "start-event-in"
++
++#endif /* HW_MISC_MCHP_DAC_H */
+diff --git a/include/hw/misc/mchp_evsys.h b/include/hw/misc/mchp_evsys.h
+index b5285de..fc92026 100644
+--- a/include/hw/misc/mchp_evsys.h
++++ b/include/hw/misc/mchp_evsys.h
+@@ -25,6 +25,8 @@
+ #include "hw/misc/mchp_regblock.h"
+ 
+ #define TYPE_MCHP_EVSYS "mchp-evsys"
++/* SAM D5x/E5x EVSYS U2504: same GPIO names (mchp_evsys5x.c) */
++#define TYPE_MCHP_EVSYS_U2504 "mchp-evsys-u2504"
+ 
+ #define MCHP_EVSYS_GENERATOR "generator"
+ #define MCHP_EVSYS_USER "user"
+diff --git a/include/hw/misc/mchp_regblock.h b/include/hw/misc/mchp_regblock.h
+index 93cef3d..db0f04e 100644
+--- a/include/hw/misc/mchp_regblock.h
++++ b/include/hw/misc/mchp_regblock.h
+@@ -109,6 +109,16 @@ void mchp_regblock_set_info(MchpRegBlock *s, const MchpInstanceInfo *info);
+ /* Recompute the IRQ output after a state change made outside an access. */
+ void mchp_regblock_update_irq(MchpRegBlock *s);
+ 
++/*
++ * The virtual time (ns) of what is happening now: QEMU_CLOCK_VIRTUAL,
++ * unless a model catching up on events (a TC serving overflows its timer
++ * fired late for) has set the time of the event it is serving. Models
++ * that keep a timeline of what they are driven to (the DAC's audio) use
++ * it, so that a burst of late events keeps its spacing.
++ */
++int64_t mchp_event_time_ns(void);
++void mchp_event_time_set(int64_t ns);   /* < 0: back to the clock */
++
+ /* Set output clock @out of @s to @hz; a change is traced and propagated. */
+ void mchp_regblock_set_clock(MchpRegBlock *s, Clock *out, uint64_t hz);
+ 
+diff --git a/include/hw/timer/mchp_tc.h b/include/hw/timer/mchp_tc.h
+index ccd86a2..9205cd7 100644
+--- a/include/hw/timer/mchp_tc.h
++++ b/include/hw/timer/mchp_tc.h
+@@ -24,6 +24,12 @@
+ #define TYPE_MCHP_TC "mchp-tc"
+ 
+ #define MCHP_TC_OVF_EVENT "ovf-event"
++/*
++ * Pulsed at every overflow while the input "ovf-dma-wanted" is high: the
++ * DMAC trigger OVF and whether an enabled DMAC channel selects it
++ */
++#define MCHP_TC_OVF_DMA "ovf-dma"
++#define MCHP_TC_OVF_DMA_WANTED "ovf-dma-wanted"
+ #define MCHP_TC_MC_EVENT "mc-event"
+ #define MCHP_TC_EVU_EVENT_IN "evu-event-in"
+ #define MCHP_TC_EVU_BUSY "evu-event-busy"
+diff --git a/tests/qtest/curiosity-cp-test.c b/tests/qtest/curiosity-cp-test.c
+index e559c2d..e3ac4c4 100644
+--- a/tests/qtest/curiosity-cp-test.c
++++ b/tests/qtest/curiosity-cp-test.c
+@@ -27,6 +27,9 @@
+ #define PORT            0x41008000
+ #define TRNG            0x42002800
+ #define DMAC            0x4100A000
++#define EVSYS           0x4100E000
++#define TC0             0x40003800
++#define DAC             0x43002400
+ #define SRAM            0x20000000
+ #define QSPI            0x42003400
+ #define QSPI_AHB        0x04000000
+@@ -288,6 +291,88 @@ static void test_neopixels(void)
+     qtest_quit(qts);
+ }
+ 
++static uint32_t qom_u32(QTestState *qts, const char *path, const char *prop)
++{
++    QDict *rsp = qtest_qmp(qts, "{ 'execute': 'qom-get', 'arguments':"
++                           " { 'path': %s, 'property': %s } }", path, prop);
++    uint32_t v = qdict_get_int(rsp, "return");
++
++    qobject_unref(rsp);
++    return v;
++}
++
++/*
++ * CircuitPython's audioio, by hand: TC0 overflows at 1 MHz; EVSYS channel
++ * 0 routes the overflow event (asynchronous path) to the DAC's START0;
++ * the overflow is also the DMAC trigger of channel 0, which loops over
++ * four samples into DATABUF0 and signals each block end through EVSYS
++ * channel 1 (synchronous, EVD interrupt). The DAC's output steps through
++ * the samples and its "audio" property carries them.
++ */
++static void test_dac_audio(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++    uint32_t desc = SRAM + 0x1000, wb = SRAM + 0x1200, buf = SRAM + 0x2000;
++    static const uint16_t samples[] = { 0x1000, 0x5000, 0x9000, 0xD000 };
++    unsigned seen = 0;
++    QDict *rsp;
++    const char *audio;
++
++    for (unsigned i = 0; i < 4; i++) {
++        qtest_writew(qts, buf + 2 * i, samples[i]);
++    }
++    qtest_writeb(qts, DAC + 0x02, 0x01);            /* EVCTRL.STARTEI0 */
++    qtest_writew(qts, DAC + 0x0C, 0x0003);          /* DACCTRL0: on, LEFTADJ */
++    qtest_writeb(qts, DAC + 0x00, 0x02);            /* ENABLE */
++    g_assert_cmphex(qtest_readb(qts, DAC + 0x07) & 1, ==, 1);   /* READY0 */
++    qtest_writew(qts, DAC + 0x10, 0x8000);          /* DATA0: mid-scale */
++    g_assert_cmpuint(qom_u32(qts, "/machine/soc/dac", "value0"), ==, 0x800);
++
++    qtest_writel(qts, EVSYS + 0x120 + 4 * 61, 1);   /* USER DAC START0: ch 0 */
++    qtest_writel(qts, EVSYS + 0x20, 73 | 2 << 8);   /* TC0 OVF, async */
++    qtest_writel(qts, EVSYS + 0x28, 34 | 1 << 10);  /* DMAC CH0, sync, rise */
++    qtest_writeb(qts, EVSYS + 0x2D, 0x02);          /* CHINTENSET1.EVD */
++
++    /* Channel 0: VALID, EVOSEL BLOCK, half-words, SRCINC; loops */
++    qtest_writew(qts, desc + 0x0, 0x0503);
++    qtest_writew(qts, desc + 0x2, 4);
++    qtest_writel(qts, desc + 0x4, buf + 8);
++    qtest_writel(qts, desc + 0x8, DAC + 0x14);
++    qtest_writel(qts, desc + 0xC, desc);
++    qtest_writel(qts, DMAC + 0x34, desc);
++    qtest_writel(qts, DMAC + 0x38, wb);
++    qtest_writew(qts, DMAC + 0x00, 0x0F02);
++    qtest_writeb(qts, DMAC + 0x46, 0x80);           /* CHEVCTRL0.EVOE */
++    qtest_writel(qts, DMAC + 0x40, 44 << 8 | 2 << 20 | 0x2);    /* TC0 OVF */
++
++    qtest_writel(qts, GCLK + 0x80 + 4 * 9, 0x40);   /* GCLK_TC0: gen 0 */
++    qtest_writeb(qts, TC0 + 0x0C, 0x01);            /* WAVE: MFRQ */
++    qtest_writew(qts, TC0 + 0x1C, 47);              /* CC0: 48 MHz / 48 */
++    qtest_writew(qts, TC0 + 0x06, 0x0100);          /* EVCTRL.OVFEO */
++    qtest_writel(qts, TC0 + 0x00, 0x02);            /* ENABLE, COUNT16 */
++
++    for (unsigned i = 0; i < 64; i++) {
++        uint32_t v = qom_u32(qts, "/machine/soc/dac", "value0");
++
++        for (unsigned k = 0; k < 4; k++) {
++            if (v == samples[k] >> 4) {
++                seen |= 1 << k;
++            }
++        }
++        qtest_clock_step(qts, 250);
++    }
++    g_assert_cmphex(seen, ==, 0xF);
++    g_assert_cmphex(qtest_readb(qts, EVSYS + 0x2E) & 0x02, ==, 0x02);  /* EVD */
++    g_assert_cmphex(qtest_readl(qts, EVSYS + 0x14) & 0x02, ==, 0x02); /* INT */
++
++    rsp = qtest_qmp(qts, "{ 'execute': 'qom-get', 'arguments':"
++                    " { 'path': '/machine/soc/dac', 'property': 'audio' } }");
++    audio = qdict_get_str(rsp, "return");
++    g_assert_true(g_str_has_prefix(audio, "22050 1 "));
++    qobject_unref(rsp);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+@@ -300,5 +385,6 @@ int main(int argc, char **argv)
+     qtest_add_func("curiosity-cp/usb-reset", test_usb_reset);
+     qtest_add_func("curiosity-cp/dmac", test_dmac);
+     qtest_add_func("curiosity-cp/neopixels", test_neopixels);
++    qtest_add_func("curiosity-cp/dac-audio", test_dac_audio);
+     return g_test_run();
+ }
+-- 
+2.53.0.windows.2
+

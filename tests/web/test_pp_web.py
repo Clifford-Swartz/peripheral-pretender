@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.pp_web.server import ADAPTERS, BOARDS, CLICKS
+from tools.pp_web.server import ADAPTERS, BOARDS, CLICKS, slot_watch
 from tools.pp_web.session import Session
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -412,7 +412,7 @@ def test_session_button_g_and_7seg(qemu_path, qemu_machines):
                 pins.append(msg["pins"])
 
         s = Session("pic32cm-mc00-cpro,ext1=buttong,ext2=7seg", CLICKS_DEMO,
-                    emit, watch=[("ext2", "outputs")])
+                    emit, watch=[slot_watch("ext2", "outputs")])
         await s.start()
         try:
             await asyncio.sleep(0.8)
@@ -509,7 +509,7 @@ def test_session_ev66e56a_blinky_and_8x8g():
             await s.stop()
         m = Session(f"{board['machine']},mb1=8x8g", AVR_BUILD / "matrix.elf",
                     emit, groups=pin_groups(board),
-                    watch=[("mb1", CLICKS["8x8g"]["display"]["property"])])
+                    watch=[slot_watch("mb1", CLICKS["8x8g"]["display"]["property"])])
         await m.start()
         try:
             await asyncio.sleep(1.5)
@@ -553,7 +553,7 @@ def test_session_buzz(qemu_path, qemu_machines):
                               msg["state"]["ext1.duty"]))
 
         s = Session("pic32cm-mc00-cpro,ext1=buzz", BUZZ_DEMO, emit,
-                    watch=[("ext1", *p) for p in watched(CLICKS["buzz"])])
+                    watch=[slot_watch("ext1", *p) for p in watched(CLICKS["buzz"])])
         await s.start()
         try:
             await asyncio.sleep(2.5)
@@ -611,7 +611,7 @@ def test_session_oledc(qemu_path, qemu_machines):
                 frames.append(msg["state"]["ext1.frame"])
 
         s = Session("pic32cm-mc00-cpro,ext1=oledc", OLEDC_DEMO, emit,
-                    watch=[("ext1", *p) for p in watched(CLICKS["oledc"])])
+                    watch=[slot_watch("ext1", *p) for p in watched(CLICKS["oledc"])])
         await s.start()
         try:
             await asyncio.sleep(2.0)
@@ -765,7 +765,7 @@ def test_session_rtc6(qemu_path, qemu_machines):
                 mfp.append((msg["levels"]["b"] >> 2) & 1)
 
         s = Session("pic32cm-mc00-cpro,ext1=rtc6", RTC6_DEMO, emit,
-                    watch=[("ext1", *p) for p in watched(CLICKS["rtc6"])])
+                    watch=[slot_watch("ext1", *p) for p in watched(CLICKS["rtc6"])])
         await s.start()
         try:
             await asyncio.sleep(7.0)
@@ -841,7 +841,7 @@ def test_session_8x8_variants(matrix):
 
         m = Session(f"{board['machine']},mb1={matrix}",
                     AVR_BUILD / "matrix.elf", emit, groups=pin_groups(board),
-                    watch=[("mb1", *p) for p in watched(CLICKS[matrix])])
+                    watch=[slot_watch("mb1", *p) for p in watched(CLICKS[matrix])])
         await m.start()
         try:
             await asyncio.sleep(1.5)
@@ -852,3 +852,175 @@ def test_session_8x8_variants(matrix):
     uart, states = asyncio.run(scenario())
     assert "frame: 3C 42 A9 85 85 A9 42 3C" in uart, uart
     assert len({f for f in states if f}) >= 3
+
+
+def test_board_description_pykit():
+    """The Curiosity PyKit Explorer: a CircuitPython board whose own parts
+    (TFT, NeoPixels, IMU) the page shows; no Click headers."""
+    from tools.pp import fatfs
+    from tools.pp_web.server import part_watch, pin_groups
+    board = json.loads((BOARDS / "pykit" / "board.json").read_text(
+        encoding="utf-8"))
+    assert _png_size(BOARDS / "pykit" / board["image"]) == tuple(
+        round(v * board["px_per_mm"]) for v in board["size_mm"])
+    x0, y0 = board["origin_mm"]
+    w, h = board["size_mm"]
+    spots = [p["at_mm"] for p in board["leds"] + board["buttons"]]
+    for part in board["parts"]:
+        spots += [part.get("display", {}).get("at_mm", [x0, y0])]
+        spots += part.get("pixels", {}).get("at_mm", [])
+        spots += [st["at_mm"] for st in part.get("sticks", [])]
+        spots += [part["audio"]["at_mm"]] if "audio" in part else []
+    for x, y in spots:
+        assert x0 <= x <= x0 + w and y0 - h <= y <= y0, (x, y)
+    assert board["machine"] == "curiosity-circuitpython"
+    assert board["leds"][0]["pin"] == "PB23"
+    assert pin_groups(board) == ("a", "b")
+    assert part_watch(board) == [
+        ("lcd.frame", "/machine/lcd", "frame", "frame-gen"),
+        ("neopixels.pixels", "/machine/neopixels", "pixels", "gen"),
+        ("speaker.audio", "/machine/soc/dac", "audio")]
+    files = fatfs.folder_files(BOARDS / "pykit" / board["circuitpython"]["drive"])
+    assert "code.py" in files
+
+
+PYKIT_ELF = (Path.home() / ".pp_cache" / "circuitpython"
+             / "microchip_curiosity_circuitpython-10.1.4.elf")
+
+
+@pytest.mark.qemu
+def test_session_pykit_circuitpython(tmp_path, qemu_path, qemu_machines):
+    """Stock CircuitPython runs the board's demo code.py from the CIRCUITPY
+    image: the TFT shows the bubble level, the NeoPixels follow a tilt of
+    the IMU, and USER turns them green."""
+    from tools.pp import fatfs
+    from tools.pp_web.server import part_watch, stick_values
+    if "curiosity-circuitpython" not in qemu_machines:
+        pytest.skip("QEMU build has no curiosity-circuitpython machine")
+    if not PYKIT_ELF.is_file():
+        pytest.skip("CircuitPython not fetched (py -m tools.pp.circuitpython "
+                    "fetch)")
+    board = json.loads((BOARDS / "pykit" / "board.json").read_text(
+        encoding="utf-8"))
+    drive = tmp_path / "circuitpy.img"
+    drive.write_bytes(fatfs.build_image(fatfs.folder_files(
+        BOARDS / "pykit" / board["circuitpython"]["drive"])))
+    tilt = next(p for p in board["parts"] if p["id"] == "imu")["sticks"][0]
+
+    async def scenario():
+        uart, state = [], {}
+
+        def emit(msg):
+            if msg["type"] == "uart":
+                uart.append(msg["data"])
+            elif msg["type"] == "clickstate":
+                state.update(msg["state"])
+
+        async def until(cond, timeout):
+            end = time.monotonic() + timeout
+            while time.monotonic() < end and not cond():
+                await asyncio.sleep(0.2)
+            return cond()
+
+        s = Session(board["machine"], PYKIT_ELF, emit,
+                    watch=part_watch(board), drive=drive)
+        await s.start()
+        try:
+            await until(lambda: "pitch" in "".join(uart), 60)
+            level = dict(state)
+            for prop, value in stick_values(tilt, 0.5, 0).items():
+                await s.set_prop("/machine/imu", prop, value)
+            await until(lambda: state.get("neopixels.pixels")
+                        != level.get("neopixels.pixels"), 10)
+            leaning = dict(state)
+            await s.press("user", True, "user-pressed")
+            await until(lambda: state.get("neopixels.pixels", "")
+                        .startswith("400000"), 10)
+            pressed = dict(state)
+        finally:
+            await s.stop()
+        return "".join(uart), level, leaning, pressed
+
+    uart, level, leaning, pressed = asyncio.run(scenario())
+    assert "\x1b" not in uart and "pitch" in uart, uart[-500:]
+    assert level["neopixels.pixels"] == " ".join(["000020"] * 5)
+    # Tipped by 30 degrees along the IMU's x: pitch 30, green 4 * 30 = 120
+    assert leaning["neopixels.pixels"].split()[0] == "007820", leaning
+    assert pressed["neopixels.pixels"] == " ".join(["400000"] * 5)
+    # The bubble level on the TFT: the dark blue background, the ring
+    frame = level["lcd.frame"]
+    seen = {_rgb565(frame, x, 10, 240) for x in range(0, 240, 8)}
+    assert 0x0108 in seen, [hex(v) for v in seen]
+
+
+@pytest.mark.qemu
+def test_session_pykit_audio(tmp_path, qemu_path, qemu_machines):
+    """audioio on the DAC: a looping 20-sample sine at 8 kHz (a TC paces
+    the DMA into DATABUF and the DAC's START events) comes out of the
+    speaker part as a 400 Hz waveform; synthio (double-buffered, refilled
+    on the DMAC's block events through EVSYS) plays A4 at 440 Hz."""
+    import base64
+    from tools.pp import fatfs
+    if "curiosity-circuitpython" not in qemu_machines:
+        pytest.skip("QEMU build has no curiosity-circuitpython machine")
+    if not PYKIT_ELF.is_file():
+        pytest.skip("CircuitPython not fetched (py -m tools.pp.circuitpython "
+                    "fetch)")
+    code = (
+        "import array, math, time, board, audioio, audiocore, synthio\n"
+        "dac = audioio.AudioOut(board.DAC)\n"
+        "sine = array.array('H', [int(32768 + 30000 * math.sin(2 * math.pi"
+        " * i / 20)) for i in range(20)])\n"
+        "dac.play(audiocore.RawSample(sine, sample_rate=8000), loop=True)\n"
+        "print('sine')\n"
+        "time.sleep(4)\n"
+        "syn = synthio.Synthesizer(sample_rate=22050)\n"
+        "dac.play(syn)\n"
+        "syn.press(69)\n"
+        "print('synth')\n"
+        "while True:\n"
+        "    time.sleep(1)\n")
+    drive = tmp_path / "circuitpy.img"
+    drive.write_bytes(fatfs.build_image({"code.py": code.encode()}))
+
+    async def scenario():
+        uart, chunks = [], {"sine": [], "synth": []}
+
+        def emit(msg):
+            text = "".join(uart)
+            phase = "synth" if "synth" in text else "sine" if "sine" in text \
+                else None
+            if msg["type"] == "uart":
+                uart.append(msg["data"])
+            elif msg["type"] == "clickstate" and phase and \
+                    msg["state"].get("spk.audio"):
+                chunks[phase].append(msg["state"]["spk.audio"])
+
+        s = Session("curiosity-circuitpython", PYKIT_ELF, emit, drive=drive,
+                    watch=[("spk.audio", "/machine/soc/dac", "audio")])
+        await s.start()
+        try:
+            end = time.monotonic() + 90
+            while time.monotonic() < end and \
+                    len(chunks["synth"]) < 40:
+                await asyncio.sleep(0.2)
+        finally:
+            await s.stop()
+        return "".join(uart), chunks
+
+    def pitch(chunks):
+        pcm, rate = b"", 0
+        for c in chunks[5:]:            # a phase's first chunks may mix
+            r, _, b64 = c.split(" ", 2)
+            rate, pcm = int(r), pcm + base64.b64decode(b64)
+        v = struct.unpack("<%dh" % (len(pcm) // 2), pcm)
+        mean = sum(v) / len(v)
+        ups = sum(1 for a, b in zip(v, v[1:]) if a < mean <= b)
+        return ups * rate / len(v), min(v), max(v)
+
+    uart, chunks = asyncio.run(scenario())
+    assert "synth" in uart, uart[-500:]
+    hz, lo, hi = pitch(chunks["sine"][:-3])
+    assert abs(hz - 400) < 8 and lo < -25000 and hi > 25000, (hz, lo, hi)
+    hz, lo, hi = pitch(chunks["synth"])
+    assert abs(hz - 440) < 8, hz

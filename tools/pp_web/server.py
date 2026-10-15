@@ -42,6 +42,7 @@ from pathlib import Path
 from aiohttp import WSMsgType, web
 
 from .session import Session
+from tools.pp import circuitpython, fatfs
 
 HERE = Path(__file__).resolve().parent
 STATIC = HERE / "static"
@@ -98,6 +99,34 @@ def stick_values(stick: dict, x: float, y: float) -> dict[str, int | str]:
             stick["y_property"]: round(y * full)}
 
 
+def slot_watch(slot: str, *prop: str) -> tuple[str, ...]:
+    """The Session watch entry of a Click property (property[, generation
+    property]) on @slot."""
+    return (f"{slot}.{prop[0]}", f"/machine/{slot}-click", *prop)
+
+
+def slot_watch(slot: str, *prop: str) -> tuple[str, ...]:
+    """The Session watch entry of a Click property (property[, generation
+    property]) on @slot."""
+    return (f"{slot}.{prop[0]}", f"/machine/{slot}-click", *prop)
+
+
+def part_watch(board: dict) -> list[tuple[str, ...]]:
+    """(key, path, property[, generation]) of what the board's own parts
+    show or play (board.json "parts": a display panel, NeoPixels, a
+    speaker)."""
+    out = []
+    for part in board.get("parts", []):
+        for kind in ("display", "pixels", "audio"):
+            d = part.get(kind)
+            if d:
+                out.append((f"{part['id']}.{d['property']}", part["path"],
+                            d["property"],
+                            *([d["gen_property"]] if "gen_property" in d
+                              else [])))
+    return out
+
+
 def board_list() -> list[dict]:
     """Every board the page can show: id and name, from boards/*/board.json."""
     boards = []
@@ -135,6 +164,52 @@ class App:
         self.slots = [h["slot"] for h in self.board["headers"] if "slot" in h]
         # slot -> {"id": click, "values": {control: value}} or None
         self.clicks: dict[str, dict | None] = {s: None for s in self.slots}
+        self.drive = None               # the CIRCUITPY image, if any
+        cp = self.board.get("circuitpython")
+        if cp:
+            self.drive = Path(tempfile.mkdtemp(prefix="pp_drive_")) / \
+                "circuitpy.img"
+            fatfs_files = fatfs.folder_files(self.board_dir / cp["drive"])
+            self.drive.write_bytes(fatfs.build_image(fatfs_files))
+
+    def circuitpython_elf(self) -> Path | None:
+        """The board's stock CircuitPython (from the cache; fetched once
+        with py -m tools.pp.circuitpython fetch)."""
+        cp = self.board.get("circuitpython")
+        if not cp:
+            return None
+        elf = circuitpython.elf_path(cp["version"], cp["board_id"])
+        return elf if elf.is_file() else None
+
+    def files_message(self) -> dict:
+        """The CIRCUITPY drive for the page: every file, and code.py."""
+        if not self.drive:
+            return {"type": "files", "files": None}
+        try:
+            fat = fatfs.FatImage(bytearray(self.drive.read_bytes()))
+            files = [{"path": p, "size": e.size, "dir": e.is_dir}
+                     for p, e in fat.walk()]
+            code = fat.read("code.py").decode("utf-8", "replace") \
+                if fat.lookup("code.py") else ""
+        except (OSError, fatfs.FatError) as e:
+            return {"type": "files", "files": [], "error": str(e)}
+        return {"type": "files", "files": files, "code": code}
+
+    async def save_file(self, path: str, text: str) -> None:
+        """Write @path on the CIRCUITPY drive; the twin restarts with it
+        (the twin holds the image while it runs)."""
+        if not self.drive or not path:
+            return
+        async with self.lock:
+            if self.session:
+                await self.session.stop()
+                self.session = None
+            data = bytearray(self.drive.read_bytes())
+            fatfs.FatImage(data).write(path, text.encode("utf-8"))
+            self.drive.write_bytes(data)
+        self.emit(self.files_message())
+        if self.elf:
+            await self.run(self.elf)
 
     def board_message(self) -> dict:
         return {"type": "board", "board": self.board, "boards": board_list(),
@@ -152,12 +227,18 @@ class App:
             self.load_board(board)
             self.uart_log = ""
             demo = ROOT / self.board["demo_elf"] if "demo_elf" in self.board else None
-            self.elf = demo if demo and demo.is_file() else None
+            self.elf = demo if demo and demo.is_file() else \
+                self.circuitpython_elf()
         self.emit({"type": "reset"})
         self.emit(self.board_message())
         self.emit({"type": "clicks", "clicks": self.clicks})
+        self.emit(self.files_message())
         if self.elf:
             await self.run(self.elf)
+        elif self.board.get("circuitpython"):
+            self.emit({"type": "status", "state": "idle",
+                       "text": "no CircuitPython: run py -m tools.pp."
+                               "circuitpython fetch"})
         else:
             self.emit({"type": "status", "state": "idle",
                        "text": "no firmware: drop an ELF built for this board"})
@@ -167,10 +248,11 @@ class App:
         return ",".join([self.board["machine"], *opts])
 
     def click_watch(self) -> list[tuple[str, ...]]:
-        """(slot, property[, generation property]) of what each plugged
-        Click shows, polled live."""
-        return [(slot, *prop) for slot, c in self.clicks.items() if c
-                for prop in watched(CLICKS[c["id"]])]
+        """(key, path, property[, generation property]) of what each
+        plugged Click and the board's own parts show, polled live."""
+        return [slot_watch(slot, *prop) for slot, c in self.clicks.items()
+                if c for prop in watched(CLICKS[c["id"]])] + \
+            part_watch(self.board)
 
     async def plug(self, slot: str, click: str | None) -> None:
         if slot not in self.clicks or (click and click not in CLICKS):
@@ -205,6 +287,26 @@ class App:
                                              round(value * ctl["scale"]))
             except (RuntimeError, ConnectionError):
                 pass                    # restarting; run() applies it
+
+    async def part_stick(self, pid: str, sid: str, x: float,
+                         y: float) -> None:
+        """A stick on a board part (board.json "parts") moved: the IMU's
+        tilt goes to the part's QOM path and its "also" paths."""
+        part = next((p for p in self.board.get("parts", [])
+                     if p["id"] == pid), None)
+        st = part and next((k for k in part.get("sticks", [])
+                            if k["id"] == sid), None)
+        if not st or not (self.session and self.session.qmp):
+            return
+        r = math.hypot(x, y)
+        if r > 1:
+            x, y = x / r, y / r
+        for path in [part["path"], *part.get("also", [])]:
+            for prop, value in stick_values(st, x, y).items():
+                try:
+                    await self.session.set_prop(path, prop, value)
+                except (RuntimeError, ConnectionError):
+                    pass                # absent (an optional breakout)
 
     async def stick(self, slot: str, sid: str, x: float, y: float,
                     pressed: bool | None) -> None:
@@ -250,7 +352,8 @@ class App:
             self.elf = elf
             self.session = Session(self.machine(), elf, self.emit,
                                    groups=pin_groups(self.board),
-                                   watch=self.click_watch())
+                                   watch=self.click_watch(),
+                                   drive=self.drive)
             try:
                 await self.session.start()
                 for slot, c in self.clicks.items():
@@ -288,6 +391,7 @@ class App:
         self.clients.add(ws)
         await ws.send_str(json.dumps(self.board_message()))
         await ws.send_str(json.dumps({"type": "clicks", "clicks": self.clicks}))
+        await ws.send_str(json.dumps(self.files_message()))
         if self.session:
             await ws.send_str(json.dumps({"type": "status", "state": "running",
                                           "elf": self.session.elf.name}))
@@ -308,10 +412,19 @@ class App:
             if req.get("type") == "click":
                 await self.plug(str(req.get("slot")), req.get("click"))
                 continue
+            if req.get("type") == "stick" and req.get("part"):
+                await self.part_stick(str(req.get("part")), str(req.get("id")),
+                                      float(req.get("x", 0)),
+                                      float(req.get("y", 0)))
+                continue
             if req.get("type") == "stick":
                 await self.stick(str(req.get("slot")), str(req.get("id")),
                                  float(req.get("x", 0)), float(req.get("y", 0)),
                                  req.get("pressed"))
+                continue
+            if req.get("type") == "save-file":
+                await self.save_file(str(req.get("path", "")),
+                                     str(req.get("text", "")))
                 continue
             if req.get("type") == "control":
                 await self.control(str(req.get("slot")), str(req.get("id")),
@@ -320,8 +433,11 @@ class App:
             if not self.session:
                 continue
             if req.get("type") == "button":
+                btn = next((b for b in self.board["buttons"]
+                            if b["action"] == req.get("id")), {})
                 await self.session.press(str(req.get("id")),
-                                         bool(req.get("pressed")))
+                                         bool(req.get("pressed")),
+                                         btn.get("property"))
             elif req.get("type") == "uart":
                 await self.session.uart_send(str(req.get("data", "")))
         self.clients.discard(ws)
@@ -362,6 +478,8 @@ class App:
         await self.run(dest)
 
     async def on_startup(self, app: web.Application) -> None:
+        if self.elf is None and not self.watch:
+            self.elf = self.circuitpython_elf()
         if self.elf:
             await self.run(self.elf)
         if self.watch:
