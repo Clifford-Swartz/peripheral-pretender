@@ -92,6 +92,9 @@ modes:
       INTFLAG:
         w1c: [MB, SB, ERROR]
         irq_source: {enable: INTENSET}
+        # a clear of SB right after a smart-mode DATA read targets the byte
+        # just read, not the next one (instant on the twin)
+        hooks: [pre_read, post_write]
       STATUS:
         w1c: [BUSERR, ARBLOST, LOWTOUT, MEXTTOUT, SEXTTOUT, LENERR]
         ro: [RXNACK, CLKHOLD]

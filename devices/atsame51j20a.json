@@ -282,6 +282,21 @@
   "fill": 255,
   "words": [
    {
+    "addr": 8388864,
+    "value": 348185,
+    "what": "TEMP_LOG word 0: room 25.0 C, hot 85.0 C (placeholder)"
+   },
+   {
+    "addr": 8388868,
+    "value": 3408550400,
+    "what": "TEMP_LOG word 1: PTAT 2650 room, 3250 hot (placeholder)"
+   },
+   {
+    "addr": 8388872,
+    "value": 10406800,
+    "what": "TEMP_LOG word 2: CTAT 2960 room, 2540 hot (placeholder)"
+   },
+   {
     "addr": 8404992,
     "value": 4271542841,
     "what": "USER row word 0 (production)"
@@ -4788,7 +4803,14 @@
    "version": "1.0.0",
    "caption": "Analog Digital Converter",
    "core": false,
-   "overlay": null,
+   "overlay": {
+    "file": "overlays/adc_u2500.yaml",
+    "sha1": "0d073b455591e9b1997b74550222d3838809c886",
+    "status": "applied",
+    "versions": [
+     "1.0.0"
+    ]
+   },
    "size": 76,
    "selector": null,
    "default_view": "",
@@ -4800,7 +4822,7 @@
      "irq": {
       "flag": "INTFLAG",
       "enable": "INTENSET",
-      "source": "heuristic"
+      "source": "overlay"
      },
      "registers": [
       {
@@ -4817,11 +4839,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 1,
-       "enprot": 0,
+       "enprot": 34808,
        "syncbusy": 3,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control A",
@@ -4947,8 +4971,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "enprot",
+         "overlay",
+         "all except SWRST, ENABLE = 0x87F8"
         ],
         [
          "sync",
@@ -5317,7 +5346,10 @@
        "syncbusy": 8,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control B",
@@ -5420,6 +5452,11 @@
         }
        ],
        "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
         [
          "sync",
          "heuristic",
@@ -5843,7 +5880,9 @@
        "syncbusy": 2048,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Software Trigger",
@@ -5867,6 +5906,11 @@
         }
        ],
        "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
         [
          "sync",
          "heuristic",
@@ -5893,6 +5937,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_CLEAR"
        ],
        "alias_of": "INTENSET",
@@ -5928,8 +5973,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "clear -> INTENSET"
         ]
        ]
       },
@@ -5952,6 +5997,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_SET"
        ],
        "alias_of": "INTENSET",
@@ -5987,8 +6033,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "set -> INTENSET"
         ]
        ]
       },
@@ -6044,8 +6090,8 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:INTFLAG: all fields W1C (0x7)"
+         "overlay",
+         "all = 0x7"
         ]
        ]
       },
@@ -6068,6 +6114,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -6097,6 +6144,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -6232,8 +6284,8 @@
         ],
         [
          "dynamic",
-         "heuristic",
-         "register named *SYNCBUSY: dynamic, reads 0"
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -6521,10 +6573,11 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "HOOK_PRE_READ",
         "READ_ONLY"
        ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Result Conversion Value",
        "note": "",
        "fields": [
@@ -6542,6 +6595,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
         ]
        ]
       },
@@ -87128,7 +87186,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/sercom_u2201.yaml",
-    "sha1": "bf50dc580beb2dca0fc6e54761c3f1fe466f3da8",
+    "sha1": "60e97667c7f4eb32b1e993fa33b34c8b6c0e603d",
     "status": "applied",
     "versions": [
      "3.1.1",
@@ -93518,9 +93576,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "I2CM Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -93554,6 +93615,16 @@
          "w1c",
          "overlay",
          "MB, SB, ERROR = 0x83"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },

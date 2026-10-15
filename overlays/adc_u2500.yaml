@@ -1,0 +1,24 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for ADC U2500 (SAM D5x/E5x, two instances, two IRQ
+# lines each). The mchp-adc model converts at once on SWTRIG.START.
+ip: ADC
+id: U2500
+versions: ["1.0.0"]
+references:
+  - "DS60001507 (SAM D5x/E5x data sheet) ADC chapter"
+registers:
+  CTRLA:
+    pac_protected: true
+    enable_protected: {all_except: [SWRST, ENABLE]}
+    self_clearing: [SWRST]
+  CTRLB: {pac_protected: true, hooks: [post_write]}   # FREERUN starts
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: all
+    irq_source: {enable: INTENSET}
+  SWTRIG: {hooks: [post_write]}   # START converts, FLUSH drops
+  STATUS: {dynamic: true}         # never busy
+  SYNCBUSY: {dynamic: true}       # instant synchronization
+  RESULT: {hooks: [pre_read]}     # reading clears RESRDY

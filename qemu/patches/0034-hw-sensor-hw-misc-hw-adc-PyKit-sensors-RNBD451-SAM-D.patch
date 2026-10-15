@@ -1,0 +1,2334 @@
+From 0534e4d8bd46c3fcab8b10b10ff149a405b1e111 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 14 Oct 2026 18:35:54 -0700
+Subject: [PATCH] hw/sensor, hw/misc, hw/adc: PyKit sensors, RNBD451, SAM D5x
+ ADC
+
+ICM-20948 (accelerometer, gyroscope, temperature, the AK09916 through the
+auxiliary I2C master's SLV0/SLV4) on the Ruler at 69h; BNO085 (SH-2 over
+SHTP: reset, product ID, Set Feature, accelerometer, gyroscope,
+magnetometer and rotation-vector reports) as the machine option
+bno085=on, the breakout the kit on the desk carries. RNBD451 BLE module
+as a chardev on SERCOM2 with its reset on PA14; command replies as read
+from the kit (V1.0.0.10), a central for front ends ("connected",
+"central-rx", "central-tx"). ADC U2500: instant conversions of the pins
+("ain"), scaled supplies, bandgap and the temperature sensor against the
+TEMP_LOG calibration. SERCOM I2C host: a clear of SB right after a
+smart-mode DATA read no longer swallows the next byte's SB (ASF4 does
+that; the next byte arrives at once on the twin). The kit's own
+robot-arm code.py runs on the twin.
+
+Peripheral Pretender: AI-assisted, not for upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/adc/mchp_adc.c                             | 357 +++++++++++++
+ hw/adc/meson.build                            |   1 +
+ hw/arm/Kconfig                                |   2 +
+ hw/arm/atsame51j20a_device.h                  |   2 +-
+ hw/arm/atsame51j20a_nvmrows.h                 |   6 +
+ hw/arm/curiosity_circuitpython.c              |  65 ++-
+ hw/arm/pic32cm_soc.c                          |   2 +
+ hw/char/mchp_sercom.c                         |  28 +
+ hw/misc/Kconfig                               |   3 +
+ hw/misc/meson.build                           |   1 +
+ hw/misc/rnbd451.c                             | 346 ++++++++++++
+ hw/sensor/Kconfig                             |   4 +
+ hw/sensor/bno085.c                            | 504 ++++++++++++++++++
+ hw/sensor/icm20948.c                          | 435 +++++++++++++++
+ hw/sensor/meson.build                         |   1 +
+ include/hw/adc/mchp_adc.h                     |  21 +
+ include/hw/mchp/gen/adc_u2500.h               |   2 +-
+ include/hw/mchp/gen/atsame51j20a/adc_u2500.h  |  18 +-
+ .../hw/mchp/gen/atsame51j20a/sercom_u2201.h   |   4 +-
+ .../gen/pic32cm1216mc00048/sercom_u2201.h     |   4 +-
+ .../gen/pic32cm5164jh01100/sercom_u2201.h     |   4 +-
+ include/hw/mchp/gen/sercom_u2201.h            |   2 +-
+ include/hw/misc/rnbd451.h                     |  22 +
+ include/hw/sensor/bno085.h                    |  18 +
+ include/hw/sensor/icm20948.h                  |  19 +
+ 25 files changed, 1851 insertions(+), 20 deletions(-)
+ create mode 100644 hw/adc/mchp_adc.c
+ create mode 100644 hw/misc/rnbd451.c
+ create mode 100644 hw/sensor/bno085.c
+ create mode 100644 hw/sensor/icm20948.c
+ create mode 100644 include/hw/adc/mchp_adc.h
+ create mode 100644 include/hw/misc/rnbd451.h
+ create mode 100644 include/hw/sensor/bno085.h
+ create mode 100644 include/hw/sensor/icm20948.h
+
+diff --git a/hw/adc/mchp_adc.c b/hw/adc/mchp_adc.c
+new file mode 100644
+index 0000000..ada1014
+--- /dev/null
++++ b/hw/adc/mchp_adc.c
+@@ -0,0 +1,357 @@
++/*
++ * Microchip SAM D5x/E5x ADC (ADC U2500)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Conversions as in DS60001507 (ADC chapter), completed at once: a start
++ * (SWTRIG.START, or each RESULT read in free-running mode) converts
++ * INPUTCTRL.MUXPOS (minus MUXNEG in differential mode) against
++ * REFCTRL.REFSEL into RESULT with the resolution of CTRLB.RESSEL, the
++ * accumulation and right shift of AVGCTRL and LEFTADJ, and sets
++ * INTFLAG.RESRDY (cleared by reading RESULT; OVERRUN when a result
++ * replaces an unread one). Inputs:
++ *
++ * - AIN0..AIN23: the "ain" property ("channel=millivolts,..."; the board
++ *   sets the pins' voltages; unset inputs read "ain-default", 0 mV);
++ * - SCALEDIOVCC, SCALEDCOREVCC, SCALEDVBAT: "vdd" / 4, 1.2 V / 4, VBAT
++ *   ("vdd") / 4; BANDGAP: 1.0 V;
++ * - PTAT, CTAT: the die temperature ("temperature", millidegrees C)
++ *   interpolated between the factory points of the device's TEMP_LOG row
++ *   (read from the NVM rows at 0x00800100), so that the data sheet's
++ *   formula gives that temperature back.
++ *
++ * References: INTREF 1.0 V (SUPC VREF.SEL at reset), INTVCC0 = VDDANA / 2,
++ * INTVCC1 = VDDANA, AREFx = VDDANA. Not modelled: gain and offset
++ * correction (logged), window monitor, DMA sequencing, events, the
++ * conversion time, dual mode.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "qemu/log.h"
++#include "hw/adc/mchp_adc.h"
++#include "hw/mchp/gen/adc_u2500.h"
++#include "migration/vmstate.h"
++#include "system/address-spaces.h"
++#include "system/dma.h"
++
++#define ADC_NAIN            32
++#define TEMP_LOG_ADDR       0x00800100
++#define BANDGAP_MV          1000
++#define CORE_MV             1200
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpAdcState, MCHP_ADC)
++
++struct MchpAdcState {
++    MchpRegBlock parent_obj;
++
++    int32_t ain_mv[ADC_NAIN];   /* < 0: unset */
++    int32_t ain_default;
++    int32_t vdd_mv;
++    int32_t temperature;        /* millidegrees C */
++    bool unread;                /* a result not read yet */
++};
++
++static uint32_t adc_reg(MchpAdcState *s, hwaddr off, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, off, size);
++}
++
++static void adc_set(MchpAdcState *s, hwaddr off, unsigned size, uint32_t v)
++{
++    mchp_regfile_poke(&MCHP_REGBLOCK(s)->rf, off, size, v);
++}
++
++/* The factory temperature points: TL, TH in tenths of a degree, codes */
++static void adc_temp_log(int32_t *tl, int32_t *th, uint32_t *vpl,
++                         uint32_t *vph, uint32_t *vcl, uint32_t *vch)
++{
++    uint32_t w[3];
++
++    dma_memory_read(&address_space_memory, TEMP_LOG_ADDR, w, sizeof(w),
++                    MEMTXATTRS_UNSPECIFIED);
++    for (unsigned i = 0; i < 3; i++) {
++        w[i] = le32_to_cpu(w[i]);
++    }
++    *tl = (w[0] & 0xFF) * 10 + ((w[0] >> 8) & 0xF);
++    *th = ((w[0] >> 12) & 0xFF) * 10 + ((w[0] >> 20) & 0xF);
++    *vpl = (w[1] >> 8) & 0xFFF;
++    *vph = (w[1] >> 20) & 0xFFF;
++    *vcl = w[2] & 0xFFF;
++    *vch = (w[2] >> 12) & 0xFFF;
++}
++
++/* 12-bit PTAT or CTAT code at the die temperature (as calibrated) */
++static uint32_t adc_temp_code(MchpAdcState *s, bool ctat)
++{
++    int32_t tl, th;
++    uint32_t vpl, vph, vcl, vch;
++    int64_t t10 = s->temperature / 100;     /* tenths */
++    int64_t lo, hi;
++
++    adc_temp_log(&tl, &th, &vpl, &vph, &vcl, &vch);
++    if (th <= tl) {
++        return 2048;            /* no calibration: mid scale */
++    }
++    lo = ctat ? vcl : vpl;
++    hi = ctat ? vch : vph;
++    return MIN(MAX(lo + (hi - lo) * (t10 - tl) / (th - tl), 0), 4095);
++}
++
++static int32_t adc_input_mv(MchpAdcState *s, unsigned mux)
++{
++    switch (mux) {
++    case MCHP_ADC_INPUTCTRL_MUXPOS_SCALEDCOREVCC:
++        return CORE_MV / 4;
++    case MCHP_ADC_INPUTCTRL_MUXPOS_SCALEDVBAT:
++    case MCHP_ADC_INPUTCTRL_MUXPOS_SCALEDIOVCC:
++        return s->vdd_mv / 4;
++    case MCHP_ADC_INPUTCTRL_MUXPOS_BANDGAP:
++        return BANDGAP_MV;
++    case MCHP_ADC_INPUTCTRL_MUXPOS_DAC:
++    case MCHP_ADC_INPUTCTRL_MUXPOS_PTC:
++        return 0;
++    default:
++        if (mux < ADC_NAIN) {
++            return s->ain_mv[mux] >= 0 ? s->ain_mv[mux] : s->ain_default;
++        }
++        return 0;
++    }
++}
++
++static int32_t adc_ref_mv(MchpAdcState *s)
++{
++    switch (FIELD_EX32(adc_reg(s, A_MCHP_ADC_REFCTRL, 1), MCHP_ADC_REFCTRL,
++                       REFSEL)) {
++    case MCHP_ADC_REFCTRL_REFSEL_INTREF:
++        return 1000;
++    case MCHP_ADC_REFCTRL_REFSEL_INTVCC0:
++        return s->vdd_mv / 2;
++    default:
++        return s->vdd_mv;
++    }
++}
++
++static void adc_convert(MchpAdcState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint32_t in = adc_reg(s, A_MCHP_ADC_INPUTCTRL, 2);
++    uint32_t ctrlb = adc_reg(s, A_MCHP_ADC_CTRLB, 2);
++    uint32_t avg = adc_reg(s, A_MCHP_ADC_AVGCTRL, 1);
++    unsigned pos = FIELD_EX32(in, MCHP_ADC_INPUTCTRL, MUXPOS);
++    unsigned res = FIELD_EX32(ctrlb, MCHP_ADC_CTRLB, RESSEL);
++    unsigned bits = res == 2 ? 10 : res == 3 ? 8 : 12;
++    unsigned n = FIELD_EX32(avg, MCHP_ADC_AVGCTRL, SAMPLENUM);
++    unsigned adj = FIELD_EX32(avg, MCHP_ADC_AVGCTRL, ADJRES);
++    bool diff = FIELD_EX32(in, MCHP_ADC_INPUTCTRL, DIFFMODE);
++    int64_t code, vref = adc_ref_mv(s);
++
++    if (!FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLA, 2), MCHP_ADC_CTRLA,
++                    ENABLE)) {
++        return;
++    }
++    if (pos == MCHP_ADC_INPUTCTRL_MUXPOS_PTAT ||
++        pos == MCHP_ADC_INPUTCTRL_MUXPOS_CTAT) {
++        code = adc_temp_code(s, pos == MCHP_ADC_INPUTCTRL_MUXPOS_CTAT);
++        code >>= 12 - bits;
++    } else {
++        int64_t mv = adc_input_mv(s, pos);
++        int64_t full = (1 << bits) - 1;
++
++        if (diff) {
++            mv -= adc_input_mv(s, FIELD_EX32(in, MCHP_ADC_INPUTCTRL, MUXNEG));
++            code = vref ? mv * (full / 2) / vref : 0;
++            code = MIN(MAX(code, -full / 2 - 1), full / 2);
++        } else {
++            code = vref ? (mv * full + vref / 2) / vref : 0;
++            code = MIN(MAX(code, 0), full);
++        }
++    }
++    if (res == 1) {             /* 16-bit: accumulate 2^n, shift ADJRES */
++        code = (code << n) >> adj;
++    }
++    if (FIELD_EX32(ctrlb, MCHP_ADC_CTRLB, LEFTADJ)) {
++        code <<= 16 - (res == 1 ? 16 : bits);
++    }
++    if (FIELD_EX32(ctrlb, MCHP_ADC_CTRLB, CORREN)) {
++        qemu_log_mask(LOG_UNIMP, "%s: gain/offset correction not "
++                      "modelled\n", rb->name);
++    }
++    if (s->unread) {
++        adc_set(s, A_MCHP_ADC_INTFLAG, 1, adc_reg(s, A_MCHP_ADC_INTFLAG, 1) |
++                R_MCHP_ADC_INTFLAG_OVERRUN_MASK);
++    }
++    adc_set(s, A_MCHP_ADC_RESULT, 2, (uint16_t)code);
++    adc_set(s, A_MCHP_ADC_INTFLAG, 1, adc_reg(s, A_MCHP_ADC_INTFLAG, 1) |
++            R_MCHP_ADC_INTFLAG_RESRDY_MASK);
++    s->unread = true;
++    mchp_regblock_update_irq(rb);
++}
++
++static uint32_t adc_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                             unsigned idx, uint32_t stored, bool side_effects)
++{
++    MchpAdcState *s = MCHP_ADC(rf->opaque);
++
++    if (ri->offset == A_MCHP_ADC_RESULT && side_effects) {
++        s->unread = false;
++        adc_set(s, A_MCHP_ADC_INTFLAG, 1, adc_reg(s, A_MCHP_ADC_INTFLAG, 1) &
++                ~R_MCHP_ADC_INTFLAG_RESRDY_MASK);
++        mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++        if (FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLB, 2), MCHP_ADC_CTRLB,
++                       FREERUN)) {
++            uint32_t v = stored;
++
++            adc_convert(s);     /* the next conversion is ready */
++            s->unread = true;
++            return v;
++        }
++    }
++    return stored;              /* STATUS, SYNCBUSY: idle and instant */
++}
++
++static void adc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                           unsigned idx, uint32_t old, uint32_t written,
++                           uint32_t we)
++{
++    MchpAdcState *s = MCHP_ADC(rf->opaque);
++
++    if (ri->offset == A_MCHP_ADC_SWTRIG) {
++        if (written & we & R_MCHP_ADC_SWTRIG_FLUSH_MASK) {
++            s->unread = false;
++        }
++        if (written & we & R_MCHP_ADC_SWTRIG_START_MASK) {
++            adc_convert(s);
++        }
++        adc_set(s, A_MCHP_ADC_SWTRIG, 1, 0);
++    } else if (ri->offset == A_MCHP_ADC_CTRLB &&
++               FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLB, 2), MCHP_ADC_CTRLB,
++                          FREERUN)) {
++        adc_convert(s);
++    }
++}
++
++/* Two lines: 0 = OVERRUN, WINMON; 1 = RESRDY */
++static uint32_t adc_irq_lines(MchpRegBlock *rb)
++{
++    uint32_t pend = mchp_regfile_peek(&rb->rf, A_MCHP_ADC_INTFLAG, 1) &
++                    mchp_regfile_peek(&rb->rf, A_MCHP_ADC_INTENSET, 1);
++
++    return (pend & R_MCHP_ADC_INTFLAG_RESRDY_MASK ? 2 : 0) |
++           (pend & ~R_MCHP_ADC_INTFLAG_RESRDY_MASK ? 1 : 0);
++}
++
++static void adc_reset_hold(MchpRegBlock *rb)
++{
++    MCHP_ADC(rb)->unread = false;
++}
++
++/* "ain": "channel=mV,channel=mV" (a channel=-1 unsets it) */
++static char *adc_get_ain(Object *obj, Error **errp)
++{
++    MchpAdcState *s = MCHP_ADC(obj);
++    g_autoptr(GString) str = g_string_new(NULL);
++
++    for (unsigned i = 0; i < ADC_NAIN; i++) {
++        if (s->ain_mv[i] >= 0) {
++            g_string_append_printf(str, "%s%u=%d", str->len ? "," : "", i,
++                                   s->ain_mv[i]);
++        }
++    }
++    return g_string_free(g_steal_pointer(&str), false);
++}
++
++static void adc_set_ain(Object *obj, const char *value, Error **errp)
++{
++    MchpAdcState *s = MCHP_ADC(obj);
++    g_auto(GStrv) items = g_strsplit(value, ",", -1);
++
++    for (unsigned i = 0; items[i]; i++) {
++        unsigned ch;
++        int mv;
++
++        if (!*items[i]) {
++            continue;
++        }
++        if (sscanf(items[i], "%u=%d", &ch, &mv) != 2 || ch >= ADC_NAIN) {
++            error_setg(errp, "ain items must be channel=millivolts, "
++                       "channel 0-%d", ADC_NAIN - 1);
++            return;
++        }
++        s->ain_mv[ch] = mv < 0 ? -1 : mv;
++    }
++}
++
++static void adc_get_i32(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, opaque, errp);
++}
++
++static void adc_set_i32(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, opaque, errp);
++}
++
++static void adc_init(Object *obj)
++{
++    MchpAdcState *s = MCHP_ADC(obj);
++
++    for (unsigned i = 0; i < ADC_NAIN; i++) {
++        s->ain_mv[i] = -1;
++    }
++    s->vdd_mv = 3300;
++    s->temperature = 25000;
++    object_property_add_str(obj, "ain", adc_get_ain, adc_set_ain);
++    object_property_add(obj, "ain-default", "int32", adc_get_i32,
++                        adc_set_i32, NULL, &s->ain_default);
++    object_property_add(obj, "vdd", "int32", adc_get_i32, adc_set_i32, NULL,
++                        &s->vdd_mv);
++    object_property_add(obj, "temperature", "int32", adc_get_i32,
++                        adc_set_i32, NULL, &s->temperature);
++}
++
++static const VMStateDescription vmstate_mchp_adc = {
++    .name = TYPE_MCHP_ADC,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpAdcState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_INT32_ARRAY(ain_mv, MchpAdcState, ADC_NAIN),
++        VMSTATE_INT32(ain_default, MchpAdcState),
++        VMSTATE_INT32(vdd_mv, MchpAdcState),
++        VMSTATE_INT32(temperature, MchpAdcState),
++        VMSTATE_BOOL(unread, MchpAdcState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void adc_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_adc;
++    c->pre_read = adc_pre_read;
++    c->post_write = adc_post_write;
++    c->reset_hold = adc_reset_hold;
++    c->irq_lines = adc_irq_lines;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_adc_types[] = {
++    {
++        .name = TYPE_MCHP_ADC,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpAdcState),
++        .instance_init = adc_init,
++        .class_init = adc_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_adc_types)
+diff --git a/hw/adc/meson.build b/hw/adc/meson.build
+index f5787eb..bda286f 100644
+--- a/hw/adc/meson.build
++++ b/hw/adc/meson.build
+@@ -3,3 +3,4 @@ system_ss.add(when: 'CONFIG_ASPEED_SOC', if_true: files('aspeed_adc.c'))
+ system_ss.add(when: 'CONFIG_NPCM7XX', if_true: files('npcm7xx_adc.c'))
+ system_ss.add(when: 'CONFIG_ZYNQ', if_true: files('zynq-xadc.c'))
+ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp3204.c'))
++system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_adc.c'))
+diff --git a/hw/arm/Kconfig b/hw/arm/Kconfig
+index ab95b4b..7866fbe 100644
+--- a/hw/arm/Kconfig
++++ b/hw/arm/Kconfig
+@@ -705,6 +705,8 @@ config CURIOSITY_CIRCUITPYTHON
+     select LED
+     select PIC32CM_SOC
+     select SST26VF
++    select PYKIT_SENSORS
++    select RNBD451
+     select ST7789
+     select WS2812
+ 
+diff --git a/hw/arm/atsame51j20a_device.h b/hw/arm/atsame51j20a_device.h
+index c0ca218..fff4090 100644
+--- a/hw/arm/atsame51j20a_device.h
++++ b/hw/arm/atsame51j20a_device.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Profile: profiles/atsame51j20a.yaml (sha1 93c779cc9afd)
++ * Profile: profiles/atsame51j20a.yaml (sha1 ab075c4307ba)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/hw/arm/atsame51j20a_nvmrows.h b/hw/arm/atsame51j20a_nvmrows.h
+index e575d2c..a0587b1 100644
+--- a/hw/arm/atsame51j20a_nvmrows.h
++++ b/hw/arm/atsame51j20a_nvmrows.h
+@@ -48,6 +48,12 @@ static inline void atsame51j20a_nvmrows_fill(uint8_t *buf,
+         uint32_t addr;
+         uint32_t value;
+     } words[] = {
++        /* TEMP_LOG word 0: room 25.0 C, hot 85.0 C (placeholder) */
++        { 0x00800100, 0x00055019 },
++        /* TEMP_LOG word 1: PTAT 2650 room, 3250 hot (placeholder) */
++        { 0x00800104, 0xCB2A5A00 },
++        /* TEMP_LOG word 2: CTAT 2960 room, 2540 hot (placeholder) */
++        { 0x00800108, 0x009ECB90 },
+         /* USER row word 0 (production) */
+         { 0x00804000, 0xFE9A9239 },
+         /* USER row word 1 (production) */
+diff --git a/hw/arm/curiosity_circuitpython.c b/hw/arm/curiosity_circuitpython.c
+index 97487e2..0366a45 100644
+--- a/hw/arm/curiosity_circuitpython.c
++++ b/hw/arm/curiosity_circuitpython.c
+@@ -18,8 +18,9 @@
+  * - USB-C (PA24/PA25): the USB device; the host's view of its first CDC
+  *   ACM interface (CircuitPython's REPL) is a serial port, see mchp-usb.
+  * - Debug UART (DEBUG_TX PA22, DEBUG_RX PA23): SERCOM3 pads 0/1.
+- * - BLE module UART (BLE_TX PA12, BLE_RX PA13): SERCOM2 pads 0/1 (the
+- *   RNBD451 itself is not modelled).
++ * - RNBD451 BLE module on SERCOM2 (BLE_TX PA12, BLE_RX PA13), its reset
++ *   NMCLR on BLE_CLR = PA14 (10 kOhm pull-up R13): /chardevs/rnbd451,
++ *   unless serial2 names another chardev.
+  *
+  * The PyKit Ruler (EV82H04A, schematic 03-02-01326 rev 3, 2025-09-10)
+  * is part of the machine:
+@@ -31,6 +32,11 @@
+  *   (R23 pulls it high: dark). The picture is /machine/lcd ("frame").
+  * - Five WS2812B NeoPixels in one chain on PB22 (NEO_0): D3 on the
+  *   Curiosity board first, then D1-D4 on the Ruler (/machine/neopixels).
++ * - ICM-20948 IMU behind the 1.8 V I2C level shifter at 69h (SDO/AD0
++ *   pulled up, R1), /machine/imu ("accel", "gyro", "mag").
++ *
++ * Machine option bno085=on plugs a BNO085 breakout (I2C 4Ah) into the
++ * QWIIC connector, as on the kit on the desk (/machine/qwiic-bno085).
+  *
+  * Machine option console=usb (default) makes serial0 the USB console,
+  * serial1 the debug UART and serial2 the BLE UART; console=debug swaps the
+@@ -60,12 +66,17 @@
+ #include "hw/core/qdev-properties-system.h"
+ #include "hw/gpio/mchp_port.h"
+ #include "hw/misc/led.h"
++#include "hw/misc/rnbd451.h"
+ #include "hw/misc/ws2812.h"
++#include "hw/i2c/i2c.h"
++#include "hw/sensor/bno085.h"
++#include "hw/sensor/icm20948.h"
+ #include "hw/ssi/mchp_qspi.h"
+ #include "hw/ssi/ssi.h"
+ #include "system/block-backend.h"
+ #include "system/blockdev.h"
+ #include "system/system.h"
++#include "chardev/char.h"
+ 
+ #define CCP_XOSC32K_HZ      32768
+ #define CCP_APP_BASE        0x4000      /* after the UF2 bootloader */
+@@ -79,6 +90,10 @@
+ #define CCP_LCD_BL_PIN      MCHP_PORT_PIN('A', 6)   /* low: lit */
+ #define CCP_LCD_DC_PIN      MCHP_PORT_PIN('B', 14)  /* D4 */
+ #define CCP_LCD_SPI         "SERCOM0"
++#define CCP_I2C             "SERCOM5"
++#define CCP_BLE_CLR_PIN     MCHP_PORT_PIN('A', 14)
++#define CCP_ICM20948_ADDR   0x69
++#define CCP_BNO085_ADDR     0x4A
+ #define CCP_SDA_PIN         MCHP_PORT_PIN('B', 31)  /* 4.7 kOhm R18 */
+ 
+ #define CCP_DEBUG_SERCOM    3       /* DEBUG_TX/RX (PA22/PA23) */
+@@ -98,6 +113,8 @@ struct CuriosityCpState {
+     bool console_debug;             /* serial0 is the debug UART */
+     DeviceState *lcd;
+     DeviceState *neopixels;
++    bool bno085;                    /* breakout on QWIIC */
++    Chardev *ble;                   /* the RNBD451, or the user's chardev */
+ };
+ 
+ /*
+@@ -205,6 +222,23 @@ static void curiosity_cp_add_ruler(CuriosityCpState *s)
+                           0, false);
+ }
+ 
++/* The I2C bus: the Ruler's IMU, a BNO085 breakout on QWIIC if plugged */
++static void curiosity_cp_add_i2c(CuriosityCpState *s)
++{
++    I2CBus *bus = I2C_BUS(qdev_get_child_bus(
++        pic32cm_soc_periph(&s->soc, CCP_I2C), "sercom5.i2c"));
++    I2CSlave *dev;
++
++    dev = i2c_slave_new(TYPE_ICM20948, CCP_ICM20948_ADDR);
++    object_property_add_child(OBJECT(s), "imu", OBJECT(dev));
++    i2c_slave_realize_and_unref(dev, bus, &error_fatal);
++    if (s->bno085) {
++        dev = i2c_slave_new(TYPE_BNO085, CCP_BNO085_ADDR);
++        object_property_add_child(OBJECT(s), "qwiic-bno085", OBJECT(dev));
++        i2c_slave_realize_and_unref(dev, bus, &error_fatal);
++    }
++}
++
+ /*
+  * The UF2 bootloader's job: an image linked at the application area
+  * starts from its own vector table when nothing occupies 0.
+@@ -237,7 +271,12 @@ static void curiosity_cp_init(MachineState *machine)
+     pic32cm_soc_connect_usb(&s->soc, serial_hd(s->console_debug ? 1 : 0));
+     pic32cm_soc_connect_serial(&s->soc, CCP_DEBUG_SERCOM,
+                                serial_hd(s->console_debug ? 0 : 1));
+-    pic32cm_soc_connect_serial(&s->soc, CCP_BLE_SERCOM, serial_hd(2));
++    s->ble = serial_hd(2);
++    if (!s->ble) {
++        s->ble = qemu_chardev_new("rnbd451", TYPE_CHARDEV_RNBD451, NULL, NULL,
++                                  &error_fatal);
++    }
++    pic32cm_soc_connect_serial(&s->soc, CCP_BLE_SERCOM, s->ble);
+     sysbus_realize(SYS_BUS_DEVICE(soc), &error_fatal);
+ 
+     port = pic32cm_soc_periph(&s->soc, "PORT");
+@@ -252,6 +291,12 @@ static void curiosity_cp_init(MachineState *machine)
+     curiosity_cp_update_user(s);
+     curiosity_cp_add_flash(s);
+     curiosity_cp_add_ruler(s);
++    curiosity_cp_add_i2c(s);
++    if (object_dynamic_cast(OBJECT(s->ble), TYPE_CHARDEV_RNBD451)) {
++        curiosity_cp_wire_pad(port, CCP_BLE_CLR_PIN,
++                              qemu_allocate_irq(rnbd451_reset_pin, s->ble, 0),
++                              1, false);
++    }
+ 
+     armv7m_load_kernel(s->soc.armv7m.cpu, machine->kernel_filename,
+                        s->soc.dev->flash_base, s->soc.dev->flash_size);
+@@ -276,6 +321,16 @@ static void curiosity_cp_set_console(Object *obj, const char *value,
+     }
+ }
+ 
++static bool curiosity_cp_get_bno085(Object *obj, Error **errp)
++{
++    return CURIOSITY_CP_MACHINE(obj)->bno085;
++}
++
++static void curiosity_cp_set_bno085(Object *obj, bool value, Error **errp)
++{
++    CURIOSITY_CP_MACHINE(obj)->bno085 = value;
++}
++
+ static void curiosity_cp_class_init(ObjectClass *oc, const void *data)
+ {
+     MachineClass *mc = MACHINE_CLASS(oc);
+@@ -294,6 +349,10 @@ static void curiosity_cp_class_init(ObjectClass *oc, const void *data)
+                                    curiosity_cp_set_user);
+     object_class_property_set_description(oc, "user-pressed",
+                                           "Hold the USER button (PA27) down");
++    object_class_property_add_bool(oc, "bno085", curiosity_cp_get_bno085,
++                                   curiosity_cp_set_bno085);
++    object_class_property_set_description(oc, "bno085",
++        "Plug a BNO085 IMU breakout into QWIIC (I2C 0x4A)");
+     object_class_property_add_str(oc, "console", curiosity_cp_get_console,
+                                   curiosity_cp_set_console);
+     object_class_property_set_description(oc, "console",
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index 0579bbf..93972ef 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -32,6 +32,7 @@
+ #include "hw/timer/mchp_tcc.h"
+ #include "hw/mchp/gen/rstc_u2239.h"
+ #include "hw/misc/mchp_sysctrl.h"
++#include "hw/adc/mchp_adc.h"
+ #include "hw/dma/mchp_dmac.h"
+ #include "hw/misc/mchp_usb.h"
+ #include "hw/misc/unimp.h"
+@@ -49,6 +50,7 @@ static const struct {
+     const char *type;
+     const char *ip_id;          /* NULL: any */
+ } pic32cm_models[] = {
++    { "ADC", TYPE_MCHP_ADC, "U2500" },
+     { "DIVAS", TYPE_MCHP_DIVAS },
+     { "DMAC", TYPE_MCHP_DMAC, "U2503" },
+     { "DSU", TYPE_MCHP_DSU, "U2209" },
+diff --git a/hw/char/mchp_sercom.c b/hw/char/mchp_sercom.c
+index d46ac94..fd76a10 100644
+--- a/hw/char/mchp_sercom.c
++++ b/hw/char/mchp_sercom.c
+@@ -109,6 +109,7 @@ struct MchpSercomState {
+     bool i2c_active;            /* a transfer since the last stop */
+     bool i2c_read;
+     uint8_t i2c_rx;             /* the byte DATA reads */
++    bool i2c_sb_unseen;         /* SB of a smart-mode next byte, unread */
+     QEMUTimer *i2c_stop_timer;
+ };
+ 
+@@ -593,6 +594,7 @@ static uint32_t mchp_sercom_i2c_read(MchpSercomState *s, bool side_effects)
+                 i2c_nack(s->i2c);
+             } else {
+                 mchp_sercom_i2c_next(s);
++                s->i2c_sb_unseen = true;
+             }
+         }
+         mchp_regblock_update_irq(MCHP_REGBLOCK(s));
+@@ -600,6 +602,23 @@ static uint32_t mchp_sercom_i2c_read(MchpSercomState *s, bool side_effects)
+     return data;
+ }
+ 
++/*
++ * The next byte arrives at once on the twin, but on silicon only after
++ * nine bit times: firmware that clears SB right after reading DATA (ASF4,
++ * CircuitPython) clears the old byte's SB there. Until INTFLAG is read,
++ * such a clear leaves the new SB alone.
++ */
++static void mchp_sercom_i2c_intflag_write(MchpSercomState *s, uint32_t old,
++                                          uint32_t written)
++{
++    if (s->i2c_sb_unseen && (written & I2CM(INTFLAG, SB)) &&
++        (old & I2CM(INTFLAG, SB))) {
++        mchp_sercom_set_reg(s, A_INTFLAG, 1, mchp_sercom_reg(s, A_INTFLAG, 1) |
++                            I2CM(INTFLAG, SB));
++    }
++    s->i2c_sb_unseen = false;
++}
++
+ static uint32_t mchp_sercom_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
+                                      unsigned idx, uint32_t stored,
+                                      bool side_effects)
+@@ -618,6 +637,9 @@ static uint32_t mchp_sercom_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
+             }
+         }
+     }
++    if (ri->offset == A_INTFLAG && side_effects) {
++        s->i2c_sb_unseen = false;       /* firmware has seen the flags */
++    }
+     return stored;      /* SYNCBUSY: synchronization is instant */
+ }
+ 
+@@ -727,6 +749,11 @@ static void mchp_sercom_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+         }
+         mchp_sercom_rx_switched(s, mchp_sercom_rx_on(ctrla, old));
+         break;
++    case A_INTFLAG:
++        if (mode == MCHP_SERCOM_MODE_I2CM) {
++            mchp_sercom_i2c_intflag_write(s, old, written & we);
++        }
++        break;
+     case A_MCHP_SERCOM_I2CM_STATUS:
+         if (mode == MCHP_SERCOM_MODE_I2CM) {
+             /* Writing BUSSTATE = IDLE forces it (only from UNKNOWN/IDLE) */
+@@ -860,6 +887,7 @@ static const VMStateDescription vmstate_mchp_sercom = {
+         VMSTATE_BOOL(i2c_read, MchpSercomState),
+         VMSTATE_UINT8(i2c_rx, MchpSercomState),
+         VMSTATE_TIMER_PTR(i2c_stop_timer, MchpSercomState),
++        VMSTATE_BOOL(i2c_sb_unseen, MchpSercomState),
+         VMSTATE_END_OF_LIST()
+     },
+ };
+diff --git a/hw/misc/Kconfig b/hw/misc/Kconfig
+index 380d9f9..1b25bdf 100644
+--- a/hw/misc/Kconfig
++++ b/hw/misc/Kconfig
+@@ -206,6 +206,9 @@ config MCHP_REGFILE
+ config WS2812
+     bool
+ 
++config RNBD451
++    bool
++
+ config MIKROBUS
+     bool
+     select I2C
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index becf1b2..e9c785d 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -27,6 +27,7 @@ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files(
+   'click_buzzer.c',
+ ))
+ system_ss.add(when: 'CONFIG_WS2812', if_true: files('ws2812.c'))
++system_ss.add(when: 'CONFIG_RNBD451', if_true: files('rnbd451.c'))
+ system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files(
+   'mchp_clock.c',
+   'mchp_edbg_dgi.c',
+diff --git a/hw/misc/rnbd451.c b/hw/misc/rnbd451.c
+new file mode 100644
+index 0000000..3b6ad42
+--- /dev/null
++++ b/hw/misc/rnbd451.c
+@@ -0,0 +1,346 @@
++/*
++ * Microchip RNBD451 Bluetooth Low Energy module on a UART
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * A chardev the board connects to the UART the module sits on: what the
++ * MCU sends reaches the module, what the module answers reaches the MCU.
++ * Modelled after the RNBD451 user's guide (DS50003253) as firmware drives
++ * it: "%REBOOT%" after a reset pulse (rnbd451_reset_pin()) or R,1 (the
++ * power-on one goes out while the MCU is still in reset, so it is not
++ * sent); "$$$" enters command mode ("CMD> " prompt), "---" leaves it
++ * ("END"); V answers the firmware version ("version" property), D the
++ * device information (name, SA, SR and SS as last set); set commands
++ * (S..., U,Z, A, Y, ...) answer "AOK"; unknown commands "Err". Replies
++ * as from the kit on the desk (firmware V1.0.0.10, read through its
++ * REPL on 2026-10-14). In data mode bytes go to the connected
++ * central, if any.
++ *
++ * The central (a phone, for the web board view) is QOM properties of
++ * this chardev (/chardevs/<id>): "connected" (set true: %CONNECT% and
++ * %STREAM_OPEN%, false: %DISCONNECT%), "central-rx" (the last data-mode
++ * bytes the module sent to it), "central-rx-gen" (bumped per chunk) and
++ * "central-tx" (set: bytes the central sends, delivered to the MCU while
++ * connected). Not modelled: radio timing, bonding, scanning, connecting
++ * out, GATT services, settings that persist across resets.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "chardev/char.h"
++#include "hw/core/irq.h"
++#include "hw/misc/rnbd451.h"
++
++#define RNBD_LINE           128
++#define RNBD_CENTRAL_RX     512
++#define RNBD_OUT            1024
++
++OBJECT_DECLARE_SIMPLE_TYPE(Rnbd451Chardev, CHARDEV_RNBD451)
++
++struct Rnbd451Chardev {
++    Chardev parent_obj;
++
++    bool cmd_mode;
++    bool connected;
++    bool in_reset;
++    char line[RNBD_LINE];
++    unsigned nline;
++    unsigned dollars;           /* consecutive '$' in data mode */
++    char *version;
++    char *name;
++    uint16_t features;          /* SR */
++    uint8_t services;           /* SS */
++    uint8_t authen;             /* SA */
++
++    GString *central_rx;
++    uint32_t central_rx_gen;
++
++    uint8_t out[RNBD_OUT];      /* module to MCU, not yet accepted */
++    unsigned nout;
++    QEMUTimer *tx_timer;        /* answers go out after the access */
++};
++
++#define RNBD_REPLY_NS       50000
++
++static void rnbd_flush(Rnbd451Chardev *s)
++{
++    Chardev *chr = CHARDEV(s);
++    int n;
++
++    while (s->nout && (n = qemu_chr_be_can_write(chr)) > 0) {
++        n = MIN(n, (int)s->nout);
++        qemu_chr_be_write(chr, s->out, n);
++        memmove(s->out, s->out + n, s->nout - n);
++        s->nout -= n;
++    }
++}
++
++static void rnbd_say(Rnbd451Chardev *s, const char *text)
++{
++    size_t len = strlen(text);
++
++    if (s->in_reset) {
++        return;
++    }
++    len = MIN(len, RNBD_OUT - s->nout);
++    memcpy(s->out + s->nout, text, len);
++    s->nout += len;
++    /* Not from inside the UART model's own write: a little later */
++    if (!timer_pending(s->tx_timer)) {
++        timer_mod(s->tx_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                  RNBD_REPLY_NS);
++    }
++}
++
++static void rnbd_tx_timer(void *opaque)
++{
++    rnbd_flush(opaque);
++}
++
++static void rnbd_reboot(Rnbd451Chardev *s)
++{
++    s->cmd_mode = false;
++    s->nline = 0;
++    s->dollars = 0;
++    if (s->connected) {
++        s->connected = false;
++    }
++    rnbd_say(s, "%REBOOT%");
++}
++
++static void rnbd_command(Rnbd451Chardev *s, const char *cmd)
++{
++    g_autofree char *reply = NULL;
++
++    if (!*cmd) {
++        return;
++    }
++    if (!strcmp(cmd, "---")) {
++        s->cmd_mode = false;
++        rnbd_say(s, "END\r\n");
++        return;
++    }
++    if (!strcmp(cmd, "R,1")) {
++        rnbd_say(s, "Rebooting\r\n");
++        rnbd_reboot(s);
++        return;
++    }
++    if (!strcmp(cmd, "V")) {
++        reply = g_strdup_printf("%s\r\nCMD> ", s->version);
++    } else if (!strcmp(cmd, "D")) {
++        reply = g_strdup_printf("BTA=%s\r\nName=%s\r\nConnected=%s\r\n"
++                                "Authen=%u\r\nFeatures=%04X\r\n"
++                                "Services=%02X\r\nCMD> ", "D88039FA0000",
++                                s->name, s->connected ? "yes" : "no",
++                                s->authen, s->features, s->services);
++    } else if (!strncmp(cmd, "SN,", 3)) {
++        g_free(s->name);
++        s->name = g_strndup(cmd + 3, 20);
++        reply = g_strdup("AOK\r\nCMD> ");
++    } else if (!strncmp(cmd, "SR,", 3)) {
++        s->features = strtoul(cmd + 3, NULL, 16);
++        reply = g_strdup("AOK\r\nCMD> ");
++    } else if (!strncmp(cmd, "SS,", 3)) {
++        s->services = strtoul(cmd + 3, NULL, 16);
++        reply = g_strdup("AOK\r\nCMD> ");
++    } else if (!strncmp(cmd, "SA,", 3)) {
++        s->authen = strtoul(cmd + 3, NULL, 10);
++        reply = g_strdup("AOK\r\nCMD> ");
++    } else if (cmd[0] == 'S' || cmd[0] == 'U' || cmd[0] == 'A' ||
++               cmd[0] == 'Y' || cmd[0] == 'N' || cmd[0] == 'Z') {
++        reply = g_strdup("AOK\r\nCMD> ");
++    } else if (!strcmp(cmd, "GK")) {
++        reply = g_strdup_printf("%s\r\nCMD> ", s->connected ?
++                                "1,0,D88039FA0001" : "none");
++    } else {
++        qemu_log_mask(LOG_UNIMP, "rnbd451: command \"%s\" not modelled\n",
++                      cmd);
++        reply = g_strdup("Err\r\nCMD> ");
++    }
++    rnbd_say(s, reply);
++}
++
++/* MCU to module */
++static int rnbd_chr_write(Chardev *chr, const uint8_t *buf, int len)
++{
++    Rnbd451Chardev *s = CHARDEV_RNBD451(chr);
++
++    if (s->in_reset) {
++        return len;
++    }
++    for (int i = 0; i < len; i++) {
++        char c = buf[i];
++
++        if (!s->cmd_mode) {
++            s->dollars = c == '$' ? s->dollars + 1 : 0;
++            if (s->dollars == 3) {
++                s->dollars = 0;
++                s->cmd_mode = true;
++                s->nline = 0;
++                rnbd_say(s, "CMD> ");
++                continue;
++            }
++            if (s->connected && c != '$') {
++                g_string_append_c(s->central_rx, c);
++                if (s->central_rx->len > RNBD_CENTRAL_RX) {
++                    g_string_erase(s->central_rx, 0,
++                                   s->central_rx->len - RNBD_CENTRAL_RX);
++                }
++                s->central_rx_gen++;
++            }
++            continue;
++        }
++        if (c == '\r' || c == '\n') {
++            s->line[s->nline] = 0;
++            s->nline = 0;
++            rnbd_command(s, s->line);
++        } else if (s->nline < RNBD_LINE - 1) {
++            s->line[s->nline++] = c;
++        }
++    }
++    return len;
++}
++
++static void rnbd_chr_accept_input(Chardev *chr)
++{
++    rnbd_flush(CHARDEV_RNBD451(chr));
++}
++
++void rnbd451_reset_pin(void *opaque, int n, int level)
++{
++    Rnbd451Chardev *s = opaque;
++    bool low = level == 0;
++
++    if (s->in_reset && !low) {
++        s->in_reset = false;
++        rnbd_reboot(s);         /* released: boots */
++    } else if (low) {
++        s->in_reset = true;
++        s->nout = 0;
++    }
++}
++
++static bool rnbd_get_connected(Object *obj, Error **errp)
++{
++    return CHARDEV_RNBD451(obj)->connected;
++}
++
++static void rnbd_set_connected(Object *obj, bool value, Error **errp)
++{
++    Rnbd451Chardev *s = CHARDEV_RNBD451(obj);
++
++    if (value == s->connected) {
++        return;
++    }
++    s->connected = value;
++    if (value) {
++        rnbd_say(s, "%CONNECT,0,D88039FA0001%%STREAM_OPEN%");
++    } else {
++        rnbd_say(s, "%DISCONNECT%");
++    }
++}
++
++static char *rnbd_get_central_rx(Object *obj, Error **errp)
++{
++    return g_strdup(CHARDEV_RNBD451(obj)->central_rx->str);
++}
++
++static void rnbd_get_gen(Object *obj, Visitor *v, const char *name,
++                         void *opaque, Error **errp)
++{
++    visit_type_uint32(v, name, &CHARDEV_RNBD451(obj)->central_rx_gen, errp);
++}
++
++static char *rnbd_get_central_tx(Object *obj, Error **errp)
++{
++    return g_strdup("");
++}
++
++static void rnbd_set_central_tx(Object *obj, const char *value, Error **errp)
++{
++    Rnbd451Chardev *s = CHARDEV_RNBD451(obj);
++
++    if (s->connected && !s->cmd_mode) {
++        rnbd_say(s, value);
++    }
++}
++
++static char *rnbd_get_version(Object *obj, Error **errp)
++{
++    return g_strdup(CHARDEV_RNBD451(obj)->version);
++}
++
++static void rnbd_set_version(Object *obj, const char *value, Error **errp)
++{
++    Rnbd451Chardev *s = CHARDEV_RNBD451(obj);
++
++    g_free(s->version);
++    s->version = g_strdup(value);
++}
++
++static bool rnbd_chr_open(Chardev *chr, ChardevBackend *backend,
++                          Error **errp)
++{
++    return true;
++}
++
++static void rnbd_init(Object *obj)
++{
++    Rnbd451Chardev *s = CHARDEV_RNBD451(obj);
++
++    /* The kit on the desk answers V with this (2026-10-14) */
++    s->version = g_strdup("RNBD451 V1.0.0.10 Jul 20 2022 (c)Microchip "
++                          "Technology Inc");
++    s->services = 0xC0;
++    s->authen = 2;
++    s->name = g_strdup("RNBD451_0001");
++    s->central_rx = g_string_new(NULL);
++    s->tx_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, rnbd_tx_timer, s);
++    object_property_add_bool(obj, "connected", rnbd_get_connected,
++                             rnbd_set_connected);
++    object_property_add_str(obj, "central-rx", rnbd_get_central_rx, NULL);
++    object_property_add(obj, "central-rx-gen", "uint32", rnbd_get_gen, NULL,
++                        NULL, NULL);
++    object_property_add_str(obj, "central-tx", rnbd_get_central_tx,
++                            rnbd_set_central_tx);
++    object_property_add_str(obj, "version", rnbd_get_version,
++                            rnbd_set_version);
++}
++
++static void rnbd_finalize(Object *obj)
++{
++    Rnbd451Chardev *s = CHARDEV_RNBD451(obj);
++
++    g_free(s->version);
++    g_free(s->name);
++    g_string_free(s->central_rx, true);
++    timer_free(s->tx_timer);
++}
++
++static void rnbd_class_init(ObjectClass *oc, const void *data)
++{
++    ChardevClass *cc = CHARDEV_CLASS(oc);
++
++    cc->chr_open = rnbd_chr_open;
++    cc->chr_write = rnbd_chr_write;
++    cc->chr_accept_input = rnbd_chr_accept_input;
++}
++
++static const TypeInfo rnbd_types[] = {
++    {
++        .name = TYPE_CHARDEV_RNBD451,
++        .parent = TYPE_CHARDEV,
++        .instance_size = sizeof(Rnbd451Chardev),
++        .instance_init = rnbd_init,
++        .instance_finalize = rnbd_finalize,
++        .class_init = rnbd_class_init,
++    },
++};
++
++DEFINE_TYPES(rnbd_types)
+diff --git a/hw/sensor/Kconfig b/hw/sensor/Kconfig
+index bc6331b..c8de5bd 100644
+--- a/hw/sensor/Kconfig
++++ b/hw/sensor/Kconfig
+@@ -43,3 +43,7 @@ config ISL_PMBUS_VR
+ config MAX31785
+     bool
+     depends on PMBUS
++
++config PYKIT_SENSORS
++    bool
++    select I2C
+diff --git a/hw/sensor/bno085.c b/hw/sensor/bno085.c
+new file mode 100644
+index 0000000..ee64c72
+--- /dev/null
++++ b/hw/sensor/bno085.c
+@@ -0,0 +1,504 @@
++/*
++ * CEVA (Hillcrest) BNO085 9-axis sensor hub with SH-2 over SHTP on I2C
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * SH-2 Reference Manual (1000-3625) and SHTP (1000-3535), I2C transport
++ * (BNO08X data sheet 1000-3927): every transfer carries a 4-byte header
++ * (length with bit 15 for continuations, channel, sequence number) and
++ * the cargo. Modelled as the Adafruit CircuitPython and Arduino drivers
++ * use it:
++ *
++ * - Channel 1 (executable) reset command 01h: the hub restarts, queues
++ *   its SHTP advertisement (channel 0) and the reset-complete message
++ *   (channel 1), and forgets the enabled features.
++ * - Channel 2 (control): product ID request F9h answered with F8h (part
++ *   10003608, version 3.2.7), Set Feature FDh answered with Get Feature
++ *   Response FCh, after which that report arrives on channel 3 every
++ *   report interval (a base timestamp FBh then the report), whenever the
++ *   host reads. Command requests F2h get a success response F1h.
++ * - Reports: accelerometer (01h, Q8 m/s^2), gyroscope (02h, Q9 rad/s),
++ *   magnetometer (03h, Q4 uT), linear acceleration (04h), rotation and
++ *   game rotation vectors (05h, 08h, Q14 quaternions), gravity (06h),
++ *   geomagnetic rotation vector (09h, Q12). They come from the "accel"
++ *   (mg), "gyro" (mdps), "mag" (nT) properties and "yaw" (millidegrees):
++ *   the orientation is roll and pitch from the gravity vector plus yaw.
++ *   Other reports are acknowledged and never sent.
++ *
++ * A read returns the oldest queued packet from its start and consumes it
++ * only when the host read it whole; with nothing queued it returns an
++ * empty header. Not modelled: FRS records, calibration, the activity and
++ * stability classifiers, step counter, H_INTN, the wake channel. Not
++ * checked against a physical part.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include <math.h>
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "qemu/bswap.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/i2c/i2c.h"
++#include "hw/sensor/bno085.h"
++#include "migration/vmstate.h"
++
++#define BNO_MAX_PACKET      256
++#define BNO_QUEUE           8
++#define BNO_NREPORTS        0x30
++
++#define CH_COMMAND          0
++#define CH_EXE              1
++#define CH_CONTROL          2
++#define CH_REPORTS          3
++
++#define R_COMMAND_RESP      0xF1
++#define R_COMMAND_REQ       0xF2
++#define R_PRODUCT_ID_RESP   0xF8
++#define R_PRODUCT_ID_REQ    0xF9
++#define R_BASE_TIMESTAMP    0xFB
++#define R_FEATURE_RESP      0xFC
++#define R_SET_FEATURE       0xFD
++#define R_GET_FEATURE       0xFE
++
++#define G_MPS2              9.80665
++
++typedef struct BnoPacket {
++    uint16_t len;               /* header included */
++    uint8_t data[BNO_MAX_PACKET];
++} BnoPacket;
++
++OBJECT_DECLARE_SIMPLE_TYPE(Bno085State, BNO085)
++
++struct Bno085State {
++    I2CSlave parent_obj;
++
++    BnoPacket queue[BNO_QUEUE];
++    uint8_t qhead;
++    uint8_t qcount;
++    uint16_t rpos;              /* bytes of the head packet read */
++    uint8_t seq_out[6];
++
++    uint8_t rx[BNO_MAX_PACKET];
++    uint16_t rxlen;
++
++    uint32_t interval_us[BNO_NREPORTS];  /* 0: off */
++    int64_t next_ns[BNO_NREPORTS];
++    uint8_t report_seq[BNO_NREPORTS];
++    uint8_t cmd_seq;
++
++    int32_t accel[3];           /* mg */
++    int32_t gyro[3];            /* mdps */
++    int32_t mag[3];             /* nT */
++    int32_t yaw;                /* millidegrees */
++};
++
++static void bno_queue(Bno085State *s, unsigned channel, const uint8_t *cargo,
++                      unsigned len)
++{
++    BnoPacket *p;
++
++    if (s->qcount == BNO_QUEUE || len + 4 > BNO_MAX_PACKET) {
++        qemu_log_mask(LOG_GUEST_ERROR, "bno085: output queue full, packet on"
++                      " channel %u dropped\n", channel);
++        return;
++    }
++    p = &s->queue[(s->qhead + s->qcount) % BNO_QUEUE];
++    p->len = len + 4;
++    stw_le_p(&p->data[0], p->len);
++    p->data[2] = channel;
++    p->data[3] = s->seq_out[channel]++;
++    memcpy(&p->data[4], cargo, len);
++    s->qcount++;
++}
++
++static void bno_restart(Bno085State *s)
++{
++    /* Advertisement: abbreviated tag list (version tag only) */
++    static const uint8_t advert[] = { 0x00, 0x01, 0x01, 0x80, 0x06, 0x31,
++                                      0x2E, 0x30, 0x2E, 0x30, 0x00 };
++    static const uint8_t reset_done[] = { 0x01 };
++
++    s->qhead = s->qcount = 0;
++    s->rpos = 0;
++    memset(s->seq_out, 0, sizeof(s->seq_out));
++    memset(s->interval_us, 0, sizeof(s->interval_us));
++    bno_queue(s, CH_COMMAND, advert, sizeof(advert));
++    bno_queue(s, CH_EXE, reset_done, sizeof(reset_done));
++}
++
++/* Orientation as a quaternion (w, x, y, z): roll/pitch from gravity, yaw */
++static void bno_quaternion(Bno085State *s, double q[4])
++{
++    double ax = s->accel[0], ay = s->accel[1], az = s->accel[2];
++    double roll = atan2(ay, az);
++    double pitch = atan2(-ax, sqrt(ay * ay + az * az));
++    double yaw = s->yaw / 1000.0 * M_PI / 180.0;
++    double cr = cos(roll / 2), sr = sin(roll / 2);
++    double cp = cos(pitch / 2), sp = sin(pitch / 2);
++    double cy = cos(yaw / 2), sy = sin(yaw / 2);
++
++    q[0] = cr * cp * cy + sr * sp * sy;
++    q[1] = sr * cp * cy - cr * sp * sy;
++    q[2] = cr * sp * cy + sr * cp * sy;
++    q[3] = cr * cp * sy - sr * sp * cy;
++}
++
++static int16_t bno_q(double v, int qpoint)
++{
++    double r = round(v * (1 << qpoint));
++
++    return MIN(MAX(r, INT16_MIN), INT16_MAX);
++}
++
++/* One input report into @out; returns its length (0: not produced) */
++static unsigned bno_report(Bno085State *s, uint8_t id, uint8_t *out)
++{
++    int16_t v[4] = { 0 };
++    unsigned n = 3, len = 10;
++    double q[4], g;
++
++    switch (id) {
++    case 0x01:                  /* accelerometer */
++    case 0x06:                  /* gravity */
++        for (unsigned i = 0; i < 3; i++) {
++            v[i] = bno_q(s->accel[i] / 1000.0 * G_MPS2, 8);
++        }
++        break;
++    case 0x04:                  /* linear acceleration: still */
++        break;
++    case 0x02:                  /* gyroscope */
++        for (unsigned i = 0; i < 3; i++) {
++            v[i] = bno_q(s->gyro[i] / 1000.0 * M_PI / 180.0, 9);
++        }
++        break;
++    case 0x03:                  /* magnetometer */
++        for (unsigned i = 0; i < 3; i++) {
++            v[i] = bno_q(s->mag[i] / 1000.0, 4);
++        }
++        break;
++    case 0x05:                  /* rotation vector */
++    case 0x08:                  /* game rotation vector */
++    case 0x09:                  /* geomagnetic rotation vector */
++        bno_quaternion(s, q);
++        g = id == 0x09 ? 12 : 14;
++        v[0] = bno_q(q[1], g);
++        v[1] = bno_q(q[2], g);
++        v[2] = bno_q(q[3], g);
++        v[3] = bno_q(q[0], g);
++        n = 4;
++        len = id == 0x08 ? 12 : 14;
++        break;
++    default:
++        return 0;
++    }
++    memset(out, 0, len);
++    out[0] = id;
++    out[1] = s->report_seq[id]++;
++    out[2] = 0x03;              /* status: high accuracy */
++    out[3] = 0;                 /* delay */
++    for (unsigned i = 0; i < n; i++) {
++        stw_le_p(&out[4 + 2 * i], v[i]);
++    }
++    return len;
++}
++
++/* Queue the reports that are due, in one packet */
++static void bno_produce(Bno085State *s)
++{
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    uint8_t cargo[BNO_MAX_PACKET - 4];
++    unsigned len = 5;
++
++    cargo[0] = R_BASE_TIMESTAMP;
++    stl_le_p(&cargo[1], 0);
++    for (unsigned id = 1; id < BNO_NREPORTS; id++) {
++        if (!s->interval_us[id] || now < s->next_ns[id] ||
++            len + 16 > sizeof(cargo)) {
++            continue;
++        }
++        len += bno_report(s, id, &cargo[len]);
++        s->next_ns[id] = now + (int64_t)s->interval_us[id] * 1000;
++    }
++    if (len > 5) {
++        bno_queue(s, CH_REPORTS, cargo, len);
++    }
++}
++
++static void bno_control(Bno085State *s, const uint8_t *c, unsigned len)
++{
++    uint8_t resp[20] = { 0 };
++
++    switch (c[0]) {
++    case R_PRODUCT_ID_REQ:
++        resp[0] = R_PRODUCT_ID_RESP;
++        resp[1] = 0x01;                 /* reset cause: power on */
++        resp[2] = 3;                    /* SW version major */
++        resp[3] = 2;                    /* minor */
++        stl_le_p(&resp[4], 10003608);   /* part number */
++        stl_le_p(&resp[8], 324);        /* build */
++        stw_le_p(&resp[12], 7);         /* patch */
++        bno_queue(s, CH_CONTROL, resp, 16);
++        break;
++    case R_SET_FEATURE:
++        if (len < 17) {
++            break;
++        }
++        if (c[1] < BNO_NREPORTS) {
++            uint32_t us = ldl_le_p(&c[5]);
++
++            s->interval_us[c[1]] = us ? MAX(us, 1000) : 0;
++            s->next_ns[c[1]] = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++        }
++        memcpy(resp, c, 17);
++        resp[0] = R_FEATURE_RESP;
++        bno_queue(s, CH_CONTROL, resp, 17);
++        break;
++    case R_GET_FEATURE:
++        resp[0] = R_FEATURE_RESP;
++        resp[1] = c[1];
++        if (c[1] < BNO_NREPORTS) {
++            stl_le_p(&resp[5], s->interval_us[c[1]]);
++        }
++        bno_queue(s, CH_CONTROL, resp, 17);
++        break;
++    case R_COMMAND_REQ:
++        resp[0] = R_COMMAND_RESP;
++        resp[1] = s->cmd_seq++;
++        resp[2] = len > 2 ? c[2] : 0;   /* command */
++        resp[3] = len > 1 ? c[1] : 0;   /* its sequence number */
++        resp[4] = 0;
++        resp[5] = 0;                    /* status: success */
++        bno_queue(s, CH_CONTROL, resp, 16);
++        break;
++    default:
++        qemu_log_mask(LOG_UNIMP, "bno085: control report 0x%02x not "
++                      "modelled\n", c[0]);
++        break;
++    }
++}
++
++/* A complete packet from the host */
++static void bno_received(Bno085State *s)
++{
++    uint16_t len;
++
++    if (s->rxlen < 4) {
++        return;
++    }
++    len = MIN(lduw_le_p(s->rx) & 0x7FFF, s->rxlen);
++    if (len <= 4) {
++        return;
++    }
++    switch (s->rx[2]) {
++    case CH_EXE:
++        if (s->rx[4] == 1) {
++            bno_restart(s);
++        }
++        break;
++    case CH_CONTROL:
++        bno_control(s, &s->rx[4], len - 4);
++        break;
++    default:
++        qemu_log_mask(LOG_UNIMP, "bno085: write on channel %u not "
++                      "modelled\n", s->rx[2]);
++        break;
++    }
++}
++
++static int bno_event(I2CSlave *i2c, enum i2c_event event)
++{
++    Bno085State *s = BNO085(i2c);
++
++    switch (event) {
++    case I2C_START_SEND:
++        s->rxlen = 0;
++        break;
++    case I2C_START_RECV:
++        s->rpos = 0;
++        if (!s->qcount) {
++            bno_produce(s);
++        }
++        break;
++    case I2C_FINISH:
++        if (s->rxlen) {
++            bno_received(s);
++            s->rxlen = 0;
++        }
++        /* A read that covered the whole packet consumes it */
++        if (s->qcount && s->rpos >= s->queue[s->qhead].len) {
++            s->qhead = (s->qhead + 1) % BNO_QUEUE;
++            s->qcount--;
++        }
++        s->rpos = 0;
++        break;
++    default:
++        break;
++    }
++    return 0;
++}
++
++static int bno_send(I2CSlave *i2c, uint8_t data)
++{
++    Bno085State *s = BNO085(i2c);
++
++    if (s->rxlen < sizeof(s->rx)) {
++        s->rx[s->rxlen++] = data;
++    }
++    return 0;
++}
++
++static uint8_t bno_recv(I2CSlave *i2c)
++{
++    Bno085State *s = BNO085(i2c);
++    BnoPacket *p = &s->queue[s->qhead];
++    uint8_t v = 0;
++
++    if (!s->qcount) {
++        return 0;               /* empty header: no packet */
++    }
++    if (s->rpos < p->len) {
++        v = p->data[s->rpos];
++    }
++    s->rpos++;
++    return v;
++}
++
++static char *bno_get_vec(int32_t *v)
++{
++    return g_strdup_printf("%d %d %d", v[0], v[1], v[2]);
++}
++
++static void bno_set_vec(int32_t *dst, const char *value, Error **errp)
++{
++    int v[3];
++    char end;
++
++    if (sscanf(value, "%d %d %d %c", &v[0], &v[1], &v[2], &end) != 3) {
++        error_setg(errp, "expected three integers: \"x y z\"");
++        return;
++    }
++    memcpy(dst, v, sizeof(v));
++}
++
++static char *bno_get_accel(Object *obj, Error **errp)
++{
++    return bno_get_vec(BNO085(obj)->accel);
++}
++
++static void bno_set_accel(Object *obj, const char *v, Error **errp)
++{
++    bno_set_vec(BNO085(obj)->accel, v, errp);
++}
++
++static char *bno_get_gyro(Object *obj, Error **errp)
++{
++    return bno_get_vec(BNO085(obj)->gyro);
++}
++
++static void bno_set_gyro(Object *obj, const char *v, Error **errp)
++{
++    bno_set_vec(BNO085(obj)->gyro, v, errp);
++}
++
++static char *bno_get_mag(Object *obj, Error **errp)
++{
++    return bno_get_vec(BNO085(obj)->mag);
++}
++
++static void bno_set_mag(Object *obj, const char *v, Error **errp)
++{
++    bno_set_vec(BNO085(obj)->mag, v, errp);
++}
++
++static void bno_get_yaw(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, &BNO085(obj)->yaw, errp);
++}
++
++static void bno_set_yaw(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    int32_t yaw;
++
++    if (visit_type_int32(v, name, &yaw, errp)) {
++        BNO085(obj)->yaw = yaw;
++    }
++}
++
++static void bno_reset(DeviceState *dev)
++{
++    Bno085State *s = BNO085(dev);
++
++    s->rxlen = 0;
++    s->cmd_seq = 0;
++    memset(s->report_seq, 0, sizeof(s->report_seq));
++    bno_restart(s);
++}
++
++static void bno_init(Object *obj)
++{
++    Bno085State *s = BNO085(obj);
++
++    s->accel[2] = 1000;
++    s->mag[0] = 20000;
++    s->mag[2] = -40000;
++    object_property_add_str(obj, "accel", bno_get_accel, bno_set_accel);
++    object_property_add_str(obj, "gyro", bno_get_gyro, bno_set_gyro);
++    object_property_add_str(obj, "mag", bno_get_mag, bno_set_mag);
++    object_property_add(obj, "yaw", "int32", bno_get_yaw, bno_set_yaw, NULL,
++                        NULL);
++}
++
++static const VMStateDescription vmstate_bno085 = {
++    .name = TYPE_BNO085,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, Bno085State),
++        VMSTATE_UINT8(qhead, Bno085State),
++        VMSTATE_UINT8(qcount, Bno085State),
++        VMSTATE_UINT16(rpos, Bno085State),
++        VMSTATE_UINT8_ARRAY(seq_out, Bno085State, 6),
++        VMSTATE_UINT8_ARRAY(rx, Bno085State, BNO_MAX_PACKET),
++        VMSTATE_UINT16(rxlen, Bno085State),
++        VMSTATE_UINT32_ARRAY(interval_us, Bno085State, BNO_NREPORTS),
++        VMSTATE_INT64_ARRAY(next_ns, Bno085State, BNO_NREPORTS),
++        VMSTATE_UINT8_ARRAY(report_seq, Bno085State, BNO_NREPORTS),
++        VMSTATE_UINT8(cmd_seq, Bno085State),
++        VMSTATE_INT32_ARRAY(accel, Bno085State, 3),
++        VMSTATE_INT32_ARRAY(gyro, Bno085State, 3),
++        VMSTATE_INT32_ARRAY(mag, Bno085State, 3),
++        VMSTATE_INT32(yaw, Bno085State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void bno_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
++
++    dc->desc = "BNO085 9-axis sensor hub (SH-2 over SHTP)";
++    dc->vmsd = &vmstate_bno085;
++    device_class_set_legacy_reset(dc, bno_reset);
++    k->event = bno_event;
++    k->send = bno_send;
++    k->recv = bno_recv;
++}
++
++static const TypeInfo bno_types[] = {
++    {
++        .name = TYPE_BNO085,
++        .parent = TYPE_I2C_SLAVE,
++        .instance_size = sizeof(Bno085State),
++        .instance_init = bno_init,
++        .class_init = bno_class_init,
++    },
++};
++
++DEFINE_TYPES(bno_types)
+diff --git a/hw/sensor/icm20948.c b/hw/sensor/icm20948.c
+new file mode 100644
+index 0000000..373167a
+--- /dev/null
++++ b/hw/sensor/icm20948.c
+@@ -0,0 +1,435 @@
++/*
++ * TDK InvenSense ICM-20948 9-axis motion sensor (I2C) with its AK09916
++ * magnetometer
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * ICM-20948 data sheet DS-000189 rev 1.3: four user banks of registers
++ * selected by REG_BANK_SEL (7Fh), I2C with a register address byte and
++ * auto-increment. Modelled: WHO_AM_I (EAh), PWR_MGMT_1 (DEVICE_RESET,
++ * SLEEP), the accelerometer, gyroscope and temperature outputs computed at
++ * read time from the "accel" (mg), "gyro" (mdps) and "temperature"
++ * (millidegrees C) properties with the full scales of ACCEL_CONFIG and
++ * GYRO_CONFIG_1 (bank 2), INT_STATUS_1.RAW_DATA_0_RDY while awake, and
++ * the auxiliary I2C master as far as drivers use it for the internal
++ * AK09916 (address 0Ch): SLV4 single transfers (I2C_MST_STATUS.SLV4_DONE)
++ * and SLV0 reads into EXT_SLV_SENS_DATA_xx. The AK09916 (data sheet
++ * 015007259-E-02): WIA1/WIA2 (48h/09h), CNTL2 modes, CNTL3 soft reset,
++ * ST1.DRDY in the measurement modes, HX..HZ at 0.15 uT/LSB from the
++ * "mag" property (nT). Everything else stores and reads back: the DMP,
++ * FIFO, low-power cycling, sample rate dividers, interrupts on INT1 and
++ * the other auxiliary slaves are not modelled. Not checked against a
++ * physical part.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "qemu/log.h"
++#include "hw/i2c/i2c.h"
++#include "hw/sensor/icm20948.h"
++#include "migration/vmstate.h"
++
++#define BANKS               4
++#define BANK_SIZE           0x80
++
++/* Bank 0 */
++#define B0_WHO_AM_I         0x00
++#define B0_USER_CTRL        0x03
++#define B0_PWR_MGMT_1       0x06
++#define B0_I2C_MST_STATUS   0x17
++#define B0_INT_STATUS_1     0x1A
++#define B0_ACCEL_XOUT_H     0x2D
++#define B0_GYRO_XOUT_H      0x33
++#define B0_TEMP_OUT_H       0x39
++#define B0_EXT_SENS_00      0x3B
++#define B0_EXT_SENS_23      0x52
++#define REG_BANK_SEL        0x7F
++/* Bank 2 */
++#define B2_GYRO_CONFIG_1    0x01
++#define B2_ACCEL_CONFIG     0x14
++/* Bank 3 */
++#define B3_SLV0_ADDR        0x03
++#define B3_SLV0_REG         0x04
++#define B3_SLV0_CTRL        0x05
++#define B3_SLV4_ADDR        0x13
++#define B3_SLV4_REG         0x14
++#define B3_SLV4_CTRL        0x15
++#define B3_SLV4_DO          0x16
++#define B3_SLV4_DI          0x17
++
++#define WHO_AM_I            0xEA
++#define PWR_RESET           BIT(7)
++#define PWR_SLEEP           BIT(6)
++#define SLV_EN              BIT(7)
++#define SLV4_DONE           BIT(6)
++#define AK09916_ADDR        0x0C
++
++/* AK09916 */
++#define AK_WIA1             0x00
++#define AK_WIA2             0x01
++#define AK_ST1              0x10
++#define AK_HXL              0x11
++#define AK_ST2              0x18
++#define AK_CNTL2            0x31
++#define AK_CNTL3            0x32
++
++OBJECT_DECLARE_SIMPLE_TYPE(Icm20948State, ICM20948)
++
++struct Icm20948State {
++    I2CSlave parent_obj;
++
++    uint8_t regs[BANKS][BANK_SIZE];
++    uint8_t pointer;
++    bool addressed;
++    uint8_t ak_cntl2;
++
++    int32_t accel[3];           /* mg */
++    int32_t gyro[3];            /* mdps */
++    int32_t mag[3];             /* nT */
++    int32_t temperature;        /* millidegrees C */
++};
++
++static unsigned icm_bank(Icm20948State *s)
++{
++    return (s->regs[0][REG_BANK_SEL] >> 4) & 3;
++}
++
++static void icm_reset_regs(Icm20948State *s)
++{
++    memset(s->regs, 0, sizeof(s->regs));
++    s->regs[0][B0_WHO_AM_I] = WHO_AM_I;
++    s->regs[0][B0_PWR_MGMT_1] = 0x41;       /* SLEEP, CLKSEL 1 */
++    s->regs[0][0x05] = 0x40;                /* LP_CONFIG */
++    s->regs[2][B2_GYRO_CONFIG_1] = 0x01;
++    s->regs[2][B2_ACCEL_CONFIG] = 0x01;
++    s->ak_cntl2 = 0;
++}
++
++static int16_t icm_clamp16(int64_t v)
++{
++    return MIN(MAX(v, INT16_MIN), INT16_MAX);
++}
++
++/* AK09916 registers */
++static uint8_t ak_read(Icm20948State *s, uint8_t reg)
++{
++    bool measuring = s->ak_cntl2 & 0x1F;
++
++    switch (reg) {
++    case AK_WIA1:
++        return 0x48;
++    case AK_WIA2:
++        return 0x09;
++    case AK_ST1:
++        return measuring ? 0x01 : 0x00;
++    case AK_HXL ... AK_HXL + 5: {
++        unsigned axis = (reg - AK_HXL) / 2;
++        int16_t v = icm_clamp16(s->mag[axis] / 150);   /* 0.15 uT/LSB */
++
++        return (reg - AK_HXL) & 1 ? (uint16_t)v >> 8 : v & 0xFF;
++    }
++    case AK_ST2:
++        return 0x00;
++    case AK_CNTL2:
++        return s->ak_cntl2;
++    default:
++        return 0x00;
++    }
++}
++
++static void ak_write(Icm20948State *s, uint8_t reg, uint8_t val)
++{
++    if (reg == AK_CNTL2) {
++        s->ak_cntl2 = val & 0x1F;
++    } else if (reg == AK_CNTL3 && (val & 1)) {
++        s->ak_cntl2 = 0;
++    }
++}
++
++/* SLV4: one byte to or from the auxiliary bus, done at once */
++static void icm_slv4(Icm20948State *s)
++{
++    uint8_t addr = s->regs[3][B3_SLV4_ADDR];
++    uint8_t reg = s->regs[3][B3_SLV4_REG];
++
++    if ((addr & 0x7F) == AK09916_ADDR) {
++        if (addr & 0x80) {
++            s->regs[3][B3_SLV4_DI] = ak_read(s, reg);
++        } else {
++            ak_write(s, reg, s->regs[3][B3_SLV4_DO]);
++        }
++    } else {
++        qemu_log_mask(LOG_GUEST_ERROR, "icm20948: SLV4 to absent auxiliary "
++                      "device 0x%02x\n", addr & 0x7F);
++    }
++    s->regs[3][B3_SLV4_CTRL] &= ~SLV_EN;
++    s->regs[0][B0_I2C_MST_STATUS] |= SLV4_DONE;
++}
++
++/* SLV0 reads land in EXT_SLV_SENS_DATA (refreshed when read) */
++static uint8_t icm_ext_sens(Icm20948State *s, unsigned n)
++{
++    uint8_t addr = s->regs[3][B3_SLV0_ADDR];
++    uint8_t ctrl = s->regs[3][B3_SLV0_CTRL];
++
++    if (!(ctrl & SLV_EN) || !(addr & 0x80) ||
++        (addr & 0x7F) != AK09916_ADDR || n >= (ctrl & 0x0F) ||
++        !(s->regs[0][B0_USER_CTRL] & BIT(5))) {
++        return s->regs[0][B0_EXT_SENS_00 + n];
++    }
++    return ak_read(s, s->regs[3][B3_SLV0_REG] + n);
++}
++
++static uint8_t icm_read(Icm20948State *s, uint8_t reg)
++{
++    unsigned bank = icm_bank(s);
++    bool awake = !(s->regs[0][B0_PWR_MGMT_1] & PWR_SLEEP);
++    uint8_t val;
++
++    if (reg == REG_BANK_SEL) {
++        return s->regs[0][REG_BANK_SEL];
++    }
++    if (bank != 0) {
++        return s->regs[bank][reg & 0x7F];
++    }
++    switch (reg) {
++    case B0_ACCEL_XOUT_H ... B0_ACCEL_XOUT_H + 5: {
++        unsigned axis = (reg - B0_ACCEL_XOUT_H) / 2;
++        unsigned fs = (s->regs[2][B2_ACCEL_CONFIG] >> 1) & 3;
++        int16_t v = awake ? icm_clamp16((int64_t)s->accel[axis] *
++                                        (16384 >> fs) / 1000) : 0;
++
++        return (reg - B0_ACCEL_XOUT_H) & 1 ? v & 0xFF : (uint16_t)v >> 8;
++    }
++    case B0_GYRO_XOUT_H ... B0_GYRO_XOUT_H + 5: {
++        unsigned axis = (reg - B0_GYRO_XOUT_H) / 2;
++        unsigned fs = (s->regs[2][B2_GYRO_CONFIG_1] >> 1) & 3;
++        /* 131 LSB/dps at +-250 dps, halved per range step */
++        int16_t v = awake ? icm_clamp16((int64_t)s->gyro[axis] * 131 /
++                                        (1000 << fs)) : 0;
++
++        return (reg - B0_GYRO_XOUT_H) & 1 ? v & 0xFF : (uint16_t)v >> 8;
++    }
++    case B0_TEMP_OUT_H:
++    case B0_TEMP_OUT_H + 1: {
++        /* TEMP_degC = (TEMP_OUT - RoomTemp_Offset) / 333.87 + 21 */
++        int16_t v = icm_clamp16((int64_t)(s->temperature - 21000) * 33387 /
++                                100000);
++
++        return reg == B0_TEMP_OUT_H ? (uint16_t)v >> 8 : v & 0xFF;
++    }
++    case B0_EXT_SENS_00 ... B0_EXT_SENS_23:
++        return icm_ext_sens(s, reg - B0_EXT_SENS_00);
++    case B0_INT_STATUS_1:
++        return awake ? 0x01 : 0x00;
++    case B0_I2C_MST_STATUS:
++        val = s->regs[0][reg];
++        s->regs[0][reg] &= ~SLV4_DONE;      /* cleared by the read */
++        return val;
++    default:
++        return s->regs[0][reg & 0x7F];
++    }
++}
++
++static void icm_write(Icm20948State *s, uint8_t reg, uint8_t val)
++{
++    unsigned bank = icm_bank(s);
++
++    if (reg == REG_BANK_SEL) {
++        s->regs[0][REG_BANK_SEL] = val & 0x30;
++        return;
++    }
++    if (bank == 0) {
++        switch (reg) {
++        case B0_WHO_AM_I:
++        case B0_ACCEL_XOUT_H ... B0_EXT_SENS_23:
++            return;                 /* read-only */
++        case B0_PWR_MGMT_1:
++            if (val & PWR_RESET) {
++                icm_reset_regs(s);  /* the bit reads 0 again at once */
++                return;
++            }
++            break;
++        }
++    }
++    s->regs[bank][reg & 0x7F] = val;
++    if (bank == 3 && reg == B3_SLV4_CTRL && (val & SLV_EN)) {
++        icm_slv4(s);
++    }
++}
++
++static int icm_event(I2CSlave *i2c, enum i2c_event event)
++{
++    Icm20948State *s = ICM20948(i2c);
++
++    if (event == I2C_START_SEND) {
++        s->addressed = false;
++    }
++    return 0;
++}
++
++static int icm_send(I2CSlave *i2c, uint8_t data)
++{
++    Icm20948State *s = ICM20948(i2c);
++
++    if (!s->addressed) {
++        s->pointer = data & 0x7F;
++        s->addressed = true;
++        return 0;
++    }
++    icm_write(s, s->pointer, data);
++    s->pointer = (s->pointer + 1) & 0x7F;
++    return 0;
++}
++
++static uint8_t icm_recv(I2CSlave *i2c)
++{
++    Icm20948State *s = ICM20948(i2c);
++    uint8_t val = icm_read(s, s->pointer);
++
++    s->pointer = (s->pointer + 1) & 0x7F;
++    return val;
++}
++
++/* "accel", "gyro", "mag": three integers "x y z" */
++static char *icm_get_vec(int32_t *v)
++{
++    return g_strdup_printf("%d %d %d", v[0], v[1], v[2]);
++}
++
++static bool icm_set_vec(int32_t *dst, const char *value, int32_t limit,
++                        const char *name, Error **errp)
++{
++    int v[3];
++    char end;
++
++    if (sscanf(value, "%d %d %d %c", &v[0], &v[1], &v[2], &end) != 3) {
++        error_setg(errp, "%s must be three integers: \"x y z\"", name);
++        return false;
++    }
++    for (unsigned i = 0; i < 3; i++) {
++        if (v[i] < -limit || v[i] > limit) {
++            error_setg(errp, "%s values must be within +-%d", name, limit);
++            return false;
++        }
++    }
++    memcpy(dst, v, sizeof(v));
++    return true;
++}
++
++static char *icm_get_accel(Object *obj, Error **errp)
++{
++    return icm_get_vec(ICM20948(obj)->accel);
++}
++
++static void icm_set_accel(Object *obj, const char *value, Error **errp)
++{
++    icm_set_vec(ICM20948(obj)->accel, value, 16000, "accel (mg)", errp);
++}
++
++static char *icm_get_gyro(Object *obj, Error **errp)
++{
++    return icm_get_vec(ICM20948(obj)->gyro);
++}
++
++static void icm_set_gyro(Object *obj, const char *value, Error **errp)
++{
++    icm_set_vec(ICM20948(obj)->gyro, value, 2000000, "gyro (mdps)", errp);
++}
++
++static char *icm_get_mag(Object *obj, Error **errp)
++{
++    return icm_get_vec(ICM20948(obj)->mag);
++}
++
++static void icm_set_mag(Object *obj, const char *value, Error **errp)
++{
++    icm_set_vec(ICM20948(obj)->mag, value, 4900000, "mag (nT)", errp);
++}
++
++static void icm_get_temp(Object *obj, Visitor *v, const char *name,
++                         void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, &ICM20948(obj)->temperature, errp);
++}
++
++static void icm_set_temp(Object *obj, Visitor *v, const char *name,
++                         void *opaque, Error **errp)
++{
++    int32_t t;
++
++    if (visit_type_int32(v, name, &t, errp)) {
++        ICM20948(obj)->temperature = t;
++    }
++}
++
++static void icm_reset(DeviceState *dev)
++{
++    Icm20948State *s = ICM20948(dev);
++
++    icm_reset_regs(s);
++    s->pointer = 0;
++    s->addressed = false;
++}
++
++static void icm_init(Object *obj)
++{
++    Icm20948State *s = ICM20948(obj);
++
++    s->accel[2] = 1000;             /* flat, face up */
++    s->mag[0] = 20000;              /* a plausible earth field (nT) */
++    s->mag[2] = -40000;
++    s->temperature = 25000;
++    object_property_add_str(obj, "accel", icm_get_accel, icm_set_accel);
++    object_property_add_str(obj, "gyro", icm_get_gyro, icm_set_gyro);
++    object_property_add_str(obj, "mag", icm_get_mag, icm_set_mag);
++    object_property_add(obj, "temperature", "int32", icm_get_temp,
++                        icm_set_temp, NULL, NULL);
++}
++
++static const VMStateDescription vmstate_icm20948 = {
++    .name = TYPE_ICM20948,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, Icm20948State),
++        VMSTATE_UINT8_2DARRAY(regs, Icm20948State, BANKS, BANK_SIZE),
++        VMSTATE_UINT8(pointer, Icm20948State),
++        VMSTATE_BOOL(addressed, Icm20948State),
++        VMSTATE_UINT8(ak_cntl2, Icm20948State),
++        VMSTATE_INT32_ARRAY(accel, Icm20948State, 3),
++        VMSTATE_INT32_ARRAY(gyro, Icm20948State, 3),
++        VMSTATE_INT32_ARRAY(mag, Icm20948State, 3),
++        VMSTATE_INT32(temperature, Icm20948State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void icm_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
++
++    dc->desc = "ICM-20948 9-axis motion sensor";
++    dc->vmsd = &vmstate_icm20948;
++    device_class_set_legacy_reset(dc, icm_reset);
++    k->event = icm_event;
++    k->send = icm_send;
++    k->recv = icm_recv;
++}
++
++static const TypeInfo icm_types[] = {
++    {
++        .name = TYPE_ICM20948,
++        .parent = TYPE_I2C_SLAVE,
++        .instance_size = sizeof(Icm20948State),
++        .instance_init = icm_init,
++        .class_init = icm_class_init,
++    },
++};
++
++DEFINE_TYPES(icm_types)
+diff --git a/hw/sensor/meson.build b/hw/sensor/meson.build
+index acf95be..e99194a 100644
+--- a/hw/sensor/meson.build
++++ b/hw/sensor/meson.build
+@@ -9,3 +9,4 @@ system_ss.add(when: 'CONFIG_LSM303DLHC_MAG', if_true: files('lsm303dlhc_mag.c'))
+ system_ss.add(when: 'CONFIG_ISL_PMBUS_VR', if_true: files('isl_pmbus_vr.c'))
+ system_ss.add(when: 'CONFIG_MAX31785', if_true: files('max31785.c'))
+ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp9808.c', 'adxl345.c'))
++system_ss.add(when: 'CONFIG_PYKIT_SENSORS', if_true: files('icm20948.c', 'bno085.c'))
+diff --git a/include/hw/adc/mchp_adc.h b/include/hw/adc/mchp_adc.h
+new file mode 100644
+index 0000000..0c398af
+--- /dev/null
++++ b/include/hw/adc/mchp_adc.h
+@@ -0,0 +1,21 @@
++/*
++ * Microchip SAM D5x/E5x ADC (ADC U2500)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * An mchp-regblock (two NVIC lines: other flags, RESRDY). Properties:
++ * "ain" ("channel=millivolts,..."), "ain-default" (mV of unset inputs),
++ * "vdd" (mV, VDDIO = VDDANA), "temperature" (die, millidegrees C).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_ADC_MCHP_ADC_H
++#define HW_ADC_MCHP_ADC_H
++
++#include "hw/misc/mchp_regblock.h"
++
++#define TYPE_MCHP_ADC "mchp-adc"
++
++#endif /* HW_ADC_MCHP_ADC_H */
+diff --git a/include/hw/mchp/gen/adc_u2500.h b/include/hw/mchp/gen/adc_u2500.h
+index 22948f6..cded442 100644
+--- a/include/hw/mchp/gen/adc_u2500.h
++++ b/include/hw/mchp/gen/adc_u2500.h
+@@ -8,7 +8,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: ATSAME51J20A
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/adc_u2500.yaml (sha1 0d073b455591)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/adc_u2500.h b/include/hw/mchp/gen/atsame51j20a/adc_u2500.h
+index fe2abe4..02ea26f 100644
+--- a/include/hw/mchp/gen/atsame51j20a/adc_u2500.h
++++ b/include/hw/mchp/gen/atsame51j20a/adc_u2500.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/adc_u2500.yaml (sha1 0d073b455591)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,7 +23,8 @@ static const MchpRegInfo atsame51j20a_adc_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x87FB, .wmask = 0x87FB,
+-        .rdz = 0x0001, .syncbusy = 0x00000003 /* SYNCBUSY */, .flags = 0,
++        .rdz = 0x0001, .enprot = 0x87F8, .syncbusy = 0x00000003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x02, .size = 1, .count = 1, .stride = 1,
+@@ -41,7 +42,8 @@ static const MchpRegInfo atsame51j20a_adc_regs[] = {
+     {
+         .name = "CTRLB", .offset = 0x06, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x0F1F, .wmask = 0x0F1F,
+-        .syncbusy = 0x00000008 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000008 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "REFCTRL", .offset = 0x08, .size = 1, .count = 1, .stride = 1,
+@@ -81,17 +83,17 @@ static const MchpRegInfo atsame51j20a_adc_regs[] = {
+     {
+         .name = "SWTRIG", .offset = 0x14, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .syncbusy = 0x00000800 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000800 /* SYNCBUSY */, .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x2C, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 14 /* INTENSET */, .reset = 0x00, .impl = 0x07,
+-        .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x07, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x2D, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 14 /* INTENSET */, .reset = 0x00, .impl = 0x07,
+-        .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x07, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x2E, .size = 1, .count = 1, .stride = 1,
+@@ -101,7 +103,7 @@ static const MchpRegInfo atsame51j20a_adc_regs[] = {
+     {
+         .name = "STATUS", .offset = 0x2F, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0xFD, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x30, .size = 4, .count = 1, .stride = 4,
+@@ -126,7 +128,7 @@ static const MchpRegInfo atsame51j20a_adc_regs[] = {
+     {
+         .name = "RESULT", .offset = 0x40, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFFFF, .wmask = 0x0000,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "RESS", .offset = 0x44, .size = 2, .count = 1, .stride = 2,
+diff --git a/include/hw/mchp/gen/atsame51j20a/sercom_u2201.h b/include/hw/mchp/gen/atsame51j20a/sercom_u2201.h
+index 7dbc159..27aa593 100644
+--- a/include/hw/mchp/gen/atsame51j20a/sercom_u2201.h
++++ b/include/hw/mchp/gen/atsame51j20a/sercom_u2201.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/sercom_u2201.yaml (sha1 bf50dc580beb)
++ * Overlay: overlays/sercom_u2201.yaml (sha1 60e97667c7f4)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -433,7 +433,7 @@ static const MchpRegInfo atsame51j20a_sercom_i2cm_regs[] = {
+     {
+         .name = "INTFLAG", .offset = 0x18, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x83, .wmask = 0x00, .w1c = 0x83,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "STATUS", .offset = 0x1A, .size = 2, .count = 1, .stride = 2,
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h b/include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h
+index ad6ec3a..16ade60 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/sercom_u2201.yaml (sha1 bf50dc580beb)
++ * Overlay: overlays/sercom_u2201.yaml (sha1 60e97667c7f4)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -365,7 +365,7 @@ static const MchpRegInfo pic32cm1216mc00048_sercom_i2cm_regs[] = {
+     {
+         .name = "INTFLAG", .offset = 0x18, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x83, .wmask = 0x00, .w1c = 0x83,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "STATUS", .offset = 0x1A, .size = 2, .count = 1, .stride = 2,
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h b/include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h
+index 1109edf..a908534 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/sercom_u2201.yaml (sha1 bf50dc580beb)
++ * Overlay: overlays/sercom_u2201.yaml (sha1 60e97667c7f4)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -375,7 +375,7 @@ static const MchpRegInfo pic32cm5164jh01100_sercom_i2cm_regs[] = {
+     {
+         .name = "INTFLAG", .offset = 0x18, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x83, .wmask = 0x00, .w1c = 0x83,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "STATUS", .offset = 0x1A, .size = 2, .count = 1, .stride = 2,
+diff --git a/include/hw/mchp/gen/sercom_u2201.h b/include/hw/mchp/gen/sercom_u2201.h
+index b7326d0..a4f7398 100644
+--- a/include/hw/mchp/gen/sercom_u2201.h
++++ b/include/hw/mchp/gen/sercom_u2201.h
+@@ -10,7 +10,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * Overlay: overlays/sercom_u2201.yaml (sha1 bf50dc580beb)
++ * Overlay: overlays/sercom_u2201.yaml (sha1 60e97667c7f4)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/misc/rnbd451.h b/include/hw/misc/rnbd451.h
+new file mode 100644
+index 0000000..8fc2085
+--- /dev/null
++++ b/include/hw/misc/rnbd451.h
+@@ -0,0 +1,22 @@
++/*
++ * Microchip RNBD451 Bluetooth Low Energy module on a UART
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * A chardev type: create it with qemu_chardev_new(id, TYPE_CHARDEV_RNBD451,
++ * NULL, NULL, errp) and give it to the UART model. rnbd451_reset_pin() is
++ * a qemu_irq handler (opaque: the chardev) for the module's active-low
++ * reset (NMCLR).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_RNBD451_H
++#define HW_MISC_RNBD451_H
++
++#define TYPE_CHARDEV_RNBD451 "chardev-rnbd451"
++
++void rnbd451_reset_pin(void *opaque, int n, int level);
++
++#endif /* HW_MISC_RNBD451_H */
+diff --git a/include/hw/sensor/bno085.h b/include/hw/sensor/bno085.h
+new file mode 100644
+index 0000000..ba430ff
+--- /dev/null
++++ b/include/hw/sensor/bno085.h
+@@ -0,0 +1,18 @@
++/*
++ * CEVA (Hillcrest) BNO085 9-axis sensor hub with SH-2 over SHTP on I2C
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Properties: "accel" ("x y z" in mg), "gyro" (mdps), "mag" (nT), "yaw"
++ * (millidegrees). I2C address 4Ah or 4Bh.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_SENSOR_BNO085_H
++#define HW_SENSOR_BNO085_H
++
++#define TYPE_BNO085 "bno085"
++
++#endif /* HW_SENSOR_BNO085_H */
+diff --git a/include/hw/sensor/icm20948.h b/include/hw/sensor/icm20948.h
+new file mode 100644
+index 0000000..32bcf48
+--- /dev/null
++++ b/include/hw/sensor/icm20948.h
+@@ -0,0 +1,19 @@
++/*
++ * TDK InvenSense ICM-20948 9-axis motion sensor (I2C) with its AK09916
++ * magnetometer
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Properties: "accel" ("x y z" in mg), "gyro" (mdps), "mag" (nT),
++ * "temperature" (millidegrees C). I2C address 68h or 69h (AD0).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_SENSOR_ICM20948_H
++#define HW_SENSOR_ICM20948_H
++
++#define TYPE_ICM20948 "icm20948"
++
++#endif /* HW_SENSOR_ICM20948_H */
+-- 
+2.53.0.windows.2
+

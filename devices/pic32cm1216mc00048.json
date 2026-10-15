@@ -30823,7 +30823,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/sercom_u2201.yaml",
-    "sha1": "bf50dc580beb2dca0fc6e54761c3f1fe466f3da8",
+    "sha1": "60e97667c7f4eb32b1e993fa33b34c8b6c0e603d",
     "status": "applied",
     "versions": [
      "3.1.1",
@@ -36355,9 +36355,12 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "I2CM Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -36391,6 +36394,16 @@
          "w1c",
          "overlay",
          "MB, SB, ERROR = 0x83"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },

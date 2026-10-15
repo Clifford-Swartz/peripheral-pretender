@@ -40,6 +40,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0031 | 8x8 R/Y/B and Button R/Y Clicks (colour variants of 8x8 G and Button G); qtests |
 | 0032 | ATSAME51J20A (SAM E51, Cortex-M4F) through the generic SoC: instances with several NVIC lines, SAM D5x OSCCTRL/OSC32KCTRL/MCLK/NVMCTRL/TRNG, QSPI (serial memory mode, memory window), USB device controller with a built-in host (CDC ACM to a chardev), GCLK source numbering per family; SST26VF quad SPI flash; the `curiosity-circuitpython` board (PyKit Explorer); regenerated tables; qtest |
 | 0033 | SAM D5x DMAC (descriptors, peripheral-paced triggers, write-back; transfers start at the next status read); ST7789V TFT driver on `pp_panel`; WS2812 chain decoder; the PyKit Ruler on `curiosity-circuitpython` (display, NeoPixels, I2C pull-ups); DMAC triggers in `MchpDeviceInfo`; qtests |
+| 0034 | ICM-20948 (with AK09916) and BNO085 (SH-2/SHTP) I2C sensors; RNBD451 BLE module chardev (replies as from the kit); SAM D5x ADC (pins, supplies, temperature sensor); SERCOM I2C host keeps the next byte's SB when firmware clears SB right after a smart-mode read; machine option `bno085=on` |
 
 ## Setting it up
 

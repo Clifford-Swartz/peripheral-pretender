@@ -22,6 +22,18 @@ nvm_rows:
   # The kit's own serial number: CircuitPython prints the bytes little
   # endian per word as UID F3E504005432505320202041213610FF.
   serial_default: [0x0004E5F3, 0x53503254, 0x41202020, 0xFF103621]
+  # TEMP_LOG row (0x00800100): factory temperature points. Placeholders
+  # (25.0 and 85.0 degrees C with typical PTAT/CTAT codes), not read from
+  # silicon: CircuitPython's REPL cannot read the NVM rows. The ADC model
+  # derives its PTAT/CTAT codes from these, so microcontroller.cpu.temperature
+  # returns the twin's die temperature whatever the values.
+  words:
+    - {addr: 0x00800100, value: 0x00055019,
+       what: "TEMP_LOG word 0: room 25.0 C, hot 85.0 C (placeholder)"}
+    - {addr: 0x00800104, value: 0xCB2A5A00,
+       what: "TEMP_LOG word 1: PTAT 2650 room, 3250 hot (placeholder)"}
+    - {addr: 0x00800108, value: 0x009ECB90,
+       what: "TEMP_LOG word 2: CTAT 2960 room, 2540 hot (placeholder)"}
 reset_overrides:
   NVMCTRL:
     PARAM: 0x00060800               # NVMP 2048 pages, PSZ 6 (512 B); ATDF has NVMP 0
