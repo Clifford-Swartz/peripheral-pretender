@@ -251,8 +251,10 @@ def test_pot_on_a0_reaches_the_mc00_adc(qemu_path, qemu_machines):
             mark = len("".join(uart))
             for _ in range(50):
                 await asyncio.sleep(0.1)
-                lines = [ln for ln in "".join(uart)[mark:].splitlines()
-                         if ln.startswith("a0 ")]
+                # Complete lines only: the UART arrives in chunks
+                done = "".join(uart)[mark:].rpartition("\n")[0]
+                lines = [ln for ln in done.splitlines()
+                         if ln.startswith("a0 ") and "mv=" in ln]
                 if len(lines) >= 2:
                     return int(lines[-1].split("mv=")[1], 16)
             return None

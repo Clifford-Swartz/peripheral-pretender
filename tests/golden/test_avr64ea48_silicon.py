@@ -48,3 +48,17 @@ def test_vcom_matches_silicon(qemu_avr, app):
     assert result.uart == expected
     assert not result.unimplemented_summary.get("total"), \
         result.unimplemented_summary
+
+
+def test_adc_checks_pass(qemu_avr):
+    """firmware/avr-hello adc.c: the ADC's internal inputs, references and
+    modes (its own checks; codes follow the supply, so no byte golden)."""
+    elf = BUILD / "adc.elf"
+    if not elf.is_file():
+        pytest.skip(f"{elf} not built (make -C firmware/avr-hello APP=adc)")
+    result = run(RunOptions(elf=elf, machine=MACHINE, qemu=qemu_avr,
+                            timeout_s=20))
+    assert result.firmware_exit == 0, result.uart
+    assert "FAIL" not in result.uart, result.uart
+    assert not result.unimplemented_summary.get("total"), \
+        result.unimplemented_summary

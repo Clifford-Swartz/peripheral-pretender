@@ -30,7 +30,9 @@ EXPECTED = {("SERCOM", "U2201"), ("PORT", "U2210"), ("OSCCTRL", "U2119"),
             ("USB", "U2222"), ("DMAC", "U2503"),
             ("ADC", "U2500"), ("DAC", "U2502"), ("EVSYS", "U2504"),
             # PIC32CM JH01 and MC00 ADC and DAC
-            ("ADC", "U2247"), ("DAC", "U2214")}
+            ("ADC", "U2247"), ("DAC", "U2214"),
+            # AVR64EA48 ADC
+            ("ADC", "adc_12b_diff_ctrl_avr_v2")}
 
 
 def edited(tmp_path, name, change):

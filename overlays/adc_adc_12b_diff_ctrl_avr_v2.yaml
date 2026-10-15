@@ -1,0 +1,20 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for the AVR8X 12-bit differential ADC
+# (adc_12b_diff_ctrl_avr_v2, AVR EA). The avr8x-adc model converts at once
+# on COMMAND.START (or a MUXPOS/MUXNEG write), free-running on a timer.
+ip: ADC
+id: adc_12b_diff_ctrl_avr_v2
+versions: [""]
+references:
+  - "DS40002324 (AVR64EA48) chapter ADC, register descriptions"
+registers:
+  COMMAND: {hooks: [post_write]}           # START, MODE, DIFF
+  MUXPOS: {hooks: [post_write]}            # START MUXPOS_WRITE
+  MUXNEG: {hooks: [post_write]}            # START MUXNEG_WRITE
+  INTFLAGS: {w1c: all}
+  RESULT: {hooks: [pre_read]}              # reading clears RESRDY
+  SAMPLE: {hooks: [pre_read]}              # reading clears SAMPRDY
+  STATUS:
+    read_only: true
+    dynamic: true                          # ADCBUSY: never busy

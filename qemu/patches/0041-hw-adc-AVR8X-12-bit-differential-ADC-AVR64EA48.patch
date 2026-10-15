@@ -1,0 +1,685 @@
+From 58b47adcd6897f4d150387b6f9ed3f73b6f1a7e1 Mon Sep 17 00:00:00 2001
+From: Clifford Swartz <cliffordswartz1@gmail.com>
+Date: Thu, 15 Oct 2026 07:01:43 -0700
+Subject: [PATCH 41/41] hw/adc: AVR8X 12-bit differential ADC (AVR64EA48)
+
+Conversions completed at once on COMMAND.START (IMMEDIATE, MUXPOS/MUXNEG
+write; free-running every 20 us of virtual time): single 12-bit, 8-bit,
+series and burst accumulation of up to 1024 samples (with scaling),
+differential (signed, +-VREF over +-2048), LEFTADJ, SAMPLE, the window
+comparator, RESRDY/SAMPRDY cleared by reading RESULT/SAMPLE, overrun
+flags, three vectors (ERROR, RESRDY, SAMPRDY). Inputs: AIN0-31 from the
+board ("ain", as the ARM ADC models), GND, VDD/10, the temperature
+sensor (its code from "temperature" through SIGROW.TEMPSENSE0/1, the
+data sheet's formula inverted). References VDD, VREFA, 1.024, 2.048,
+2.5, 4.096 V. New overlay; regenerated tables.
+
+Peripheral Pretender: AI-assisted; not for submission to upstream QEMU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/adc/Kconfig                                |   4 +
+ hw/adc/avr8x_adc.c                            | 463 ++++++++++++++++++
+ hw/adc/meson.build                            |   1 +
+ hw/avr/Kconfig                                |   1 +
+ hw/avr/avr8x_soc.c                            |  17 +-
+ include/hw/adc/avr8x_adc.h                    |  15 +
+ .../mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h   |   2 +-
+ .../avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h  |  17 +-
+ 8 files changed, 510 insertions(+), 10 deletions(-)
+ create mode 100644 hw/adc/avr8x_adc.c
+ create mode 100644 include/hw/adc/avr8x_adc.h
+
+diff --git a/hw/adc/Kconfig b/hw/adc/Kconfig
+index 25d2229..ad96fa6 100644
+--- a/hw/adc/Kconfig
++++ b/hw/adc/Kconfig
+@@ -1,2 +1,6 @@
+ config STM32F2XX_ADC
+     bool
++
++config AVR8X_ADC
++    bool
++    select MCHP_REGFILE
+diff --git a/hw/adc/avr8x_adc.c b/hw/adc/avr8x_adc.c
+new file mode 100644
+index 0000000..7920e33
+--- /dev/null
++++ b/hw/adc/avr8x_adc.c
+@@ -0,0 +1,463 @@
++/*
++ * Microchip AVR8X 12-bit differential ADC (adc_12b_diff_ctrl_avr_v2)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Behaviour from DS40002324 (AVR64EA48), chapter ADC, conversions
++ * completed at once. COMMAND.START IMMEDIATE converts (and reads back STOP
++ * when done, unless CTRLF.FREERUN, when it converts again every
++ * ADC_FREERUN_NS of virtual time until START is STOP);
++ * MUXPOS_WRITE and MUXNEG_WRITE convert on a write of that register.
++ * COMMAND.MODE: SINGLE_12BIT, SINGLE_8BIT (the 12-bit code >> 4), and
++ * SERIES/BURST accumulating CTRLF.SAMPNUM samples into RESULT (the
++ * _SCALING variants shift the sum down to 16 bits); every conversion's
++ * code is SAMPLE. COMMAND.DIFF: MUXPOS - MUXNEG, signed (RESULT sign
++ * extended). CTRLF.LEFTADJ shifts a 12-bit result to 16 bits. INTFLAGS:
++ * RESRDY (cleared by reading RESULT), SAMPRDY (by reading SAMPLE),
++ * RESOVR/SAMPOVR (a result or sample replacing an unread one), WCMP
++ * (CTRLD.WINCM against WINLT/WINHT, on RESULT or SAMPLE as WINSRC says).
++ * Vectors: ERROR (RESOVR, SAMPOVR, TRIGOVR), RESRDY, SAMPRDY (and WCMP).
++ *
++ * Inputs: AIN0..AIN31 from the board ("ain", "channel=millivolts", the
++ * same interface as the Microchip ARM ADC models; unset ones read
++ * "ain-default"), GND, VDD/10 ("vdd" in mV), the temperature sensor
++ * (the code whose conversion with SIGROW.TEMPSENSE0/1, as the data sheet's
++ * formula gives it, is "temperature" in millidegrees C; mid scale when
++ * TEMPSENSE0 is 0), DAC0 (0 V: no DAC model). References: VDD, VREFA
++ * ("vrefa"; VDD unless set), 1.024, 2.048, 2.500, 4.096 V.
++ *
++ * Not modelled: the PGA (gain logged), events, chopping, the conversion
++ * time, STATUS.ADCBUSY (always 0).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/avr/avr8x_periph.h"
++#include "hw/adc/avr8x_adc.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h"
++#include "migration/vmstate.h"
++#include "system/address-spaces.h"
++#include "system/dma.h"
++
++#define ADC_NAIN            32
++#define MUX_GND             0x30
++#define MUX_VDD10           0x31
++#define MUX_TEMPSENSE       0x32
++#define MUX_DAC0            0x38
++#define ADC_FREERUN_NS      20000       /* about 13 ADC clocks at 650 kHz */
++
++OBJECT_DECLARE_SIMPLE_TYPE(Avr8xAdcState, AVR8X_ADC)
++
++struct Avr8xAdcState {
++    MchpRegBlock parent_obj;
++
++    int32_t ain_mv[ADC_NAIN];   /* < 0: unset */
++    int32_t ain_default;
++    int32_t vdd_mv;
++    int32_t vrefa_mv;           /* < 0: VDD */
++    int32_t temperature;        /* millidegrees C */
++    uint32_t tempsense_addr;    /* SIGROW.TEMPSENSE0 in the address space */
++    bool res_unread, samp_unread;
++    QEMUTimer *freerun;
++};
++
++static uint32_t adc_reg(Avr8xAdcState *s, hwaddr off, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, off, size);
++}
++
++static void adc_set(Avr8xAdcState *s, hwaddr off, unsigned size,
++                    uint32_t v)
++{
++    mchp_regfile_poke(&MCHP_REGBLOCK(s)->rf, off, size, v);
++}
++
++static void adc_flag(Avr8xAdcState *s, uint8_t mask)
++{
++    adc_set(s, A_MCHP_ADC_INTFLAGS, 1,
++            adc_reg(s, A_MCHP_ADC_INTFLAGS, 1) | mask);
++}
++
++static int32_t adc_ref_mv(Avr8xAdcState *s)
++{
++    switch (FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLC, 1), MCHP_ADC_CTRLC,
++                       REFSEL)) {
++    case MCHP_ADC_CTRLC_REFSEL_1V024:
++        return 1024;
++    case MCHP_ADC_CTRLC_REFSEL_2V048:
++        return 2048;
++    case MCHP_ADC_CTRLC_REFSEL_2V500:
++        return 2500;
++    case MCHP_ADC_CTRLC_REFSEL_4V096:
++        return 4096;
++    case MCHP_ADC_CTRLC_REFSEL_VREFA:
++        return s->vrefa_mv >= 0 ? s->vrefa_mv : s->vdd_mv;
++    default:
++        return s->vdd_mv;
++    }
++}
++
++/*
++ * The temperature sensor's 12-bit code (against 1.024 V): the inverse of
++ * the data sheet's T[K] = ((code + TEMPSENSE1) * TEMPSENSE0 + 2048) / 4096
++ */
++static int32_t adc_temp_code(Avr8xAdcState *s)
++{
++    uint8_t b[4] = { 0 };
++    int16_t slope, offset;
++    int64_t t_k4096;
++
++    if (s->tempsense_addr) {
++        dma_memory_read(&address_space_memory, s->tempsense_addr, b,
++                        sizeof(b), MEMTXATTRS_UNSPECIFIED);
++    }
++    slope = b[0] | b[1] << 8;
++    offset = b[2] | b[3] << 8;
++    if (!slope) {
++        return 2048;            /* no calibration: mid scale */
++    }
++    t_k4096 = ((int64_t)s->temperature + 273150) * 4096 / 1000;
++    return t_k4096 / slope - offset;
++}
++
++/* One input in mV (the temperature sensor: its code, see above) */
++static int32_t adc_input_mv(Avr8xAdcState *s, unsigned mux)
++{
++    if (mux < ADC_NAIN) {
++        return s->ain_mv[mux] >= 0 ? s->ain_mv[mux] : s->ain_default;
++    }
++    switch (mux) {
++    case MUX_VDD10:
++        return s->vdd_mv / 10;
++    case MUX_TEMPSENSE:
++        return (int64_t)adc_temp_code(s) * adc_ref_mv(s) / 4095;
++    default:                    /* GND, DAC0 (no DAC model) */
++        return 0;
++    }
++}
++
++/* One 12-bit conversion (signed in differential mode) */
++static int32_t adc_sample(Avr8xAdcState *s, bool diff)
++{
++    unsigned pos = FIELD_EX32(adc_reg(s, A_MCHP_ADC_MUXPOS, 1),
++                              MCHP_ADC_MUXPOS, MUXPOS);
++    unsigned neg = FIELD_EX32(adc_reg(s, A_MCHP_ADC_MUXNEG, 1),
++                              MCHP_ADC_MUXNEG, MUXNEG);
++    int64_t ref = adc_ref_mv(s), mv = adc_input_mv(s, pos);
++
++    if (diff) {
++        mv -= adc_input_mv(s, neg);
++        return ref ? MIN(MAX(mv * 2048 / ref, -2048), 2047) : 0;
++    }
++    return ref ? MIN(MAX((mv * 4095 + ref / 2) / ref, 0), 4095) : 0;
++}
++
++static bool adc_window(Avr8xAdcState *s, int32_t v)
++{
++    int32_t lt = adc_reg(s, A_MCHP_ADC_WINLT, 2);
++    int32_t ht = adc_reg(s, A_MCHP_ADC_WINHT, 2);
++
++    switch (FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLD, 1), MCHP_ADC_CTRLD,
++                       WINCM)) {
++    case MCHP_ADC_CTRLD_WINCM_BELOW:
++        return v < lt;
++    case MCHP_ADC_CTRLD_WINCM_ABOVE:
++        return v > ht;
++    case MCHP_ADC_CTRLD_WINCM_INSIDE:
++        return v >= lt && v <= ht;
++    case MCHP_ADC_CTRLD_WINCM_OUTSIDE:
++        return v < lt || v > ht;
++    default:
++        return false;
++    }
++}
++
++static void adc_convert(Avr8xAdcState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    uint32_t cmd = adc_reg(s, A_MCHP_ADC_COMMAND, 1);
++    uint32_t ctrlf = adc_reg(s, A_MCHP_ADC_CTRLF, 1);
++    unsigned mode = FIELD_EX32(cmd, MCHP_ADC_COMMAND, MODE);
++    bool diff = FIELD_EX32(cmd, MCHP_ADC_COMMAND, DIFF);
++    unsigned sampnum = MIN(FIELD_EX32(ctrlf, MCHP_ADC_CTRLF, SAMPNUM), 10);
++    unsigned n = 1;
++    int64_t sum = 0;
++    int32_t sample = 0;
++
++    if (!FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLA, 1), MCHP_ADC_CTRLA,
++                    ENABLE)) {
++        return;
++    }
++    if (FIELD_EX32(adc_reg(s, A_MCHP_ADC_PGACTRL, 1), MCHP_ADC_PGACTRL,
++                   PGAEN)) {
++        qemu_log_mask(LOG_UNIMP, "%s: PGA not modelled\n", rb->name);
++    }
++    if (mode >= MCHP_ADC_COMMAND_MODE_SERIES) {
++        n = 1U << sampnum;
++    }
++    for (unsigned i = 0; i < n; i++) {
++        sample = adc_sample(s, diff);
++        sum += sample;
++    }
++    if (mode == MCHP_ADC_COMMAND_MODE_SINGLE_8BIT) {
++        sum = sample >> 4;
++    } else if ((mode == MCHP_ADC_COMMAND_MODE_SERIES_SCALING ||
++                mode == MCHP_ADC_COMMAND_MODE_BURST_SCALING) &&
++               sampnum > 4) {
++        sum >>= sampnum - 4;    /* scaled to 16 bits */
++    } else if (mode == MCHP_ADC_COMMAND_MODE_SINGLE_12BIT &&
++               FIELD_EX32(ctrlf, MCHP_ADC_CTRLF, LEFTADJ)) {
++        sum <<= 4;
++    }
++    if (s->samp_unread) {
++        adc_flag(s, R_MCHP_ADC_INTFLAGS_SAMPOVR_MASK);
++    }
++    if (s->res_unread) {
++        adc_flag(s, R_MCHP_ADC_INTFLAGS_RESOVR_MASK);
++    }
++    adc_set(s, A_MCHP_ADC_SAMPLE, 2, (uint16_t)sample);
++    adc_set(s, A_MCHP_ADC_RESULT, 4, (uint32_t)sum);
++    if (adc_window(s, FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLD, 1),
++                                 MCHP_ADC_CTRLD, WINSRC) ? sample : sum)) {
++        adc_flag(s, R_MCHP_ADC_INTFLAGS_WCMP_MASK);
++    }
++    adc_flag(s, R_MCHP_ADC_INTFLAGS_RESRDY_MASK |
++             R_MCHP_ADC_INTFLAGS_SAMPRDY_MASK);
++    s->res_unread = s->samp_unread = true;
++    if (!FIELD_EX32(ctrlf, MCHP_ADC_CTRLF, FREERUN)) {
++        /* START reads back STOP once the conversion is done */
++        adc_set(s, A_MCHP_ADC_COMMAND, 1,
++                FIELD_DP32(cmd, MCHP_ADC_COMMAND, START,
++                           MCHP_ADC_COMMAND_START_STOP));
++    } else if (FIELD_EX32(cmd, MCHP_ADC_COMMAND, START) ==
++               MCHP_ADC_COMMAND_START_IMMEDIATE) {
++        timer_mod(s->freerun, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                  ADC_FREERUN_NS);
++    }
++    mchp_regblock_update_irq(rb);
++}
++
++static uint32_t adc_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                             unsigned idx, uint32_t stored, bool side_effects)
++{
++    Avr8xAdcState *s = AVR8X_ADC(rf->opaque);
++    uint8_t clear = 0;
++
++    if (!side_effects) {
++        return stored;
++    }
++    /* Each byte of a multi-byte read gets here: clearing is idempotent */
++    if (ri->offset == A_MCHP_ADC_RESULT) {
++        s->res_unread = false;
++        clear = R_MCHP_ADC_INTFLAGS_RESRDY_MASK;
++    } else if (ri->offset == A_MCHP_ADC_SAMPLE) {
++        s->samp_unread = false;
++        clear = R_MCHP_ADC_INTFLAGS_SAMPRDY_MASK;
++    }
++    if (clear) {
++        adc_set(s, A_MCHP_ADC_INTFLAGS, 1,
++                adc_reg(s, A_MCHP_ADC_INTFLAGS, 1) & ~clear);
++        mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++    }
++    return stored;
++}
++
++static void adc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                           unsigned idx, uint32_t old, uint32_t written,
++                           uint32_t we)
++{
++    Avr8xAdcState *s = AVR8X_ADC(rf->opaque);
++    unsigned start = FIELD_EX32(adc_reg(s, A_MCHP_ADC_COMMAND, 1),
++                                MCHP_ADC_COMMAND, START);
++
++    switch (ri->offset) {
++    case A_MCHP_ADC_COMMAND:
++        if (start == MCHP_ADC_COMMAND_START_STOP) {
++            timer_del(s->freerun);
++        } else if (start == MCHP_ADC_COMMAND_START_IMMEDIATE) {
++            adc_convert(s);
++        } else if (start == MCHP_ADC_COMMAND_START_EVENT_TRIGGER) {
++            qemu_log_mask(LOG_UNIMP, "%s: event triggers not modelled\n",
++                          MCHP_REGBLOCK(s)->name);
++        }
++        break;
++    case A_MCHP_ADC_MUXPOS:
++        if (start == MCHP_ADC_COMMAND_START_MUXPOS_WRITE) {
++            adc_convert(s);
++        }
++        break;
++    case A_MCHP_ADC_MUXNEG:
++        if (start == MCHP_ADC_COMMAND_START_MUXNEG_WRITE) {
++            adc_convert(s);
++        }
++        break;
++    }
++}
++
++/* Three vectors: ERROR (overruns), RESRDY, SAMPRDY (and WCMP) */
++static uint32_t adc_irq_lines(MchpRegBlock *rb)
++{
++    uint8_t pend = mchp_regfile_peek(&rb->rf, A_MCHP_ADC_INTFLAGS, 1) &
++                   mchp_regfile_peek(&rb->rf, A_MCHP_ADC_INTCTRL, 1);
++    uint8_t err = R_MCHP_ADC_INTFLAGS_RESOVR_MASK |
++                  R_MCHP_ADC_INTFLAGS_SAMPOVR_MASK |
++                  R_MCHP_ADC_INTFLAGS_TRIGOVR_MASK;
++
++    return (pend & err ? 1 : 0) |
++           (pend & R_MCHP_ADC_INTFLAGS_RESRDY_MASK ? 2 : 0) |
++           (pend & (R_MCHP_ADC_INTFLAGS_SAMPRDY_MASK |
++                    R_MCHP_ADC_INTFLAGS_WCMP_MASK) ? 4 : 0);
++}
++
++static void adc_freerun(void *opaque)
++{
++    adc_convert(opaque);
++}
++
++static void adc_reset_hold(MchpRegBlock *rb)
++{
++    Avr8xAdcState *s = AVR8X_ADC(rb);
++
++    timer_del(s->freerun);
++    s->res_unread = s->samp_unread = false;
++}
++
++static bool adc_realize(MchpRegBlock *rb, Error **errp)
++{
++    AVR8X_ADC(rb)->freerun = timer_new_ns(QEMU_CLOCK_VIRTUAL, adc_freerun,
++                                          rb);
++    return true;
++}
++
++static void adc_finalize(Object *obj)
++{
++    timer_free(AVR8X_ADC(obj)->freerun);
++}
++
++/* "ain": "channel=mV,channel=mV" (a channel=-1 unsets it) */
++static char *adc_get_ain(Object *obj, Error **errp)
++{
++    Avr8xAdcState *s = AVR8X_ADC(obj);
++    g_autoptr(GString) str = g_string_new(NULL);
++
++    for (unsigned i = 0; i < ADC_NAIN; i++) {
++        if (s->ain_mv[i] >= 0) {
++            g_string_append_printf(str, "%s%u=%d", str->len ? "," : "", i,
++                                   s->ain_mv[i]);
++        }
++    }
++    return g_string_free(g_steal_pointer(&str), false);
++}
++
++static void adc_set_ain(Object *obj, const char *value, Error **errp)
++{
++    Avr8xAdcState *s = AVR8X_ADC(obj);
++    g_auto(GStrv) items = g_strsplit(value, ",", -1);
++
++    for (unsigned i = 0; items[i]; i++) {
++        unsigned ch;
++        int mv;
++
++        if (!*items[i]) {
++            continue;
++        }
++        if (sscanf(items[i], "%u=%d", &ch, &mv) != 2 || ch >= ADC_NAIN) {
++            error_setg(errp, "ain items must be channel=millivolts, "
++                       "channel 0-%d", ADC_NAIN - 1);
++            return;
++        }
++        s->ain_mv[ch] = mv < 0 ? -1 : mv;
++    }
++}
++
++static void adc_get_i32(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, opaque, errp);
++}
++
++static void adc_set_i32(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, opaque, errp);
++}
++
++static void adc_init(Object *obj)
++{
++    Avr8xAdcState *s = AVR8X_ADC(obj);
++
++    for (unsigned i = 0; i < ADC_NAIN; i++) {
++        s->ain_mv[i] = -1;
++    }
++    s->vdd_mv = 3300;
++    s->vrefa_mv = -1;
++    s->temperature = 25000;
++    object_property_add_str(obj, "ain", adc_get_ain, adc_set_ain);
++    object_property_add(obj, "ain-default", "int32", adc_get_i32,
++                        adc_set_i32, NULL, &s->ain_default);
++    object_property_add(obj, "vdd", "int32", adc_get_i32, adc_set_i32, NULL,
++                        &s->vdd_mv);
++    object_property_add(obj, "vrefa", "int32", adc_get_i32, adc_set_i32,
++                        NULL, &s->vrefa_mv);
++    object_property_add(obj, "temperature", "int32", adc_get_i32,
++                        adc_set_i32, NULL, &s->temperature);
++}
++
++static const Property adc_properties[] = {
++    DEFINE_PROP_UINT32("tempsense-addr", Avr8xAdcState, tempsense_addr, 0),
++};
++
++static const VMStateDescription vmstate_avr8x_adc = {
++    .name = TYPE_AVR8X_ADC,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, Avr8xAdcState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_INT32_ARRAY(ain_mv, Avr8xAdcState, ADC_NAIN),
++        VMSTATE_INT32(ain_default, Avr8xAdcState),
++        VMSTATE_INT32(vdd_mv, Avr8xAdcState),
++        VMSTATE_INT32(vrefa_mv, Avr8xAdcState),
++        VMSTATE_INT32(temperature, Avr8xAdcState),
++        VMSTATE_BOOL(res_unread, Avr8xAdcState),
++        VMSTATE_BOOL(samp_unread, Avr8xAdcState),
++        VMSTATE_TIMER_PTR(freerun, Avr8xAdcState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void adc_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    dc->vmsd = &vmstate_avr8x_adc;
++    device_class_set_props(dc, adc_properties);
++    c->realize = adc_realize;
++    c->pre_read = adc_pre_read;
++    c->post_write = adc_post_write;
++    c->reset_hold = adc_reset_hold;
++    c->irq_lines = adc_irq_lines;
++    c->is_enabled = avr8x_never_enabled;
++    c->log_writes = false;
++}
++
++static const TypeInfo avr8x_adc_types[] = {
++    {
++        .name = TYPE_AVR8X_ADC,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(Avr8xAdcState),
++        .instance_init = adc_init,
++        .instance_finalize = adc_finalize,
++        .class_init = adc_class_init,
++    },
++};
++
++DEFINE_TYPES(avr8x_adc_types)
+diff --git a/hw/adc/meson.build b/hw/adc/meson.build
+index 4ab1059..22ed667 100644
+--- a/hw/adc/meson.build
++++ b/hw/adc/meson.build
+@@ -4,3 +4,4 @@ system_ss.add(when: 'CONFIG_NPCM7XX', if_true: files('npcm7xx_adc.c'))
+ system_ss.add(when: 'CONFIG_ZYNQ', if_true: files('zynq-xadc.c'))
+ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp3204.c'))
+ system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_adc.c', 'mchp_adc_u2247.c'))
++system_ss.add(when: 'CONFIG_AVR8X_ADC', if_true: files('avr8x_adc.c'))
+diff --git a/hw/avr/Kconfig b/hw/avr/Kconfig
+index 3f91644..6d031fb 100644
+--- a/hw/avr/Kconfig
++++ b/hw/avr/Kconfig
+@@ -10,6 +10,7 @@ config AVR8X_SOC
+     select AVR8X_USART
+     select AVR8X_SPI
+     select AVR8X_TCB
++    select AVR8X_ADC
+     select AVR8X_TWI
+     select MIKROBUS
+     select MCHP_REGFILE
+diff --git a/hw/avr/avr8x_soc.c b/hw/avr/avr8x_soc.c
+index 9d2fa8a..75c173b 100644
+--- a/hw/avr/avr8x_soc.c
++++ b/hw/avr/avr8x_soc.c
+@@ -33,6 +33,7 @@
+ #include "hw/i2c/avr8x_twi.h"
+ #include "hw/ssi/avr8x_spi.h"
+ #include "hw/timer/avr8x_tcb.h"
++#include "hw/adc/avr8x_adc.h"
+ #include "system/address-spaces.h"
+ 
+ /*
+@@ -43,6 +44,7 @@ static const struct {
+     const char *module;
+     const char *type;
+ } avr8x_models[] = {
++    { "ADC", TYPE_AVR8X_ADC },
+     { "CLKCTRL", TYPE_AVR8X_CLKCTRL },
+     { "CPUINT", TYPE_AVR8X_CPUINT },
+     { "FUSE", TYPE_AVR8X_NVMBYTES },
+@@ -393,6 +395,14 @@ static bool avr8x_realize_periph(Avr8xSocState *s, uint8_t rev, Error **errp)
+                                      &error_abort);
+         } else if (!strcmp(info->module, "CLKCTRL")) {
+             qdev_prop_set_uint32(dev, "xoschf-hz", s->xoschf_hz);
++        } else if (!strcmp(info->module, "ADC")) {
++            /* The temperature sensor's calibration: SIGROW.TEMPSENSE0/1 */
++            for (unsigned j = 0; j < s->dev->ninstances; j++) {
++                if (!strcmp(s->dev->instances[j].module, "SIGROW")) {
++                    qdev_prop_set_uint32(dev, "tempsense-addr", OFFSET_DATA +
++                                         s->dev->instances[j].base + 4);
++                }
++            }
+         } else if (object_dynamic_cast(OBJECT(dev), TYPE_AVR8X_NVMBYTES)) {
+             avr8x_nvm_image(s, dev, info, rev);
+         }
+@@ -404,14 +414,17 @@ static bool avr8x_realize_periph(Avr8xSocState *s, uint8_t rev, Error **errp)
+         }
+         sysbus_mmio_map(sbd, 0, OFFSET_DATA + info->base);
+         /*
+-         * USART: RXC, DRE, TXC; TWI: TWIS, TWIM; generic blocks: their
++         * USART: RXC, DRE, TXC; TWI: TWIS, TWIM; ADC: ERROR, RESRDY,
++         * SAMPRDY; generic blocks: their
+          * first vector
+          */
+         avr8x_connect_vectors(s, sbd, info,
+                               object_dynamic_cast(OBJECT(dev),
+                                                   TYPE_AVR8X_USART) ? 3 :
+                               object_dynamic_cast(OBJECT(dev),
+-                                                  TYPE_AVR8X_TWI) ? 2 : 1);
++                                                  TYPE_AVR8X_TWI) ? 2 :
++                              object_dynamic_cast(OBJECT(dev),
++                                                  TYPE_AVR8X_ADC) ? 3 : 1);
+     }
+     if (nvmctrl) {
+         qdev_connect_gpio_out_named(nvmctrl, AVR8X_NVMCTRL_FLMAP, 0,
+diff --git a/include/hw/adc/avr8x_adc.h b/include/hw/adc/avr8x_adc.h
+new file mode 100644
+index 0000000..b18d7c4
+--- /dev/null
++++ b/include/hw/adc/avr8x_adc.h
+@@ -0,0 +1,15 @@
++/*
++ * Microchip AVR8X 12-bit differential ADC (adc_12b_diff_ctrl_avr_v2)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_ADC_AVR8X_ADC_H
++#define HW_ADC_AVR8X_ADC_H
++
++#define TYPE_AVR8X_ADC "avr8x-adc"
++
++#endif /* HW_ADC_AVR8X_ADC_H */
+diff --git a/include/hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h b/include/hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h
+index c310f22..c429280 100644
+--- a/include/hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h
++++ b/include/hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h
+@@ -9,7 +9,7 @@
+  * Do not edit.
+  * Analog to Digital Converter
+  * Devices: AVR64EA48
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/adc_adc_12b_diff_ctrl_avr_v2.yaml (sha1 c1896584a707)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h b/include/hw/mchp/gen/avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h
+index c1b70ed..9449829 100644
+--- a/include/hw/mchp/gen/avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h
++++ b/include/hw/mchp/gen/avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from AVR64EA48.atdf
+  * (AVR-Ex_DFP 2.8.189). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/adc_adc_12b_diff_ctrl_avr_v2.yaml (sha1 c1896584a707)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -48,7 +48,7 @@ static const MchpRegInfo avr64ea48_adc_regs[] = {
+     {
+         .name = "STATUS", .offset = 0x06, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x07, .size = 1, .count = 1, .stride = 1,
+@@ -64,7 +64,8 @@ static const MchpRegInfo avr64ea48_adc_regs[] = {
+     },
+     {
+         .name = "COMMAND", .offset = 0x0A, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0xF7, .wmask = 0xF7, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0xF7, .wmask = 0xF7,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "PGACTRL", .offset = 0x0B, .size = 1, .count = 1, .stride = 1,
+@@ -72,21 +73,23 @@ static const MchpRegInfo avr64ea48_adc_regs[] = {
+     },
+     {
+         .name = "MUXPOS", .offset = 0x0C, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "MUXNEG", .offset = 0x0D, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "RESULT", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "SAMPLE", .offset = 0x14, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFFFF, .wmask = 0x0000,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "TEMP0", .offset = 0x18, .size = 1, .count = 1, .stride = 1,
+-- 
+2.53.0.windows.2
+

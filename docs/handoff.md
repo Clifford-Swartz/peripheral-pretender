@@ -307,6 +307,14 @@ page the MC00's J700 (DAC OUT, GND) and J701 (VREF) are header holes, and `board
 `"analog_out"` makes the DAC's `vout` a voltage source for the bench: a voltmeter in J700 follows
 the DAC (`tests/web/test_bench.py`).
 
+**AVR64EA48 ADC (2026-10-15):** patch 0041; `firmware/avr-hello` `APP=adc` checks the references,
+modes (8-bit, left-adjust, 16-sample burst, differential) and RESRDY, and passes on the twin
+(`tests/golden/test_avr64ea48_silicon.py::test_adc_checks_pass`). Bench pots reach it through
+`ain` like the ARM ADCs. **Open:** run `adc` on the Nano's silicon (its nEDBG needs a replug after
+the DGI incident), then copy its SIGROW TEMPSENSE0/1 into `profiles/avr64ea48.yaml` data rows so
+the twin's temperature reading matches. avr-gcc (XC8 4.00) drops `(void)ADC0.RESULT;`: read into a
+volatile.
+
 ## EDBG data gateway (DGI) and a Data Visualizer panel (2026-10-15)
 
 The MC00 twin's debugger has a data gateway (patch 0037): the DGI command protocol on a chardev,
