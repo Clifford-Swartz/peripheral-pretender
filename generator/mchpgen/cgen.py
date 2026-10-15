@@ -445,8 +445,10 @@ def _inst_entry(ds: DeviceSem, i: InstanceSem) -> list[str]:
         items += [f".alias_name = {c_str(i.alias_name)}",
                   f".alias_base = 0x{i.alias_base:08X}",
                   f".alias_size = 0x{i.alias_size:X}"]
-    items += [f".irq = {i.irq}", f".irq_input = {i.irq_input}",
-              f".pac_id = {i.pac_id}", f".gclk_core = {i.gclk_core}",
+    items += [f".irq = {i.irq}", f".irq_input = {i.irq_input}"]
+    if i.nirqs > 1:
+        items.append(f".nirqs = {i.nirqs}")
+    items += [f".pac_id = {i.pac_id}", f".gclk_core = {i.gclk_core}",
               f".gclk_slow = {i.gclk_slow}", f".dmac_rx = {i.dmac_rx}",
               f".dmac_tx = {i.dmac_tx}",
               ".flags = " + (" | ".join(f"MCHP_INST_{f}" for f in i.flags) or "0")]
@@ -497,7 +499,7 @@ def soc_header(ds: DeviceSem) -> str:
     out += ["", "/* Core configuration (ATDF device parameters) */",
             define(f"{SYM}_NUM_IRQ", p["NUM_IRQ"]),
             define(f"{SYM}_NVIC_PRIO_BITS", p["__NVIC_PRIO_BITS"]),
-            define(f"{SYM}_CM0P_REV", p["__CM0P_REV"]),
+            *core_rev_defines(dev, SYM),
             define(f"{SYM}_MPU_PRESENT", p["__MPU_PRESENT"]),
             define(f"{SYM}_VTOR_PRESENT", p["__VTOR_PRESENT"])]
     sig = dev.property_groups.get("SIGNATURES", {})
@@ -588,13 +590,39 @@ def device_header_path(ds: DeviceSem) -> str:
     return f"hw/arm/{ds.symbol}_device.h"
 
 
+# Arm cores: ATDF revision parameter, CPUID part number bits, name
+ARM_CORES = (("__CM0P_REV", 0x410CC600, "Cortex-M0+"),
+             ("__CM4_REV", 0x410FC240, "Cortex-M4"))
+
+
+def arm_core(dev) -> tuple[str, int, int]:
+    """(core name, ATDF revision rXpY as 0xXY.., SCB->CPUID)"""
+    for param, base, name in ARM_CORES:
+        if param in dev.params:
+            rev = int(dev.params[param], 0)
+            return name, rev, base | (rev >> 8 & 0xF) << 20 | (rev & 0xF)
+    raise ValueError(f"{dev.name}: no supported Arm core parameter "
+                     f"({', '.join(c[0] for c in ARM_CORES)})")
+
+
+def core_rev_defines(dev, SYM: str) -> list[str]:
+    """<SYM>_CM0P_REV or <SYM>_CM4_REV (and _FPU_PRESENT) from the ATDF"""
+    p = dev.params
+    out = []
+    for param, _, _ in ARM_CORES:
+        if param in p:
+            out.append(define(f"{SYM}_{param.strip('_')}", p[param]))
+    if "__FPU_PRESENT" in p:
+        out.append(define(f"{SYM}_FPU_PRESENT", p["__FPU_PRESENT"]))
+    return out
+
+
 def device_header(ds: DeviceSem) -> str:
     """The MchpDeviceInfo a generic PIC32CM SoC model is built from."""
     dev = ds.device
     sym, SYM = ds.symbol, ds.symbol.upper()
     g = guard(device_header_path(ds))
-    rev = int(dev.params["__CM0P_REV"], 0)
-    cpuid = 0x410CC600 | (rev >> 8 & 0xF) << 20 | (rev & 0xF)
+    core, rev, cpuid = arm_core(dev)
     out = file_header(f"{dev.name} device descriptor", ds,
                       [f"Profile: profiles/{ds.profile.file} "
                        f"(sha1 {ds.profile.sha1[:12]})"])
@@ -602,7 +630,7 @@ def device_header(ds: DeviceSem) -> str:
             f'#include "{soc_header_path(ds)[len("include/"):]}"',
             f'#include "{nvmrows_header_path(ds)[len("hw/arm/"):]}"', "",
             define(f"{SYM}_CPUID", f"0x{cpuid:08X}",
-                   f"Cortex-M0+ r{rev >> 8 & 0xF}p{rev & 0xF}"), "",
+                   f"{core} r{rev >> 8 & 0xF}p{rev & 0xF}"), "",
             "/* Silicon revisions (DSU.DID.REVISION); the first is the default */",
             f"static const MchpSiliconRev {sym}_revisions[] = {{"]
     for name, value in ds.profile.silicon_revisions:
@@ -612,8 +640,12 @@ def device_header(ds: DeviceSem) -> str:
         f".name = {c_str(dev.name)}", f".cpuid = {SYM}_CPUID",
         f".num_irq = {SYM}_NUM_IRQ", f".nvic_prio_bits = {SYM}_NVIC_PRIO_BITS",
         f".flash_base = {SYM}_FLASH_BASE", f".flash_size = {SYM}_FLASH_SIZE",
-        f".dataflash_base = {SYM}_DATAFLASH_BASE",
-        f".dataflash_size = {SYM}_DATAFLASH_SIZE",
+    ]
+    if any(s.name == "DATAFLASH" for s in dev.memory_segments):
+        # SAM D5x/E5x have none (SmartEEPROM instead)
+        items += [f".dataflash_base = {SYM}_DATAFLASH_BASE",
+                  f".dataflash_size = {SYM}_DATAFLASH_SIZE"]
+    items += [
         f".sram_base = {SYM}_{_sram(ds).name}_BASE",
         f".sram_size = {SYM}_{_sram(ds).name}_SIZE",
         f".nvmrows_base = {SYM}_NVMROWS_BASE",
@@ -638,9 +670,17 @@ def device_header(ds: DeviceSem) -> str:
 
 
 def _sram(ds: DeviceSem):
-    """The main SRAM segment (DRAM on the JH01, HSRAM on the MC00)."""
+    """The main SRAM segment (DRAM on the JH01, HSRAM on the MC00 and the
+    SAM E51). Segments inside another (SAM E51 HSRAM_ETB, HSRAM_RET1) are
+    views of it; BKUPRAM (outside the code/SRAM regions) is not the main
+    one."""
     rams = [s for s in ds.device.memory_segments
             if s.type == "ram" and s.address_space == "base"]
+    rams = [s for s in rams
+            if not any(o is not s and o.start <= s.start and
+                       s.start + s.size <= o.start + o.size and
+                       (o.size, o.name) != (s.size, s.name) for o in rams)]
+    rams = [s for s in rams if s.start < 0x40000000] or rams
     if len(rams) != 1:
         raise ValueError(f"{ds.device.name}: expected one RAM segment, got "
                          f"{[s.name for s in rams]}")

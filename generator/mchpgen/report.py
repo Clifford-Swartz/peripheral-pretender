@@ -150,8 +150,15 @@ def _nvm(ds: DeviceSem) -> list[str]:
     return (_table(["address", "value", "content"], rows) +
             ["", f"Everything else in 0x{nvmrows.BASE:08X}-"
                  f"0x{nvmrows.BASE + nvmrows.SIZE - 1:08X} reads 0x{nvmrows.FILL:02X}. "
-                 f"NVMCTRL.PARAM implied by the NVMCTRL parameters: "
-                 f"0x{nvmrows.nvm_param(ds.device):08X}."])
+                 + _nvm_param_text(ds)])
+
+
+def _nvm_param_text(ds) -> str:
+    param = nvmrows.nvm_param(ds.device)
+    if param is None:
+        return "The NVMCTRL parameters do not give NVMCTRL.PARAM."
+    return ("NVMCTRL.PARAM implied by the NVMCTRL parameters: "
+            f"0x{param:08X}.")
 
 
 def _sources(r: RegSem) -> str:

@@ -23,7 +23,11 @@ EXPECTED = {("SERCOM", "U2201"), ("PORT", "U2210"), ("OSCCTRL", "U2119"),
             ("USART", "uart_autobd_v4"), ("CPUINT", "int_8bit_v3"),
             ("CLKCTRL", "avrea"), ("NVMCTRL", "nvm_ctrl_avr_v3"),
             ("SPI", "spi_8bit_v2"), ("TCB", "tmr_16b_capture_v1"),
-            ("TWI", "i2c_8bit_avr_v3")}
+            ("TWI", "i2c_8bit_avr_v3"),
+            # ATSAME51J20A (SAM E51: its own clock, NVM, QSPI, TRNG, USB IPs)
+            ("OSCCTRL", "U2401"), ("OSC32KCTRL", "U2400"), ("MCLK", "U2408"),
+            ("NVMCTRL", "U2409"), ("QSPI", "U2008"), ("TRNG", "U2242"),
+            ("USB", "U2222")}
 
 
 def edited(tmp_path, name, change):

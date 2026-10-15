@@ -1,0 +1,36 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for USB U2222 (SAM D5x/E5x full-speed USB, device mode).
+# The mchp-usb model moves data between the endpoint banks in RAM
+# (DESCADD) and a built-in host that enumerates the device and bridges its
+# CDC ACM interface to a chardev.
+ip: USB
+id: U2222
+versions: ["1.2.0"]
+references:
+  - "DS60001507 (SAM D5x/E5x data sheet) USB chapter: device mode, endpoint banks"
+modes:
+  DEVICE:
+    registers:
+      CTRLA:
+        self_clearing: [SWRST]
+        hooks: [post_write]           # ENABLE/MODE start or stop the bus
+      SYNCBUSY:
+        dynamic: true                 # SWRST reads 1 once after a reset
+      CTRLB: {hooks: [post_write]}    # DETACH attaches the device
+      DADD: {hooks: [post_write]}
+      INTFLAG:
+        w1c: all
+        irq_source: {enable: INTENSET}
+        hooks: [post_write]
+      EPINTSMRY: {dynamic: true}      # endpoints with pending interrupts
+      FNUM: {dynamic: true}           # frame counter of the built-in host
+      EPSTATUSCLR: {hooks: [post_write]}
+      EPSTATUSSET: {hooks: [post_write]}
+      EPINTFLAG:
+        w1c: all
+        hooks: [post_write]
+      EPINTENCLR: {hooks: [post_write]}
+      EPINTENSET: {hooks: [post_write]}
+reset_overrides:
+  CTRLB: 0x0001                       # DETACH

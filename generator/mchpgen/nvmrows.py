@@ -45,9 +45,13 @@ def _fuse(device: atdf.Device, group: str, reg: str) -> tuple[int, dict[str, int
     return base + r.offset, {b.name: b.mask for b in r.bitfields}
 
 
-def nvm_param(device: atdf.Device) -> int:
-    """NVMCTRL.PARAM implied by the NVMCTRL instance parameters."""
+def nvm_param(device: atdf.Device) -> int | None:
+    """NVMCTRL.PARAM implied by the NVMCTRL instance parameters (None when
+    the ATDF lacks them: SAM D5x/E5x)."""
     nvm = device.instance("NVMCTRL")
+    if (nvm.param_int("PAGE_SIZE") is None or nvm.param_int("PAGES") is None
+            or nvm.param_int("DATAFLASH_PAGES") is None):
+        return None
     psz = (nvm.param_int("PAGE_SIZE") // 8).bit_length() - 1
     return (nvm.param_int("DATAFLASH_PAGES") << 20 | psz << 16 |
             nvm.param_int("PAGES"))

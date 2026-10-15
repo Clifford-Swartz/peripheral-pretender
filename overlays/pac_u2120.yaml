@@ -4,7 +4,7 @@
 # protected writes are not refused (no enforcement).
 ip: PAC
 id: U2120
-versions: ["1.1.0"]
+versions: ["1.1.0", "1.2.0"]   # 1.2.0: SAM E51
 references:
   - "DS60001632H 12.6 (PAC registers), 12.5.2.4 (access errors)"
   - "docs/research/boot-path.md finding 11"

@@ -47,6 +47,9 @@ class InstanceSem:
     ip: IpSem
     params: dict[str, str]
     notes: list[str] = field(default_factory=list)
+    # NVIC lines of the instance, consecutive from irq (SAM D5x/E5x: SERCOM
+    # has four, DMAC five, EIC sixteen); 1 on parts with one line each
+    nirqs: int = 1
 
 
 @dataclass
@@ -214,23 +217,36 @@ def _check_overlaps(instances: list[InstanceSem]):
 
 
 def _irq_map(device: atdf.Device) -> tuple[list[IrqLine], list[IrqLine],
-                                           dict[str, tuple[IrqLine, int]]]:
+                                           dict[str, tuple[IrqLine, int]],
+                                           dict[str, int]]:
     lines, exceptions, irq_of = [], [], {}
     if device.is_avr:
-        return _avr_vectors(device)
-    for it in device.interrupts:
+        return _avr_vectors(device) + ({},)
+    nirqs: dict[str, int] = {}
+    # In line order, so that an instance's first line is its irq
+    for it in sorted(device.interrupts, key=lambda i: i.index):
         line = IrqLine(it.index, it.name, it.caption, list(it.instances))
         (lines if it.index >= 0 else exceptions).append(line)
         if it.index < 0:
             continue
         for pos, name in enumerate(it.instances):
             if name in irq_of:
-                raise ValueError(f"{name} drives IRQ {irq_of[name][0].index} "
-                                 f"and {it.index}: one line per instance only")
+                first, _ = irq_of[name]
+                more = nirqs.get(name, 1)
+                # SAM D5x/E5x: an instance with several lines of its own,
+                # consecutive (SERCOMn_0..3); a shared line among them is
+                # not supported
+                if (len(it.instances) > 1 or len(first.instances) > 1 or
+                        it.index != first.index + more):
+                    raise ValueError(f"{name} drives IRQ {first.index} and "
+                                     f"{it.index}: several lines per instance "
+                                     "must be its own and consecutive")
+                nirqs[name] = more + 1
+                continue
             irq_of[name] = (line, pos)
     lines.sort(key=lambda l: l.index)
     exceptions.sort(key=lambda l: l.index)
-    return lines, exceptions, irq_of
+    return lines, exceptions, irq_of, nirqs
 
 
 def _avr_vectors(device: atdf.Device) -> tuple[list[IrqLine], list[IrqLine],
@@ -291,10 +307,18 @@ def build(device: atdf.Device, overlays, prof: Profile | None = None
         if mod is None or mod.id != ip_id:
             diags.append(Diag("info", ov.file,
                               f"no {ip_name} {ip_id} module in this ATDF"))
-    lines, exceptions, irq_of = _irq_map(device)
+    lines, exceptions, irq_of, nirqs = _irq_map(device)
+    # An instance with no register group at all (SAM E51 PUKCC: a ROM
+    # library's coprocessor) has nothing to map
+    bare = {i.name for i in device.instances if not i.groups}
+    for name in sorted(bare):
+        diags.append(Diag("info", device.name, f"{name}: no register group "
+                          "in the ATDF, not mapped"))
     instances = [_build_instance(device, inst, ips[inst.module], irq_of)
-                 for inst in device.instances]
-    known = {i.name for i in instances}
+                 for inst in device.instances if inst.name not in bare]
+    for i in instances:
+        i.nirqs = nirqs.get(i.name, 1)
+    known = {i.name for i in instances} | bare
     for line in lines:
         for name in line.instances:
             if name not in known:

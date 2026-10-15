@@ -5,7 +5,7 @@
 # NMI; filtering and debouncing are instantaneous.
 ip: EIC
 id: U2254
-versions: ["2.0.4", "3.1.0"]      # 2.0.4: MC00; 3.1.0: JH01 (debouncer, PINSTATE)
+versions: ["2.0.4", "3.0.0", "3.1.0"]   # 2.0.4: MC00; 3.0.0: SAM E51; 3.1.0: JH01 (debouncer, PINSTATE)
 references:
   - "DS60001638E 25 (PIC32CM MC00 EIC), DS60001632H 24 (PIC32CM JH01 EIC)"
 registers:
@@ -28,8 +28,10 @@ registers:
     irq_source: {enable: INTENSET}
     hooks: [post_write]           # a level EXTINT sets the flag again
   ASYNCH: {pac_protected: true, enable_protected: all}
-  CONFIG0: {pac_protected: true, enable_protected: all}
-  CONFIG1: {pac_protected: true, enable_protected: all}
+  CONFIG0: {pac_protected: true, enable_protected: all, optional: true}
+  CONFIG1: {pac_protected: true, enable_protected: all, optional: true}
+  # SAM E51: one CONFIG array instead of CONFIG0/CONFIG1
+  CONFIG: {pac_protected: true, enable_protected: all, optional: true}
   DEBOUNCEN: {pac_protected: true, enable_protected: all, optional: true}
   DPRESCALER: {pac_protected: true, enable_protected: all, optional: true}
   PINSTATE:

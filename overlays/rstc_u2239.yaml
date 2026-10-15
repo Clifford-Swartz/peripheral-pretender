@@ -3,7 +3,7 @@
 # Behavior overlay for RSTC U2239.
 ip: RSTC
 id: U2239
-versions: ["2.0.2"]
+versions: ["2.0.2", "4.0.0"]   # 4.0.0: SAM E51
 references:
   - "DS60001632H 20.7 (RSTC registers)"
   - "docs/research/boot-path.md finding 13 (RCAUSE must survive the reset)"

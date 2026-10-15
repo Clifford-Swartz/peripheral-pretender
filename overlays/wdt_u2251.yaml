@@ -3,7 +3,7 @@
 # Behavior overlay for WDT U2251 (IRQ 1). Timeouts are out of scope in v0.
 ip: WDT
 id: U2251
-versions: ["1.0.1"]
+versions: ["1.0.1", "1.1.0"]   # 1.1.0: SAM E51 (fuses in USER_WORD_1: its profile)
 references:
   - "DS60001632H 22.6 (WDT registers), 10.2.1 Table 10-3 (user row)"
   - "docs/research/boot-path.md finding 3 (Harmony startup reads CTRLA)"

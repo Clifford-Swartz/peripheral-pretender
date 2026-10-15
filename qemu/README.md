@@ -38,6 +38,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0029 | AVR8X TWI host (`avr8x-twi`; regenerated AVR64EA48 TWI tables), I2C on the Nano Base's mikroBUS sockets; ADXL345 and the Accel Click (`accel`); qtests |
 | 0030 | MCP79411 RTCC with SRAM/EEPROM (`mchp-mcp79411`, two I2C addresses) and the RTC 6 Click (`rtc6`); qtests |
 | 0031 | 8x8 R/Y/B and Button R/Y Clicks (colour variants of 8x8 G and Button G); qtests |
+| 0032 | ATSAME51J20A (SAM E51, Cortex-M4F) through the generic SoC: instances with several NVIC lines, SAM D5x OSCCTRL/OSC32KCTRL/MCLK/NVMCTRL/TRNG, QSPI (serial memory mode, memory window), USB device controller with a built-in host (CDC ACM to a chardev), GCLK source numbering per family; SST26VF quad SPI flash; the `curiosity-circuitpython` board (PyKit Explorer); regenerated tables; qtest |
 
 ## Setting it up
 

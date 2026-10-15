@@ -20,14 +20,23 @@
 #define BLINK_HALF_PERIOD_MS    200U
 
 /* The 128-bit serial number (DS 10.3 / 8.3); the DFP does not name it. */
-static const uintptr_t serial_number_addr[] = {
-    0x0080A00CU, 0x0080A040U, 0x0080A044U, 0x0080A048U,
-};
+/* The four serial-number words; boards on other families say where */
+#ifndef BOARD_SERIAL_ADDRS
+#define BOARD_SERIAL_ADDRS  { 0x0080A00CU, 0x0080A040U, 0x0080A044U, \
+                              0x0080A048U }
+#endif
+/* The calibration row printed as calrow (OTP5 on the PIC32CM) */
+#ifndef BOARD_CALROW_ADDR
+#define BOARD_CALROW_ADDR   OTP5_ADDR
+#endif
+
+static const uintptr_t serial_number_addr[] = BOARD_SERIAL_ADDRS;
 
 /* Identity and factory data; only the DID's device bits are checked. */
 static void report_identity(void)
 {
-    const volatile uint32_t *cal_row = (const volatile uint32_t *)OTP5_ADDR;
+    const volatile uint32_t *cal_row =
+        (const volatile uint32_t *)BOARD_CALROW_ADDR;
     uint32_t did = DSU_REGS->DSU_DID;
 
     console_puts("dsu: DID=0x");
@@ -88,9 +97,9 @@ static void blink_led0(void)
         console_put_dec(BLINK_COUNT);
         console_puts("\r\n");
 
-        LED0_GROUP->PORT_OUTCLR = LED0_MASK;
+        LED0_ON();
         delay_ms(BLINK_HALF_PERIOD_MS);
-        LED0_GROUP->PORT_OUTSET = LED0_MASK;
+        LED0_OFF();
         delay_ms(BLINK_HALF_PERIOD_MS);
     }
 }

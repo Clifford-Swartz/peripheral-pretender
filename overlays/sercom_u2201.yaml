@@ -5,7 +5,7 @@
 # RW, and has no enable-protection or SYNCBUSY mapping).
 ip: SERCOM
 id: U2201
-versions: ["3.1.1"]
+versions: ["3.1.1", "5.0.0"]   # 5.0.0: SAM E51
 references:
   - "DS60001632H 30.7 (USART registers), 31.7 (SPI), 32.7/32.8 (I2C client/host)"
   - "docs/research/microchip-data.md, Table: SERCOM USART_INT registers"

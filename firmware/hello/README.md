@@ -62,7 +62,7 @@ the user's approval).
 | `boards/<board>/board.mk` | Device, DFP directory and VCOM vector for the Makefile and `make check` |
 | `src/console.c` | VCOM output: blocking DRE-polled TX, hex/decimal formatting, the interrupt-driven print and `VCOM_Handler` (`SERCOM4_Handler`, IRQ13, on the JH01) |
 | `src/main.c` | Test sequence: identity data, IRQ print, SysTick-timed LED0 blinks, exit line |
-| `dfp/` | Startup files and flash linker scripts copied unmodified from the DFPs: `startup_pic32cm5164jh01100.c`, `pic32cm5164jh01100_flash.ld` (PIC32CM-JH_DFP 1.3.221, `PIC32CM-JH01/gcc/gcc/`), `startup_pic32cm1216mc00048.c`, `pic32cm1216mc00048_flash.ld` (PIC32CM-MC_DFP 1.4.67, `PIC32CM1216MC00048/gcc/gcc/`); Apache-2.0 headers intact |
+| `dfp/` | Startup files and flash linker scripts copied unmodified from the DFPs: `startup_pic32cm5164jh01100.c`, `pic32cm5164jh01100_flash.ld` (PIC32CM-JH_DFP 1.3.221, `PIC32CM-JH01/gcc/gcc/`), `startup_pic32cm1216mc00048.c`, `pic32cm1216mc00048_flash.ld` (PIC32CM-MC_DFP 1.4.67, `PIC32CM1216MC00048/gcc/gcc/`), `startup_same51j20a.c`, `same51j20a_flash.ld` (SAME51_DFP 3.9.267, `gcc/gcc/`); Apache-2.0 headers intact |
 | `check-elf.sh` | Static checks on the ELF (`make check`) |
 
 ## Build
@@ -343,4 +343,6 @@ fork, and binary-distribution obligations. SHA-256:
 ```
 776e701cd9021f7131501c0c1c4c9e33414fdb7ccb4bd0465ac0cb9591572620  startup_pic32cm5164jh01100.c
 84b4aac6c70d9ec767b541e7a4a618d76ca1b6f21bd99a5907ae314e066b2693  pic32cm5164jh01100_flash.ld
+f6b72eed27ec76e57404986eeb0d215ba73f7976a3331ed2e5ea131ff88b41bd  startup_same51j20a.c
+dca69e5f1a38fd422f74df04e4e9b3f53889678aa05a052aa66775be2953ff59  same51j20a_flash.ld
 ```

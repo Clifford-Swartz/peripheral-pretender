@@ -1,0 +1,19 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for TRNG U2242 (SAM D5x/E5x true random number generator).
+ip: TRNG
+id: U2242
+versions: ["1.1.0"]
+references:
+  - "DS60001507 (SAM D5x/E5x data sheet) TRNG chapter"
+registers:
+  CTRLA: {pac_protected: true, hooks: [post_write]}
+  EVCTRL: {pac_protected: true, enable_protected: all}
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: all
+    dynamic: true                 # DATARDY while enabled
+    irq_source: {enable: INTENSET}
+  DATA:
+    dynamic: true                 # a new random word per read

@@ -1,0 +1,25 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for MCLK U2408 (SAM D5x/E5x: CPUDIV and HSDIV).
+ip: MCLK
+id: U2408
+versions: ["1.0.0"]
+references:
+  - "DS60001507 (SAM D5x/E5x data sheet) MCLK chapter"
+registers:
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: [CKRDY]
+    irq_source: {enable: INTENSET}
+  HSDIV: {read_only: true}        # fixed at 1
+  CPUDIV:
+    pac_protected: true
+    hooks: [post_write]           # cpuclk = GCLK0 / CPUDIV; sets INTFLAG.CKRDY
+  AHBMASK: {pac_protected: true}
+  APBAMASK: {pac_protected: true}
+  APBBMASK: {pac_protected: true}
+  APBCMASK: {pac_protected: true}
+  APBDMASK: {pac_protected: true}
+reset_overrides:
+  INTFLAG: 0x01                   # CKRDY: clocks are ready out of reset

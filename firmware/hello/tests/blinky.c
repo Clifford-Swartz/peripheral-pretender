@@ -26,7 +26,7 @@ int main(void)
     console_puts("PP blinky: " BOARD_BANNER "\r\n");
     console_puts("LED0 blinks at 2 Hz; hold SW0 for 8 Hz\r\n");
 
-    LED0_GROUP->PORT_OUTSET = LED0_MASK;            /* off (active low) */
+    LED0_OFF();
     LED0_GROUP->PORT_DIRSET = LED0_MASK;
     SW0_GROUP->PORT_DIRCLR = 1U << SW0_PIN;
     SW0_GROUP->PORT_OUTSET = 1U << SW0_PIN;         /* pull-up */

@@ -81,7 +81,9 @@ def _instance(i: InstanceSem) -> dict:
         "alias": ({"name": i.alias_name, "base": i.alias_base,
                    "size": i.alias_size} if i.alias_name else None),
         "irq": ({"line": i.irq, "name": i.irq_name, "input": i.irq_input,
-                 "shared": "SHARED_IRQ" in i.flags} if i.irq >= 0 else None),
+                 "shared": "SHARED_IRQ" in i.flags}
+                | ({"lines": i.nirqs} if i.nirqs > 1 else {})
+                if i.irq >= 0 else None),
         "pac_id": i.pac_id, "gclk_core": i.gclk_core, "gclk_slow": i.gclk_slow,
         "dmac_rx": i.dmac_rx, "dmac_tx": i.dmac_tx, "flags": list(i.flags),
         "params": dict(i.params), "notes": list(i.notes),
@@ -112,7 +114,10 @@ def device_json(ds: DeviceSem) -> str:
                    "variants": dev.variants},
         "core": _avr_core(ds) if dev.is_avr else {"num_irq": int(p["NUM_IRQ"]),
                  "nvic_prio_bits": int(p["__NVIC_PRIO_BITS"]),
-                 "cm0p_rev": int(p["__CM0P_REV"], 0),
+                 **({"cm0p_rev": int(p["__CM0P_REV"], 0)}
+                    if "__CM0P_REV" in p else
+                    {"cm4_rev": int(p["__CM4_REV"], 0),
+                     "fpu_present": p.get("__FPU_PRESENT") == "1"}),
                  "mpu_present": p["__MPU_PRESENT"] == "1",
                  "vtor_present": p["__VTOR_PRESENT"] == "1",
                  "dsu_did_signature": int(dev.property_groups.get(

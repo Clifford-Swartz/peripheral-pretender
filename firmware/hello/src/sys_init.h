@@ -12,6 +12,15 @@
 
 #include "board.h"
 
+/* LED0 on and off; boards with an active-high LED0 say LED0_ACTIVE_HIGH */
+#ifdef LED0_ACTIVE_HIGH
+#define LED0_ON()           (LED0_GROUP->PORT_OUTSET = LED0_MASK)
+#define LED0_OFF()          (LED0_GROUP->PORT_OUTCLR = LED0_MASK)
+#else
+#define LED0_ON()           (LED0_GROUP->PORT_OUTCLR = LED0_MASK)
+#define LED0_OFF()          (LED0_GROUP->PORT_OUTSET = LED0_MASK)
+#endif
+
 /* board.c: Harmony's SYS_Initialize for the board, access for access */
 void sys_initialize(void);
 /* board.c: one line per SYS_Initialize step, read back with checks */

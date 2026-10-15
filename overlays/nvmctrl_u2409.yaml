@@ -1,0 +1,26 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for NVMCTRL U2409 (SAM D5x/E5x: two flash banks, page
+# buffer, SmartEEPROM).
+ip: NVMCTRL
+id: U2409
+versions: ["1.0.0"]
+references:
+  - "DS60001507 (SAM D5x/E5x data sheet) NVMCTRL chapter"
+registers:
+  CTRLA: {pac_protected: true}    # wait states have no timing effect under TCG
+  CTRLB:
+    pac_protected: true
+    write_only: true
+    hooks: [post_write]           # CMDEX=0xA5 runs CMD
+  PARAM: {read_only: true}
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: all
+    irq_source: {enable: INTENSET}
+  STATUS:
+    dynamic: true                 # READY, LOAD (page buffer loaded), BOOTPROT
+  ADDR: {pac_protected: true}
+reset_overrides:
+  STATUS: 0x0001                  # READY

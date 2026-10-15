@@ -18,10 +18,11 @@ from dataclasses import dataclass, field
 
 import yaml
 
-from .overlay import Overlay, OverlayError, _parse_overrides
+from .overlay import (Overlay, OverlayError, _parse_overrides,
+                      _parse_reset_from)
 
 TOP_KEYS = {"device", "references", "notes", "reset_overrides", "nvm_rows",
-            "silicon_revisions", "data_rows"}
+            "silicon_revisions", "data_rows", "reset_from"}
 NVM_KEYS = {"user_row", "serial_addrs", "serial_default", "words"}
 
 
@@ -46,6 +47,9 @@ class Profile:
     # AVR: bytes of the data space that differ from the defaults (SIGROW
     # serial number, calibration): (data address, bytes, comment)
     data_rows: list[tuple[int, bytes, str]] = field(default_factory=list)
+    # module -> {REG.FIELD: fuse spec}: where this device keeps the fuses
+    # an overlay's reset_from names (SAM E51 WDT fuses sit in USER_WORD_1)
+    reset_from: dict[str, dict] = field(default_factory=dict)
     sha1: str = ""
 
     @property
@@ -121,6 +125,10 @@ def load(path: str) -> Profile:
     for module, regs in (raw.get("reset_overrides") or {}).items():
         overrides[str(module)] = _parse_overrides(
             f"{where}.reset_overrides.{module}", regs)
+    fuses = {}
+    for module, items in (raw.get("reset_from") or {}).items():
+        fuses[str(module)] = _parse_reset_from(
+            f"{where}.reset_from.{module}", items)
     revs = raw.get("silicon_revisions")
     if (not isinstance(revs, dict) or not revs
             or not all(isinstance(v, int) and 0 <= v <= 255
@@ -132,6 +140,7 @@ def load(path: str) -> Profile:
     prof = Profile(path=os.path.abspath(path), device=str(raw["device"]),
                    references=list(raw.get("references") or []),
                    reset_overrides=overrides,
+                   reset_from=fuses,
                    nvm_rows=(_nvm_rows(where + ".nvm_rows", nvm)
                              if nvm is not None else None),
                    silicon_revisions=[(str(k), v) for k, v in revs.items()],
@@ -150,7 +159,8 @@ def find(profile_dir: str, device_name: str) -> Profile:
 
 def apply(overlays: dict[tuple[str, str], Overlay], prof: Profile,
           module_ids: dict[str, str]) -> dict[tuple[str, str], Overlay]:
-    """Overlays with the profile's reset overrides layered on top.
+    """Overlays with the profile's reset overrides (and fuse sources of
+    reset values) layered on top.
 
     @module_ids maps the device's module names to their IP ids. Only the
     overlays that change are copied.
@@ -161,8 +171,21 @@ def apply(overlays: dict[tuple[str, str], Overlay], prof: Profile,
         if key not in overlays:
             _fail(prof.file, f"reset_overrides.{module}: the device has no "
                              f"overlaid {module} module")
-        ov = copy.deepcopy(overlays[key])
+        ov = copy.deepcopy(out[key])
         for view in ov.views.values():
             view.reset_overrides.update(items)
+        out[key] = ov
+    for module, items in sorted(prof.reset_from.items()):
+        key = (module, module_ids.get(module, ""))
+        if key not in overlays:
+            _fail(prof.file, f"reset_from.{module}: the device has no "
+                             f"overlaid {module} module")
+        ov = copy.deepcopy(out[key])
+        for view in ov.views.values():
+            unknown = set(items) - set(view.reset_from)
+            if unknown:
+                _fail(prof.file, f"reset_from.{module}: {sorted(unknown)} "
+                                 "are not in the overlay's reset_from")
+            view.reset_from.update(items)
         out[key] = ov
     return out

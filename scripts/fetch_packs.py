@@ -39,6 +39,14 @@ PACKS = [
         "check": "atdf/AVR64EA48.atdf",
     },
     {
+        # SAME51J20A (Curiosity CircuitPython board of the PyKit Explorer):
+        # ATDF at atdf/ATSAME51J20A.atdf (no family folder).
+        "path": ("Microchip", "SAME51_DFP", "3.9.267"),
+        "url": "https://packs.download.microchip.com/"
+               "Microchip.SAME51_DFP.3.9.267.atpack",
+        "check": "atdf/ATSAME51J20A.atdf",
+    },
+    {
         "path": ("ARM", "CMSIS", "6.1.0"),
         "url": "https://github.com/ARM-software/CMSIS_6/releases/download/"
                "v6.1.0/ARM.CMSIS.6.1.0.pack",

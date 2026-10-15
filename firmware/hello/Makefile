@@ -33,7 +33,9 @@ SRCS     := $(APP_SRC) src/console.c src/util.c boards/$(BOARD)/board.c \
             dfp/startup_$(DEVICE).c
 OBJS     := $(SRCS:%.c=$(BUILD)/%.o)
 
-ARCH     := -mcpu=cortex-m0plus -mthumb
+# board.mk may set ARCH (core) and CMSIS_CORE (its CMSIS core header)
+ARCH     ?= -mcpu=cortex-m0plus -mthumb
+CMSIS_CORE ?= core_cm0plus.h
 CPPFLAGS := -Isrc -Iboards/$(BOARD) -isystem "$(DFP)/include" -isystem "$(CMSIS)"
 CFLAGS   := $(ARCH) -std=gnu11 -Os -g -ffunction-sections -fdata-sections \
             -Wall -Wextra -MMD -MP
@@ -76,7 +78,7 @@ clean:
 packs:
 	@test -f "$(DFP)/include/$(DEVICE).h" || \
 	    { echo "DFP not found at $(DFP); set PACKS= or DFP=" >&2; exit 1; }
-	@test -f "$(CMSIS)/core_cm0plus.h" || \
+	@test -f "$(CMSIS)/$(CMSIS_CORE)" || \
 	    { echo "CMSIS not found at $(CMSIS); set PACKS= or CMSIS=" >&2; exit 1; }
 
 -include $(OBJS:.o=.d)

@@ -21,6 +21,7 @@ FLAG_ORDER = ("PAC", "ALIAS_SET", "ALIAS_CLEAR", "ALIAS_TOGGLE", "DYNAMIC",
 FLAG_BITS = {name: 1 << i for i, name in enumerate(FLAG_ORDER)}
 
 # sync: "GENCTRL{n}" or "REG.GENCTRL{n}": element i raises bit GENCTRL<i>
+# (or bit i of a field GENCTRL, as on the SAM E51)
 SYNC_ELEMENT = re.compile(r"^(?:([A-Z][A-Z0-9_]*)\.)?([A-Z][A-Z0-9_]*)\{n\}$")
 
 
@@ -636,10 +637,15 @@ class _ViewBuilder:
             r.sync_reg, bits = self._sync_bits(r, regname, by_name)
             masks = []
             for i in range(r.count):
-                if f"{stem}{i}" not in bits:
+                if f"{stem}{i}" in bits:
+                    masks.append(bits[f"{stem}{i}"])
+                elif stem in bits and (bits[stem] & -bits[stem]) << i                         & bits[stem]:
+                    # SAM E51 GCLK: one SYNCBUSY.GENCTRL field, bit n for
+                    # GENCTRLn
+                    masks.append((bits[stem] & -bits[stem]) << i)
+                else:
                     self.ctx.error(f"{r.name}: sync bit {stem}{i} missing in "
                                    f"{r.sync_reg}")
-                masks.append(bits[f"{stem}{i}"])
             if any(m != masks[0] << i for i, m in enumerate(masks)):
                 self.ctx.error(f"{r.name}: per-element sync bits are not "
                                f"consecutive")

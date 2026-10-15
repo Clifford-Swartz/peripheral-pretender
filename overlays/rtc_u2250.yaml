@@ -1,11 +1,12 @@
 # Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
 #
-# Behavior overlay for RTC U2250 (PIC32CM MC00). The mchp-rtc model counts
+# Behavior overlay for RTC U2250 (PIC32CM MC00; SAM E51, which adds
+# COMP1, ALARM1/MASK1, tamper and backup registers). The mchp-rtc model counts
 # CLK_RTC_OSC (OSC32KCTRL.RTCCTRL) through the prescaler in the three
 # modes, with periodic, compare/alarm and overflow flags.
 ip: RTC
 id: U2250
-versions: ["1.1.1"]
+versions: ["1.1.1", "2.1.0"]   # 2.1.0: SAM E51
 references:
   - "DS60001638E 23 (PIC32CM MC00 RTC)"
 modes:
@@ -33,7 +34,7 @@ modes:
         hooks: [pre_read, post_write]   # valid with COUNTSYNC; reload
       COMP:
         pac_protected: true
-        sync: COMP0
+        sync: "COMP{n}"                 # SAM E51: COMP[0..1]
         hooks: [post_write]
   MODE1:
     registers:
@@ -80,7 +81,13 @@ modes:
         pac_protected: true
         sync: ALARM0
         hooks: [post_write]
+        optional: true                  # SAM E51: ALARM0/ALARM1
       MASK:
         pac_protected: true
         sync: MASK0
         hooks: [post_write]
+        optional: true                  # SAM E51: MASK0/MASK1
+      ALARM0: &alarm0 {pac_protected: true, sync: ALARM0, hooks: [post_write], optional: true}
+      MASK0: &mask0 {pac_protected: true, sync: MASK0, hooks: [post_write], optional: true}
+      ALARM1: {pac_protected: true, sync: ALARM1, hooks: [post_write], optional: true}
+      MASK1: {pac_protected: true, sync: MASK1, hooks: [post_write], optional: true}

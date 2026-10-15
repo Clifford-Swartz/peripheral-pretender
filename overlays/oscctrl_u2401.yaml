@@ -1,0 +1,34 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for OSCCTRL U2401 (SAM D5x/E5x: XOSC0/1, DFLL48M, FDPLL0/1;
+# five IRQ lines). Register names of the DPLL group apply to both PLLs.
+ip: OSCCTRL
+id: U2401
+versions: ["1.0.0"]
+references:
+  - "DS60001507 (SAM D5x/E5x data sheet) OSCCTRL chapter: registers, DFLL48M and FDPLL"
+registers:
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: all
+    irq_source: {enable: INTENSET}
+  STATUS:
+    dynamic: true                 # ready/lock bits follow the controls
+  XOSCCTRL: {pac_protected: true, hooks: [post_write]}
+  DFLLCTRLA: {pac_protected: true, hooks: [post_write]}
+  DFLLCTRLB: {pac_protected: true, hooks: [post_write]}
+  DFLLVAL: {pac_protected: true, hooks: [post_write]}
+  DFLLMUL: {pac_protected: true, hooks: [post_write]}
+  DFLLSYNC: {dynamic: true}       # instant synchronization: reads 0
+  DPLLCTRLA: {pac_protected: true, hooks: [post_write]}
+  DPLLRATIO: {pac_protected: true, hooks: [post_write]}
+  DPLLCTRLB: {pac_protected: true, hooks: [post_write]}
+  DPLLSYNCBUSY: {dynamic: true}
+  DPLLSTATUS:
+    dynamic: true                 # LOCK|CLKRDY once enabled with a reference
+reset_overrides:
+  # DFLL48M runs in open loop from reset (ENABLE | ONDEMAND); GCLK0 uses it
+  DFLLCTRLA: 0x82
+  STATUS: 0x00000100              # DFLLRDY
+  INTFLAG: 0x00000100             # DFLLRDY

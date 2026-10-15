@@ -1,0 +1,22 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for OSC32KCTRL U2400 (SAM D5x/E5x: XOSC32K, OSCULP32K,
+# CLK_RTC_OSC; no OSC32K).
+ip: OSC32KCTRL
+id: U2400
+versions: ["1.0.0"]
+references:
+  - "DS60001507 (SAM D5x/E5x data sheet) OSC32KCTRL chapter"
+registers:
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: all
+    irq_source: {enable: INTENSET}
+  STATUS:
+    dynamic: true                 # XOSC32KRDY once enabled with a crystal
+  RTCCTRL: {pac_protected: true, hooks: [post_write]}
+  XOSC32K: {pac_protected: true, hooks: [post_write]}
+  CFDCTRL: {pac_protected: true}
+  EVCTRL: {pac_protected: true}
+  OSCULP32K: {pac_protected: true, hooks: [post_write]}

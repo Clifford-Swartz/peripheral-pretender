@@ -5,7 +5,7 @@
 # configurations depend on the device and live in its profile.
 ip: HMATRIXB
 id: I7638
-versions: ["2.1.3"]
+versions: ["2.1.3", "2.1.4"]   # 2.1.4: SAM E51
 references:
   - "silicon, PIC32CM1216MC00048 rev A1 after reset, 2026-10-13"
 registers: {}

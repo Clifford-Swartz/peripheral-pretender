@@ -25,6 +25,9 @@ BUILD = PROJECT_ROOT / "firmware" / "hello" / "build"
 BOARDS = {
     "pic32cm_jh01_cpro": ("pic32cm-jh01-cpro", "PIC32CM5164JH01100"),
     "pic32cm_mc00_cpro": ("pic32cm-mc00-cpro", "PIC32CM1216MC00048"),
+    # serial0 is the USB console by default; hello prints on the debug UART
+    "curiosity_circuitpython": ("curiosity-circuitpython,console=debug",
+                                "ATSAME51J20A"),
 }
 
 
@@ -33,7 +36,7 @@ def board(request, qemu_machines):
     name = request.param
     machine, device = BOARDS[name]
     elf = BUILD / name / "hello.elf"
-    if machine not in qemu_machines:
+    if machine.split(",")[0] not in qemu_machines:
         pytest.skip(f"QEMU build has no {machine} machine yet")
     if not elf.is_file():
         pytest.skip(f"{elf.relative_to(PROJECT_ROOT)} not built "

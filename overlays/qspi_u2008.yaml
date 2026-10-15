@@ -1,0 +1,30 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for QSPI U2008 (SAM D5x/E5x). The mchp-qspi model runs
+# serial-memory-mode instruction frames on its SSI bus, with data through
+# the memory window at 0x04000000.
+ip: QSPI
+id: U2008
+versions: ["1.6.3"]
+references:
+  - "DS60001507 (SAM D5x/E5x data sheet) QSPI chapter: instruction frames, memory mode"
+registers:
+  CTRLA:
+    pac_protected: true
+    self_clearing: [SWRST]
+    strobe: [LASTXFER]
+    hooks: [post_write]           # LASTXFER ends the transfer (INSTREND)
+  CTRLB: {pac_protected: true, enable_protected: all}
+  BAUD: {pac_protected: true, enable_protected: all}
+  RXDATA: {dynamic: true}         # SPI mode
+  TXDATA: {hooks: [post_write]}   # SPI mode: one SSI transfer
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: all
+    irq_source: {enable: INTENSET}
+  STATUS: {dynamic: true}         # ENABLE, CSSTATUS
+  INSTRFRAME:
+    hooks: [pre_read, post_write] # a write starts the instruction frame
+reset_overrides:
+  INTFLAG: 0x00000002             # DRE

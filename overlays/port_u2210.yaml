@@ -4,7 +4,7 @@
 # (3 groups at a 0x80 stride: PA, PB, PC); rules apply to every group.
 ip: PORT
 id: U2210
-versions: ["2.1.1", "3.1.0"]   # 2.1.1: MC00
+versions: ["2.1.1", "2.2.0", "3.1.0"]   # 2.1.1: MC00; 2.2.0: SAM E51
 references:
   - "DS60001632H 27.7 (PORT registers), 7.4 (PA30 SWCLK after reset)"
   - "docs/research/microchip-data.md, Table: PORT group registers"
