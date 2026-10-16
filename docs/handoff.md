@@ -442,6 +442,10 @@ session scratchpad only; what matters is in each model's header comment.
 - **DC Motor** (patch 0055, `click-dcmotor`): PWM duty timed like the Buzz Click's, the
   4053/DRV8833 table, a motor with lag; a `motor` display. MikroElektronika's example uses
   only slow decay, so its motor slows as its duty rises: true on silicon too.
+- **Servo** (patch 0056, `click-servo`): PCA9685 plus a minimal LTC2497 in one device; a
+  `servos` display. MikroElektronika's driver writes MODE1 0xF1 from awake, which would
+  select the grounded EXTCLK if the chip took it: the data sheet's sequence says it does
+  not, so the model guards it. Unchecked on hardware.
 
 The renderer follows DXF arcs and turns parts (`rotate_deg`); new part kinds potentiometer,
 encoder, module. `header_center_mm` places Clicks whose DXF header is off the usual origin

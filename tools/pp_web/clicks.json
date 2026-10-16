@@ -2347,5 +2347,87 @@
         "active_low": true
       }
     ]
+  },
+  "servo": {
+    "name": "Servo Click",
+    "vendor": "MikroElektronika",
+    "chip": "PCA9685 + LTC2497",
+    "bus": "I2C 0x40, 0x14",
+    "description": "16-channel 12-bit PWM for servos (NXP PCA9685; OE# on CS) and per-servo current sense (LTC2497 over 0.1 Ohm shunts). Servos 1-4 shown, turned by the law MikroE's driver assumes (81-2761 us for 0-180 degrees at 30 Hz)",
+    "controls": [
+      {
+        "id": "load-ma",
+        "label": "Servo current",
+        "property": "load-ma",
+        "unit": "mA",
+        "min": 0,
+        "max": 2000,
+        "step": 10,
+        "scale": 1,
+        "default": 150
+      }
+    ],
+    "monitors": [
+      {
+        "id": "pulses",
+        "label": "Pulse widths, us (ch 1-16)",
+        "property": "pulses"
+      }
+    ],
+    "display": {
+      "type": "servos",
+      "property": "angles",
+      "size_mm": 10,
+      "servos": [
+        {
+          "ch": 0,
+          "at_mm": [
+            31,
+            6
+          ]
+        },
+        {
+          "ch": 1,
+          "at_mm": [
+            31,
+            18
+          ]
+        },
+        {
+          "ch": 2,
+          "at_mm": [
+            31,
+            30
+          ]
+        },
+        {
+          "ch": 3,
+          "at_mm": [
+            31,
+            42
+          ]
+        }
+      ]
+    },
+    "signals": [],
+    "image": "servo/top.png",
+    "origin_mm": [
+      -1.27,
+      53.34
+    ],
+    "size_mm": [
+      25.4,
+      57.15
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          17.53,
+          2.54
+        ],
+        "color": "#5dff7a"
+      }
+    ]
   }
 }

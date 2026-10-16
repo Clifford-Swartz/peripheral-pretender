@@ -389,6 +389,14 @@ a monitor shows the bridge's state. Demo: `make -C firmware/hello BOARD=pic32cm_
 APP=dcmotor` (EXT1; TCC0 PWM at 5 kHz; forward, full, brake, reverse, coast, slow decay,
 sleep, 2 s each).
 
+The Servo Click (`clicks/servo/`) brings a `display` of type `servos`: servos 1-4 beside the
+board, each horn at its channel's angle from the polled `angles` (dim without a pulse). The
+servo law defaults to the one MikroElektronika's driver assumes (81-2761 us for 0-180 degrees
+at its 30 Hz), so the page shows the angles its firmware means. A slider sets the current a
+servo draws (what the LTC2497 reads) and a monitor shows all sixteen pulse widths. Demo: `make
+-C firmware/hello BOARD=pic32cm_mc00_cpro APP=servo` (EXT1; MikroElektronika's set-up, 30 Hz,
+a readback, servo 1's current; then servo 1 sweeps, servo 2 mirrors it, 3 and 4 hold).
+
 Colour variants: 8x8 R, Y and B and Button R and Y share their device with 8x8 G and Button G
 and have their own art and LED colours. The 8x8 B Click's page links the 8x8 R Click's 2D files,
 so its art is the 8x8 R DXF with the silkscreen letter replaced (`silk_label`).

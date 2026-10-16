@@ -1,0 +1,704 @@
+From e81ca094e25a159d0d273cd3cdf515b122db189c Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 15 Oct 2026 22:55:22 -0700
+Subject: [PATCH] hw/misc: the Servo Click, PCA9685 and LTC2497
+
+click-servo answers for both chips: the PCA9685 at 0x40 (All Call,
+sub-addresses, the general call's software reset, auto-increment,
+RESTART, PRE_SCALE only while asleep, full on and off, INVRT, ALL_LED,
+EXTCLK only from sleep) with OE# on the socket's CS, and a minimal
+LTC2497 at 0x14 that reads each servo's current through its shunt. The
+pulse widths and the servos' angles (by a settable servo law) are
+properties for front ends. qtest.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  13 +
+ hw/misc/click_servo.c                 | 479 ++++++++++++++++++++++++++
+ hw/misc/meson.build                   |   1 +
+ hw/misc/mikrobus.c                    |   6 +
+ include/hw/misc/click_servo.h         |  28 ++
+ tests/qtest/pic32cm-click-test.c      |  79 +++++
+ 6 files changed, 606 insertions(+)
+ create mode 100644 hw/misc/click_servo.c
+ create mode 100644 include/hw/misc/click_servo.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 3074309..4e7c680 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -237,6 +237,19 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   ``tau-ms`` (150) lag, 50 ms braking, 1 s coasting. ``rpm``, ``drive``,
+   ``state`` and ``angle`` read it. EXT2's AN is PA08, EXT1's PB08.
+ 
++``servo``
++  Servo Click (v100, ``click-servo``): a PCA9685 at I2C 0x40 (also All
++  Call 0x70, its sub-addresses and the general call's software reset),
++  OE# on CS (R18 4.7k pull-up: outputs off until firmware drives CS low),
++  and a minimal LTC2497 at 0x14 reading each servo's current through its
++  0.1 Ohm shunt (150 ms conversions, no acknowledge meanwhile). Sleep,
++  auto-increment, RESTART, PRE_SCALE (only while asleep), full on/off,
++  INVRT, ALL_LED, and EXTCLK set only from sleep (with the pin tied low,
++  no PWM). ``period-us``, ``pulses`` and ``angles`` (by the servo law
++  ``min-us``/``max-us``: 81/2761 us for 0/180 degrees, the law
++  MikroElektronika's driver assumes; 500/2500 for a typical servo) read
++  what the servos get; a servo with a pulse draws ``load-ma`` (150).
++
+ ``oledw``
+   OLED W Click (v100): an SSD1306 (``ssd1306``) with a 96x39 white OLED
+   (MI9639BO-W) on SPI (jumpers J1-J3 on SPI), CS# on CS, D/C# on PWM, RES#
+diff --git a/hw/misc/click_servo.c b/hw/misc/click_servo.c
+new file mode 100644
+index 0000000..4e276f7
+--- /dev/null
++++ b/hw/misc/click_servo.c
+@@ -0,0 +1,479 @@
++/*
++ * Servo Click: PCA9685 16-channel PWM and LTC2497 current sense, with
++ * servos on its headers
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Servo Click (MikroElektronika, schematic v100): a PCA9685 (NXP, rev 4)
++ * at 0x40 (A0-A2 jumpers on GND, EXTCLK tied low) drives sixteen servo
++ * headers; OE# is the socket's CS with a 4.7k pull-up, so the outputs
++ * stay off until firmware drives CS low. Each servo returns its current
++ * through a 0.1 Ohm shunt that an LTC2497 at 0x14 (address pins low)
++ * measures against a 2.048 V reference (MAX6106).
++ *
++ * PCA9685: MODE1 (reset 0x11: SLEEP, ALLCALL), MODE2 (0x04), SUBADR1-3,
++ * ALLCALLADR, LEDn_ON/OFF_L/H at 0x06 + 4n (full on and full off in bit 4
++ * of the high bytes; full off at reset), ALL_LED at 0xFA-0xFD (write
++ * only), PRE_SCALE at 0xFE (0x1E, written only while SLEEP is set, at
++ * least 3). The pointer auto-increments with MODE1.AI, rolling over from
++ * 0x45 and from 0xFF to 0. Writing RESTART 1 clears it. EXTCLK is set
++ * only by writing it while SLEEP already is, and then, with the pin tied
++ * low, no PWM runs (MikroElektronika's driver writes 0xF1 from awake,
++ * which leaves it clear). The general call (0x00) with 0x06 resets the
++ * chip. A channel's pulse is ((OFF - ON) mod 4096) of the
++ * (PRE_SCALE + 1) * 4096 / 25 MHz period; full off, full on, INVRT,
++ * SLEEP and OE# high (outputs off, OUTNE 0) as the data sheet says. The
++ * output phase, OCH (outputs change at once) and open-drain levels are
++ * not modelled.
++ *
++ * LTC2497 (minimal): a write selects the channel (101 SGL ODD A2 A1 A0);
++ * when a transfer ends a 150 ms conversion starts, during which the chip
++ * does not acknowledge; a read returns the previous result as 24 bits
++ * (SIG, MSB, 16 data bits, six zeros), single-ended against COM, full
++ * scale 1.024 V. A servo with a pulse draws "load-ma" through its shunt.
++ *
++ * The servos: an angle from the pulse width by the servo law (min-us at
++ * 0 degrees, max-us at 180, clamped). The default law is the one
++ * MikroElektronika's driver assumes at its 30 Hz (OFF count = degrees x
++ * 330 / 180 + 10: 81 us at 0, 2761 us at 180), so the page shows the
++ * angles its firmware means; a typical servo is 500/2500. No physical
++ * Click checked it.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/visitor.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/i2c/i2c.h"
++#include "hw/misc/click_servo.h"
++#include "migration/vmstate.h"
++
++#define REG_MODE1           0x00
++#define REG_MODE2           0x01
++#define REG_SUBADR1         0x02
++#define REG_ALLCALLADR      0x05
++#define REG_LED0            0x06
++#define REG_LAST_LED        0x45
++#define REG_ALL_LED         0xFA
++#define REG_PRESCALE        0xFE
++
++#define M1_RESTART          BIT(7)
++#define M1_EXTCLK           BIT(6)
++#define M1_AI               BIT(5)
++#define M1_SLEEP            BIT(4)
++#define M1_SUB1             BIT(3)
++#define M1_ALLCALL          BIT(0)
++#define M2_INVRT            BIT(4)
++#define FULL                BIT(4)      /* in ON_H, OFF_H */
++
++#define NCH                 16
++#define OSC_HZ              25000000
++#define ADC_CONV_NS         (150 * SCALE_MS)
++#define SHUNT_MOHM          100
++#define ADC_FS_UV           1024000
++
++enum { TGT_PCA, TGT_ADC, TGT_GENCALL };
++
++OBJECT_DECLARE_SIMPLE_TYPE(ClickServoState, CLICK_SERVO)
++
++struct ClickServoState {
++    I2CSlave parent_obj;
++
++    uint8_t regs[256];
++    uint8_t ptr;
++    bool ptr_set;
++    uint8_t target;
++    bool oe_high;               /* OE#: outputs off */
++
++    /* LTC2497 */
++    uint8_t adc_sel;            /* the channel select byte */
++    uint32_t adc_result;        /* 24 bits, the last conversion */
++    uint32_t adc_next;          /* converting now */
++    uint8_t adc_nread;
++    bool adc_busy;
++    QEMUTimer *adc_timer;
++
++    uint32_t min_us, max_us, load_ma;
++};
++
++static void pca_reset_regs(ClickServoState *s)
++{
++    memset(s->regs, 0, sizeof(s->regs));
++    s->regs[REG_MODE1] = M1_SLEEP | M1_ALLCALL;
++    s->regs[REG_MODE2] = 0x04;
++    s->regs[REG_SUBADR1] = 0xE2;
++    s->regs[REG_SUBADR1 + 1] = 0xE4;
++    s->regs[REG_SUBADR1 + 2] = 0xE8;
++    s->regs[REG_ALLCALLADR] = 0xE0;
++    for (unsigned n = 0; n < NCH; n++) {
++        s->regs[REG_LED0 + 4 * n + 3] = FULL;     /* full off */
++    }
++    s->regs[REG_PRESCALE] = 0x1E;
++}
++
++/* Period in nanoseconds */
++static uint64_t pca_period_ns(ClickServoState *s)
++{
++    return (uint64_t)(s->regs[REG_PRESCALE] + 1) * 4096 *
++           NANOSECONDS_PER_SECOND / OSC_HZ;
++}
++
++/* Channel @n's high time in nanoseconds */
++static uint64_t pca_pulse_ns(ClickServoState *s, unsigned n)
++{
++    const uint8_t *r = &s->regs[REG_LED0 + 4 * n];
++    uint64_t period = pca_period_ns(s), hi;
++    unsigned on = (r[1] & 0xF) << 8 | r[0];
++    unsigned off = (r[3] & 0xF) << 8 | r[2];
++
++    if (s->oe_high || (s->regs[REG_MODE1] & (M1_SLEEP | M1_EXTCLK))) {
++        return 0;                       /* OUTNE 0: low */
++    }
++    if (r[3] & FULL) {
++        hi = 0;
++    } else if (r[1] & FULL) {
++        hi = period;
++    } else {
++        hi = period * ((off - on) & 0xFFF) / 4096;
++    }
++    if (s->regs[REG_MODE2] & M2_INVRT) {
++        hi = period - hi;
++    }
++    return hi;
++}
++
++static void pca_write(ClickServoState *s, uint8_t reg, uint8_t v)
++{
++    uint8_t old;
++
++    switch (reg) {
++    case REG_MODE1:
++        old = s->regs[reg];
++        v = (v & ~M1_RESTART) | (old & M1_RESTART & ~v);
++        if (!(old & M1_SLEEP) || !(v & M1_SLEEP)) {
++            v = (v & ~M1_EXTCLK) | (old & M1_EXTCLK);   /* sticky, guarded */
++        }
++        if ((v & M1_SLEEP) && !(old & M1_SLEEP)) {
++            for (unsigned n = 0; n < NCH; n++) {
++                if (!(s->regs[REG_LED0 + 4 * n + 3] & FULL)) {
++                    v |= M1_RESTART;    /* PWM was running */
++                    break;
++                }
++            }
++        }
++        s->regs[reg] = v;
++        break;
++    case REG_PRESCALE:
++        if (s->regs[REG_MODE1] & M1_SLEEP) {
++            s->regs[reg] = MAX(v, 3);
++        }
++        break;
++    case REG_ALL_LED ... REG_ALL_LED + 3:
++        for (unsigned n = 0; n < NCH; n++) {
++            s->regs[REG_LED0 + 4 * n + reg - REG_ALL_LED] =
++                reg & 1 ? v & 0x1F : v;
++        }
++        break;
++    case REG_MODE2:
++        s->regs[reg] = v & 0x1F;
++        break;
++    case REG_SUBADR1 ... REG_ALLCALLADR:
++        s->regs[reg] = v & 0xFE;
++        break;
++    case REG_LED0 ... REG_LAST_LED:
++        s->regs[reg] = (reg - REG_LED0) & 1 ? v & 0x1F : v;
++        break;
++    default:
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "click-servo: write 0x%02x to reserved 0x%02x\n", v,
++                      reg);
++        break;
++    }
++}
++
++static uint8_t pca_read(ClickServoState *s, uint8_t reg)
++{
++    if (reg >= REG_ALL_LED && reg < REG_PRESCALE) {
++        return 0;                       /* write only */
++    }
++    return s->regs[reg];
++}
++
++static void pca_advance(ClickServoState *s)
++{
++    if (!(s->regs[REG_MODE1] & M1_AI)) {
++        return;
++    }
++    s->ptr = s->ptr == REG_LAST_LED ? 0 : s->ptr + 1;   /* 0xFF wraps too */
++}
++
++/* ---- LTC2497 ---- */
++
++static uint32_t adc_convert(ClickServoState *s)
++{
++    unsigned ch = (s->adc_sel & 0x8 ? 1 : 0) | (s->adc_sel & 7) << 1;
++    uint64_t uv = 0, code;
++
++    if (ch < NCH && pca_pulse_ns(s, ch)) {
++        uv = (uint64_t)s->load_ma * SHUNT_MOHM;   /* mA x mOhm = uV */
++    }
++    if (uv >= ADC_FS_UV) {
++        return 3u << 22;                /* over range: SIG, MSB */
++    }
++    code = uv * 65536 / ADC_FS_UV;
++    return 1u << 23 | (uint32_t)code << 6;
++}
++
++static void adc_done(void *opaque)
++{
++    ClickServoState *s = opaque;
++
++    s->adc_result = s->adc_next;
++    s->adc_busy = false;
++}
++
++static void adc_start(ClickServoState *s)
++{
++    s->adc_next = adc_convert(s);
++    s->adc_busy = true;
++    timer_mod(s->adc_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++              ADC_CONV_NS);
++}
++
++/* ---- I2C ---- */
++
++static bool servo_match(I2CSlave *candidate, uint8_t address, bool broadcast,
++                        I2CNodeList *current_devs)
++{
++    ClickServoState *s = CLICK_SERVO(candidate);
++    uint8_t m1 = s->regs[REG_MODE1];
++    I2CNode *node;
++
++    if (broadcast) {
++        s->target = TGT_GENCALL;
++    } else if (address == CLICK_SERVO_ADDR ||
++               ((m1 & M1_ALLCALL) &&
++                address == s->regs[REG_ALLCALLADR] >> 1) ||
++               ((m1 & M1_SUB1) && address == s->regs[REG_SUBADR1] >> 1) ||
++               ((m1 & (M1_SUB1 >> 1)) &&
++                address == s->regs[REG_SUBADR1 + 1] >> 1) ||
++               ((m1 & (M1_SUB1 >> 2)) &&
++                address == s->regs[REG_SUBADR1 + 2] >> 1)) {
++        s->target = TGT_PCA;
++    } else if (address == CLICK_SERVO_ADC_ADDR && !s->adc_busy) {
++        s->target = TGT_ADC;
++    } else {
++        return false;
++    }
++    node = g_new(struct I2CNode, 1);
++    node->elt = candidate;
++    QLIST_INSERT_HEAD(current_devs, node, next);
++    return true;
++}
++
++static int servo_event(I2CSlave *i2c, enum i2c_event event)
++{
++    ClickServoState *s = CLICK_SERVO(i2c);
++
++    switch (event) {
++    case I2C_START_SEND:
++        s->ptr_set = false;
++        break;
++    case I2C_START_RECV:
++        s->adc_nread = 0;
++        break;
++    case I2C_FINISH:
++        if (s->target == TGT_ADC) {
++            adc_start(s);
++        }
++        break;
++    default:
++        break;
++    }
++    return 0;
++}
++
++static int servo_send(I2CSlave *i2c, uint8_t data)
++{
++    ClickServoState *s = CLICK_SERVO(i2c);
++
++    switch (s->target) {
++    case TGT_GENCALL:
++        if (data == 0x06) {
++            pca_reset_regs(s);          /* SWRST */
++        }
++        break;
++    case TGT_ADC:
++        if ((data & 0xE0) == 0xA0) {
++            s->adc_sel = data;
++        }
++        break;
++    default:
++        if (!s->ptr_set) {
++            s->ptr = data;
++            s->ptr_set = true;
++        } else {
++            pca_write(s, s->ptr, data);
++            pca_advance(s);
++        }
++        break;
++    }
++    return 0;
++}
++
++static uint8_t servo_recv(I2CSlave *i2c)
++{
++    ClickServoState *s = CLICK_SERVO(i2c);
++    uint8_t v;
++
++    if (s->target == TGT_ADC) {
++        v = s->adc_nread < 3 ? s->adc_result >> (16 - 8 * s->adc_nread) : 0;
++        s->adc_nread++;
++        return v;
++    }
++    if (s->target != TGT_PCA) {
++        return 0xFF;
++    }
++    v = pca_read(s, s->ptr);
++    pca_advance(s);
++    return v;
++}
++
++static void servo_set_oe(void *opaque, int n, int level)
++{
++    CLICK_SERVO(opaque)->oe_high = level > 0;
++}
++
++/* ---- for front ends ---- */
++
++static void servo_get_period(Object *obj, Visitor *v, const char *name,
++                             void *opaque, Error **errp)
++{
++    uint32_t us = pca_period_ns(CLICK_SERVO(obj)) / 1000;
++
++    visit_type_uint32(v, name, &us, errp);
++}
++
++static char *servo_get_pulses(Object *obj, Error **errp)
++{
++    ClickServoState *s = CLICK_SERVO(obj);
++    GString *g = g_string_new(NULL);
++
++    for (unsigned n = 0; n < NCH; n++) {
++        g_string_append_printf(g, "%s%u", n ? " " : "",
++                               (unsigned)(pca_pulse_ns(s, n) / 1000));
++    }
++    return g_string_free(g, false);
++}
++
++static char *servo_get_angles(Object *obj, Error **errp)
++{
++    ClickServoState *s = CLICK_SERVO(obj);
++    GString *g = g_string_new(NULL);
++    int span = MAX((int)s->max_us - (int)s->min_us, 1);
++
++    for (unsigned n = 0; n < NCH; n++) {
++        int us = pca_pulse_ns(s, n) / 1000;
++        int deg = -1;
++
++        if (us > 0 && (uint64_t)us * 1000 < pca_period_ns(s)) {
++            deg = ((us - (int)s->min_us) * 180 + span / 2) / span;
++            deg = MAX(0, MIN(180, deg));
++        }
++        g_string_append_printf(g, "%s%d", n ? " " : "", deg);
++    }
++    return g_string_free(g, false);
++}
++
++static void servo_reset(DeviceState *dev)
++{
++    ClickServoState *s = CLICK_SERVO(dev);
++
++    pca_reset_regs(s);
++    s->ptr = 0;
++    s->ptr_set = false;
++    s->adc_sel = 0xB0;
++    s->adc_result = 1u << 23;
++    s->adc_busy = false;
++    timer_del(s->adc_timer);
++}
++
++static void servo_init(Object *obj)
++{
++    ClickServoState *s = CLICK_SERVO(obj);
++
++    s->adc_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, adc_done, s);
++    qdev_init_gpio_in_named(DEVICE(obj), servo_set_oe, CLICK_SERVO_OE, 1);
++    s->oe_high = true;                  /* R18 pulls OE# up */
++    s->min_us = 81;                     /* MikroElektronika's law */
++    s->max_us = 2761;
++    s->load_ma = 150;
++    object_property_add(obj, "period-us", "uint32", servo_get_period, NULL,
++                        NULL, NULL);
++    object_property_add_str(obj, "pulses", servo_get_pulses, NULL);
++    object_property_add_str(obj, "angles", servo_get_angles, NULL);
++    object_property_add_uint32_ptr(obj, "min-us", &s->min_us,
++                                   OBJ_PROP_FLAG_READWRITE);
++    object_property_add_uint32_ptr(obj, "max-us", &s->max_us,
++                                   OBJ_PROP_FLAG_READWRITE);
++    object_property_add_uint32_ptr(obj, "load-ma", &s->load_ma,
++                                   OBJ_PROP_FLAG_READWRITE);
++}
++
++static void servo_finalize(Object *obj)
++{
++    timer_free(CLICK_SERVO(obj)->adc_timer);
++}
++
++static const VMStateDescription vmstate_servo = {
++    .name = TYPE_CLICK_SERVO,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, ClickServoState),
++        VMSTATE_UINT8_ARRAY(regs, ClickServoState, 256),
++        VMSTATE_UINT8(ptr, ClickServoState),
++        VMSTATE_BOOL(ptr_set, ClickServoState),
++        VMSTATE_UINT8(target, ClickServoState),
++        VMSTATE_BOOL(oe_high, ClickServoState),
++        VMSTATE_UINT8(adc_sel, ClickServoState),
++        VMSTATE_UINT32(adc_result, ClickServoState),
++        VMSTATE_UINT32(adc_next, ClickServoState),
++        VMSTATE_UINT8(adc_nread, ClickServoState),
++        VMSTATE_BOOL(adc_busy, ClickServoState),
++        VMSTATE_TIMER_PTR(adc_timer, ClickServoState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void servo_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
++
++    dc->desc = "Servo Click (PCA9685, LTC2497) with servos";
++    dc->vmsd = &vmstate_servo;
++    device_class_set_legacy_reset(dc, servo_reset);
++    k->event = servo_event;
++    k->send = servo_send;
++    k->recv = servo_recv;
++    k->match_and_add = servo_match;
++}
++
++static const TypeInfo servo_types[] = {
++    {
++        .name = TYPE_CLICK_SERVO,
++        .parent = TYPE_I2C_SLAVE,
++        .instance_size = sizeof(ClickServoState),
++        .instance_init = servo_init,
++        .instance_finalize = servo_finalize,
++        .class_init = servo_class_init,
++    },
++};
++
++DEFINE_TYPES(servo_types)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 3a58ad4..ab3ba46 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -30,6 +30,7 @@ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files(
+   'emc2301.c',
+   'rn2903.c',
+   'click_dcmotor.c',
++  'click_servo.c',
+ ))
+ system_ss.add(when: 'CONFIG_WS2812', if_true: files('ws2812.c'))
+ system_ss.add(when: 'CONFIG_RNBD451', if_true: files('rnbd451.c'))
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index 6c1685e..fd1502f 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -22,6 +22,7 @@
+ #include "hw/misc/click_buzzer.h"
+ #include "hw/misc/click_dcmotor.h"
+ #include "hw/misc/click_pot.h"
++#include "hw/misc/click_servo.h"
+ #include "hw/misc/emc2301.h"
+ #include "hw/misc/mikrobus.h"
+ #include "hw/misc/quectel_l86.h"
+@@ -166,6 +167,11 @@ static const ClickInfo mikrobus_clicks[] = {
+                { CLICK_DCMOTOR_NSLEEP, MIKROBUS_AN_PIN } },
+       .pulls = { { true, MIKROBUS_AN_PIN, 1 },            /* R3 47k */
+                  { true, MIKROBUS_INT, 1 } } },           /* R4 2k2 */
++    { "servo", "Servo Click: PCA9685 16-channel PWM at I2C 0x40 (OE# on CS) "
++      "and LTC2497 current sense at 0x14, servos on its headers",
++      TYPE_CLICK_SERVO, CLICK_I2C, CLICK_SERVO_ADDR, 0,
++      .ins = { { CLICK_SERVO_OE, MIKROBUS_CS } },
++      .pulls = { { true, MIKROBUS_CS, 1 } } },            /* R18 4.7k */
+     { "gnss", "GNSS Click: Quectel L86 GNSS module on the UART (9600 baud, "
+       "NMEA), RESET on RST, FORCE_ON on CS",
+       TYPE_CHARDEV_QUECTEL_L86, CLICK_UART, 0, 0,
+diff --git a/include/hw/misc/click_servo.h b/include/hw/misc/click_servo.h
+new file mode 100644
+index 0000000..fd80d00
+--- /dev/null
++++ b/include/hw/misc/click_servo.h
+@@ -0,0 +1,28 @@
++/*
++ * Servo Click: PCA9685 16-channel PWM and LTC2497 current sense, with
++ * servos on its headers
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * An I2C device answering for both chips: the PCA9685 at 0x40 (also All
++ * Call, its sub-addresses and the general call's software reset) and the
++ * LTC2497 at 0x14. GPIO input "oe": the PCA9685's OE# (the socket's CS).
++ * QOM properties (read-only): "period-us", "pulses" (the 16 channels'
++ * pulse widths in microseconds) and "angles" (the servos' angles in
++ * degrees, -1 without a pulse); settable: "min-us"/"max-us" (the servo
++ * law, 0 and 180 degrees: 81/2761, MikroElektronika's) and "load-ma"
++ * (the current a servo with a pulse draws, 150).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_CLICK_SERVO_H
++#define HW_MISC_CLICK_SERVO_H
++
++#define TYPE_CLICK_SERVO "click-servo"
++#define CLICK_SERVO_ADDR 0x40
++#define CLICK_SERVO_ADC_ADDR 0x14
++#define CLICK_SERVO_OE "oe"
++
++#endif /* HW_MISC_CLICK_SERVO_H */
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index ad3af0d..fa940f7 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -1292,6 +1292,84 @@ static void test_dcmotor(void)
+     qtest_quit(qts);
+ }
+ 
++/*
++ * Servo Click on EXT1: PCA9685 at 0x40 with MikroElektronika's set-up
++ * (its 0xF1 from awake leaves EXTCLK clear), 30 Hz, a 90 degree pulse
++ * that shows once OE# (CS, PA17) goes low, the LTC2497 at 0x14 reading
++ * the servo's current, EXTCLK from sleep stopping the PWM, SWRST.
++ */
++#define PCA9685         0x40
++#define LTC2497         0x14
++
++static uint8_t pca_reg(QTestState *qts, uint8_t reg)
++{
++    uint8_t v;
++
++    i2c_rd(qts, PCA9685, reg, &v, 1);
++    return v;
++}
++
++static void pca_set(QTestState *qts, uint8_t reg, uint8_t v)
++{
++    g_assert_true(i2c_wr(qts, PCA9685, reg, &v, 1));
++}
++
++static void test_servo(void)
++{
++    QTestState *qts = i2c_init("-M pic32cm-mc00-cpro,ext1=servo ");
++    g_autofree char *off = NULL, *on = NULL, *ang = NULL, *stop = NULL;
++    uint8_t d[3];
++
++    g_assert_cmphex(pca_reg(qts, 0x00), ==, 0x11);
++    g_assert_cmphex(pca_reg(qts, 0xFE), ==, 0x1E);
++    pca_set(qts, 0x00, 0x81);
++    pca_set(qts, 0x00, 0xF1);
++    g_assert_cmphex(pca_reg(qts, 0x00), ==, 0x31);          /* no EXTCLK */
++    pca_set(qts, 0xFE, 202);
++    pca_set(qts, 0x00, 0xA1);
++    g_assert_cmphex(pca_reg(qts, 0x00), ==, 0x21);          /* RESTART 0 */
++    g_assert_cmphex(pca_reg(qts, 0xFE), ==, 202);
++    g_assert_cmpint(qom_int(qts, CLICK1, "period-us"), ==, 33259);
++
++    /* LED0: ON 0, OFF 175 (90 degrees for the driver), auto-increment */
++    g_assert_true(i2c_wr(qts, PCA9685, 0x06,
++                         (const uint8_t[]){ 0, 0, 175, 0 }, 4));
++    off = qom_str(qts, CLICK1, "pulses");
++    g_assert_true(g_str_has_prefix(off, "0 0 "));           /* OE# high */
++    qtest_writel(qts, PA + P_DIRSET, BIT(17));
++    qtest_writel(qts, PA + P_OUTCLR, BIT(17));
++    on = qom_str(qts, CLICK1, "pulses");
++    g_assert_true(g_str_has_prefix(on, "1421 0 "));
++    ang = qom_str(qts, CLICK1, "angles");
++    g_assert_true(g_str_has_prefix(ang, "90 -1 "));
++
++    /* LTC2497: CH0 single-ended, 150 mA through 0.1 Ohm = 960 counts */
++    g_assert_true(i2c_wr(qts, LTC2497, 0xB0, NULL, 0));
++    g_assert_false(i2c_wr(qts, LTC2497, 0xB0, NULL, 0));   /* converting */
++    qtest_clock_step(qts, 160 * SCALE_MS);
++    qtest_writel(qts, SERCOM2 + 0x24, LTC2497 << 1 | 1);
++    for (unsigned i = 0; i < 3; i++) {
++        if (i == 2) {
++            qtest_writel(qts, SERCOM2 + 0x04, I2CM_SMEN | I2CM_ACKACT);
++        }
++        d[i] = qtest_readb(qts, SERCOM2 + 0x28);
++    }
++    i2c_stop(qts);
++    g_assert_cmphex(d[0] << 16 | d[1] << 8 | d[2], ==, 0x800000 | 960 << 6);
++
++    /* EXTCLK set from sleep: the pin is tied low, the PWM stops */
++    pca_set(qts, 0x00, 0x31);
++    pca_set(qts, 0x00, 0x71);
++    pca_set(qts, 0x00, 0x61);
++    stop = qom_str(qts, CLICK1, "pulses");
++    g_assert_true(g_str_has_prefix(stop, "0 0 "));
++
++    /* General call software reset */
++    g_assert_true(i2c_wr(qts, 0x00, 0x06, NULL, 0));
++    g_assert_cmphex(pca_reg(qts, 0x00), ==, 0x11);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+@@ -1314,6 +1392,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/weather", test_weather);
+     qtest_add_func("pic32cm-click/fan", test_fan);
+     qtest_add_func("pic32cm-click/dcmotor", test_dcmotor);
++    qtest_add_func("pic32cm-click/servo", test_servo);
+     qtest_add_func("pic32cm-click/thermo8-identity", test_identity);
+     qtest_add_func("pic32cm-click/not-fitted", test_not_fitted);
+     qtest_add_func("pic32cm-click/thermo8-int-pullup", test_int_pullup);
+-- 
+2.53.0.windows.2
+

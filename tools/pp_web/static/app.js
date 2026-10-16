@@ -398,6 +398,24 @@ function drawClick(stack, h, id, def) {
         d.size_mm, d.size_mm);
     spinFans();
   }
+  // Servos on a PWM Click's headers: each horn at its channel's angle
+  // (the polled "angles", -1: no pulse, the servo limp and dim)
+  if (def.display && def.display.type === "servos") {
+    const d = def.display;
+    for (const sv of d.servos) {
+      const el = document.createElement("div");
+      el.className = "click-servo";
+      el.dataset.prop = `${h.slot}.${d.property}`;
+      el.dataset.ch = sv.ch;
+      el.innerHTML = `<svg viewBox="0 0 100 100"><rect x="20" y="8" width="60" height="84" rx="6" ` +
+        `fill="#1f3b73" stroke="#0e1d3a" stroke-width="2"/><circle cx="50" cy="34" r="14" fill="#e8e8e8"/>` +
+        `<g class="horn"><path d="M44 34 L47 4 L53 4 L56 34 Z" fill="#f4f4f4" stroke="#888" ` +
+        `stroke-width="1.5"/><circle cx="50" cy="34" r="8" fill="#f4f4f4" stroke="#888" stroke-width="1.5"/>` +
+        `<circle cx="50" cy="34" r="2.5" fill="#666"/></g></svg><span>S${sv.ch + 1}</span>`;
+      put(el, [sv.at_mm[0] - d.size_mm / 2, sv.at_mm[1] + d.size_mm / 2],
+          d.size_mm, d.size_mm);
+    }
+  }
   // Sticks: a joystick knob to drag (springs back; hold still to push
   // it), or, in "tilt" mode, which way the Click leans (stays put;
   // double-click levels it)
@@ -632,6 +650,13 @@ function updateClickParts() {
     if (!sounding.has(slot) || !document.querySelector(`.click-sound[data-slot="${slot}"]`)) {
       tone(slot, 0, 0);
     }
+  }
+  for (const el of document.querySelectorAll(".click-servo")) {
+    const deg = Number(String(clickState[el.dataset.prop] || "").split(" ")[el.dataset.ch] ?? -1);
+    const live = deg >= 0;
+    el.classList.toggle("limp", !live);
+    if (live) el.querySelector(".horn").style.transform = `rotate(${deg - 90}deg)`;
+    el.querySelector("span").textContent = `S${Number(el.dataset.ch) + 1}${live ? ` ${deg}°` : ""}`;
   }
   for (const el of document.querySelectorAll(".click-fan")) {
     const rpm = Number(clickState[el.dataset.prop] || 0);

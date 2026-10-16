@@ -1570,6 +1570,53 @@ def test_session_dcmotor(qemu_path, qemu_machines):
     assert state == "coast"
 
 
+SERVO_DEMO = BUILD / "servo.elf"
+
+
+@pytest.mark.qemu
+def test_session_servo(qemu_path, qemu_machines):
+    """servo.elf with a Servo Click on EXT1: MikroElektronika's set-up
+    (EXTCLK left clear), 30 Hz, the OFF count read back and servo 1's
+    current through the LTC2497 pass; servos 3 and 4 then hold 45 and 135
+    degrees and servo 1 sweeps, as the page's angles show."""
+    from tools.pp_web import server
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not SERVO_DEMO.is_file():
+        pytest.skip("servo.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=servo)")
+    assert ("angles",) in server.watched(server.CLICKS["servo"])
+
+    async def angles(app):
+        a = await app.session.qmp.execute(
+            "qom-get", path="/machine/ext1-click", property="angles")
+        return [int(x) for x in a.split()]
+
+    async def scenario():
+        app = server.App("ev15n46a", SERVO_DEMO)
+        await app.plug("ext1", "servo")
+        try:
+            for _ in range(100):
+                await asyncio.sleep(0.1)
+                if "angle 30" in app.uart_log:
+                    break
+            seen = set()
+            for _ in range(20):
+                a = await angles(app)
+                seen.add(a[0])
+                await asyncio.sleep(0.05)
+        finally:
+            await app.session.stop()
+        return app.uart_log, a, seen
+
+    uart, a, seen = asyncio.run(scenario())
+    assert "PP:EXIT 0" in uart, uart
+    assert "FAIL" not in uart, uart
+    assert a[2] == 45 and a[3] == 135, a
+    assert a[4:] == [-1] * 12, a
+    assert len(seen) > 3, seen                      # servo 1 moving
+
+
 OLEDW_DEMO = BUILD / "oledw.elf"
 
 
