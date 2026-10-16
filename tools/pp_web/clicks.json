@@ -2140,5 +2140,71 @@
         "color": "#5dff7a"
       }
     ]
+  },
+  "fan": {
+    "name": "Fan Click",
+    "vendor": "MikroElektronika",
+    "chip": "EMC2301",
+    "bus": "I2C 0x2F",
+    "description": "RPM-based PWM fan controller (Microchip) with a 5 V four-wire fan on its terminals: Direct Setting or the RPM algorithm, spin-up, stall and the power-up watchdog; ALERT# on INT. The fan is drawn at a tenth of its speed",
+    "controls": [
+      {
+        "id": "max-rpm",
+        "label": "Fan top speed",
+        "property": "max-rpm",
+        "unit": "rpm",
+        "min": 1000,
+        "max": 8000,
+        "step": 100,
+        "scale": 1,
+        "default": 4000
+      }
+    ],
+    "toggles": [
+      {
+        "id": "blocked",
+        "label": "Hold the fan (stall)",
+        "property": "blocked"
+      }
+    ],
+    "display": {
+      "type": "fan",
+      "property": "rpm",
+      "at_mm": [
+        11.43,
+        33.0
+      ],
+      "size_mm": 12
+    },
+    "signals": [
+      {
+        "id": "ALERT",
+        "pin": "int",
+        "active_low": true,
+        "at_mm": [
+          22.86,
+          15.24
+        ]
+      }
+    ],
+    "image": "fan/top.png",
+    "origin_mm": [
+      -1.27,
+      24.765
+    ],
+    "size_mm": [
+      25.4,
+      28.575
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          16.51,
+          0.0
+        ],
+        "color": "#5dff7a"
+      }
+    ]
   }
 }

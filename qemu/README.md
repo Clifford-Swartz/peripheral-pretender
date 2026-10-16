@@ -59,6 +59,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0050 | OLED B Click: `ssd1306-i2c` (0x3C/0x3D by SA0 on D/C at each START, control bytes, an `ssd1306` on a private SSI bus inside); catalog `props` for device properties (the blue panel) |
 | 0051 | Color 2 Click: ISL29125 (`isl29125`) at I2C 0x44, G/R/B conversions in mode order (101 ms at 16 bits, 1/16 at 12), 375/10000 lux range, threshold (with persistence) and conversion-done interrupts on the open-drain INT, cleared by reading STATUS, the 0x46 reset; the light as `red`/`green`/`blue`/`lux`; qtest |
 | 0052 | Weather Click: BME280 (`bme280`, I2C) at 0x76, sleep/forced/normal with typical measurement and standby times, oversampling resolution, IIR filter, skipped readings, results held during a burst read, 0xB6 reset; typical calibration, raw readings by bisection over the data sheet's compensation so `temperature`/`pressure`/`humidity` read back exactly; qtest |
+| 0053 | Fan Click: EMC2301 (`emc2301`) at 0x2F with a fan on it: Direct Setting and the RPM-based algorithm, spin-up, stall/spin/drive-fail status, power-up watchdog, software lock, TACH Reading by equation 4-2 from the fan's speed (`max-rpm`, `min-duty`, `tau-ms`, `poles`, `blocked`; `rpm`, `duty`); ALERT# on INT; qtest |
 
 ## Setting it up
 

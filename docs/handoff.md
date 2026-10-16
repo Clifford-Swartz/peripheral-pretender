@@ -431,6 +431,10 @@ session scratchpad only; what matters is in each model's header comment.
 - **Weather** (patch 0052, `bme280`, I2C only): typical calibration, raw readings found by
   bisection so the sliders read back exactly; modes, oversampling, IIR filter. The ClickID
   board's address is unsure (silkscreen 0x77, schematic and driver 0x76): 0x76 modelled.
+- **Fan** (patch 0053, `emc2301` plus a fan): both control modes, spin-up, stall, the
+  power-up watchdog; a turning fan on the page. The RPM loop's PID is approximated, and the
+  RPM formula's range factor m disagrees with Linux's emc2305 driver: we follow the data
+  sheet and MikroElektronika.
 
 The renderer follows DXF arcs and turns parts (`rotate_deg`); new part kinds potentiometer,
 encoder, module. `header_center_mm` places Clicks whose DXF header is off the usual origin

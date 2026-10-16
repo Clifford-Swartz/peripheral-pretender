@@ -1430,6 +1430,48 @@ def test_session_weather(qemu_path, qemu_machines):
     assert 25.5 < temps(uart)[-1] < 30.0, uart
 
 
+FAN_DEMO = BUILD / "fan.elf"
+
+
+@pytest.mark.qemu
+def test_session_fan(qemu_path, qemu_machines):
+    """fan.elf with a Fan Click on EXT1: the EMC2301's identity, a fan at
+    rest reading the 960 rpm floor, Direct Setting and the RPM algorithm
+    pass; the page's fan turns (rpm polled) and holding it stops it."""
+    from tools.pp_web import server
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not FAN_DEMO.is_file():
+        pytest.skip("fan.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=fan)")
+    assert ("rpm",) in server.watched(server.CLICKS["fan"])
+
+    async def rpm(app):
+        return await app.session.qmp.execute(
+            "qom-get", path="/machine/ext1-click", property="rpm")
+
+    async def scenario():
+        app = server.App("ev15n46a", FAN_DEMO)
+        await app.plug("ext1", "fan")
+        try:
+            for _ in range(300):
+                await asyncio.sleep(0.1)
+                if "PP:EXIT" in app.uart_log:
+                    break
+            spinning = await rpm(app)
+            await app.control("ext1", "blocked", 1)
+            held = await rpm(app)
+        finally:
+            await app.session.stop()
+        return app.uart_log, spinning, held
+
+    uart, spinning, held = asyncio.run(scenario())
+    assert "PP:EXIT 0" in uart, uart
+    assert "FAIL" not in uart, uart
+    assert spinning > 2500, spinning
+    assert held == 0
+
+
 OLEDW_DEMO = BUILD / "oledw.elf"
 
 

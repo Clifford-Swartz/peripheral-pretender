@@ -366,6 +366,14 @@ MikroElektronika's set-up, the data sheet's integer compensation, a line every 1
 MikroElektronika's own driver keeps the raw readings unsigned and so goes wrong below about
 0 C, on silicon as on the twin; the demo uses the data sheet's code.
 
+The Fan Click (`clicks/fan/`) brings a `display` of type `fan`: a fan beside its terminals that
+turns with the polled `rpm` (drawn at a tenth of the speed, which a screen can show), the rpm
+next to it. A slider sets the fan's top speed and a toggle holds it still (a stall). Demo:
+`make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=fan` (EXT1; identity, the 960 rpm floor of
+a stopped fan, Direct Setting at 50 %, the RPM algorithm on 3000 rpm, then MikroElektronika's
+duty sweep). Firmware that never writes the chip sees its watchdog run the fan at full speed
+after four seconds, as on silicon.
+
 Colour variants: 8x8 R, Y and B and Button R and Y share their device with 8x8 G and Button G
 and have their own art and LED colours. The 8x8 B Click's page links the 8x8 R Click's 2D files,
 so its art is the 8x8 R DXF with the silkscreen letter replaced (`silk_label`).

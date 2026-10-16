@@ -1,0 +1,955 @@
+From e93639b201c2f7e724884274573d959a01549401 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 15 Oct 2026 22:23:39 -0700
+Subject: [PATCH] hw/misc: EMC2301 fan controller with a fan, the Fan Click
+
+emc2301 at I2C 0x2F drives a modelled four-wire fan: Direct Setting and
+the RPM-based algorithm (update period, gain, Max Step, Minimum Drive,
+error window), spin-up, stall, spin and drive-fail status cleared on
+read once their cause is gone, the four-second power-up watchdog, the
+software lock, and ALERT#. The fan's speed follows its duty with a lag;
+TACH Reading comes from it by the data sheet's equation 4-2. qtest.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  11 +
+ hw/misc/emc2301.c                     | 717 ++++++++++++++++++++++++++
+ hw/misc/meson.build                   |   1 +
+ hw/misc/mikrobus.c                    |   6 +
+ include/hw/misc/emc2301.h             |  24 +
+ tests/qtest/pic32cm-click-test.c      |  92 ++++
+ 6 files changed, 851 insertions(+)
+ create mode 100644 hw/misc/emc2301.c
+ create mode 100644 include/hw/misc/emc2301.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 26b3ca0..7fa0349 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -204,6 +204,17 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   default 25000), ``pressure`` (Pa, 101325) and ``humidity`` (m%RH,
+   50000). SPI is not modelled.
+ 
++``fan``
++  Fan Click (v100): an EMC2301 fan controller (``emc2301``) at I2C 0x2F,
++  ALERT# on INT (R3 10k pull-up), and a four-wire fan on its terminals.
++  Direct Setting and the RPM-based algorithm (update period, gain, Max
++  Step, Minimum Drive, error window), spin-up, stall, spin and drive-fail
++  status, the four-second power-up watchdog, the software lock, and TACH
++  Reading from the fan's speed by the data sheet's equation 4-2. The fan
++  follows ``max-rpm`` (4000) times its duty with a ``tau-ms`` (700) lag,
++  stops below ``min-duty`` (200 per mille) or while ``blocked``; ``rpm``
++  and ``duty`` read what it does.
++
+ ``oledw``
+   OLED W Click (v100): an SSD1306 (``ssd1306``) with a 96x39 white OLED
+   (MI9639BO-W) on SPI (jumpers J1-J3 on SPI), CS# on CS, D/C# on PWM, RES#
+diff --git a/hw/misc/emc2301.c b/hw/misc/emc2301.c
+new file mode 100644
+index 0000000..51afda5
+--- /dev/null
++++ b/hw/misc/emc2301.c
+@@ -0,0 +1,717 @@
++/*
++ * Microchip EMC2301 RPM-based PWM fan controller, with a fan on it
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * EMC2301/2/3/5 data sheet (DS20006532A), fan 1 only. SMBus registers at
++ * 0x2F with an auto-incrementing pointer; undefined registers read 0.
++ *
++ * The drive (0-255, the PWM duty in 255ths, inverted by PLRTY1) comes
++ * from Fan Setting in Direct Setting mode, or, with EN_ALGO, from the
++ * RPM-based algorithm: every update period (UDT) the TACH Reading is
++ * compared with the TACH Target and the drive steps toward it (gain
++ * GPR, at most Max Step, never below Minimum Drive; a target high byte
++ * of 0xFF turns the drive off; nothing moves inside the error window);
++ * Fan Setting then reads the drive and ignores writes. Spin-up (100 %
++ * for a quarter of the spin-up time unless NKCK, then the spin-up level)
++ * runs when the drive leaves 0, or in RPM mode when the fan reads slower
++ * than Valid TACH; still slow after it, FNSPIN sets and it tries again.
++ * Outside spin-up, a TACH Reading above Valid TACH with drive on sets
++ * FNSTL; at full drive slower than the target by the drive fail band for
++ * DFC update periods sets DRIVE_FAIL. Status bits clear on read once
++ * their cause is gone. Four seconds after power-up without a Fan Setting
++ * write or EN_ALGO, the watchdog sets WATCH and drives 100 % (WD_EN: the
++ * watchdog runs on, restarted by every access). ALERT# is low while MASK
++ * is clear and WATCH or an enabled fan status bit is set. LOCK makes the
++ * SWL registers read-only until reset.
++ *
++ * TACH Reading = (edges - 1) * m * 32768 * 60 / (poles * rpm), saturating
++ * at 8191 (0xFF 0xF8 for a stopped fan); the data sheet's equation 4-2
++ * with the fan's real poles, so a wrong EDGES setting reads wrong as on
++ * silicon. Reading 0x3E latches 0x3F.
++ *
++ * The fan: its speed follows max-rpm times the duty (0 below min-duty or
++ * while "blocked") with a first-order lag of tau-ms. The PID details of
++ * the real algorithm are not documented; this one is proportional on
++ * the drive (integral on the speed). No physical part checked it.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/i2c/i2c.h"
++#include "hw/misc/emc2301.h"
++#include "migration/vmstate.h"
++#include <math.h>
++
++#define REG_CONFIG          0x20
++#define REG_STATUS          0x24
++#define REG_STALL           0x25
++#define REG_SPIN            0x26
++#define REG_DRVFAIL         0x27
++#define REG_INT_EN          0x29
++#define REG_POLARITY        0x2A
++#define REG_OUTCFG          0x2B
++#define REG_BASEFREQ        0x2D
++#define REG_SETTING         0x30
++#define REG_DIVIDE          0x31
++#define REG_FANCFG1         0x32
++#define REG_FANCFG2         0x33
++#define REG_GAIN            0x35
++#define REG_SPINUP          0x36
++#define REG_MAXSTEP         0x37
++#define REG_MINDRIVE        0x38
++#define REG_VALID           0x39
++#define REG_BAND_L          0x3A
++#define REG_BAND_H          0x3B
++#define REG_TARGET_L        0x3C
++#define REG_TARGET_H        0x3D
++#define REG_READ_H          0x3E
++#define REG_READ_L          0x3F
++#define REG_LOCK            0xEF
++#define REG_FEATURES        0xFC
++#define REG_PRODUCT         0xFD
++#define REG_MANUF           0xFE
++#define REG_REVISION        0xFF
++
++#define CFG_MASK            BIT(7)
++#define CFG_WD_EN           BIT(5)
++#define FC1_EN_ALGO         BIT(7)
++#define ST_WATCH            BIT(7)
++#define ST_DVFAIL           BIT(2)
++#define ST_FNSPIN           BIT(1)
++#define ST_FNSTL            BIT(0)
++#define SPIN_NKCK           BIT(5)
++
++#define COUNT_MAX           8191
++#define WATCHDOG_NS         (4 * NANOSECONDS_PER_SECOND)
++
++static const uint32_t udt_ms[8] = { 100, 200, 300, 400, 500, 800, 1200,
++                                    1600 };
++static const uint32_t spt_ms[4] = { 250, 500, 1000, 2000 };
++static const uint32_t erg_rpm[4] = { 0, 50, 100, 200 };
++static const uint32_t dfc_periods[4] = { 0, 16, 32, 64 };
++
++enum { SPIN_OFF, SPIN_KICK, SPIN_LEVEL };
++
++OBJECT_DECLARE_SIMPLE_TYPE(Emc2301State, EMC2301)
++
++struct Emc2301State {
++    I2CSlave parent_obj;
++
++    uint8_t regs[256];
++    uint8_t ptr;
++    bool ptr_set;
++    uint8_t read_l;             /* 0x3F as latched by reading 0x3E */
++    uint8_t target_l;           /* TACH Target low, until the high byte */
++    uint8_t cond;               /* stall/spin/drive-fail causes, now */
++    uint8_t status;             /* latched Fan Status bits */
++    uint8_t drive;
++    uint8_t spin;               /* SPIN_* */
++    bool watchdog_armed;
++    uint32_t fail_periods;
++
++    /* The fan */
++    uint32_t max_rpm;
++    uint32_t min_duty;          /* per mille */
++    uint32_t tau_ms;
++    uint32_t poles;
++    bool blocked;
++    int64_t rpm0;               /* speed at t0, milli-RPM */
++    int64_t t0;
++
++    QEMUTimer *update;          /* UDT: algorithm and checks */
++    QEMUTimer *spinup;
++    QEMUTimer *watchdog;
++    qemu_irq alert;
++};
++
++static int64_t now_ns(void)
++{
++    return qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++}
++
++/* ---- the fan ---- */
++
++static uint32_t fan_duty(Emc2301State *s)
++{
++    uint32_t d = s->drive;
++
++    if (s->regs[REG_POLARITY] & 1) {
++        d = 255 - d;
++    }
++    return d * 1000 / 255;
++}
++
++static double fan_target(Emc2301State *s)
++{
++    uint32_t duty = fan_duty(s);
++
++    if (s->blocked || duty < s->min_duty || duty == 0) {
++        return 0;
++    }
++    return (double)s->max_rpm * duty / 1000;
++}
++
++static double fan_rpm(Emc2301State *s)
++{
++    double tgt = fan_target(s);
++    double dt = (now_ns() - s->t0) / 1e6 / MAX(s->tau_ms, 1);
++
++    if (s->blocked) {
++        return 0;
++    }
++    return tgt + (s->rpm0 / 1000.0 - tgt) * exp(-dt);
++}
++
++/* Fix the speed now, before the drive or the fan changes */
++static void fan_anchor(Emc2301State *s)
++{
++    s->rpm0 = llround(fan_rpm(s) * 1000);
++    s->t0 = now_ns();
++}
++
++static uint32_t tach_count(Emc2301State *s)
++{
++    uint8_t c1 = s->regs[REG_FANCFG1];
++    unsigned edges = 3 + 2 * ((c1 >> 3) & 3);
++    unsigned m = 1 << ((c1 >> 5) & 3);
++    double rpm = fan_rpm(s), c;
++
++    if (rpm < 1) {
++        return COUNT_MAX;
++    }
++    c = (edges - 1) * m * 32768.0 * 60 / (MAX(s->poles, 1) * rpm);
++    return c >= COUNT_MAX ? COUNT_MAX : (uint32_t)c;
++}
++
++static uint32_t count_to_rpm(Emc2301State *s, uint32_t count)
++{
++    uint8_t c1 = s->regs[REG_FANCFG1];
++    unsigned edges = 3 + 2 * ((c1 >> 3) & 3);
++    unsigned m = 1 << ((c1 >> 5) & 3);
++
++    /* the firmware's view: 2 poles */
++    return count ? (edges - 1) * m * 32768u * 60 / (2 * count) : 0;
++}
++
++/* ---- the controller ---- */
++
++static void update_alert(Emc2301State *s)
++{
++    bool on = false;
++
++    if (!(s->regs[REG_CONFIG] & CFG_MASK)) {
++        on = (s->status & ST_WATCH) ||
++             ((s->regs[REG_INT_EN] & 1) &&
++              (s->status & (ST_FNSTL | ST_FNSPIN | ST_DVFAIL)));
++    }
++    qemu_set_irq(s->alert, on ? 0 : -1);
++}
++
++static void raise_status(Emc2301State *s, uint8_t bits)
++{
++    s->cond |= bits;
++    s->status |= bits;
++    update_alert(s);
++}
++
++static void set_drive(Emc2301State *s, uint8_t d)
++{
++    fan_anchor(s);
++    s->drive = d;
++}
++
++static bool rpm_mode(Emc2301State *s)
++{
++    return s->regs[REG_FANCFG1] & FC1_EN_ALGO;
++}
++
++static uint32_t target_count(Emc2301State *s)
++{
++    return s->regs[REG_TARGET_H] << 5 | s->regs[REG_TARGET_L] >> 3;
++}
++
++static uint32_t valid_count(Emc2301State *s)
++{
++    return s->regs[REG_VALID] << 5 | 0x1F;
++}
++
++/* The drive outside spin-up */
++static uint8_t base_drive(Emc2301State *s)
++{
++    if (!rpm_mode(s)) {
++        return s->regs[REG_SETTING];
++    }
++    if (s->regs[REG_TARGET_H] == 0xFF) {
++        return 0;
++    }
++    return MAX(s->drive, s->regs[REG_MINDRIVE]);
++}
++
++static void start_spinup(Emc2301State *s)
++{
++    uint32_t t = spt_ms[s->regs[REG_SPINUP] & 3];
++
++    if (s->regs[REG_SPINUP] & SPIN_NKCK) {
++        s->spin = SPIN_LEVEL;
++        set_drive(s, (30 + 5 * ((s->regs[REG_SPINUP] >> 2) & 7)) * 255 / 100);
++    } else {
++        s->spin = SPIN_KICK;
++        set_drive(s, 255);
++        t /= 4;
++    }
++    timer_mod(s->spinup, now_ns() + (int64_t)t * SCALE_MS);
++}
++
++static void spinup_step(void *opaque)
++{
++    Emc2301State *s = opaque;
++
++    if (s->spin == SPIN_KICK) {
++        s->spin = SPIN_LEVEL;
++        set_drive(s, (30 + 5 * ((s->regs[REG_SPINUP] >> 2) & 7)) * 255 / 100);
++        timer_mod(s->spinup, now_ns() +
++                  (int64_t)spt_ms[s->regs[REG_SPINUP] & 3] * 3 / 4 * SCALE_MS);
++        return;
++    }
++    s->spin = SPIN_OFF;
++    if (rpm_mode(s) && tach_count(s) > valid_count(s)) {
++        raise_status(s, ST_FNSPIN);     /* did not start: again */
++        start_spinup(s);
++        return;
++    }
++    s->cond &= ~ST_FNSPIN;
++    if (rpm_mode(s)) {
++        set_drive(s, base_drive(s));
++    } else {
++        set_drive(s, s->regs[REG_SETTING]);
++    }
++}
++
++static void algorithm(Emc2301State *s)
++{
++    uint32_t tc = target_count(s), c = tach_count(s);
++    int32_t err, delta, step = s->regs[REG_MAXSTEP] & 0x3F;
++    unsigned gpr = 1 << (s->regs[REG_GAIN] & 3);
++    int32_t d;
++
++    if (s->regs[REG_TARGET_H] == 0xFF) {
++        set_drive(s, 0);
++        return;
++    }
++    if (tc > valid_count(s)) {
++        return;                         /* a target it cannot see */
++    }
++    if (c > valid_count(s) && s->spin == SPIN_OFF) {
++        raise_status(s, ST_FNSTL);      /* stalled: spin it up again */
++        start_spinup(s);
++        return;
++    }
++    err = (int32_t)count_to_rpm(s, tc) - (int32_t)count_to_rpm(s, c);
++    if ((uint32_t)abs(err) <= erg_rpm[(s->regs[REG_FANCFG2] >> 1) & 3]) {
++        return;
++    }
++    delta = ((int32_t)c - (int32_t)tc) * (int32_t)gpr / 16;
++    if (delta == 0) {
++        delta = c > tc ? 1 : -1;
++    }
++    delta = MAX(MIN(delta, step), -step);
++    d = (int32_t)s->drive + delta;
++    d = MAX(MIN(d, 255), s->regs[REG_MINDRIVE]);
++    set_drive(s, d);
++}
++
++static void update_tick(void *opaque)
++{
++    Emc2301State *s = opaque;
++    uint32_t c, dfc = dfc_periods[s->regs[REG_SPINUP] >> 6];
++
++    fan_anchor(s);
++    if (rpm_mode(s) && s->spin == SPIN_OFF) {
++        algorithm(s);
++    }
++    c = tach_count(s);
++    if (s->spin == SPIN_OFF && s->drive && c > valid_count(s)) {
++        raise_status(s, ST_FNSTL);
++    } else if (c <= valid_count(s) || !s->drive) {
++        s->cond &= ~ST_FNSTL;
++    }
++    if (rpm_mode(s) && dfc && s->drive == 255) {
++        uint32_t band = s->regs[REG_BAND_H] << 5 | s->regs[REG_BAND_L] >> 3;
++
++        if (c > target_count(s) + band) {
++            if (++s->fail_periods >= dfc) {
++                raise_status(s, ST_DVFAIL);
++            }
++        } else {
++            s->fail_periods = 0;
++            s->cond &= ~ST_DVFAIL;
++        }
++    } else {
++        s->fail_periods = 0;
++        s->cond &= ~ST_DVFAIL;
++    }
++    timer_mod(s->update, now_ns() +
++              (int64_t)udt_ms[s->regs[REG_FANCFG1] & 7] * SCALE_MS);
++}
++
++static void watchdog_fire(void *opaque)
++{
++    Emc2301State *s = opaque;
++
++    s->watchdog_armed = false;
++    s->status |= ST_WATCH;
++    s->regs[REG_FANCFG1] &= ~FC1_EN_ALGO;
++    s->regs[REG_SETTING] = 0xFF;
++    if (s->drive == 0 && s->spin == SPIN_OFF) {
++        start_spinup(s);                /* ends at Fan Setting, 100 % */
++    } else if (s->spin == SPIN_OFF) {
++        set_drive(s, 0xFF);
++    }
++    update_alert(s);
++    if (s->regs[REG_CONFIG] & CFG_WD_EN) {
++        s->watchdog_armed = true;
++        timer_mod(s->watchdog, now_ns() + WATCHDOG_NS);
++    }
++}
++
++static void watchdog_stop(Emc2301State *s)
++{
++    if (s->watchdog_armed && !(s->regs[REG_CONFIG] & CFG_WD_EN)) {
++        s->watchdog_armed = false;
++        timer_del(s->watchdog);
++    }
++}
++
++/* Registers SWL makes read-only */
++static bool lockable(uint8_t reg)
++{
++    return reg == REG_CONFIG || reg == REG_FANCFG2 ||
++           (reg >= REG_GAIN && reg <= REG_BAND_H);
++}
++
++static void emc_write(Emc2301State *s, uint8_t reg, uint8_t v)
++{
++    if ((s->regs[REG_LOCK] & 1) && lockable(reg)) {
++        return;
++    }
++    switch (reg) {
++    case REG_CONFIG:
++        s->regs[reg] = v & 0xE3;
++        if (v & CFG_WD_EN) {
++            s->watchdog_armed = true;
++            timer_mod(s->watchdog, now_ns() + WATCHDOG_NS);
++        }
++        update_alert(s);
++        break;
++    case REG_INT_EN:
++    case REG_POLARITY:
++    case REG_OUTCFG:
++        s->regs[reg] = v & 1;
++        if (reg == REG_POLARITY) {
++            fan_anchor(s);
++        }
++        update_alert(s);
++        break;
++    case REG_BASEFREQ:
++        s->regs[reg] = v & 3;
++        break;
++    case REG_SETTING:
++        watchdog_stop(s);
++        if (rpm_mode(s)) {
++            break;                      /* the algorithm owns it */
++        }
++        s->regs[reg] = v;
++        if (s->drive == 0 && v && s->spin == SPIN_OFF) {
++            start_spinup(s);
++        } else if (s->spin == SPIN_OFF) {
++            set_drive(s, v);
++        }
++        break;
++    case REG_DIVIDE:
++        s->regs[reg] = v;
++        break;
++    case REG_FANCFG1:
++        s->regs[reg] = v;
++        if (v & FC1_EN_ALGO) {
++            watchdog_stop(s);
++        }
++        timer_mod(s->update, now_ns() + (int64_t)udt_ms[v & 7] * SCALE_MS);
++        break;
++    case REG_FANCFG2:
++        s->regs[reg] = v & 0x7E;
++        break;
++    case REG_GAIN:
++        s->regs[reg] = v & 0x3F;
++        break;
++    case REG_MAXSTEP:
++        s->regs[reg] = v & 0x3F;
++        break;
++    case REG_SPINUP:
++    case REG_MINDRIVE:
++    case REG_VALID:
++    case REG_BAND_H:
++        s->regs[reg] = v;
++        break;
++    case REG_BAND_L:
++        s->regs[reg] = v & 0xF8;
++        break;
++    case REG_TARGET_L:
++        s->target_l = v & 0xF8;
++        break;
++    case REG_TARGET_H:
++        if (rpm_mode(s) && s->regs[REG_TARGET_H] == 0xFF && v != 0xFF &&
++            s->spin == SPIN_OFF) {
++            s->regs[REG_TARGET_L] = s->target_l;
++            s->regs[REG_TARGET_H] = v;
++            start_spinup(s);
++            break;
++        }
++        s->regs[REG_TARGET_L] = s->target_l;
++        s->regs[REG_TARGET_H] = v;
++        break;
++    case REG_LOCK:
++        s->regs[reg] |= v & 1;          /* only a reset clears it */
++        break;
++    default:
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "emc2301: write 0x%02x to read-only 0x%02x\n", v, reg);
++        break;
++    }
++}
++
++static uint8_t emc_read(Emc2301State *s, uint8_t reg)
++{
++    uint8_t v;
++    uint32_t c;
++
++    switch (reg) {
++    case REG_STATUS:
++        v = s->status;
++        s->status = (s->status & ~ST_WATCH & ~7) | (s->cond & 7);
++        update_alert(s);
++        return v;
++    case REG_STALL:
++    case REG_SPIN:
++    case REG_DRVFAIL: {
++        uint8_t bit = 1 << (reg - REG_STALL);
++
++        v = !!(s->status & bit);
++        s->status = (s->status & ~bit) | (s->cond & bit);
++        update_alert(s);
++        return v;
++    }
++    case REG_SETTING:
++        return rpm_mode(s) ? s->drive : s->regs[reg];
++    case REG_READ_H:
++        c = tach_count(s);
++        s->read_l = (c & 0x1F) << 3;
++        return c >> 5;
++    case REG_READ_L:
++        return s->read_l;
++    case REG_PRODUCT:
++        return 0x37;
++    case REG_MANUF:
++        return 0x5D;
++    case REG_REVISION:
++        return 0x80;
++    case REG_FEATURES:
++        return 0;
++    default:
++        return s->regs[reg];
++    }
++}
++
++static int emc_event(I2CSlave *i2c, enum i2c_event event)
++{
++    Emc2301State *s = EMC2301(i2c);
++
++    if (event == I2C_START_SEND) {
++        s->ptr_set = false;
++    }
++    if ((s->regs[REG_CONFIG] & CFG_WD_EN) && event != I2C_FINISH) {
++        timer_mod(s->watchdog, now_ns() + WATCHDOG_NS);
++    }
++    return 0;
++}
++
++static int emc_send(I2CSlave *i2c, uint8_t data)
++{
++    Emc2301State *s = EMC2301(i2c);
++
++    if (!s->ptr_set) {
++        s->ptr = data;
++        s->ptr_set = true;
++    } else {
++        emc_write(s, s->ptr++, data);
++    }
++    return 0;
++}
++
++static uint8_t emc_recv(I2CSlave *i2c)
++{
++    Emc2301State *s = EMC2301(i2c);
++
++    return emc_read(s, s->ptr++);
++}
++
++static void emc_get_rpm(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    uint32_t rpm = lround(fan_rpm(EMC2301(obj)));
++
++    visit_type_uint32(v, name, &rpm, errp);
++}
++
++static void emc_get_duty(Object *obj, Visitor *v, const char *name,
++                         void *opaque, Error **errp)
++{
++    uint32_t duty = fan_duty(EMC2301(obj));
++
++    visit_type_uint32(v, name, &duty, errp);
++}
++
++static bool emc_get_blocked(Object *obj, Error **errp)
++{
++    return EMC2301(obj)->blocked;
++}
++
++static void emc_set_blocked(Object *obj, bool value, Error **errp)
++{
++    Emc2301State *s = EMC2301(obj);
++
++    fan_anchor(s);
++    s->blocked = value;
++}
++
++static void emc_reset(DeviceState *dev)
++{
++    Emc2301State *s = EMC2301(dev);
++
++    memset(s->regs, 0, sizeof(s->regs));
++    s->regs[REG_CONFIG] = 0x40;
++    s->regs[REG_DIVIDE] = 0x01;
++    s->regs[REG_FANCFG1] = 0x2B;
++    s->regs[REG_FANCFG2] = 0x28;
++    s->regs[REG_GAIN] = 0x2A;
++    s->regs[REG_SPINUP] = 0x19;
++    s->regs[REG_MAXSTEP] = 0x10;
++    s->regs[REG_MINDRIVE] = 0x66;
++    s->regs[REG_VALID] = 0xF5;
++    s->regs[REG_TARGET_L] = 0xF8;
++    s->regs[REG_TARGET_H] = 0xFF;
++    s->target_l = 0xF8;
++    s->read_l = 0xF8;
++    s->ptr = 0;
++    s->ptr_set = false;
++    s->cond = 0;
++    s->status = 0;
++    s->spin = SPIN_OFF;
++    s->fail_periods = 0;
++    s->drive = 0;
++    s->rpm0 = 0;
++    s->t0 = now_ns();
++    timer_del(s->spinup);
++    s->watchdog_armed = true;
++    timer_mod(s->watchdog, now_ns() + WATCHDOG_NS);
++    timer_mod(s->update, now_ns() + 400 * SCALE_MS);
++    update_alert(s);
++}
++
++static void emc_init(Object *obj)
++{
++    Emc2301State *s = EMC2301(obj);
++
++    s->update = timer_new_ns(QEMU_CLOCK_VIRTUAL, update_tick, s);
++    s->spinup = timer_new_ns(QEMU_CLOCK_VIRTUAL, spinup_step, s);
++    s->watchdog = timer_new_ns(QEMU_CLOCK_VIRTUAL, watchdog_fire, s);
++    qdev_init_gpio_out_named(DEVICE(obj), &s->alert, EMC2301_ALERT, 1);
++    s->max_rpm = 4000;
++    s->min_duty = 200;
++    s->tau_ms = 700;
++    s->poles = 2;
++    object_property_add_uint32_ptr(obj, "max-rpm", &s->max_rpm,
++                                   OBJ_PROP_FLAG_READWRITE);
++    object_property_add_uint32_ptr(obj, "min-duty", &s->min_duty,
++                                   OBJ_PROP_FLAG_READWRITE);
++    object_property_add_uint32_ptr(obj, "tau-ms", &s->tau_ms,
++                                   OBJ_PROP_FLAG_READWRITE);
++    object_property_add_uint32_ptr(obj, "poles", &s->poles,
++                                   OBJ_PROP_FLAG_READWRITE);
++    object_property_add_bool(obj, "blocked", emc_get_blocked,
++                             emc_set_blocked);
++    object_property_add(obj, "rpm", "uint32", emc_get_rpm, NULL, NULL,
++                        NULL);
++    object_property_add(obj, "duty", "uint32", emc_get_duty, NULL, NULL,
++                        NULL);
++}
++
++static void emc_finalize(Object *obj)
++{
++    Emc2301State *s = EMC2301(obj);
++
++    timer_free(s->update);
++    timer_free(s->spinup);
++    timer_free(s->watchdog);
++}
++
++static const VMStateDescription vmstate_emc = {
++    .name = TYPE_EMC2301,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, Emc2301State),
++        VMSTATE_UINT8_ARRAY(regs, Emc2301State, 256),
++        VMSTATE_UINT8(ptr, Emc2301State),
++        VMSTATE_BOOL(ptr_set, Emc2301State),
++        VMSTATE_UINT8(read_l, Emc2301State),
++        VMSTATE_UINT8(target_l, Emc2301State),
++        VMSTATE_UINT8(cond, Emc2301State),
++        VMSTATE_UINT8(status, Emc2301State),
++        VMSTATE_UINT8(drive, Emc2301State),
++        VMSTATE_UINT8(spin, Emc2301State),
++        VMSTATE_BOOL(watchdog_armed, Emc2301State),
++        VMSTATE_UINT32(fail_periods, Emc2301State),
++        VMSTATE_BOOL(blocked, Emc2301State),
++        VMSTATE_INT64(rpm0, Emc2301State),
++        VMSTATE_INT64(t0, Emc2301State),
++        VMSTATE_TIMER_PTR(update, Emc2301State),
++        VMSTATE_TIMER_PTR(spinup, Emc2301State),
++        VMSTATE_TIMER_PTR(watchdog, Emc2301State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void emc_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
++
++    dc->desc = "EMC2301 RPM-based PWM fan controller with a fan";
++    dc->vmsd = &vmstate_emc;
++    device_class_set_legacy_reset(dc, emc_reset);
++    k->event = emc_event;
++    k->send = emc_send;
++    k->recv = emc_recv;
++}
++
++static const TypeInfo emc_types[] = {
++    {
++        .name = TYPE_EMC2301,
++        .parent = TYPE_I2C_SLAVE,
++        .instance_size = sizeof(Emc2301State),
++        .instance_init = emc_init,
++        .instance_finalize = emc_finalize,
++        .class_init = emc_class_init,
++    },
++};
++
++DEFINE_TYPES(emc_types)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index e7b892a..8631123 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -27,6 +27,7 @@ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files(
+   'click_buzzer.c',
+   'click_pot.c',
+   'quectel_l86.c',
++  'emc2301.c',
+ ))
+ system_ss.add(when: 'CONFIG_WS2812', if_true: files('ws2812.c'))
+ system_ss.add(when: 'CONFIG_RNBD451', if_true: files('rnbd451.c'))
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index f3351ea..7b83081 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -21,6 +21,7 @@
+ #include "hw/misc/click_button.h"
+ #include "hw/misc/click_buzzer.h"
+ #include "hw/misc/click_pot.h"
++#include "hw/misc/emc2301.h"
+ #include "hw/misc/mikrobus.h"
+ #include "hw/misc/quectel_l86.h"
+ #include "hw/misc/rnbd451.h"
+@@ -183,6 +184,11 @@ static const ClickInfo mikrobus_clicks[] = {
+       "sensor at I2C 0x76 (COMM SEL on I2C, ADDR SEL on 0)",
+       TYPE_BME280, CLICK_I2C, BME280_ADDR, 0,
+       .pulls = { { true, MIKROBUS_RST, 1 } } },           /* R5 10k */
++    { "fan", "Fan Click: EMC2301 RPM-based fan controller at I2C 0x2F "
++      "with a 4-wire fan on its terminals, ALERT# on INT",
++      TYPE_EMC2301, CLICK_I2C, EMC2301_ADDR, 0,
++      .outs = { { EMC2301_ALERT, MIKROBUS_INT } },
++      .pulls = { { true, MIKROBUS_INT, 1 } } },           /* R3 10k */
+     { "rn4871", "RN4871 Click: Microchip RN4871 Bluetooth LE module on the "
+       "UART (115200 baud, ASCII commands), RST_N on RST",
+       TYPE_CHARDEV_RN4871, CLICK_UART, 0, 0,
+diff --git a/include/hw/misc/emc2301.h b/include/hw/misc/emc2301.h
+new file mode 100644
+index 0000000..b9d9c6c
+--- /dev/null
++++ b/include/hw/misc/emc2301.h
+@@ -0,0 +1,24 @@
++/*
++ * Microchip EMC2301 RPM-based PWM fan controller, with a fan on it
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * I2C address 0x2F. GPIO output "alert": the open-drain ALERT# pin, 0
++ * while driven low, -1 while released. The fan on its PWM and TACH:
++ * "max-rpm" at full drive (default 4000), "min-duty" in per mille below
++ * which it stops (200), "tau-ms" its time constant (700), "poles" (2),
++ * "blocked" (holds it still); read-only "rpm" and "duty" (per mille, the
++ * PWM it gets).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_EMC2301_H
++#define HW_MISC_EMC2301_H
++
++#define TYPE_EMC2301 "emc2301"
++#define EMC2301_ADDR 0x2F
++#define EMC2301_ALERT "alert"
++
++#endif /* HW_MISC_EMC2301_H */
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index ed1273d..77f3624 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -578,6 +578,14 @@ static void qom_set_int(QTestState *qts, const char *path, const char *prop,
+                              PRId64 " } }", path, prop, v);
+ }
+ 
++static void qom_set_bool(QTestState *qts, const char *path, const char *prop,
++                         bool v)
++{
++    qtest_qmp_assert_success(qts, "{ 'execute': 'qom-set', 'arguments': {"
++                             " 'path': %s, 'property': %s, 'value': %i } }",
++                             path, prop, v);
++}
++
+ /* Thumbstick Click on EXT1: MCP3204 on SPI (CS# PA17), switch on INT */
+ static void test_thumbstick(void)
+ {
+@@ -1145,6 +1153,89 @@ static void test_weather(void)
+     qtest_quit(qts);
+ }
+ 
++/*
++ * Fan Click: EMC2301 at 0x2F on EXT1. Identity, Direct Setting at 50 %
++ * spins the fan to about 2000 RPM (TACH Reading 3932 at the reset
++ * settings), the RPM-based algorithm settles on a target, a blocked fan
++ * sets FNSTL and pulls ALERT# with the interrupt on; reading clears it
++ * once the fan turns again. The power-up watchdog drives 100 %.
++ */
++#define EMC2301         0x2F
++
++static uint8_t emc_reg(QTestState *qts, uint8_t reg)
++{
++    uint8_t v;
++
++    i2c_rd(qts, EMC2301, reg, &v, 1);
++    return v;
++}
++
++static void emc_set(QTestState *qts, uint8_t reg, uint8_t v)
++{
++    g_assert_true(i2c_wr(qts, EMC2301, reg, &v, 1));
++}
++
++static unsigned emc_tach(QTestState *qts)
++{
++    unsigned h = emc_reg(qts, 0x3E);
++
++    return h << 5 | emc_reg(qts, 0x3F) >> 3;
++}
++
++static void test_fan(void)
++{
++    QTestState *qts = i2c_init("-M pic32cm-mc00-cpro,ext1=fan ");
++    unsigned c;
++
++    g_assert_cmphex(emc_reg(qts, 0xFD), ==, 0x37);
++    g_assert_cmphex(emc_reg(qts, 0xFE), ==, 0x5D);
++    g_assert_cmphex(emc_reg(qts, 0x32), ==, 0x2B);
++    g_assert_cmpuint(emc_tach(qts), ==, 8191);              /* stopped */
++
++    /* MikroElektronika's start: 50 % (stops the watchdog), base freq */
++    emc_set(qts, 0x30, 0x80);
++    emc_set(qts, 0x2D, 0x80);
++    g_assert_cmphex(emc_reg(qts, 0x2D), ==, 0x00);
++    qtest_clock_step(qts, 8 * NANOSECONDS_PER_SECOND);
++    g_assert_cmpuint(qom_int(qts, CLICK1, "rpm"), ==, 2004); /* 501 ‰ */
++    c = emc_tach(qts);
++    g_assert_cmpuint(c, ==, 7864320 / 2004);
++    g_assert_cmphex(emc_reg(qts, 0x24), ==, 0);             /* no WATCH */
++
++    /* RPM mode: target 3000 RPM (count 2621) */
++    emc_set(qts, 0x3C, (2621 & 0x1F) << 3);
++    emc_set(qts, 0x3D, 2621 >> 5);
++    emc_set(qts, 0x32, 0x2B | 0x80);
++    qtest_clock_step(qts, 20 * NANOSECONDS_PER_SECOND);
++    c = qom_int(qts, CLICK1, "rpm");
++    g_assert_cmpuint(c, >, 2900);
++    g_assert_cmpuint(c, <, 3100);
++
++    /* Blocked: stall, ALERT# with the interrupt enabled */
++    emc_set(qts, 0x29, 0x01);
++    qom_set_bool(qts, CLICK1, "blocked", true);
++    qtest_clock_step(qts, 2 * NANOSECONDS_PER_SECOND);
++    g_assert_false(int_high(qts));
++    g_assert_cmphex(emc_reg(qts, 0x25), ==, 0x01);
++    qom_set_bool(qts, CLICK1, "blocked", false);
++    qtest_clock_step(qts, 6 * NANOSECONDS_PER_SECOND);
++    emc_reg(qts, 0x24);
++    emc_reg(qts, 0x25);
++    emc_reg(qts, 0x26);
++    g_assert_true(int_high(qts));
++    qtest_quit(qts);
++
++    /* Nobody writes: the watchdog runs the fan at full speed */
++    qts = i2c_init("-M pic32cm-mc00-cpro,ext1=fan ");
++    qtest_clock_step(qts, 4 * NANOSECONDS_PER_SECOND + SCALE_MS);
++    g_assert_false(int_high(qts));
++    g_assert_cmphex(emc_reg(qts, 0x24), ==, 0x80);
++    g_assert_cmphex(emc_reg(qts, 0x30), ==, 0xFF);
++    qtest_clock_step(qts, 5 * NANOSECONDS_PER_SECOND);
++    g_assert_cmpuint(qom_int(qts, CLICK1, "rpm"), >, 3950);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+@@ -1165,6 +1256,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/rotary", test_rotary);
+     qtest_add_func("pic32cm-click/color2", test_color2);
+     qtest_add_func("pic32cm-click/weather", test_weather);
++    qtest_add_func("pic32cm-click/fan", test_fan);
+     qtest_add_func("pic32cm-click/thermo8-identity", test_identity);
+     qtest_add_func("pic32cm-click/not-fitted", test_not_fitted);
+     qtest_add_func("pic32cm-click/thermo8-int-pullup", test_int_pullup);
+-- 
+2.53.0.windows.2
+

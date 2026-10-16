@@ -251,6 +251,12 @@ h2 small { color: var(--muted); font-weight: normal; }
 /* A display panel on a Click (OLED C): the controller's picture */
 .click-panel { position: absolute; image-rendering: pixelated; background: #000;
   pointer-events: none; }
+/* A fan on a Click's terminals, its speed under it */
+.click-fan { position: absolute; pointer-events: none; display: flex;
+  align-items: flex-start; justify-content: center; }
+.click-fan svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.click-fan span { transform: translateY(-130%); font: 700 10px/1 system-ui, sans-serif;
+  color: #fff; background: #000a; border-radius: 3px; padding: 1px 4px; white-space: nowrap; }
 /* The light a colour sensor sees, glowing over it */
 .click-swatch { position: absolute; border-radius: 50%; pointer-events: none;
   border: 1px solid rgba(255,255,255,.5); }

@@ -373,6 +373,22 @@ function drawClick(stack, h, id, def) {
     put(el, [d.at_mm[0] - d.size_mm / 2, d.at_mm[1] + d.size_mm / 2],
         d.size_mm, d.size_mm);
   }
+  // A fan on the Click's terminals: turns with its rpm property (drawn
+  // at a tenth of the speed, which a screen can show), the rpm under it
+  if (def.display && def.display.type === "fan") {
+    const d = def.display, el = document.createElement("div");
+    el.className = "click-fan";
+    el.dataset.prop = `${h.slot}.${d.property}`;
+    const blades = [0, 72, 144, 216, 288].map((a) =>
+      `<path transform="rotate(${a} 50 50)" d="M50 50 C44 30 46 12 58 8 C70 12 66 34 50 50Z"/>`).join("");
+    el.innerHTML = `<svg viewBox="0 0 100 100"><rect x="2" y="2" width="96" height="96" rx="10" ` +
+      `fill="#1b1d22" stroke="#555" stroke-width="2"/><circle cx="50" cy="50" r="46" fill="#0d0e11"/>` +
+      `<g class="rotor" fill="#3a3f48" stroke="#6b7280" stroke-width="1">${blades}` +
+      `<circle cx="50" cy="50" r="11" fill="#22252b"/></g></svg><span></span>`;
+    put(el, [d.at_mm[0] - d.size_mm / 2, d.at_mm[1] + d.size_mm / 2],
+        d.size_mm, d.size_mm);
+    spinFans();
+  }
   // Sticks: a joystick knob to drag (springs back; hold still to push
   // it), or, in "tilt" mode, which way the Click leans (stays put;
   // double-click levels it)
@@ -420,6 +436,26 @@ function drawClick(stack, h, id, def) {
     el.title = `${sig.id} (${el.dataset.pin})`;
     put(el, sig.at_mm, 2.6);
   }
+}
+
+// Turn every fan on the page by its rpm while any is shown
+let fanFrame = 0, fanLast = 0;
+function spinFans() {
+  if (fanFrame) return;
+  const step = (t) => {
+    const fans = document.querySelectorAll(".click-fan");
+    if (!fans.length) { fanFrame = 0; return; }
+    const dt = fanLast ? Math.min(0.1, (t - fanLast) / 1000) : 0;
+    fanLast = t;
+    for (const el of fans) {
+      const a = (Number(el.dataset.angle || 0) +
+                 Number(el.dataset.rpm || 0) / 60 * 360 * dt / 10) % 360;
+      el.dataset.angle = a;
+      el.querySelector(".rotor").setAttribute("transform", `rotate(${a.toFixed(1)} 50 50)`);
+    }
+    fanFrame = requestAnimationFrame(step);
+  };
+  fanFrame = requestAnimationFrame(step);
 }
 
 function showClicks(state) {
@@ -587,6 +623,11 @@ function updateClickParts() {
     if (!sounding.has(slot) || !document.querySelector(`.click-sound[data-slot="${slot}"]`)) {
       tone(slot, 0, 0);
     }
+  }
+  for (const el of document.querySelectorAll(".click-fan")) {
+    const rpm = Number(clickState[el.dataset.prop] || 0);
+    el.dataset.rpm = rpm;
+    el.querySelector("span").textContent = `${rpm} rpm`;
   }
   for (const el of document.querySelectorAll(".click-7seg")) {
     const value = Number(clickState[el.dataset.prop] || 0);

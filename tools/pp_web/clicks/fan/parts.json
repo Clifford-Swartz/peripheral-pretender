@@ -1,0 +1,16 @@
+{
+ "source": "MikroElektronika Fan Click v100 (MIKROE-2004): 2D and 3D files (Fan_Click_2d_3d_files.zip: CAD/Fan_click_v100.dxf, CAD/Fan_click_v100.step; silkscreen FAN click) and schematic v100. Part centres from the STEP placements and DXF pad pairs; CN1/CN2 (2-way 2.54 mm screw terminals, ScrewTerminal_2.54) sized from the silkscreen outline (estimated). U1 EMC2301 MSOP-8 body 3 x 3 mm, pin 1 top-left (silk dot).",
+ "parts": [
+  {"ref": "CN2", "kind": "terminal", "ways": 2, "value": "GND, TACH", "at_mm": [8.64, 21.2], "size_mm": [5.5, 7.0]},
+  {"ref": "CN1", "kind": "terminal", "ways": 2, "value": "PWM, +5V", "at_mm": [14.22, 21.2], "size_mm": [5.5, 7.0]},
+  {"ref": "U1", "kind": "ic", "value": "EMC2301-1-ACZL (MSOP-8)", "at_mm": [11.43, 7.62], "size_mm": [3.0, 3.0]},
+  {"ref": "R1", "kind": "resistor", "value": "10k (SDA pull-up)", "at_mm": [5.41, 12.22], "size_mm": [1.25, 2.0]},
+  {"ref": "R2", "kind": "resistor", "value": "10k (SCL pull-up)", "at_mm": [9.42, 12.22], "size_mm": [1.25, 2.0]},
+  {"ref": "R3", "kind": "resistor", "value": "10k (ALERT#/INT pull-up)", "at_mm": [13.44, 12.22], "size_mm": [1.25, 2.0]},
+  {"ref": "R4", "kind": "resistor", "value": "10k (TACH pull-up)", "at_mm": [17.45, 12.22], "size_mm": [1.25, 2.0]},
+  {"ref": "R5", "kind": "resistor", "value": "10k (PWM pull-up)", "at_mm": [17.45, 7.62], "size_mm": [1.25, 2.0]},
+  {"ref": "C1", "kind": "capacitor", "value": "100n", "at_mm": [5.41, 7.62], "size_mm": [1.25, 2.0]},
+  {"ref": "R6", "kind": "resistor", "value": "470", "at_mm": [6.27, 0.0], "size_mm": [2.0, 1.25]},
+  {"ref": "PWR", "kind": "led", "at_mm": [16.51, 0.0], "size_mm": [2.0, 1.25]}
+ ]
+}
