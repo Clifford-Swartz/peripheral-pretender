@@ -1396,3 +1396,42 @@ def test_session_oledw(qemu_path, qemu_machines):
                  for y in range(2, h - 2))
     assert 0 < inside <= 25                            # the 5x5 ball
     assert first != second                             # it moves
+
+
+OLEDB_DEMO = BUILD / "oledb.elf"
+
+
+@pytest.mark.qemu
+def test_session_oledb(qemu_path, qemu_machines):
+    """oledb.elf with an OLED B Click on EXT1: the same picture as the OLED
+    W's over I2C (commands to 0x3C with D/C low, data to 0x3D with D/C
+    high, as MikroElektronika's driver moves SA0), in blue."""
+    import base64
+    from tools.pp_web import server
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not OLEDB_DEMO.is_file():
+        pytest.skip("oledb.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=oledb)")
+
+    async def scenario():
+        app = server.App("ev15n46a", OLEDB_DEMO)
+        await app.plug("ext1", "oledb")
+        try:
+            await asyncio.sleep(1.2)
+            b = await app.session.qmp.execute(
+                "qom-get", path="/machine/ext1-click", property="frame")
+        finally:
+            await app.session.stop()
+        raw = base64.b64decode(b)
+        return [int.from_bytes(raw[i:i + 2], "big") for i in
+                range(0, len(raw), 2)]
+
+    px = asyncio.run(scenario())
+    w, h = 96, 39
+    lit = [v for v in px if v]
+    assert len(px) == w * h
+    assert set(lit) == {0x2CBF}                         # blue
+    for x, y in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
+        assert px[y * w + x], (x, y)
+    assert len(lit) == 2 * w + 2 * (h - 2) + 25         # frame and ball

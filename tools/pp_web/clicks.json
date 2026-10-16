@@ -1937,5 +1937,48 @@
       8.86,
       9.93
     ]
+  },
+  "oledb": {
+    "name": "OLED B Click",
+    "vendor": "MikroElektronika",
+    "chip": "SSD1306",
+    "bus": "I2C 0x3C/0x3D",
+    "description": "96x39 blue monochrome OLED (MI9639BO-B) on an SSD1306, I2C only: address by D/C (PWM), RES# on RST",
+    "controls": [],
+    "display": {
+      "type": "panel",
+      "property": "frame",
+      "gen_property": "frame-gen",
+      "width": 96,
+      "height": 39,
+      "at_mm": [
+        11.388,
+        32.452
+      ],
+      "size_mm": [
+        19.372,
+        7.858
+      ]
+    },
+    "signals": [],
+    "image": "oledb/top.png",
+    "origin_mm": [
+      -1.27,
+      39.116
+    ],
+    "size_mm": [
+      25.4,
+      42.926
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          13.335,
+          0.0
+        ],
+        "color": "#5dff7a"
+      }
+    ]
   }
 }

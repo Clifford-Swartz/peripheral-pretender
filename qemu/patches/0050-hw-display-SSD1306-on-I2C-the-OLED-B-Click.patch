@@ -1,0 +1,291 @@
+From f4d40427575b7dbc3d717ecd815db0e13d70ab83 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 15 Oct 2026 21:17:44 -0700
+Subject: [PATCH] hw/display: SSD1306 on I2C, the OLED B Click
+
+ssd1306-i2c answers at 0x3C, or 0x3D with SA0 (the D/C# input) high at
+the START, takes a control byte (Co, D/C#) at the start of each transfer
+and hands the bytes to an ssd1306 on a private SSI bus, whose panel and
+frame it shows. Catalog entries may now set device properties (props):
+the OLED B's panel is blue.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |   9 +-
+ hw/display/ssd1306.c                  | 162 ++++++++++++++++++++++++++
+ hw/misc/mikrobus.c                    |  17 +++
+ include/hw/display/ssd1306.h          |   2 +
+ 4 files changed, 188 insertions(+), 2 deletions(-)
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 98af643..c73f122 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -192,8 +192,13 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   charge pump enabled (8Dh 14h). Panel: SEG95..0 left to right, COM19..0
+   and COM50..32 interleaved top to bottom (``seg-left``, ``com-row0``,
+   ``com-row1``); its picture is ``frame``/``frame-gen`` like the OLED C's.
+-  Scrolling is not modelled. The OLED B Click (I2C only, v101) is not in
+-  the catalog yet.
++  Scrolling is not modelled.
++
++``oledb``
++  OLED B Click (v101): the same controller and panel in blue, I2C only
++  (``ssd1306-i2c``): 0x3C, or 0x3D with D/C# (the SSD1306's SA0, on PWM)
++  high, read at each START; RES# on RST. Each transfer starts with a
++  control byte (Co, D/C#). The SPI ``ssd1306`` does the rest inside.
+ 
+ SPI Clicks on both headers share the SPI bus; each listens only while its
+ own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
+diff --git a/hw/display/ssd1306.c b/hw/display/ssd1306.c
+index b2489eb..535763c 100644
+--- a/hw/display/ssd1306.c
++++ b/hw/display/ssd1306.c
+@@ -29,6 +29,16 @@
+  * and column x RAM column 95 - x. The picture is white on black ("color",
+  * RGB565). Not checked against a physical display.
+  *
++ * "ssd1306-i2c" is the same controller on I2C (BS[2:0] = 010; the OLED B
++ * Click): it answers at 0x3C, or 0x3D with its SA0 pin high (the GPIO input
++ * "dc", which the Click wires to D/C#: read at each START, as
++ * MikroElektronika's driver moves between the two). Each transfer starts
++ * with a control byte: bit 6 (D/C#) says whether the bytes after it are
++ * data or commands, bit 7 (Co) set means only the next byte, then another
++ * control byte. Inside, an "ssd1306" child on a private SSI bus does the
++ * rest (its panel properties and "frame" appear on this device too).
++ * Reading the status byte returns 0.
++ *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+ 
+@@ -39,6 +49,7 @@
+ #include "hw/core/qdev-properties.h"
+ #include "hw/display/pp_panel.h"
+ #include "hw/display/ssd1306.h"
++#include "hw/i2c/i2c.h"
+ #include "hw/ssi/ssi.h"
+ #include "migration/vmstate.h"
+ 
+@@ -452,6 +463,150 @@ static void ssd1306_class_init(ObjectClass *klass, const void *data)
+     k->cs_polarity = SSI_CS_LOW;
+ }
+ 
++/* The I2C front end: control bytes, then bytes to the SSI core */
++OBJECT_DECLARE_SIMPLE_TYPE(Ssd1306I2cState, SSD1306_I2C)
++
++#define SSD1306_I2C_ADDR    0x3C
++
++struct Ssd1306I2cState {
++    I2CSlave parent_obj;
++
++    Ssd1306State core;
++    SSIBus *bus;
++    qemu_irq core_dc;
++    qemu_irq core_reset;
++    qemu_irq core_cs;
++    bool sa0;
++    bool control;               /* the next byte is a control byte */
++    bool co;                    /* only one byte follows the control byte */
++};
++
++static bool ssd1306_i2c_match_and_add(I2CSlave *candidate, uint8_t address,
++                                      bool broadcast,
++                                      I2CNodeList *current_devs)
++{
++    Ssd1306I2cState *s = SSD1306_I2C(candidate);
++    I2CNode *node;
++
++    if (broadcast || address != (SSD1306_I2C_ADDR | s->sa0)) {
++        return false;
++    }
++    node = g_new(struct I2CNode, 1);
++    node->elt = candidate;
++    QLIST_INSERT_HEAD(current_devs, node, next);
++    return true;
++}
++
++static int ssd1306_i2c_event(I2CSlave *i2c, enum i2c_event event)
++{
++    Ssd1306I2cState *s = SSD1306_I2C(i2c);
++
++    if (event == I2C_START_SEND) {
++        s->control = true;
++    }
++    return 0;
++}
++
++static int ssd1306_i2c_send(I2CSlave *i2c, uint8_t data)
++{
++    Ssd1306I2cState *s = SSD1306_I2C(i2c);
++
++    if (s->control) {
++        s->co = data & 0x80;
++        qemu_set_irq(s->core_dc, !!(data & 0x40));
++        s->control = false;
++        return 0;
++    }
++    qemu_set_irq(s->core_cs, 0);    /* selected (its reset deselects it) */
++    ssi_transfer(s->bus, data);
++    if (s->co) {
++        s->control = true;
++    }
++    return 0;
++}
++
++static uint8_t ssd1306_i2c_recv(I2CSlave *i2c)
++{
++    return 0;                       /* status: display on/off not shown */
++}
++
++static void ssd1306_i2c_set_sa0(void *opaque, int n, int level)
++{
++    SSD1306_I2C(opaque)->sa0 = level > 0;
++}
++
++static void ssd1306_i2c_set_reset(void *opaque, int n, int level)
++{
++    qemu_set_irq(SSD1306_I2C(opaque)->core_reset, level);
++}
++
++static void ssd1306_i2c_realize(DeviceState *dev, Error **errp)
++{
++    Ssd1306I2cState *s = SSD1306_I2C(dev);
++    DeviceState *core = DEVICE(&s->core);
++
++    s->bus = ssi_create_bus(dev, "ssi");
++    if (!qdev_realize(core, BUS(s->bus), errp)) {
++        return;
++    }
++    s->core_dc = qdev_get_gpio_in_named(core, SSD1306_DC, 0);
++    s->core_reset = qdev_get_gpio_in_named(core, SSD1306_RESET, 0);
++    /* CS# is not used on I2C: the core is selected for each byte */
++    s->core_cs = qdev_get_gpio_in_named(core, SSI_GPIO_CS, 0);
++    qdev_init_gpio_in_named(dev, ssd1306_i2c_set_sa0, SSD1306_DC, 1);
++    qdev_init_gpio_in_named(dev, ssd1306_i2c_set_reset, SSD1306_RESET, 1);
++}
++
++static void ssd1306_i2c_reset(DeviceState *dev)
++{
++    Ssd1306I2cState *s = SSD1306_I2C(dev);
++
++    s->control = true;
++    s->co = false;
++}
++
++static void ssd1306_i2c_init(Object *obj)
++{
++    Ssd1306I2cState *s = SSD1306_I2C(obj);
++    static const char *const props[] = {
++        "width", "height", "seg-left", "com-row0", "com-row1", "color",
++        "frame", "frame-gen", "panel-width", "panel-height",
++    };
++
++    object_initialize_child(obj, "core", &s->core, TYPE_SSD1306);
++    for (unsigned i = 0; i < ARRAY_SIZE(props); i++) {
++        object_property_add_alias(obj, props[i], OBJECT(&s->core), props[i]);
++    }
++}
++
++static const VMStateDescription vmstate_ssd1306_i2c = {
++    .name = TYPE_SSD1306_I2C,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, Ssd1306I2cState),
++        VMSTATE_BOOL(sa0, Ssd1306I2cState),
++        VMSTATE_BOOL(control, Ssd1306I2cState),
++        VMSTATE_BOOL(co, Ssd1306I2cState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void ssd1306_i2c_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
++
++    dc->desc = "SSD1306 128x64 monochrome OLED driver on I2C";
++    dc->realize = ssd1306_i2c_realize;
++    dc->vmsd = &vmstate_ssd1306_i2c;
++    device_class_set_legacy_reset(dc, ssd1306_i2c_reset);
++    k->event = ssd1306_i2c_event;
++    k->send = ssd1306_i2c_send;
++    k->recv = ssd1306_i2c_recv;
++    k->match_and_add = ssd1306_i2c_match_and_add;
++}
++
+ static const TypeInfo ssd1306_types[] = {
+     {
+         .name = TYPE_SSD1306,
+@@ -461,6 +616,13 @@ static const TypeInfo ssd1306_types[] = {
+         .instance_finalize = ssd1306_finalize,
+         .class_init = ssd1306_class_init,
+     },
++    {
++        .name = TYPE_SSD1306_I2C,
++        .parent = TYPE_I2C_SLAVE,
++        .instance_size = sizeof(Ssd1306I2cState),
++        .instance_init = ssd1306_i2c_init,
++        .class_init = ssd1306_i2c_class_init,
++    },
+ };
+ 
+ DEFINE_TYPES(ssd1306_types)
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index f7c4bfb..75f974d 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -66,6 +66,7 @@ typedef struct ClickInfo {
+     ClickLine ins[4];           /* socket pin into a device input */
+     ClickPull pulls[4];
+     qemu_irq_handler uart_pin;  /* a UART Click's socket pin inputs */
++    const char *props;          /* "name=value,..." set on its device */
+ } ClickInfo;
+ 
+ static const ClickInfo mikrobus_clicks[] = {
+@@ -162,6 +163,12 @@ static const ClickInfo mikrobus_clicks[] = {
+       .ins = { { SSI_GPIO_CS, MIKROBUS_CS },
+                { SSD1306_DC, MIKROBUS_PWM },
+                { SSD1306_RESET, MIKROBUS_RST } } },      /* no pulls */
++    { "oledb", "OLED B Click: SSD1306 with a 96x39 blue OLED (MI9639BO-B) "
++      "on I2C at 0x3C/0x3D (SA0 on D/C, PWM), RES# on RST",
++      TYPE_SSD1306_I2C, CLICK_I2C, 0x3C, 0,
++      .ins = { { SSD1306_DC, MIKROBUS_PWM },
++               { SSD1306_RESET, MIKROBUS_RST } },
++      .props = "color=0x2CBF" },                          /* blue */
+     { "eeprom3", "EEPROM 3 Click: AT24CM02 256 KiB EEPROM at I2C 0x50-0x53 "
+       "(ADD jumper on 0, A17:A16 in the address), WP tied low",
+       TYPE_MCHP_AT24CM02, CLICK_I2C, MCHP_AT24CM02_ADDR, 0 },
+@@ -361,6 +368,16 @@ static void mikrobus_plug_one(Object *machine, const MikrobusSocket *sock,
+         if (c->length) {
+             qdev_prop_set_uint32(dev, "length", c->length);
+         }
++        if (c->props) {
++            g_auto(GStrv) items = g_strsplit(c->props, ",", -1);
++
++            for (unsigned i = 0; items[i]; i++) {
++                g_auto(GStrv) kv = g_strsplit(items[i], "=", 2);
++
++                object_property_parse(OBJECT(dev), kv[0], kv[1],
++                                      &error_fatal);
++            }
++        }
+         if (c->bus == CLICK_SPI) {
+             /* Sockets share the SPI bus; each Click has its own CS */
+             qdev_prop_set_uint8(dev, "cs", index);
+diff --git a/include/hw/display/ssd1306.h b/include/hw/display/ssd1306.h
+index 4ec25cd..dfec379 100644
+--- a/include/hw/display/ssd1306.h
++++ b/include/hw/display/ssd1306.h
+@@ -11,6 +11,8 @@
+ #define HW_DISPLAY_SSD1306_H
+ 
+ #define TYPE_SSD1306 "ssd1306"
++/* On I2C at 0x3C/0x3D (SA0 on the "dc" input) */
++#define TYPE_SSD1306_I2C "ssd1306-i2c"
+ 
+ /* GPIO inputs: D/C# (high: data), RES# (low: reset) */
+ #define SSD1306_DC "dc"
+-- 
+2.53.0.windows.2
+

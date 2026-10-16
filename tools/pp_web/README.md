@@ -340,8 +340,13 @@ The OLED W Click (`clicks/oledw/`) shows its SSD1306's picture on the glass like
 `parts.json` has `header_origin_mm` and the catalog `header_center_mm` (the Rotary Clicks have
 one too: their header sits at (-0.47, 2.49)). Demo: `make -C firmware/hello
 BOARD=pic32cm_mc00_cpro APP=oledw` (EXT1; MikroElektronika's set-up, a frame round the glass
-and a bouncing ball; SW0 inverts). The OLED B Click is I2C only and its files have no DXF: not
-in the catalog yet.
+and a bouncing ball; SW0 inverts).
+
+The OLED B Click (`clicks/oledb/`) is the same panel in blue on I2C only. Its download has no
+DXF, so its art is drawn without one (`make_art.py -`: `outline_mm`, `header`, `texts` in
+`parts.json`), every part placed from the STEP file; the silkscreen text is estimated. Demo:
+`make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=oledb` (EXT1; oledw.c's picture over I2C,
+commands to 0x3C and data to 0x3D as MikroElektronika's driver does).
 
 Colour variants: 8x8 R, Y and B and Button R and Y share their device with 8x8 G and Button G
 and have their own art and LED colours. The 8x8 B Click's page links the 8x8 R Click's 2D files,

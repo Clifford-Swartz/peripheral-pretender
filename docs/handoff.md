@@ -423,8 +423,9 @@ session scratchpad only; what matters is in each model's header comment.
 - **EEPROM 3** (`mchp-at24cm02`): four addresses, page writes, no ACK during the write
   cycle, an address counter kept across STOP; a memory view in the panel.
 - **OLED W** (`ssd1306`): MikroElektronika's set-up shows RAM lines 1-39 mirrored. **OLED B**
-  is I2C only (v101) with no DXF: not done; it needs an I2C front end on the SSD1306 (SA0 from
-  D/C at each START) and art from its STEP.
+  (patch 0050, `ssd1306-i2c`): I2C only (v101), SA0 from D/C at each START, the SPI core on a
+  private bus inside; blue through the catalog's new `props`; art drawn from its STEP (no DXF;
+  silkscreen text estimated).
 
 The renderer follows DXF arcs and turns parts (`rotate_deg`); new part kinds potentiometer,
 encoder, module. `header_center_mm` places Clicks whose DXF header is off the usual origin

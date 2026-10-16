@@ -1,0 +1,544 @@
+{
+ "source": "MikroElektronika OLED B Click v101: 2D and 3D files (oled_b_click_2d_3d_files.zip, CAD/OLED_B_click_v101.step; there is no DXF) and schematic v101 (MI9639BO-B2, AP7331, R1 470, R5/R6 4.7k SCL/SDA pull-ups). From the STEP's assembly placements: the board outline (25.4 x 42.926 mm, one 2.54 mm chamfer at the bottom right), every part's position, rotation and reference designator (0805 bodies 2.0 x 1.25), the mikroBUS pin centres (x 0.003 / 22.863, y 0..17.78) and the display glass (23.8 x 16.2, top edge y 38.481, left x -0.508; FPC ledge at the bottom). The active area (19.372 x 7.858, 2.21 mm from the glass's left edge and 2.1 mm from its top) is from the Multi-Inno MI9639BO spec; the STEP's polariser is centred on it. Estimated (no DXF or photo used): all silkscreen text positions, sizes and fonts; header pin labels are the schematic's net names; the mikroe logo and other silk art are omitted; SOT-23-5 drawn as its 2.9 x 1.6 body.",
+ "outline_mm": [
+  [
+   -1.27,
+   -3.81
+  ],
+  [
+   21.59,
+   -3.81
+  ],
+  [
+   24.13,
+   -1.27
+  ],
+  [
+   24.13,
+   39.116
+  ],
+  [
+   -1.27,
+   39.116
+  ]
+ ],
+ "header": true,
+ "header_origin_mm": [
+  0.003,
+  0.0
+ ],
+ "texts": [
+  {
+   "text": "NC",
+   "at_mm": [
+    2.053,
+    17.78
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "D/C",
+   "at_mm": [
+    20.813,
+    17.78
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "RST",
+   "at_mm": [
+    2.053,
+    15.240000000000002
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "NC",
+   "at_mm": [
+    20.813,
+    15.240000000000002
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "CS",
+   "at_mm": [
+    2.053,
+    12.700000000000001
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "NC",
+   "at_mm": [
+    20.813,
+    12.700000000000001
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "NC",
+   "at_mm": [
+    2.053,
+    10.16
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "NC",
+   "at_mm": [
+    20.813,
+    10.16
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "NC",
+   "at_mm": [
+    2.053,
+    7.620000000000001
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "SCL",
+   "at_mm": [
+    20.813,
+    7.620000000000001
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "NC",
+   "at_mm": [
+    2.053,
+    5.080000000000002
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "SDA",
+   "at_mm": [
+    20.813,
+    5.080000000000002
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "3V3",
+   "at_mm": [
+    2.053,
+    2.540000000000001
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "5V",
+   "at_mm": [
+    20.813,
+    2.540000000000001
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "GND",
+   "at_mm": [
+    2.053,
+    0.0
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "GND",
+   "at_mm": [
+    20.813,
+    0.0
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "OLED B click",
+   "at_mm": [
+    11.43,
+    -2.35
+   ],
+   "size": 2.0
+  },
+  {
+   "text": "PWR",
+   "at_mm": [
+    16.25,
+    0.0
+   ],
+   "size": 1.1
+  },
+  {
+   "text": "C1",
+   "at_mm": [
+    0.762,
+    21.45
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "C2",
+   "at_mm": [
+    4.318,
+    21.45
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "C3",
+   "at_mm": [
+    7.874,
+    21.45
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "C5",
+   "at_mm": [
+    11.43,
+    21.45
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "R2",
+   "at_mm": [
+    15.113,
+    21.45
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "C7",
+   "at_mm": [
+    18.669,
+    21.45
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "C6",
+   "at_mm": [
+    22.225,
+    21.45
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "R3",
+   "at_mm": [
+    9.017,
+    12.95
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "R4",
+   "at_mm": [
+    13.843,
+    12.95
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "C9",
+   "at_mm": [
+    6.95,
+    8.255
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "C8",
+   "at_mm": [
+    15.95,
+    8.255
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "U1",
+   "at_mm": [
+    11.43,
+    10.4
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "R5",
+   "at_mm": [
+    6.85,
+    4.826
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "R6",
+   "at_mm": [
+    16.0,
+    4.826
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "R1",
+   "at_mm": [
+    7.35,
+    0.0
+   ],
+   "size": 0.9
+  }
+ ],
+ "parts": [
+  {
+   "ref": "OLED1",
+   "kind": "oled",
+   "value": "MI9639BO-B2 96x39 blue",
+   "at_mm": [
+    11.392,
+    30.381
+   ],
+   "size_mm": [
+    23.8,
+    16.2
+   ],
+   "active_mm": [
+    19.372,
+    7.858
+   ],
+   "active_at_mm": [
+    11.388,
+    32.452
+   ]
+  },
+  {
+   "ref": "C1",
+   "kind": "capacitor",
+   "value": "1u",
+   "at_mm": [
+    0.762,
+    20.066
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "C2",
+   "kind": "capacitor",
+   "value": "1u",
+   "at_mm": [
+    4.318,
+    20.066
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "C3",
+   "kind": "capacitor",
+   "value": "1u",
+   "at_mm": [
+    7.874,
+    20.066
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "C5",
+   "kind": "capacitor",
+   "value": "1u",
+   "at_mm": [
+    11.43,
+    20.066
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "R2",
+   "kind": "resistor",
+   "value": "390k",
+   "at_mm": [
+    15.113,
+    20.066
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "C7",
+   "kind": "capacitor",
+   "value": "4.7u",
+   "at_mm": [
+    18.669,
+    20.066
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "C6",
+   "kind": "capacitor",
+   "value": "2.2u",
+   "at_mm": [
+    22.225,
+    20.066
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "R3",
+   "kind": "resistor",
+   "value": "160k",
+   "at_mm": [
+    9.017,
+    11.684
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "R4",
+   "kind": "resistor",
+   "value": "20k",
+   "at_mm": [
+    13.843,
+    11.684
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "C9",
+   "kind": "capacitor",
+   "value": "4.7u",
+   "at_mm": [
+    8.255,
+    8.255
+   ],
+   "size_mm": [
+    1.25,
+    2.0
+   ]
+  },
+  {
+   "ref": "C8",
+   "kind": "capacitor",
+   "value": "2.2u",
+   "at_mm": [
+    14.605,
+    8.255
+   ],
+   "size_mm": [
+    1.25,
+    2.0
+   ]
+  },
+  {
+   "ref": "U1",
+   "kind": "ic",
+   "value": "AP7331-ADJ (SOT-23-5)",
+   "at_mm": [
+    11.43,
+    8.255
+   ],
+   "size_mm": [
+    2.9,
+    1.6
+   ]
+  },
+  {
+   "ref": "R5",
+   "kind": "resistor",
+   "value": "4k7",
+   "at_mm": [
+    9.017,
+    4.826
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "R6",
+   "kind": "resistor",
+   "value": "4k7",
+   "at_mm": [
+    13.843,
+    4.826
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "R1",
+   "kind": "resistor",
+   "value": "470",
+   "at_mm": [
+    9.525,
+    0.0
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "LD1",
+   "kind": "led",
+   "value": "green (PWR)",
+   "at_mm": [
+    13.335,
+    0.0
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ],
+   "color": "#7be38a"
+  }
+ ]
+}
