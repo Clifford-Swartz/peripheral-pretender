@@ -1,0 +1,375 @@
+{
+ "source": "MikroElektronika LR 2 Click v102 (MIKROE-4615): the 2D and 3D zip (lr_2_click_2d_3d_files.zip) has only a STEP (CAD/LR_2_Click_v102.step, no DXF), so the outline and every part position come from the STEP assembly (board, refdes products placed by their transforms; scratch step_parts.py), schematic LR-2-click-schematic-v102. Outline: 25.4 x 57.15 mm, chamfered bottom-right corner, top corners rounded (r 2.286, drawn as arcs from the STEP corner points). Header from the STEP at x 0/22.86, y 0-17.78 (standard). Estimated: silkscreen texts (none in the STEP; placed by hand), U1 drawn from its two STEP bodies (module PCB 17.27 x 26.16, shield 14.1 x 23.5), CN2 only its on-board square body (the SMA barrel reaches y 61.1, 7.8 mm past the edge, outside the art), JP1 is an 0805 at the fitted position (side not known), SOT-23/TSSOP bodies without leads, 0402 bodies drawn 1.0 x 0.5.",
+ "outline_mm": [
+  [
+   -1.27,
+   -3.81
+  ],
+  [
+   21.59,
+   -3.81
+  ],
+  [
+   24.13,
+   -1.27
+  ],
+  [
+   24.13,
+   51.054
+  ],
+  [
+   24.018,
+   51.76
+  ],
+  [
+   23.693,
+   52.398
+  ],
+  [
+   23.188,
+   52.903
+  ],
+  [
+   22.55,
+   53.228
+  ],
+  [
+   21.844,
+   53.34
+  ],
+  [
+   1.016,
+   53.34
+  ],
+  [
+   0.31,
+   53.228
+  ],
+  [
+   -0.328,
+   52.903
+  ],
+  [
+   -0.833,
+   52.398
+  ],
+  [
+   -1.158,
+   51.76
+  ],
+  [
+   -1.27,
+   51.054
+  ]
+ ],
+ "header": true,
+ "texts": [
+  {
+   "text": "LR 2 click",
+   "at_mm": [
+    11.43,
+    -2.3
+   ],
+   "size": 2.0
+  },
+  {
+   "text": "PWR",
+   "at_mm": [
+    16.4,
+    0.0
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "VCC SEL",
+   "at_mm": [
+    10.43,
+    7.2
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "3V3",
+   "at_mm": [
+    7.6,
+    5.61
+   ],
+   "size": 0.8
+  },
+  {
+   "text": "5V",
+   "at_mm": [
+    13.0,
+    5.61
+   ],
+   "size": 0.8
+  },
+  {
+   "text": "RFH ANT",
+   "at_mm": [
+    9.0,
+    49.8
+   ],
+   "size": 1.1
+  }
+ ],
+ "parts": [
+  {
+   "ref": "U1",
+   "kind": "module",
+   "value": "Microchip RN2903A-I/RM098 LoRaWAN module (915 MHz), shield can on top",
+   "at_mm": [
+    11.42,
+    32.21
+   ],
+   "size_mm": [
+    17.27,
+    26.16
+   ],
+   "label": "RN2903",
+   "label_size": 2.0,
+   "antenna_mm": [
+    14.1,
+    23.5
+   ],
+   "antenna_at_mm": [
+    11.48,
+    32.14
+   ],
+   "antenna_color": "#bfc4ca"
+  },
+  {
+   "ref": "CN2",
+   "kind": "module",
+   "value": "SMA right-angle jack (Molex), RFH ANT; barrel points off the top edge",
+   "at_mm": [
+    19.28,
+    49.82
+   ],
+   "size_mm": [
+    6.35,
+    7.04
+   ],
+   "antenna_mm": [
+    6.0,
+    6.7
+   ],
+   "antenna_at_mm": [
+    19.28,
+    49.82
+   ],
+   "antenna_color": "#d8b45a",
+   "label": "SMA",
+   "label_size": 1.4
+  },
+  {
+   "ref": "U3",
+   "kind": "ic",
+   "value": "TXB0106 level translator (TSSOP-16)",
+   "at_mm": [
+    14.09,
+    12.55
+   ],
+   "size_mm": [
+    5.0,
+    4.4
+   ]
+  },
+  {
+   "ref": "U2",
+   "kind": "ic",
+   "value": "LP2985-33DBVR 3.3 V LDO (SOT-23-5)",
+   "at_mm": [
+    7.67,
+    12.52
+   ],
+   "size_mm": [
+    2.9,
+    1.6
+   ]
+  },
+  {
+   "ref": "R1",
+   "kind": "resistor",
+   "value": "470 (LD1)",
+   "at_mm": [
+    9.52,
+    0.0
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "LD1",
+   "kind": "led",
+   "value": "green (PWR)",
+   "at_mm": [
+    13.33,
+    0.0
+   ],
+   "size_mm": [
+    2.02,
+    1.25
+   ],
+   "color": "#7be38a"
+  },
+  {
+   "ref": "JP1",
+   "kind": "zero_ohm",
+   "value": "VCC SEL, fitted 1-2 (3V3)",
+   "at_mm": [
+    10.43,
+    5.61
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "R2",
+   "kind": "resistor",
+   "value": "220 (LDO ON/OFF)",
+   "at_mm": [
+    5.46,
+    12.52
+   ],
+   "size_mm": [
+    0.5,
+    1.0
+   ]
+  },
+  {
+   "ref": "R3",
+   "kind": "resistor",
+   "value": "10k (RESET pull-up)",
+   "at_mm": [
+    10.8,
+    15.42
+   ],
+   "size_mm": [
+    0.5,
+    1.0
+   ]
+  },
+  {
+   "ref": "C1",
+   "kind": "capacitor",
+   "value": "10uF",
+   "at_mm": [
+    -0.25,
+    37.4
+   ],
+   "size_mm": [
+    0.5,
+    1.0
+   ]
+  },
+  {
+   "ref": "C2",
+   "kind": "capacitor",
+   "value": "0.1uF",
+   "at_mm": [
+    0.69,
+    37.4
+   ],
+   "size_mm": [
+    0.5,
+    1.0
+   ]
+  },
+  {
+   "ref": "C3",
+   "kind": "capacitor",
+   "value": "10uF",
+   "at_mm": [
+    23.09,
+    33.42
+   ],
+   "size_mm": [
+    0.5,
+    1.0
+   ]
+  },
+  {
+   "ref": "C4",
+   "kind": "capacitor",
+   "value": "0.1uF",
+   "at_mm": [
+    22.17,
+    33.42
+   ],
+   "size_mm": [
+    0.5,
+    1.0
+   ]
+  },
+  {
+   "ref": "C5",
+   "kind": "capacitor",
+   "value": "4.7uF",
+   "at_mm": [
+    7.91,
+    15.98
+   ],
+   "size_mm": [
+    1.0,
+    0.5
+   ]
+  },
+  {
+   "ref": "C6",
+   "kind": "capacitor",
+   "value": "0.1uF",
+   "at_mm": [
+    7.91,
+    15.09
+   ],
+   "size_mm": [
+    1.0,
+    0.5
+   ]
+  },
+  {
+   "ref": "C7",
+   "kind": "capacitor",
+   "value": "0.1uF",
+   "at_mm": [
+    17.35,
+    10.1
+   ],
+   "size_mm": [
+    0.5,
+    1.0
+   ]
+  },
+  {
+   "ref": "C8",
+   "kind": "capacitor",
+   "value": "0.1uF",
+   "at_mm": [
+    17.35,
+    15.0
+   ],
+   "size_mm": [
+    0.5,
+    1.0
+   ]
+  },
+  {
+   "ref": "C9",
+   "kind": "capacitor",
+   "value": "10nF",
+   "at_mm": [
+    5.98,
+    9.96
+   ],
+   "size_mm": [
+    1.0,
+    0.5
+   ]
+  }
+ ]
+}

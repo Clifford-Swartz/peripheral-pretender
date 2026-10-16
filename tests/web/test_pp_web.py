@@ -1472,6 +1472,51 @@ def test_session_fan(qemu_path, qemu_machines):
     assert held == 0
 
 
+LR2_DEMO = BUILD / "lr2.elf"
+
+
+@pytest.mark.qemu
+def test_session_lr2(qemu_path, qemu_machines):
+    """lr2.elf with an LR 2 Click on EXT1: the RN2903's boot line after a
+    reset pulse, keys_not_init, an OTAA join, an uplink and
+    MikroElektronika's point-to-point packet pass; then the page, as the
+    other radio, sends a line the firmware receives, and as the network
+    sends a downlink that arrives with the next uplink."""
+    from tools.pp_web import server
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not LR2_DEMO.is_file():
+        pytest.skip("lr2.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=lr2)")
+
+    async def scenario():
+        app = server.App("ev15n46a", LR2_DEMO)
+        await app.plug("ext1", "lr2")
+        try:
+            for _ in range(300):
+                await asyncio.sleep(0.1)
+                if "PP:EXIT" in app.uart_log:
+                    break
+            await app.click_text("ext1", "downlink", "hi node")
+            await app.click_text("ext1", "peer", "hello twin")
+            for _ in range(600):
+                await asyncio.sleep(0.1)
+                if "downlink: hi node" in app.uart_log:
+                    break
+            air = await app.session.qmp.execute(
+                "qom-get", path="/machine/ext1-click", property="air")
+        finally:
+            await app.session.stop()
+        return app.uart_log, air
+
+    uart, air = asyncio.run(scenario())
+    assert "PP:EXIT 0" in uart, uart
+    assert "FAIL" not in uart, uart
+    assert "received: hello twin" in uart, uart
+    assert "downlink: hi node" in uart, uart
+    assert "P2P out: MikroE" in air, air
+
+
 OLEDW_DEMO = BUILD / "oledw.elf"
 
 

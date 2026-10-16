@@ -435,6 +435,10 @@ session scratchpad only; what matters is in each model's header comment.
   power-up watchdog; a turning fan on the page. The RPM loop's PID is approximated, and the
   RPM formula's range factor m disagrees with Linux's emc2305 driver: we follow the data
   sheet and MikroElektronika.
+- **LR 2** (patch 0054, `chardev-rn2903`): the RN2903's sys/mac/radio commands and errors,
+  joins and uplinks with LoRaWAN timing, P2P with the time on air; the page is the network
+  and the other radio. The version string and the two spaces after `radio_rx` are observed
+  behaviour, not documented. RN2483 would be a subclass (868 MHz defaults, its ranges).
 
 The renderer follows DXF arcs and turns parts (`rotate_deg`); new part kinds potentiometer,
 encoder, module. `header_center_mm` places Clicks whose DXF header is off the usual origin

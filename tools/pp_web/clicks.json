@@ -2206,5 +2206,59 @@
         "color": "#5dff7a"
       }
     ]
+  },
+  "lr2": {
+    "name": "LR 2 Click",
+    "vendor": "MikroElektronika",
+    "chip": "RN2903",
+    "bus": "UART 57600",
+    "description": "Microchip RN2903 LoRaWAN module (915 MHz): sys/mac/radio ASCII commands, OTAA/ABP joins, uplinks, point-to-point radio; RESET on RST. You are the network and the other radio",
+    "controls": [],
+    "toggles": [
+      {
+        "id": "join-accept",
+        "label": "Network accepts joins",
+        "property": "join-accept"
+      }
+    ],
+    "inputs": [
+      {
+        "id": "peer",
+        "label": "The other radio sends (Enter)",
+        "property": "peer-send"
+      },
+      {
+        "id": "downlink",
+        "label": "Network downlink, next uplink (Enter)",
+        "property": "downlink"
+      }
+    ],
+    "monitors": [
+      {
+        "id": "air",
+        "label": "On the air",
+        "property": "air"
+      }
+    ],
+    "signals": [],
+    "image": "lr2/top.png",
+    "origin_mm": [
+      -1.27,
+      53.34
+    ],
+    "size_mm": [
+      25.4,
+      57.15
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          13.33,
+          0.0
+        ],
+        "color": "#5dff7a"
+      }
+    ]
   }
 }

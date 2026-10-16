@@ -374,6 +374,13 @@ a stopped fan, Direct Setting at 50 %, the RPM algorithm on 3000 rpm, then Mikro
 duty sweep). Firmware that never writes the chip sees its watchdog run the fan at full speed
 after four seconds, as on silicon.
 
+The LR 2 Click (`clicks/lr2/`, art from its STEP file: no DXF, silkscreen estimated) makes
+you the LoRaWAN network and the other radio: a toggle accepts or denies OTAA joins, one input
+is what the other radio sends (received by the next `radio rx`), another a downlink that
+comes back with the next uplink, and the monitor shows what went over the air. Demo: `make -C
+firmware/hello BOARD=pic32cm_mc00_cpro APP=lr2` (EXT1; boot line, keys, an OTAA join, an
+uplink, MikroElektronika's P2P packet; then P2P out and in, an uplink every fourth round).
+
 Colour variants: 8x8 R, Y and B and Button R and Y share their device with 8x8 G and Button G
 and have their own art and LED colours. The 8x8 B Click's page links the 8x8 R Click's 2D files,
 so its art is the 8x8 R DXF with the silkscreen letter replaced (`silk_label`).
