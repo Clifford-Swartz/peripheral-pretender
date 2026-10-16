@@ -61,6 +61,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0052 | Weather Click: BME280 (`bme280`, I2C) at 0x76, sleep/forced/normal with typical measurement and standby times, oversampling resolution, IIR filter, skipped readings, results held during a burst read, 0xB6 reset; typical calibration, raw readings by bisection over the data sheet's compensation so `temperature`/`pressure`/`humidity` read back exactly; qtest |
 | 0053 | Fan Click: EMC2301 (`emc2301`) at 0x2F with a fan on it: Direct Setting and the RPM-based algorithm, spin-up, stall/spin/drive-fail status, power-up watchdog, software lock, TACH Reading by equation 4-2 from the fan's speed (`max-rpm`, `min-duty`, `tau-ms`, `poles`, `blocked`; `rpm`, `duty`); ALERT# on INT; qtest |
 | 0054 | LR 2 Click: RN2903 (`chardev-rn2903`) on the UART at 57600: sys/mac/radio commands with their documented errors, OTAA/ABP joins after the join window, uplinks after RX1, radio tx after the LoRa time on air, radio rx with the radio watchdog; the network and the other radio as properties (`join-accept`, `downlink`, `peer-send`, `air`); CTS on INT pulled low |
+| 0055 | DC Motor Click (`click-dcmotor`): the 74HC4053 routing and the DRV8833 truth table from PWM (duty timed on the virtual clock), SELECT1 (RST), SELECT2 (CS), nSLEEP (AN as a digital pin), nFAULT on INT (`fault`); a motor with lag (`max-rpm`, `tau-ms`; `rpm`, `drive`, `state`, `angle`); qtest |
 
 ## Setting it up
 

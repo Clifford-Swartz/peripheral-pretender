@@ -439,6 +439,9 @@ session scratchpad only; what matters is in each model's header comment.
   joins and uplinks with LoRaWAN timing, P2P with the time on air; the page is the network
   and the other radio. The version string and the two spaces after `radio_rx` are observed
   behaviour, not documented. RN2483 would be a subclass (868 MHz defaults, its ranges).
+- **DC Motor** (patch 0055, `click-dcmotor`): PWM duty timed like the Buzz Click's, the
+  4053/DRV8833 table, a motor with lag; a `motor` display. MikroElektronika's example uses
+  only slow decay, so its motor slows as its duty rises: true on silicon too.
 
 The renderer follows DXF arcs and turns parts (`rotate_deg`); new part kinds potentiometer,
 encoder, module. `header_center_mm` places Clicks whose DXF header is off the usual origin

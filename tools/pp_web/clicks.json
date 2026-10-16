@@ -2260,5 +2260,92 @@
         "color": "#5dff7a"
       }
     ]
+  },
+  "dcmotor": {
+    "name": "DC Motor Click",
+    "vendor": "MikroElektronika",
+    "chip": "DRV8833 + 74HC4053",
+    "bus": "GPIO + PWM",
+    "description": "H-bridge for a brushed DC motor: PWM on PWM, SELECT1 on RST and SELECT2 on CS pick direction and decay (fast: drive = duty; slow: drive = 1 - duty), nSLEEP on AN, nFAULT on INT. The motor is drawn at a tenth of its speed",
+    "controls": [
+      {
+        "id": "max-rpm",
+        "label": "Motor top speed",
+        "property": "max-rpm",
+        "unit": "rpm",
+        "min": 500,
+        "max": 10000,
+        "step": 100,
+        "scale": 1,
+        "default": 3000
+      }
+    ],
+    "toggles": [
+      {
+        "id": "fault",
+        "label": "Fault (nFAULT low, bridge off)",
+        "property": "fault"
+      }
+    ],
+    "monitors": [
+      {
+        "id": "state",
+        "label": "Bridge",
+        "property": "state"
+      }
+    ],
+    "display": {
+      "type": "motor",
+      "property": "rpm",
+      "at_mm": [
+        27.5,
+        40.0
+      ],
+      "size_mm": 12
+    },
+    "signals": [
+      {
+        "id": "nFAULT",
+        "pin": "int",
+        "active_low": true,
+        "at_mm": [
+          19.01,
+          8.6
+        ]
+      }
+    ],
+    "image": "dcmotor/top.png",
+    "origin_mm": [
+      -5.1181,
+      46.6979
+    ],
+    "size_mm": [
+      25.4,
+      57.15
+    ],
+    "header_center_mm": [
+      7.58,
+      2.25
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          12.48,
+          -5.48
+        ],
+        "color": "#5dff7a"
+      },
+      {
+        "id": "FAULT",
+        "at_mm": [
+          16.31,
+          28.22
+        ],
+        "color": "#ff4a4a",
+        "pin": "int",
+        "active_low": true
+      }
+    ]
   }
 }

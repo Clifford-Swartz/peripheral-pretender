@@ -1517,6 +1517,59 @@ def test_session_lr2(qemu_path, qemu_machines):
     assert "P2P out: MikroE" in air, air
 
 
+DCMOTOR_DEMO = BUILD / "dcmotor.elf"
+
+
+@pytest.mark.qemu
+def test_session_dcmotor(qemu_path, qemu_machines):
+    """dcmotor.elf with a DC Motor Click on EXT1: a round of steps with no
+    fault, then the motor runs forward at full drive (TCC0 PWM at 100 %,
+    SEL1 = SEL2 = 0) and backward at half (SEL2 high), and the fault
+    toggle stops the bridge."""
+    from tools.pp_web import server
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not DCMOTOR_DEMO.is_file():
+        pytest.skip("dcmotor.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=dcmotor)")
+
+    async def get(app, prop):
+        return await app.session.qmp.execute(
+            "qom-get", path="/machine/ext1-click", property=prop)
+
+    async def until(app, text, count, rpms=None):
+        for _ in range(400):
+            await asyncio.sleep(0.05)
+            if rpms is not None:
+                rpms.append(await get(app, "rpm"))
+            if app.uart_log.count(text) >= count:
+                return
+
+    async def scenario():
+        app = server.App("ev15n46a", DCMOTOR_DEMO)
+        await app.plug("ext1", "dcmotor")
+        try:
+            fwd, rev = [], []
+            await until(app, "PP:EXIT", 1)
+            await until(app, "forward 100 %", 2)
+            await until(app, "brake", 2, fwd)
+            await until(app, "reverse 50 %", 2)
+            await until(app, "coast", 2, rev)
+            fwd, rev = max(fwd), min(rev)
+            await app.control("ext1", "fault", 1)
+            await asyncio.sleep(0.3)
+            state = await get(app, "state")
+        finally:
+            await app.session.stop()
+        return app.uart_log, fwd, rev, state
+
+    uart, fwd, rev, state = asyncio.run(scenario())
+    assert "PP:EXIT 0" in uart, uart
+    assert fwd > 2500, fwd
+    assert -1600 < rev < -1300, rev
+    assert state == "coast"
+
+
 OLEDW_DEMO = BUILD / "oledw.elf"
 
 

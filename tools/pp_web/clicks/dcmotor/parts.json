@@ -1,0 +1,26 @@
+{
+ "source": "MikroElektronika DC Motor Click v101 (MIKROE-1526): 2D and 3D files (DC Motor_click_2d_3d_files.zip: DC Motor_click_v101.dxf, DC Motor_click_v101.step) and schematic v101. Part centres from the STEP placements and the DXF pads; body sizes from the packages (QFN-16 3x3, SO-16, 0805, 1210, PLCC-2 Everlight 67-21, 5.08 mm 2-way terminal blocks). J2 MOTOR PWR shorting jumper fitted EXT (middle-right) in the STEP and schematic: left as its DXF pads (no jumper kind). Terminal blocks are orange on the real board (the terminal kind draws green).",
+ "parts": [
+  {"ref": "CN2", "kind": "terminal", "ways": 2, "value": "VM supply: GND, 3-10V", "at_mm": [2.47, 41.0], "size_mm": [10.16, 11.2]},
+  {"ref": "CN1", "kind": "terminal", "ways": 2, "value": "motor: OUT2, OUT1", "at_mm": [12.63, 41.0], "size_mm": [10.16, 11.2]},
+  {"ref": "U1", "kind": "ic", "value": "DRV8833RTY (QFN-16 3x3)", "at_mm": [7.59, 21.0], "size_mm": [3.0, 3.0]},
+  {"ref": "U2", "kind": "ic", "value": "74HC4053 (SO-16)", "at_mm": [7.58, 4.08], "size_mm": [9.9, 3.9], "rotate_deg": 180},
+  {"ref": "R5", "kind": "resistor", "value": "0.22 (1210, sense B)", "at_mm": [1.27, 21.12], "size_mm": [2.5, 3.2]},
+  {"ref": "R2", "kind": "resistor", "value": "0.22 (1210, sense A)", "at_mm": [14.25, 21.12], "size_mm": [2.5, 3.2]},
+  {"ref": "C4", "kind": "capacitor", "value": "10n", "at_mm": [2.6, 15.73], "size_mm": [2.0, 1.25]},
+  {"ref": "R3", "kind": "resistor", "value": "47k nSLEEP pull-up", "at_mm": [12.56, 15.71], "size_mm": [2.0, 1.25]},
+  {"ref": "C1", "kind": "capacitor", "value": "10u", "at_mm": [5.53, 14.87], "size_mm": [1.25, 2.0]},
+  {"ref": "C2", "kind": "capacitor", "value": "100n", "at_mm": [7.58, 14.87], "size_mm": [1.25, 2.0]},
+  {"ref": "C5", "kind": "capacitor", "value": "2.2u", "at_mm": [9.63, 14.87], "size_mm": [1.25, 2.0]},
+  {"ref": "Q1", "kind": "ic", "value": "BC856 (SOT-23)", "at_mm": [10.23, 28.25], "size_mm": [2.9, 1.3]},
+  {"ref": "R7", "kind": "resistor", "value": "10k", "at_mm": [13.27, 28.23], "size_mm": [1.25, 2.0]},
+  {"ref": "LD2", "kind": "led", "value": "FAULT (red)", "color": "#ff5a4a", "at_mm": [16.31, 28.22], "size_mm": [2.8, 4.2]},
+  {"ref": "R6", "kind": "resistor", "value": "220", "at_mm": [14.47, 6.49], "size_mm": [1.25, 2.0]},
+  {"ref": "R4", "kind": "resistor", "value": "2k2 nFAULT pull-up", "at_mm": [14.47, 1.66], "size_mm": [1.25, 2.0]},
+  {"ref": "C3", "kind": "capacitor", "value": "100n", "at_mm": [12.48, -2.57], "size_mm": [2.0, 1.25]},
+  {"ref": "R1", "kind": "resistor", "value": "2k2", "at_mm": [8.35, -5.25], "size_mm": [1.25, 2.0]},
+  {"ref": "LD1", "kind": "led", "value": "PWR (green)", "at_mm": [12.48, -5.48], "size_mm": [4.2, 2.8]},
+  {"ref": "J2", "kind": "ic", "value": "MOTOR PWR shorting jumper, fitted EXT (drawn as a black block)", "at_mm": [2.47, 28.22], "size_mm": [5.0, 2.4]},
+  {"ref": "J1", "kind": "zero_ohm", "value": "PWR SEL = 3.3V", "at_mm": [1.51, -4.07], "size_mm": [2.0, 1.25]}
+ ]
+}

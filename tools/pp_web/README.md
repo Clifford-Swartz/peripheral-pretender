@@ -381,6 +381,14 @@ comes back with the next uplink, and the monitor shows what went over the air. D
 firmware/hello BOARD=pic32cm_mc00_cpro APP=lr2` (EXT1; boot line, keys, an OTAA join, an
 uplink, MikroElektronika's P2P packet; then P2P out and in, an uplink every fourth round).
 
+The DC Motor Click (`clicks/dcmotor/`; its DXF puts the header at (-3.85, -6.64), hence
+`header_center_mm`) brings a `display` of type `motor`: the motor's end beside the terminals,
+its shaft turning either way at a tenth of the signed `rpm`. The FAULT LED is an LED with
+`pin` INT and `active_low`. A slider sets the motor's top speed, a toggle injects a fault and
+a monitor shows the bridge's state. Demo: `make -C firmware/hello BOARD=pic32cm_mc00_cpro
+APP=dcmotor` (EXT1; TCC0 PWM at 5 kHz; forward, full, brake, reverse, coast, slow decay,
+sleep, 2 s each).
+
 Colour variants: 8x8 R, Y and B and Button R and Y share their device with 8x8 G and Button G
 and have their own art and LED colours. The 8x8 B Click's page links the 8x8 R Click's 2D files,
 so its art is the 8x8 R DXF with the silkscreen letter replaced (`silk_label`).

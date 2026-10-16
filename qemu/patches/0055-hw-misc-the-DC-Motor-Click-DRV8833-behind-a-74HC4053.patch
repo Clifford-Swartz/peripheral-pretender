@@ -1,0 +1,568 @@
+From 655dae14cde960b97014c53636f2a58a4d53ad7d Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 15 Oct 2026 22:45:18 -0700
+Subject: [PATCH] hw/misc: the DC Motor Click, DRV8833 behind a 74HC4053
+
+click-dcmotor watches PWM, SELECT1 (RST), SELECT2 (CS) and nSLEEP (AN as
+a digital pin): the PWM duty is timed on the virtual clock, the
+multiplexer picks bridge A or B, and the DRV8833 truth table gives the
+drive with fast or slow decay, brake and coast. nFAULT on INT follows a
+"fault" property. A motor with a first-order lag turns behind it; rpm,
+drive, state and angle read it. qtest.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  11 +
+ hw/misc/click_dcmotor.c               | 362 ++++++++++++++++++++++++++
+ hw/misc/meson.build                   |   1 +
+ hw/misc/mikrobus.c                    |  12 +
+ include/hw/misc/click_dcmotor.h       |  28 ++
+ tests/qtest/pic32cm-click-test.c      |  57 ++++
+ 6 files changed, 471 insertions(+)
+ create mode 100644 hw/misc/click_dcmotor.c
+ create mode 100644 include/hw/misc/click_dcmotor.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 94ee56a..3074309 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -226,6 +226,17 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   other radio are properties: ``join-accept``, ``downlink`` (text, sent
+   once on port 1), ``peer-send`` (text), ``air`` (what went over the air).
+ 
++``dcmotor``
++  DC Motor Click (v101, ``click-dcmotor``): a 74HC4053 routes PWM and
++  SELECT1 (RST) to one of the DRV8833's bridges by SELECT2 (CS); both
++  drive the motor. SEL1/SEL2 0/0 forward and 0/1 reverse with fast decay
++  (drive = duty), 1/1 forward and 1/0 reverse with slow decay (drive = 1 -
++  duty, 100 % brakes). nSLEEP on AN (R3 47k pull-up), nFAULT on INT (R4
++  2k2, the FAULT LED) while ``fault`` is set. The duty is timed on the
++  virtual clock; the motor follows drive times ``max-rpm`` (3000) with a
++  ``tau-ms`` (150) lag, 50 ms braking, 1 s coasting. ``rpm``, ``drive``,
++  ``state`` and ``angle`` read it. EXT2's AN is PA08, EXT1's PB08.
++
+ ``oledw``
+   OLED W Click (v100): an SSD1306 (``ssd1306``) with a 96x39 white OLED
+   (MI9639BO-W) on SPI (jumpers J1-J3 on SPI), CS# on CS, D/C# on PWM, RES#
+diff --git a/hw/misc/click_dcmotor.c b/hw/misc/click_dcmotor.c
+new file mode 100644
+index 0000000..a171c5b
+--- /dev/null
++++ b/hw/misc/click_dcmotor.c
+@@ -0,0 +1,362 @@
++/*
++ * DC Motor Click: DRV8833 H-bridge behind a 74HC4053, with a motor on it
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * DC Motor Click (MikroElektronika, schematic v101): a 74HC4053 routes
++ * the PWM pin and SELECT1 (RST) to bridge A (AIN1, AIN2) while SELECT2
++ * (CS) is low, to bridge B (BIN2, BIN1) while it is high; the two
++ * bridges' outputs are tied together onto the motor terminals, and the
++ * unselected bridge's inputs fall to the DRV8833's pull-downs (coast).
++ * With the DRV8833 truth table (TI SLVSAR1), PWM duty d:
++ *
++ *   SEL1 SEL2   OUT1/OUT2        drive
++ *    0    0     forward, fast    +d       (off time: coast)
++ *    0    1     reverse, fast    -d
++ *    1    1     forward, slow    +(1 - d) (off time: brake)
++ *    1    0     reverse, slow    -(1 - d)
++ *
++ * nSLEEP (AN, R3 47k pull-up) low puts the bridges to sleep (coast);
++ * they drive again 1 ms after it rises. nFAULT (INT, R4 2k2 pull-up, the
++ * FAULT LED) goes low while "fault" is set, the bridge off meanwhile;
++ * overcurrent, thermal and undervoltage protection are not modelled.
++ *
++ * The PWM duty is timed on the virtual clock as the Buzz Click's: the
++ * last full period's high time; a constant level (no edge for two
++ * periods plus 1 ms) is 0 or 100 %. Every 10 ms the motor's speed moves
++ * toward drive times max-rpm with a time constant of tau-ms while
++ * driven, 50 ms while braking (drive 0 in slow decay) and 1 s while
++ * coasting. No physical Click or motor checked it.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/visitor.h"
++#include "qemu/timer.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "system/reset.h"
++#include "hw/misc/click_dcmotor.h"
++#include "migration/vmstate.h"
++#include <math.h>
++
++#define TICK_NS             (10 * SCALE_MS)
++#define WAKE_NS             SCALE_MS
++#define TAU_BRAKE_MS        50
++#define TAU_COAST_MS        1000
++
++typedef enum {
++    MOTOR_SLEEP,
++    MOTOR_COAST,
++    MOTOR_BRAKE,
++    MOTOR_FORWARD,
++    MOTOR_REVERSE,
++} MotorState;
++
++static const char *const state_names[] = {
++    "sleep", "coast", "brake", "forward", "reverse",
++};
++
++OBJECT_DECLARE_SIMPLE_TYPE(ClickDcmotorState, CLICK_DCMOTOR)
++
++struct ClickDcmotorState {
++    DeviceState parent_obj;
++
++    /* Pins */
++    bool pwm, sel1, sel2, nsleep;
++    int64_t wake_ns;            /* nSLEEP rose */
++
++    /* PWM timing, as the Buzz Click */
++    int64_t rise_ns;
++    int64_t edge_ns;
++    int64_t period_ns;
++    int64_t high_ns;
++    int64_t pending_high_ns;
++
++    /* The motor */
++    uint32_t max_rpm;
++    uint32_t tau_ms;
++    bool fault;
++    int32_t drive;              /* per mille, signed */
++    uint8_t state;
++    int64_t rpm_milli;          /* signed */
++    int64_t angle_milli;        /* millidegrees, 0..360000 */
++    int64_t last_ns;
++
++    QEMUTimer *tick;
++    qemu_irq nfault;
++};
++
++/* Per mille high: the last period, or the constant level */
++static int32_t pwm_duty(ClickDcmotorState *s, int64_t now)
++{
++    if (s->period_ns > 0 && now - s->edge_ns <= 2 * s->period_ns + SCALE_MS) {
++        return MIN(1000, (s->high_ns * 1000 + s->period_ns / 2) /
++                         s->period_ns);
++    }
++    return s->pwm ? 1000 : 0;
++}
++
++static void evaluate(ClickDcmotorState *s, int64_t now)
++{
++    int32_t d = pwm_duty(s, now);
++    bool slow = s->sel1;                /* the table above */
++    bool fwd = s->sel1 == s->sel2;
++
++    if (!s->nsleep) {
++        s->drive = 0;
++        s->state = MOTOR_SLEEP;
++        return;
++    }
++    if (now - s->wake_ns < WAKE_NS || s->fault) {
++        s->drive = 0;
++        s->state = MOTOR_COAST;         /* waking, or the bridge off */
++        return;
++    }
++    if (slow) {
++        d = 1000 - d;                   /* PWM low drives, high brakes */
++    }
++    s->drive = fwd ? d : -d;
++    if (d == 0) {
++        s->state = slow ? MOTOR_BRAKE : MOTOR_COAST;
++    } else {
++        s->state = fwd ? MOTOR_FORWARD : MOTOR_REVERSE;
++    }
++}
++
++static void advance(ClickDcmotorState *s, int64_t now)
++{
++    double dt = (now - s->last_ns) / 1e6;       /* ms */
++    double tgt = (double)s->drive * s->max_rpm / 1000;
++    double rpm = s->rpm_milli / 1000.0;
++    double tau = s->state == MOTOR_BRAKE ? TAU_BRAKE_MS :
++                 s->drive == 0 ? TAU_COAST_MS : MAX(s->tau_ms, 1);
++    double next;
++
++    if (dt <= 0) {
++        return;
++    }
++    next = tgt + (rpm - tgt) * exp(-dt / tau);
++    s->angle_milli += llround((rpm + next) / 2 * 6.0 * dt);  /* deg/ms */
++    s->angle_milli %= 360000;
++    if (s->angle_milli < 0) {
++        s->angle_milli += 360000;
++    }
++    s->rpm_milli = llround(next * 1000);
++    if (llabs(s->rpm_milli) < 500 && s->drive == 0) {
++        s->rpm_milli = 0;
++    }
++    s->last_ns = now;
++}
++
++static void dcm_tick(void *opaque)
++{
++    ClickDcmotorState *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    advance(s, now);
++    evaluate(s, now);
++    qemu_set_irq(s->nfault, s->fault ? 0 : -1);
++    timer_mod(s->tick, now + TICK_NS);
++}
++
++static void dcm_set_pwm(void *opaque, int n, int level)
++{
++    ClickDcmotorState *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    bool high = level > 0;
++    int64_t last = s->edge_ns;
++
++    if (high == s->pwm) {
++        return;
++    }
++    s->pwm = high;
++    s->edge_ns = now;
++    if (high) {
++        if (s->rise_ns >= 0 && (!s->period_ns ||
++                                now - last <= 2 * s->period_ns + SCALE_MS)) {
++            s->period_ns = now - s->rise_ns;
++            s->high_ns = s->pending_high_ns;
++        } else {
++            s->period_ns = 0;
++        }
++        s->rise_ns = now;
++    } else if (s->rise_ns >= 0) {
++        s->pending_high_ns = now - s->rise_ns;
++    }
++}
++
++static void dcm_set_sel1(void *opaque, int n, int level)
++{
++    CLICK_DCMOTOR(opaque)->sel1 = level > 0;
++}
++
++static void dcm_set_sel2(void *opaque, int n, int level)
++{
++    CLICK_DCMOTOR(opaque)->sel2 = level > 0;
++}
++
++static void dcm_set_nsleep(void *opaque, int n, int level)
++{
++    ClickDcmotorState *s = opaque;
++    bool high = level > 0;
++
++    if (high && !s->nsleep) {
++        s->wake_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    }
++    s->nsleep = high;
++}
++
++static void dcm_get_rpm(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    int32_t rpm = CLICK_DCMOTOR(obj)->rpm_milli / 1000;
++
++    visit_type_int32(v, name, &rpm, errp);
++}
++
++static void dcm_get_drive(Object *obj, Visitor *v, const char *name,
++                          void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, &CLICK_DCMOTOR(obj)->drive, errp);
++}
++
++static void dcm_get_angle(Object *obj, Visitor *v, const char *name,
++                          void *opaque, Error **errp)
++{
++    uint32_t deg = CLICK_DCMOTOR(obj)->angle_milli / 1000;
++
++    visit_type_uint32(v, name, &deg, errp);
++}
++
++static char *dcm_get_state(Object *obj, Error **errp)
++{
++    return g_strdup(state_names[CLICK_DCMOTOR(obj)->state]);
++}
++
++static bool dcm_get_fault(Object *obj, Error **errp)
++{
++    return CLICK_DCMOTOR(obj)->fault;
++}
++
++static void dcm_set_fault(Object *obj, bool value, Error **errp)
++{
++    ClickDcmotorState *s = CLICK_DCMOTOR(obj);
++
++    s->fault = value;
++    qemu_set_irq(s->nfault, value ? 0 : -1);
++}
++
++static void dcm_reset(void *opaque)
++{
++    ClickDcmotorState *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    s->rise_ns = -1;
++    s->edge_ns = 0;
++    s->period_ns = 0;
++    s->high_ns = 0;
++    s->pending_high_ns = 0;
++    s->rpm_milli = 0;
++    s->drive = 0;
++    s->state = MOTOR_SLEEP;
++    s->last_ns = now;
++    s->fault = false;
++    qemu_set_irq(s->nfault, -1);
++    timer_mod(s->tick, now + TICK_NS);
++}
++
++static void dcm_realize(DeviceState *dev, Error **errp)
++{
++    /* Not on a bus: no device reset of its own */
++    qemu_register_reset(dcm_reset, dev);
++    dcm_reset(dev);
++}
++
++static void dcm_init(Object *obj)
++{
++    ClickDcmotorState *s = CLICK_DCMOTOR(obj);
++    DeviceState *dev = DEVICE(obj);
++
++    s->tick = timer_new_ns(QEMU_CLOCK_VIRTUAL, dcm_tick, s);
++    qdev_init_gpio_in_named(dev, dcm_set_pwm, CLICK_DCMOTOR_PWM, 1);
++    qdev_init_gpio_in_named(dev, dcm_set_sel1, CLICK_DCMOTOR_SEL1, 1);
++    qdev_init_gpio_in_named(dev, dcm_set_sel2, CLICK_DCMOTOR_SEL2, 1);
++    qdev_init_gpio_in_named(dev, dcm_set_nsleep, CLICK_DCMOTOR_NSLEEP, 1);
++    qdev_init_gpio_out_named(dev, &s->nfault, CLICK_DCMOTOR_NFAULT, 1);
++    s->max_rpm = 3000;
++    s->tau_ms = 150;
++    s->nsleep = true;                   /* R3 pulls it up */
++    object_property_add_uint32_ptr(obj, "max-rpm", &s->max_rpm,
++                                   OBJ_PROP_FLAG_READWRITE);
++    object_property_add_uint32_ptr(obj, "tau-ms", &s->tau_ms,
++                                   OBJ_PROP_FLAG_READWRITE);
++    object_property_add(obj, "rpm", "int32", dcm_get_rpm, NULL, NULL, NULL);
++    object_property_add(obj, "drive", "int32", dcm_get_drive, NULL, NULL,
++                        NULL);
++    object_property_add(obj, "angle", "uint32", dcm_get_angle, NULL, NULL,
++                        NULL);
++    object_property_add_str(obj, "state", dcm_get_state, NULL);
++    object_property_add_bool(obj, "fault", dcm_get_fault, dcm_set_fault);
++}
++
++static void dcm_unrealize(DeviceState *dev)
++{
++    qemu_unregister_reset(dcm_reset, dev);
++}
++
++static void dcm_finalize(Object *obj)
++{
++    timer_free(CLICK_DCMOTOR(obj)->tick);
++}
++
++static const VMStateDescription vmstate_dcm = {
++    .name = TYPE_CLICK_DCMOTOR,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_BOOL(pwm, ClickDcmotorState),
++        VMSTATE_BOOL(sel1, ClickDcmotorState),
++        VMSTATE_BOOL(sel2, ClickDcmotorState),
++        VMSTATE_BOOL(nsleep, ClickDcmotorState),
++        VMSTATE_INT64(wake_ns, ClickDcmotorState),
++        VMSTATE_INT64(rise_ns, ClickDcmotorState),
++        VMSTATE_INT64(edge_ns, ClickDcmotorState),
++        VMSTATE_INT64(period_ns, ClickDcmotorState),
++        VMSTATE_INT64(high_ns, ClickDcmotorState),
++        VMSTATE_INT64(pending_high_ns, ClickDcmotorState),
++        VMSTATE_BOOL(fault, ClickDcmotorState),
++        VMSTATE_INT32(drive, ClickDcmotorState),
++        VMSTATE_UINT8(state, ClickDcmotorState),
++        VMSTATE_INT64(rpm_milli, ClickDcmotorState),
++        VMSTATE_INT64(angle_milli, ClickDcmotorState),
++        VMSTATE_INT64(last_ns, ClickDcmotorState),
++        VMSTATE_TIMER_PTR(tick, ClickDcmotorState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void dcm_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->desc = "DC Motor Click (DRV8833, 74HC4053) with a motor";
++    dc->vmsd = &vmstate_dcm;
++    dc->realize = dcm_realize;
++    dc->unrealize = dcm_unrealize;
++}
++
++static const TypeInfo dcm_types[] = {
++    {
++        .name = TYPE_CLICK_DCMOTOR,
++        .parent = TYPE_DEVICE,
++        .instance_size = sizeof(ClickDcmotorState),
++        .instance_init = dcm_init,
++        .instance_finalize = dcm_finalize,
++        .class_init = dcm_class_init,
++    },
++};
++
++DEFINE_TYPES(dcm_types)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 2b57248..3a58ad4 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -29,6 +29,7 @@ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files(
+   'quectel_l86.c',
+   'emc2301.c',
+   'rn2903.c',
++  'click_dcmotor.c',
+ ))
+ system_ss.add(when: 'CONFIG_WS2812', if_true: files('ws2812.c'))
+ system_ss.add(when: 'CONFIG_RNBD451', if_true: files('rnbd451.c'))
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index b4e1827..6c1685e 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -20,6 +20,7 @@
+ #include "hw/core/qdev-properties.h"
+ #include "hw/misc/click_button.h"
+ #include "hw/misc/click_buzzer.h"
++#include "hw/misc/click_dcmotor.h"
+ #include "hw/misc/click_pot.h"
+ #include "hw/misc/emc2301.h"
+ #include "hw/misc/mikrobus.h"
+@@ -154,6 +155,17 @@ static const ClickInfo mikrobus_clicks[] = {
+       "(OUT SEL on REF), buffered onto AN: 0-2.048 V",
+       TYPE_CLICK_POT, CLICK_GPIO, 0, 0,
+       .outs = { { CLICK_POT_AN, MIKROBUS_AN } } },        /* U2, Q1 buffer */
++    { "dcmotor", "DC Motor Click: DRV8833 H-bridge through a 74HC4053 (PWM "
++      "on PWM, SELECT1 on RST, SELECT2 on CS, nSLEEP on AN, nFAULT on INT) "
++      "with a motor on its terminals",
++      TYPE_CLICK_DCMOTOR, CLICK_GPIO, 0, 0,
++      .outs = { { CLICK_DCMOTOR_NFAULT, MIKROBUS_INT } },
++      .ins = { { CLICK_DCMOTOR_PWM, MIKROBUS_PWM },
++               { CLICK_DCMOTOR_SEL1, MIKROBUS_RST },
++               { CLICK_DCMOTOR_SEL2, MIKROBUS_CS },
++               { CLICK_DCMOTOR_NSLEEP, MIKROBUS_AN_PIN } },
++      .pulls = { { true, MIKROBUS_AN_PIN, 1 },            /* R3 47k */
++                 { true, MIKROBUS_INT, 1 } } },           /* R4 2k2 */
+     { "gnss", "GNSS Click: Quectel L86 GNSS module on the UART (9600 baud, "
+       "NMEA), RESET on RST, FORCE_ON on CS",
+       TYPE_CHARDEV_QUECTEL_L86, CLICK_UART, 0, 0,
+diff --git a/include/hw/misc/click_dcmotor.h b/include/hw/misc/click_dcmotor.h
+new file mode 100644
+index 0000000..ee6bebf
+--- /dev/null
++++ b/include/hw/misc/click_dcmotor.h
+@@ -0,0 +1,28 @@
++/*
++ * DC Motor Click: DRV8833 H-bridge behind a 74HC4053, with a motor on it
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * GPIO inputs "pwm", "sel1", "sel2" and "nsleep" (the socket's PWM, RST,
++ * CS and AN pins); GPIO output "nfault" (open drain: 0 while driven low,
++ * -1 while released). QOM properties: "rpm" (signed, read-only), "drive"
++ * (signed per mille, read-only), "state" (sleep, coast, brake, forward
++ * or reverse), "angle" (the shaft, degrees, for front ends), "max-rpm"
++ * (default 3000), "tau-ms" (150, the driven time constant) and "fault"
++ * (set: nFAULT low, the bridge off).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_CLICK_DCMOTOR_H
++#define HW_MISC_CLICK_DCMOTOR_H
++
++#define TYPE_CLICK_DCMOTOR "click-dcmotor"
++#define CLICK_DCMOTOR_PWM "pwm"
++#define CLICK_DCMOTOR_SEL1 "sel1"
++#define CLICK_DCMOTOR_SEL2 "sel2"
++#define CLICK_DCMOTOR_NSLEEP "nsleep"
++#define CLICK_DCMOTOR_NFAULT "nfault"
++
++#endif /* HW_MISC_CLICK_DCMOTOR_H */
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index 77f3624..ad3af0d 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -1236,6 +1236,62 @@ static void test_fan(void)
+     qtest_quit(qts);
+ }
+ 
++/*
++ * DC Motor Click on EXT1: PWM PB10, SELECT1 on RST (PA20), SELECT2 on CS
++ * (PA17), nSLEEP on AN (PB08, R3 pull-up), nFAULT on INT (PB02)
++ */
++static char *dcm_state(QTestState *qts)
++{
++    return qom_str(qts, CLICK1, "state");
++}
++
++static void test_dcmotor(void)
++{
++    QTestState *qts = qtest_init("-M pic32cm-mc00-cpro,ext1=dcmotor ");
++    g_autofree char *st0 = NULL, *st1 = NULL, *st2 = NULL, *st3 = NULL;
++    g_autofree char *st4 = NULL;
++
++    qtest_clock_step(qts, 20 * SCALE_MS);
++    st0 = dcm_state(qts);
++    g_assert_cmpstr(st0, ==, "coast");          /* awake, PWM low */
++    g_assert_true(pin_high(qts, PB, INT1_PIN));
++
++    /* PWM steady high, SEL1 = SEL2 = 0: forward, full speed */
++    qtest_writel(qts, PA + P_DIRSET, BIT(17) | BIT(20));
++    qtest_writel(qts, PA + P_OUTCLR, BIT(17) | BIT(20));
++    qtest_writel(qts, PB + P_DIRSET, BIT(10));
++    qtest_writel(qts, PB + P_OUTSET, BIT(10));
++    qtest_clock_step(qts, 2 * NANOSECONDS_PER_SECOND);
++    st1 = dcm_state(qts);
++    g_assert_cmpstr(st1, ==, "forward");
++    g_assert_cmpint(qom_int(qts, CLICK1, "rpm"), >, 2950);
++
++    /* SEL1 = SEL2 = 1, PWM high: slow decay at 100 %, a brake */
++    qtest_writel(qts, PA + P_OUTSET, BIT(17) | BIT(20));
++    qtest_clock_step(qts, 600 * SCALE_MS);
++    st2 = dcm_state(qts);
++    g_assert_cmpstr(st2, ==, "brake");
++    g_assert_cmpint(qom_int(qts, CLICK1, "rpm"), ==, 0);
++
++    /* SEL1 = 0, SEL2 = 1: reverse, fast decay, 75 % at 5 kHz */
++    qtest_writel(qts, PA + P_OUTCLR, BIT(20));
++    square(qts, PB, 10, 100, 150000, 50000);
++    st3 = dcm_state(qts);
++    g_assert_cmpstr(st3, ==, "reverse");
++    g_assert_cmpint(qom_int(qts, CLICK1, "drive"), ==, -750);
++    g_assert_cmpint(qom_int(qts, CLICK1, "rpm"), <, 0);
++
++    /* nSLEEP low; a fault pulls nFAULT */
++    qtest_writel(qts, PB + P_DIRSET, BIT(8));
++    qtest_writel(qts, PB + P_OUTCLR, BIT(8));
++    qtest_clock_step(qts, 20 * SCALE_MS);
++    st4 = dcm_state(qts);
++    g_assert_cmpstr(st4, ==, "sleep");
++    qtest_qom_set_bool(qts, CLICK1, "fault", true);
++    g_assert_false(pin_high(qts, PB, INT1_PIN));
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+@@ -1257,6 +1313,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/color2", test_color2);
+     qtest_add_func("pic32cm-click/weather", test_weather);
+     qtest_add_func("pic32cm-click/fan", test_fan);
++    qtest_add_func("pic32cm-click/dcmotor", test_dcmotor);
+     qtest_add_func("pic32cm-click/thermo8-identity", test_identity);
+     qtest_add_func("pic32cm-click/not-fitted", test_not_fitted);
+     qtest_add_func("pic32cm-click/thermo8-int-pullup", test_int_pullup);
+-- 
+2.53.0.windows.2
+

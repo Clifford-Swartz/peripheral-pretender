@@ -375,16 +375,25 @@ function drawClick(stack, h, id, def) {
   }
   // A fan on the Click's terminals: turns with its rpm property (drawn
   // at a tenth of the speed, which a screen can show), the rpm under it
-  if (def.display && def.display.type === "fan") {
+  // A DC motor (type "motor"): its end with the shaft's disc, turning
+  // either way by the signed rpm
+  if (def.display && (def.display.type === "fan" || def.display.type === "motor")) {
     const d = def.display, el = document.createElement("div");
     el.className = "click-fan";
     el.dataset.prop = `${h.slot}.${d.property}`;
     const blades = [0, 72, 144, 216, 288].map((a) =>
       `<path transform="rotate(${a} 50 50)" d="M50 50 C44 30 46 12 58 8 C70 12 66 34 50 50Z"/>`).join("");
-    el.innerHTML = `<svg viewBox="0 0 100 100"><rect x="2" y="2" width="96" height="96" rx="10" ` +
-      `fill="#1b1d22" stroke="#555" stroke-width="2"/><circle cx="50" cy="50" r="46" fill="#0d0e11"/>` +
-      `<g class="rotor" fill="#3a3f48" stroke="#6b7280" stroke-width="1">${blades}` +
-      `<circle cx="50" cy="50" r="11" fill="#22252b"/></g></svg><span></span>`;
+    el.innerHTML = d.type === "fan"
+      ? `<svg viewBox="0 0 100 100"><rect x="2" y="2" width="96" height="96" rx="10" ` +
+        `fill="#1b1d22" stroke="#555" stroke-width="2"/><circle cx="50" cy="50" r="46" fill="#0d0e11"/>` +
+        `<g class="rotor" fill="#3a3f48" stroke="#6b7280" stroke-width="1">${blades}` +
+        `<circle cx="50" cy="50" r="11" fill="#22252b"/></g></svg><span></span>`
+      : `<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="48" fill="#b8bec6" stroke="#6b7280" ` +
+        `stroke-width="2"/><circle cx="50" cy="50" r="40" fill="#9aa1aa"/>` +
+        `<rect x="12" y="44" width="10" height="12" fill="#c58b2b"/><rect x="78" y="44" width="10" ` +
+        `height="12" fill="#c58b2b"/><g class="rotor"><circle cx="50" cy="50" r="24" fill="#e7c25a" ` +
+        `stroke="#8a6d1f" stroke-width="2"/><rect x="47" y="28" width="6" height="22" fill="#5b4510"/>` +
+        `<circle cx="50" cy="50" r="5" fill="#d9dde2" stroke="#555"/></g></svg><span></span>`;
     put(el, [d.at_mm[0] - d.size_mm / 2, d.at_mm[1] + d.size_mm / 2],
         d.size_mm, d.size_mm);
     spinFans();
