@@ -2078,5 +2078,67 @@
         "color": "#5dff7a"
       }
     ]
+  },
+  "weather": {
+    "name": "Weather Click",
+    "vendor": "MikroElektronika",
+    "chip": "BME280",
+    "bus": "I2C 0x76",
+    "description": "Humidity, pressure and temperature sensor (Bosch): forced and normal modes, oversampling, IIR filter (with MikroE's filter 16 a change settles over about 10 s, as on the real part)",
+    "controls": [
+      {
+        "id": "temperature",
+        "label": "Temperature",
+        "property": "temperature",
+        "unit": "°C",
+        "min": -40,
+        "max": 85,
+        "step": 0.1,
+        "scale": 1000,
+        "default": 25
+      },
+      {
+        "id": "pressure",
+        "label": "Pressure",
+        "property": "pressure",
+        "unit": "hPa",
+        "min": 300,
+        "max": 1100,
+        "step": 0.1,
+        "scale": 100,
+        "default": 1013.25
+      },
+      {
+        "id": "humidity",
+        "label": "Humidity",
+        "property": "humidity",
+        "unit": "%RH",
+        "min": 0,
+        "max": 100,
+        "step": 0.5,
+        "scale": 1000,
+        "default": 50
+      }
+    ],
+    "signals": [],
+    "image": "weather/top.png",
+    "origin_mm": [
+      -1.27,
+      24.7652
+    ],
+    "size_mm": [
+      25.4,
+      28.5752
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          16.0,
+          1.65
+        ],
+        "color": "#5dff7a"
+      }
+    ]
   }
 }

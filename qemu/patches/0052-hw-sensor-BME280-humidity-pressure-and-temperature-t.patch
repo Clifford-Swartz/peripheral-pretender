@@ -1,0 +1,798 @@
+From fea6bcad0996a9c263208763dcc9fcfb848fd5c4 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 15 Oct 2026 22:12:02 -0700
+Subject: [PATCH] hw/sensor: BME280 humidity, pressure and temperature, the
+ Weather Click
+
+bme280 on I2C at 0x76: the register map with a typical calibration
+image, sleep, forced and normal modes with the typical measurement times
+and the standby times, oversampling resolution, the IIR filter, skipped
+readings, results held back during a burst read, the 0xB6 reset. The raw
+readings come from bisection over the data sheet's integer compensation,
+so firmware compensating them reads "temperature", "pressure" and
+"humidity" back. SPI is not modelled. qtest.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  11 +
+ hw/misc/mikrobus.c                    |   5 +
+ hw/sensor/bme280.c                    | 599 ++++++++++++++++++++++++++
+ hw/sensor/meson.build                 |   2 +-
+ include/hw/sensor/bme280.h            |  21 +
+ tests/qtest/pic32cm-click-test.c      |  63 +++
+ 6 files changed, 700 insertions(+), 1 deletion(-)
+ create mode 100644 hw/sensor/bme280.c
+ create mode 100644 include/hw/sensor/bme280.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index dac50e3..26b3ca0 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -193,6 +193,17 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   ``lux`` (default pure red at 5000 lux); each channel reads the
+   linearised component times ``lux`` over the full scale, plus one count.
+ 
++``weather``
++  Weather Click (v101): a BME280 (``bme280``) at I2C 0x76 (COMM SEL on
++  I2C, ADDR SEL on 0; RST, which only reaches the ClickID circuit, pulled
++  up by R5). Sleep, forced and normal modes with the typical measurement
++  times and the standby times, oversampling resolution, the IIR filter,
++  skipped measurements (0x80000/0x8000), results held during a burst read,
++  the 0xB6 reset. A fixed set of typical calibration values; the raw
++  readings compensate (data sheet section 4.2.3) to ``temperature`` (m°C,
++  default 25000), ``pressure`` (Pa, 101325) and ``humidity`` (m%RH,
++  50000). SPI is not modelled.
++
+ ``oledw``
+   OLED W Click (v100): an SSD1306 (``ssd1306``) with a 96x39 white OLED
+   (MI9639BO-W) on SPI (jumpers J1-J3 on SPI), CS# on CS, D/C# on PWM, RES#
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index c7d90c4..f3351ea 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -30,6 +30,7 @@
+ #include "hw/display/ssd1351.h"
+ #include "hw/rtc/mchp_mcp7941x.h"
+ #include "hw/sensor/adxl345.h"
++#include "hw/sensor/bme280.h"
+ #include "hw/sensor/isl29125.h"
+ #include "hw/sensor/mchp_mcp9808.h"
+ #include "hw/ssi/max7219.h"
+@@ -178,6 +179,10 @@ static const ClickInfo mikrobus_clicks[] = {
+       TYPE_ISL29125, CLICK_I2C, ISL29125_ADDR, 0,
+       .outs = { { ISL29125_INT, MIKROBUS_INT } },
+       .pulls = { { true, MIKROBUS_INT, 1 } } },           /* R4 4.7k */
++    { "weather", "Weather Click: BME280 humidity, pressure and temperature "
++      "sensor at I2C 0x76 (COMM SEL on I2C, ADDR SEL on 0)",
++      TYPE_BME280, CLICK_I2C, BME280_ADDR, 0,
++      .pulls = { { true, MIKROBUS_RST, 1 } } },           /* R5 10k */
+     { "rn4871", "RN4871 Click: Microchip RN4871 Bluetooth LE module on the "
+       "UART (115200 baud, ASCII commands), RST_N on RST",
+       TYPE_CHARDEV_RN4871, CLICK_UART, 0, 0,
+diff --git a/hw/sensor/bme280.c b/hw/sensor/bme280.c
+new file mode 100644
+index 0000000..04f78e5
+--- /dev/null
++++ b/hw/sensor/bme280.c
+@@ -0,0 +1,599 @@
++/*
++ * Bosch BME280 humidity, pressure and temperature sensor (I2C)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * BME280 data sheet (BST-BME280-DS002-15 rev 1.6), I2C only (the SPI
++ * interface is not modelled). Reads run from the register pointer and
++ * auto-increment; a write is pairs of register and data. 0xD0 reads the
++ * chip ID 0x60, 0xB6 to 0xE0 resets. The calibration image (0x88-0xA1,
++ * 0xE1-0xE7) is a fixed set of typical values; the raw readings are found
++ * by bisection over the data sheet's integer compensation (4.2.3) so that
++ * firmware compensating them reads the properties back: temperature to
++ * 0.01 degree, pressure to about 0.1 Pa, humidity to about 0.01 %RH.
++ *
++ * ctrl_hum takes effect with the next ctrl_meas write. Forced mode makes
++ * one measurement and goes back to sleep; normal mode measures and waits
++ * the standby time t_sb, over and over. A measurement takes the typical
++ * time of section 9.1 for its oversampling (status.measuring meanwhile);
++ * its results reach the data registers at its end, or, during a burst
++ * read, at that read's STOP. A skipped measurement reads 0x80000 (0x8000
++ * for humidity). Without the IIR filter, temperature and pressure have
++ * 16 + (oversampling - 1) bits; with it, 20 bits through
++ * (old * (c - 1) + new) / c, reset by writing the filter field. The
++ * config register is written in normal mode too (MikroElektronika's
++ * driver relies on it). No physical part checked it.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/i2c/i2c.h"
++#include "hw/sensor/bme280.h"
++#include "migration/vmstate.h"
++
++#define REG_CALIB0          0x88        /* to 0xA1 */
++#define REG_ID              0xD0
++#define REG_RESET           0xE0
++#define REG_CALIB1          0xE1        /* to 0xE7 */
++#define REG_CTRL_HUM        0xF2
++#define REG_STATUS          0xF3
++#define REG_CTRL_MEAS       0xF4
++#define REG_CONFIG          0xF5
++#define REG_DATA            0xF7        /* to 0xFE */
++
++#define CHIP_ID             0x60
++#define RESET_CMD           0xB6
++#define ST_MEASURING        BIT(3)
++#define MODE_SLEEP          0
++#define MODE_NORMAL         3
++
++#define SKIPPED_TP          0x80000
++#define SKIPPED_H           0x8000
++
++/* Typical calibration (dig_T3 positive and 0xE4/0xE6 below 0x80) */
++static const uint16_t cal_t1 = 28009;
++static const int16_t cal_t2 = 25654, cal_t3 = 50;
++static const uint16_t cal_p1 = 37064;
++static const int16_t cal_p[10] = { 0, 0, -10664, 3024, 7487, -72, -7,
++                                   9900, -10230, 4285 };     /* P2..P9 */
++static const uint8_t cal_h1 = 75, cal_h3 = 0;
++static const int16_t cal_h2 = 362, cal_h4 = 321, cal_h5 = 50;
++static const int8_t cal_h6 = 30;
++
++/* t_sb codes in microseconds */
++static const uint32_t t_sb_us[8] = { 500, 62500, 125000, 250000, 500000,
++                                     1000000, 10000, 20000 };
++
++OBJECT_DECLARE_SIMPLE_TYPE(Bme280State, BME280)
++
++struct Bme280State {
++    I2CSlave parent_obj;
++
++    uint8_t ptr;
++    bool ptr_set;               /* a write's register byte came */
++    bool reading;               /* in a read transfer (results held) */
++    bool pending;               /* results to land at the read's end */
++
++    uint8_t ctrl_hum;
++    uint8_t osrs_h;             /* ctrl_hum as of the last ctrl_meas */
++    uint8_t ctrl_meas;
++    uint8_t config;
++    bool measuring;
++    bool standby;               /* normal mode, between measurements */
++    bool filter_fresh;          /* next sample passes the IIR unchanged */
++    uint32_t filt_t, filt_p;
++    uint32_t adc_t, adc_p, adc_h;   /* the data registers */
++    uint32_t new_t, new_p, new_h;   /* the measurement that finished */
++
++    int32_t temperature;        /* m°C */
++    int32_t pressure;           /* Pa */
++    int32_t humidity;           /* m%RH */
++
++    QEMUTimer *timer;
++};
++
++/* ---- the data sheet's compensation (4.2.3) and its inverse ---- */
++
++static int32_t comp_t(int32_t adc, int32_t *t_fine)
++{
++    int32_t var1 = (((adc >> 3) - ((int32_t)cal_t1 << 1)) * cal_t2) >> 11;
++    int32_t d = (adc >> 4) - (int32_t)cal_t1;
++    int32_t var2 = (((d * d) >> 12) * cal_t3) >> 14;
++
++    *t_fine = var1 + var2;
++    return (*t_fine * 5 + 128) >> 8;
++}
++
++/* Q24.8 Pa */
++static uint32_t comp_p(int32_t adc, int32_t t_fine)
++{
++    int64_t var1 = (int64_t)t_fine - 128000, var2, p;
++
++    var2 = var1 * var1 * cal_p[6];
++    var2 += (var1 * cal_p[5]) * 131072;
++    var2 += (int64_t)cal_p[4] * 34359738368LL;
++    var1 = ((var1 * var1 * cal_p[3]) >> 8) + ((var1 * cal_p[2]) * 4096);
++    var1 = ((((int64_t)1) << 47) + var1) * cal_p1 >> 33;
++    if (var1 == 0) {
++        return 0;
++    }
++    p = 1048576 - adc;
++    p = ((p * 2147483648LL) - var2) * 3125 / var1;
++    var1 = ((int64_t)cal_p[9] * (p >> 13) * (p >> 13)) >> 25;
++    var2 = ((int64_t)cal_p[8] * p) >> 19;
++    return (uint32_t)(((p + var1 + var2) >> 8) + ((int64_t)cal_p[7] << 4));
++}
++
++/* Q22.10 %RH */
++static uint32_t comp_h(int32_t adc, int32_t t_fine)
++{
++    int32_t v = t_fine - 76800;
++
++    v = ((((adc << 14) - ((int32_t)cal_h4 << 20) - (cal_h5 * v)) + 16384)
++         >> 15) *
++        (((((((v * cal_h6) >> 10) * (((v * cal_h3) >> 11) + 32768)) >> 10)
++           + 2097152) * cal_h2 + 8192) >> 14);
++    v -= ((((v >> 15) * (v >> 15)) >> 7) * cal_h1) >> 4;
++    v = MAX(v, 0);
++    v = MIN(v, 419430400);
++    return (uint32_t)v >> 12;
++}
++
++/* The smallest 20-bit reading giving at least @centi (0.01 °C) */
++static uint32_t inv_t(int32_t centi, int32_t *t_fine)
++{
++    uint32_t lo = 0, hi = (1 << 20) - 1;
++
++    while (lo < hi) {
++        uint32_t mid = (lo + hi) / 2;
++
++        if (comp_t(mid, t_fine) >= centi) {
++            hi = mid;
++        } else {
++            lo = mid + 1;
++        }
++    }
++    comp_t(lo, t_fine);
++    return lo;
++}
++
++/* The reading nearest @pa (pressure falls as the reading rises) */
++static uint32_t inv_p(int32_t pa, int32_t t_fine)
++{
++    int64_t tgt = (int64_t)pa * 256;
++    uint32_t lo = 0, hi = (1 << 20) - 1;
++
++    while (lo < hi) {
++        uint32_t mid = (lo + hi) / 2;
++
++        if (comp_p(mid, t_fine) <= tgt) {
++            hi = mid;
++        } else {
++            lo = mid + 1;
++        }
++    }
++    if (lo > 0 && llabs(comp_p(lo - 1, t_fine) - tgt) <
++                  llabs(comp_p(lo, t_fine) - tgt)) {
++        lo--;
++    }
++    return lo;
++}
++
++static uint32_t inv_h(int32_t milli, int32_t t_fine)
++{
++    int64_t tgt = (int64_t)milli * 1024 / 1000;
++    uint32_t lo = 0, hi = 0xFFFF;
++
++    while (lo < hi) {
++        uint32_t mid = (lo + hi) / 2;
++
++        if (comp_h(mid, t_fine) >= tgt) {
++            hi = mid;
++        } else {
++            lo = mid + 1;
++        }
++    }
++    if (lo > 0 && llabs(comp_h(lo - 1, t_fine) - tgt) <
++                  llabs(comp_h(lo, t_fine) - tgt)) {
++        lo--;
++    }
++    return lo;
++}
++
++/* ---- measurements ---- */
++
++static unsigned osrs_factor(unsigned code)
++{
++    return code ? 1 << (MIN(code, 5) - 1) : 0;
++}
++
++/* Section 9.1, typical: 1 + 2 T + (2 P + 0.5) + (2 H + 0.5) ms */
++static int64_t meas_us(Bme280State *s)
++{
++    unsigned t = osrs_factor(s->ctrl_meas >> 5);
++    unsigned p = osrs_factor((s->ctrl_meas >> 2) & 7);
++    unsigned h = osrs_factor(s->osrs_h);
++    int64_t us = 1000 + 2000 * t;
++
++    if (p) {
++        us += 2000 * p + 500;
++    }
++    if (h) {
++        us += 2000 * h + 500;
++    }
++    return us;
++}
++
++static uint32_t iir(Bme280State *s, uint32_t *mem, uint32_t adc)
++{
++    unsigned code = (s->config >> 2) & 7;
++    unsigned c = 1 << MIN(code, 4);     /* off, 2, 4, 8, 16 */
++
++    if (c == 1) {
++        return adc;
++    }
++    if (s->filter_fresh) {
++        *mem = adc;
++    } else {
++        *mem = (uint32_t)(((uint64_t)*mem * (c - 1) + adc) / c);
++    }
++    return *mem;
++}
++
++/* The finished measurement's readings, at its oversampling and filter */
++static void measure(Bme280State *s)
++{
++    unsigned ot = s->ctrl_meas >> 5, op = (s->ctrl_meas >> 2) & 7;
++    bool filt = (s->config >> 2) & 7;
++    int32_t t_fine;
++    int32_t centi = (s->temperature + (s->temperature < 0 ? -5 : 5)) / 10;
++    uint32_t t = inv_t(centi, &t_fine);
++    uint32_t p = inv_p(s->pressure, t_fine);
++    uint32_t h = inv_h(s->humidity, t_fine);
++
++    if (!filt) {
++        /* 16 + (osrs - 1) bits, the rest zero */
++        t &= ~((1u << (5 - MIN(MAX(ot, 1), 5))) - 1);
++        p &= ~((1u << (5 - MIN(MAX(op, 1), 5))) - 1);
++    }
++    s->new_t = ot ? iir(s, &s->filt_t, t) : SKIPPED_TP;
++    s->new_p = op ? iir(s, &s->filt_p, p) : SKIPPED_TP;
++    s->new_h = s->osrs_h ? h : SKIPPED_H;
++    if (filt && (ot || op)) {
++        s->filter_fresh = false;
++    }
++}
++
++static void land(Bme280State *s)
++{
++    s->adc_t = s->new_t;
++    s->adc_p = s->new_p;
++    s->adc_h = s->new_h;
++    s->pending = false;
++}
++
++static void start_measurement(Bme280State *s)
++{
++    s->measuring = true;
++    s->standby = false;
++    timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++              meas_us(s) * SCALE_US);
++}
++
++static void bme_timer(void *opaque)
++{
++    Bme280State *s = opaque;
++
++    if (s->standby) {
++        start_measurement(s);
++        return;
++    }
++    s->measuring = false;
++    measure(s);
++    if (s->reading) {
++        s->pending = true;
++    } else {
++        land(s);
++    }
++    if ((s->ctrl_meas & 3) == MODE_NORMAL) {
++        s->standby = true;
++        timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                  t_sb_us[s->config >> 5] * SCALE_US);
++    } else {
++        s->ctrl_meas &= ~3;             /* forced: back to sleep */
++    }
++}
++
++static void bme_reset_state(Bme280State *s)
++{
++    s->ctrl_hum = 0;
++    s->osrs_h = 0;
++    s->ctrl_meas = 0;
++    s->config = 0;
++    s->measuring = false;
++    s->standby = false;
++    s->filter_fresh = true;
++    s->pending = false;
++    s->adc_t = s->new_t = SKIPPED_TP;
++    s->adc_p = s->new_p = SKIPPED_TP;
++    s->adc_h = s->new_h = SKIPPED_H;
++    timer_del(s->timer);
++}
++
++static void bme_write(Bme280State *s, uint8_t reg, uint8_t v)
++{
++    unsigned mode;
++
++    switch (reg) {
++    case REG_RESET:
++        if (v == RESET_CMD) {
++            bme_reset_state(s);
++        }
++        break;
++    case REG_CTRL_HUM:
++        s->ctrl_hum = v & 7;
++        break;
++    case REG_CTRL_MEAS:
++        s->ctrl_meas = v;
++        s->osrs_h = s->ctrl_hum;
++        mode = v & 3;
++        if (s->measuring) {
++            break;                      /* takes effect after this one */
++        }
++        if (mode == MODE_SLEEP) {
++            s->standby = false;
++            timer_del(s->timer);
++        } else if (mode != MODE_NORMAL || !s->standby) {
++            start_measurement(s);
++        }
++        break;
++    case REG_CONFIG:
++        if (((v ^ s->config) >> 2) & 7) {
++            s->filter_fresh = true;
++        }
++        s->config = v & 0xFD;
++        break;
++    default:
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "bme280: write 0x%02x to read-only 0x%02x\n", v, reg);
++        break;
++    }
++}
++
++static uint8_t calib_byte(unsigned off)
++{
++    uint8_t lo[26], hi[7];
++    uint16_t w[12] = { cal_t1, cal_t2, cal_t3, cal_p1, cal_p[2], cal_p[3],
++                       cal_p[4], cal_p[5], cal_p[6], cal_p[7], cal_p[8],
++                       cal_p[9] };
++
++    for (unsigned i = 0; i < 12; i++) {
++        lo[2 * i] = w[i] & 0xFF;
++        lo[2 * i + 1] = w[i] >> 8;
++    }
++    lo[24] = 0;
++    lo[25] = cal_h1;
++    hi[0] = cal_h2 & 0xFF;
++    hi[1] = (uint16_t)cal_h2 >> 8;
++    hi[2] = cal_h3;
++    hi[3] = (cal_h4 >> 4) & 0xFF;
++    hi[4] = (cal_h5 & 0xF) << 4 | (cal_h4 & 0xF);
++    hi[5] = (cal_h5 >> 4) & 0xFF;
++    hi[6] = (uint8_t)cal_h6;
++    if (off >= REG_CALIB0 && off < REG_CALIB0 + sizeof(lo)) {
++        return lo[off - REG_CALIB0];
++    }
++    if (off >= REG_CALIB1 && off < REG_CALIB1 + sizeof(hi)) {
++        return hi[off - REG_CALIB1];
++    }
++    return 0;
++}
++
++static uint8_t bme_read(Bme280State *s, uint8_t reg)
++{
++    switch (reg) {
++    case REG_ID:
++        return CHIP_ID;
++    case REG_CTRL_HUM:
++        return s->ctrl_hum;
++    case REG_STATUS:
++        return s->measuring ? ST_MEASURING : 0;
++    case REG_CTRL_MEAS:
++        return s->ctrl_meas;
++    case REG_CONFIG:
++        return s->config;
++    case REG_DATA:
++        return s->adc_p >> 12;
++    case REG_DATA + 1:
++        return s->adc_p >> 4;
++    case REG_DATA + 2:
++        return (s->adc_p & 0xF) << 4;
++    case REG_DATA + 3:
++        return s->adc_t >> 12;
++    case REG_DATA + 4:
++        return s->adc_t >> 4;
++    case REG_DATA + 5:
++        return (s->adc_t & 0xF) << 4;
++    case REG_DATA + 6:
++        return s->adc_h >> 8;
++    case REG_DATA + 7:
++        return s->adc_h & 0xFF;
++    default:
++        return calib_byte(reg);
++    }
++}
++
++static int bme_event(I2CSlave *i2c, enum i2c_event event)
++{
++    Bme280State *s = BME280(i2c);
++
++    switch (event) {
++    case I2C_START_SEND:
++        s->ptr_set = false;
++        s->reading = false;
++        break;
++    case I2C_START_RECV:
++        s->reading = true;
++        break;
++    case I2C_FINISH:
++        s->reading = false;
++        if (s->pending) {
++            land(s);
++        }
++        break;
++    default:
++        break;
++    }
++    return 0;
++}
++
++static int bme_send(I2CSlave *i2c, uint8_t data)
++{
++    Bme280State *s = BME280(i2c);
++
++    if (!s->ptr_set) {
++        s->ptr = data;
++        s->ptr_set = true;
++    } else {
++        bme_write(s, s->ptr, data);     /* pairs: no auto-increment */
++        s->ptr_set = false;
++    }
++    return 0;
++}
++
++static uint8_t bme_recv(I2CSlave *i2c)
++{
++    Bme280State *s = BME280(i2c);
++
++    return bme_read(s, s->ptr++);
++}
++
++static void bme_set_int(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    Bme280State *s = BME280(obj);
++    int32_t *field, lo, hi, val;
++
++    if (!strcmp(name, "temperature")) {
++        field = &s->temperature, lo = -40000, hi = 85000;
++    } else if (!strcmp(name, "pressure")) {
++        field = &s->pressure, lo = 30000, hi = 110000;
++    } else {
++        field = &s->humidity, lo = 0, hi = 100000;
++    }
++    if (!visit_type_int32(v, name, &val, errp)) {
++        return;
++    }
++    if (val < lo || val > hi) {
++        error_setg(errp, "%s must be %d to %d", name, lo, hi);
++        return;
++    }
++    *field = val;
++}
++
++static void bme_get_int(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    Bme280State *s = BME280(obj);
++    int32_t val = !strcmp(name, "temperature") ? s->temperature :
++                  !strcmp(name, "pressure") ? s->pressure : s->humidity;
++
++    visit_type_int32(v, name, &val, errp);
++}
++
++static void bme_reset(DeviceState *dev)
++{
++    Bme280State *s = BME280(dev);
++
++    s->ptr = 0;
++    s->ptr_set = false;
++    s->reading = false;
++    bme_reset_state(s);
++}
++
++static void bme_init(Object *obj)
++{
++    Bme280State *s = BME280(obj);
++
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, bme_timer, s);
++    s->temperature = 25000;
++    s->pressure = 101325;
++    s->humidity = 50000;
++    object_property_add(obj, "temperature", "int", bme_get_int,
++                        bme_set_int, NULL, NULL);
++    object_property_add(obj, "pressure", "int", bme_get_int,
++                        bme_set_int, NULL, NULL);
++    object_property_add(obj, "humidity", "int", bme_get_int,
++                        bme_set_int, NULL, NULL);
++}
++
++static void bme_finalize(Object *obj)
++{
++    timer_free(BME280(obj)->timer);
++}
++
++static const VMStateDescription vmstate_bme = {
++    .name = TYPE_BME280,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, Bme280State),
++        VMSTATE_UINT8(ptr, Bme280State),
++        VMSTATE_BOOL(ptr_set, Bme280State),
++        VMSTATE_BOOL(reading, Bme280State),
++        VMSTATE_BOOL(pending, Bme280State),
++        VMSTATE_UINT8(ctrl_hum, Bme280State),
++        VMSTATE_UINT8(osrs_h, Bme280State),
++        VMSTATE_UINT8(ctrl_meas, Bme280State),
++        VMSTATE_UINT8(config, Bme280State),
++        VMSTATE_BOOL(measuring, Bme280State),
++        VMSTATE_BOOL(standby, Bme280State),
++        VMSTATE_BOOL(filter_fresh, Bme280State),
++        VMSTATE_UINT32(filt_t, Bme280State),
++        VMSTATE_UINT32(filt_p, Bme280State),
++        VMSTATE_UINT32(adc_t, Bme280State),
++        VMSTATE_UINT32(adc_p, Bme280State),
++        VMSTATE_UINT32(adc_h, Bme280State),
++        VMSTATE_UINT32(new_t, Bme280State),
++        VMSTATE_UINT32(new_p, Bme280State),
++        VMSTATE_UINT32(new_h, Bme280State),
++        VMSTATE_INT32(temperature, Bme280State),
++        VMSTATE_INT32(pressure, Bme280State),
++        VMSTATE_INT32(humidity, Bme280State),
++        VMSTATE_TIMER_PTR(timer, Bme280State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void bme_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
++
++    dc->desc = "BME280 humidity, pressure and temperature sensor";
++    dc->vmsd = &vmstate_bme;
++    device_class_set_legacy_reset(dc, bme_reset);
++    k->event = bme_event;
++    k->send = bme_send;
++    k->recv = bme_recv;
++}
++
++static const TypeInfo bme_types[] = {
++    {
++        .name = TYPE_BME280,
++        .parent = TYPE_I2C_SLAVE,
++        .instance_size = sizeof(Bme280State),
++        .instance_init = bme_init,
++        .instance_finalize = bme_finalize,
++        .class_init = bme_class_init,
++    },
++};
++
++DEFINE_TYPES(bme_types)
+diff --git a/hw/sensor/meson.build b/hw/sensor/meson.build
+index 05fda9f..a92382e 100644
+--- a/hw/sensor/meson.build
++++ b/hw/sensor/meson.build
+@@ -9,5 +9,5 @@ system_ss.add(when: 'CONFIG_LSM303DLHC_MAG', if_true: files('lsm303dlhc_mag.c'))
+ system_ss.add(when: 'CONFIG_ISL_PMBUS_VR', if_true: files('isl_pmbus_vr.c'))
+ system_ss.add(when: 'CONFIG_MAX31785', if_true: files('max31785.c'))
+ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp9808.c', 'adxl345.c',
+-                                                      'isl29125.c'))
++                                                      'isl29125.c', 'bme280.c'))
+ system_ss.add(when: 'CONFIG_PYKIT_SENSORS', if_true: files('icm20948.c', 'bno085.c'))
+diff --git a/include/hw/sensor/bme280.h b/include/hw/sensor/bme280.h
+new file mode 100644
+index 0000000..0d8e5df
+--- /dev/null
++++ b/include/hw/sensor/bme280.h
+@@ -0,0 +1,21 @@
++/*
++ * Bosch BME280 humidity, pressure and temperature sensor (I2C)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * I2C address 0x76 (SDO low) or 0x77. The air it measures: "temperature"
++ * (milli-degrees Celsius, -40000 to 85000), "pressure" (Pa, 30000 to
++ * 110000) and "humidity" (thousandths of %RH, 0 to 100000), settable
++ * while running.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_SENSOR_BME280_H
++#define HW_SENSOR_BME280_H
++
++#define TYPE_BME280 "bme280"
++#define BME280_ADDR 0x76
++
++#endif /* HW_SENSOR_BME280_H */
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index 736d1e6..ed1273d 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -1083,6 +1083,68 @@ static void test_color2(void)
+     qtest_quit(qts);
+ }
+ 
++/*
++ * Weather Click: BME280 at 0x76 on EXT1. A forced measurement at x16
++ * (filter off: 20 bits) gives the raw readings that compensate to the
++ * properties, then sleep; skipped measurements read 0x80000/0x8000.
++ */
++#define BME280          0x76
++
++static void bme_data(QTestState *qts, uint32_t *p, uint32_t *t, uint32_t *h)
++{
++    uint8_t d[8];
++
++    i2c_rd(qts, BME280, 0xF7, d, 8);
++    *p = d[0] << 12 | d[1] << 4 | d[2] >> 4;
++    *t = d[3] << 12 | d[4] << 4 | d[5] >> 4;
++    *h = d[6] << 8 | d[7];
++}
++
++static void test_weather(void)
++{
++    QTestState *qts = i2c_init("-M pic32cm-mc00-cpro,ext1=weather ");
++    uint8_t d[4];
++    uint32_t p, t, h;
++
++    i2c_rd(qts, BME280, 0xD0, d, 1);
++    g_assert_cmphex(d[0], ==, 0x60);
++    i2c_rd(qts, BME280, 0x88, d, 4);                /* dig_T1, dig_T2 */
++    g_assert_cmphex(d[0] | d[1] << 8, ==, 28009);
++    g_assert_cmphex(d[2] | d[3] << 8, ==, 25654);
++    bme_data(qts, &p, &t, &h);
++    g_assert_cmphex(p, ==, 0x80000);
++    g_assert_cmphex(h, ==, 0x8000);
++
++    /* Pairs of register and value; ctrl_hum counts at ctrl_meas */
++    g_assert_true(i2c_wr(qts, BME280, 0xF2, (const uint8_t[]){ 0x01 }, 1));
++    g_assert_true(i2c_wr(qts, BME280, 0xF4, (const uint8_t[]){ 0xB5 }, 1));
++    i2c_rd(qts, BME280, 0xF3, d, 1);
++    g_assert_cmphex(d[0], ==, 0x08);                /* measuring */
++    qtest_clock_step(qts, 70 * SCALE_MS);           /* 1+32+32.5+2.5 ms */
++    i2c_rd(qts, BME280, 0xF3, d, 2);
++    g_assert_cmphex(d[0], ==, 0x00);
++    g_assert_cmphex(d[1], ==, 0xB4);                /* back to sleep */
++    bme_data(qts, &p, &t, &h);
++    g_assert_cmpuint(t, ==, 529864);
++    g_assert_cmpuint(p, ==, 327438);
++    g_assert_cmpuint(h, ==, 29614);
++
++    /* Pressure skipped, at x1 temperature has 16 bits */
++    qom_set_int(qts, CLICK1, "temperature", -40000);
++    g_assert_true(i2c_wr(qts, BME280, 0xF4, (const uint8_t[]){ 0x21 }, 1));
++    qtest_clock_step(qts, 10 * SCALE_MS);
++    bme_data(qts, &p, &t, &h);
++    g_assert_cmphex(p, ==, 0x80000);
++    g_assert_cmphex(t & 0xF, ==, 0);
++    g_assert_cmpuint(t, ==, 317304 & ~0xF);
++
++    /* Soft reset */
++    g_assert_true(i2c_wr(qts, BME280, 0xE0, (const uint8_t[]){ 0xB6 }, 1));
++    i2c_rd(qts, BME280, 0xF2, d, 1);
++    g_assert_cmphex(d[0], ==, 0);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+@@ -1102,6 +1164,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/pot", test_pot);
+     qtest_add_func("pic32cm-click/rotary", test_rotary);
+     qtest_add_func("pic32cm-click/color2", test_color2);
++    qtest_add_func("pic32cm-click/weather", test_weather);
+     qtest_add_func("pic32cm-click/thermo8-identity", test_identity);
+     qtest_add_func("pic32cm-click/not-fitted", test_not_fitted);
+     qtest_add_func("pic32cm-click/thermo8-int-pullup", test_int_pullup);
+-- 
+2.53.0.windows.2
+

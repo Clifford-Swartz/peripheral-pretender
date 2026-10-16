@@ -1386,6 +1386,50 @@ def test_session_color2(qemu_path, qemu_machines):
     assert "B=1 hue=120 GREEN" in uart, uart
 
 
+WEATHER_DEMO = BUILD / "weather.elf"
+
+
+@pytest.mark.qemu
+def test_session_weather(qemu_path, qemu_machines):
+    """weather.elf with a Weather Click on EXT1: MikroElektronika's set-up
+    reads back, the data sheet's compensation gives the page's defaults
+    exactly (25.00 C, 1013.25 hPa, 50.00 %RH), and a warmer slider shows
+    in the readings, eased by the IIR filter (16) toward it."""
+    import re
+    from tools.pp_web import server
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not WEATHER_DEMO.is_file():
+        pytest.skip("weather.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=weather)")
+
+    def temps(log):
+        return [float(x) for x in re.findall(r"T=(-?[\d.]+) C", log)]
+
+    async def scenario():
+        app = server.App("ev15n46a", WEATHER_DEMO)
+        await app.plug("ext1", "weather")
+        try:
+            for _ in range(50):
+                await asyncio.sleep(0.1)
+                if "PP:EXIT" in app.uart_log:
+                    break
+            await app.control("ext1", "temperature", 30)
+            for _ in range(150):
+                await asyncio.sleep(0.1)
+                if temps(app.uart_log)[-1] > 25.5:
+                    break
+        finally:
+            await app.session.stop()
+        return app.uart_log
+
+    uart = asyncio.run(scenario())
+    assert "PP:EXIT 0" in uart, uart
+    assert "FAIL" not in uart, uart
+    assert "T=25.00 C P=1013.25 hPa H=50.00 %RH" in uart, uart
+    assert 25.5 < temps(uart)[-1] < 30.0, uart
+
+
 OLEDW_DEMO = BUILD / "oledw.elf"
 
 

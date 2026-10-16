@@ -358,6 +358,14 @@ and blue right. Demo: `make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=color2
 MikroElektronika's set-up, the conversion-done interrupt; then a line whenever the colour name
 changes; WHITE needs about 10000 lux, equal channels below that read RED, as in their example).
 
+The Weather Click (`clicks/weather/`, the v101 ClickID board) has sliders for temperature,
+pressure and humidity. The BME280's raw readings compensate exactly to them, but with
+MikroElektronika's IIR filter (16) a change eases in over about ten seconds, as on the real
+part. Demo: `make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=weather` (EXT1;
+MikroElektronika's set-up, the data sheet's integer compensation, a line every 1.5 s).
+MikroElektronika's own driver keeps the raw readings unsigned and so goes wrong below about
+0 C, on silicon as on the twin; the demo uses the data sheet's code.
+
 Colour variants: 8x8 R, Y and B and Button R and Y share their device with 8x8 G and Button G
 and have their own art and LED colours. The 8x8 B Click's page links the 8x8 R Click's 2D files,
 so its art is the 8x8 R DXF with the silkscreen letter replaced (`silk_label`).

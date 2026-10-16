@@ -1,0 +1,22 @@
+{
+ "source": "MikroElektronika Weather Click v101 (ClickID): 2D and 3D files (Weather_click_2d_3d_files_v101ID.zip, CAD/Weather click_v101_ClickID.dxf; silkscreen Weather click, COMM SEL 1-4 SPI|I2C, ADDR SEL 0|1, C1 C2, R2 R3, PWR, 3.3V) and schematic v101 (Weather_Click_Schematic_v101.pdf, the ClickID one: BME280, DS28E36 ClickID, 74LVC1G3157 CS switch). Part positions read off the pad groups; the BME280's 8 LGA pads are not reported by dxf_pads.py (too small) and were measured from the render. The four COMM SEL solder jumpers are drawn in the I2C position and ADDR SEL on 0 (SDO to GND: 0x76), as the copper bridges on the silkscreen show. Which 0402 at y 2.71 is R4 (1k), R5 (10k) or C3 (0.47uF) is a guess.",
+ "parts": [
+  {"ref": "U1", "kind": "ic", "value": "BME280 (LGA-8 2.5x2.5)", "at_mm": [11.43, 21.77], "size_mm": [2.5, 2.5]},
+  {"ref": "C1", "kind": "capacitor", "value": "100nF", "at_mm": [10.13, 17.27], "size_mm": [1.0, 0.5]},
+  {"ref": "C2", "kind": "capacitor", "value": "100nF", "at_mm": [12.68, 17.27], "size_mm": [1.0, 0.5]},
+  {"ref": "R2", "kind": "resistor", "value": "4.7k", "at_mm": [13.98, 10.12], "size_mm": [1.0, 0.5]},
+  {"ref": "R3", "kind": "resistor", "value": "4.7k", "at_mm": [16.48, 10.12], "size_mm": [1.0, 0.5]},
+  {"ref": "COMM4", "kind": "zero_ohm", "value": "I2C", "at_mm": [8.62, 13.16], "size_mm": [1.5, 0.8]},
+  {"ref": "COMM3", "kind": "zero_ohm", "value": "I2C", "at_mm": [8.61, 10.95], "size_mm": [1.5, 0.8]},
+  {"ref": "COMM2", "kind": "zero_ohm", "value": "I2C", "at_mm": [8.62, 8.76], "size_mm": [1.5, 0.8]},
+  {"ref": "COMM1", "kind": "zero_ohm", "value": "I2C", "at_mm": [8.62, 6.60], "size_mm": [1.5, 0.8]},
+  {"ref": "ADDR", "kind": "zero_ohm", "value": "0", "at_mm": [14.24, 6.60], "size_mm": [1.5, 0.8]},
+  {"ref": "R5", "kind": "resistor", "value": "10k", "at_mm": [5.93, 2.71], "size_mm": [1.0, 0.5]},
+  {"ref": "R4", "kind": "resistor", "value": "1k", "at_mm": [9.10, 2.71], "size_mm": [1.0, 0.5]},
+  {"ref": "C3", "kind": "capacitor", "value": "0.47uF", "at_mm": [12.28, 2.71], "size_mm": [1.0, 0.5]},
+  {"ref": "U3", "kind": "ic", "value": "74LVC1G3157GV (SOT457)", "at_mm": [6.88, 0.87], "size_mm": [1.5, 2.9]},
+  {"ref": "U2", "kind": "ic", "value": "DS28E36 (ClickID, TDFN-6)", "at_mm": [11.43, 0.74], "size_mm": [3.0, 3.0]},
+  {"ref": "LD1", "kind": "led", "value": "PWR", "at_mm": [16.0, 1.65], "size_mm": [1.6, 0.8], "color": "#7be38a"},
+  {"ref": "R1", "kind": "resistor", "value": "470", "at_mm": [16.0, 0.0], "size_mm": [1.6, 0.8]}
+ ]
+}
