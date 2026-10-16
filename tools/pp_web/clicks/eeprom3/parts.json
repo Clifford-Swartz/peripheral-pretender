@@ -1,0 +1,12 @@
+{
+ "source": "MikroElektronika EEPROM 3 Click: 2D and 3D files (eeprom-3-click-2d-and-3d-files.zip, EEPROM3_click_v101a.dxf; silkscreen 256KB, I2C interface, ADD 1/0, U1, R2, R3, PWR, R1, PWR SEL 3V3/5V, EEPROM 3 click) and schematic v100 (AT24CM02 SOIC-8, A2 jumper to GND, WP to GND). Positions from the DXF pads and the rendered silkscreen; the SOIC-8 pads are not reported by dxf_pads (positions read from the render). Jumpers drawn in their default positions (ADD 0, PWR SEL 3V3).",
+ "parts": [
+  {"ref": "U1", "kind": "ic", "value": "AT24CM02 (SOIC-8)", "at_mm": [11.36, 10.30], "size_mm": [3.9, 4.9]},
+  {"ref": "R2", "kind": "resistor", "value": "4k7", "at_mm": [16.33, 10.92], "size_mm": [1.4, 3.0]},
+  {"ref": "R3", "kind": "resistor", "value": "4k7", "at_mm": [18.39, 10.92], "size_mm": [1.4, 3.0]},
+  {"ref": "ADD", "kind": "zero_ohm", "value": "A2=0", "at_mm": [5.28, 9.19], "size_mm": [1.5, 3.0]},
+  {"ref": "R1", "kind": "resistor", "value": "470", "at_mm": [9.75, 2.51], "size_mm": [3.0, 1.4]},
+  {"ref": "PWR", "kind": "led", "value": "green", "at_mm": [4.96, 2.59], "size_mm": [3.6, 1.8], "color": "#7be38a"},
+  {"ref": "PWR SEL", "kind": "zero_ohm", "value": "3.3V", "at_mm": [14.79, 2.57], "size_mm": [3.4, 1.5]}
+ ]
+}

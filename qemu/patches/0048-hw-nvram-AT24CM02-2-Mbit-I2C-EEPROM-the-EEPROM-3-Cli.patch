@@ -1,0 +1,386 @@
+From f53312874b8124ea4f590f143a3ffdf6bdfef8b6 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 15 Oct 2026 18:53:16 -0700
+Subject: [PATCH] hw/nvram: AT24CM02 2-Mbit I2C EEPROM, the EEPROM 3 Click
+
+mchp-at24cm02 answers at four I2C addresses (A17:A16 in the address),
+takes two word-address bytes, buffers page writes that wrap within the
+256-byte page and commits them at STOP, then ignores its address for the
+write cycle (ACK polling works). Its address counter survives between
+transfers, so a current-address read after an address-only write reads
+where the firmware pointed.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |   8 +
+ hw/misc/mikrobus.c                    |   4 +
+ hw/nvram/mchp_at24cm02.c              | 280 ++++++++++++++++++++++++++
+ hw/nvram/meson.build                  |   1 +
+ include/hw/nvram/mchp_at24cm02.h      |  18 ++
+ 5 files changed, 311 insertions(+)
+ create mode 100644 hw/nvram/mchp_at24cm02.c
+ create mode 100644 include/hw/nvram/mchp_at24cm02.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 017a462..24c0655 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -175,6 +175,14 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   ``connected``, ``central-tx`` (what it sends) and ``central-rx`` (what it
+   received). CS (RTS) and INT (CTS) are not modelled.
+ 
++``eeprom3``
++  EEPROM 3 Click (v101a): an AT24CM02 2-Mbit EEPROM (``mchp-at24cm02``) at
++  I2C 0x50-0x53 (ADD jumper on 0; the address's low bits are A17:A16), WP
++  tied low. Two word-address bytes, page writes that wrap within 256 bytes,
++  the write cycle at STOP (``write-ms``, 5 ms, no ACK meanwhile), an address
++  counter kept between transfers, reads wrapping at 256 KiB. Erased at
++  power-up. ``view-at`` (hex) and ``view`` show 32 bytes for front ends.
++
+ SPI Clicks on both headers share the SPI bus; each listens only while its
+ own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
+ 
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index a17209a..4f0c277 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -24,6 +24,7 @@
+ #include "hw/misc/mikrobus.h"
+ #include "hw/misc/quectel_l86.h"
+ #include "hw/misc/rnbd451.h"
++#include "hw/nvram/mchp_at24cm02.h"
+ #include "hw/adc/mchp_mcp3204.h"
+ #include "hw/display/ssd1351.h"
+ #include "hw/rtc/mchp_mcp7941x.h"
+@@ -154,6 +155,9 @@ static const ClickInfo mikrobus_clicks[] = {
+       .pulls = { { true, MIKROBUS_CS, 1 },                /* R4 10k */
+                  { true, MIKROBUS_RST, 1 } },             /* the module's */
+       .uart_pin = quectel_l86_pin },
++    { "eeprom3", "EEPROM 3 Click: AT24CM02 256 KiB EEPROM at I2C 0x50-0x53 "
++      "(ADD jumper on 0, A17:A16 in the address), WP tied low",
++      TYPE_MCHP_AT24CM02, CLICK_I2C, MCHP_AT24CM02_ADDR, 0 },
+     { "rn4871", "RN4871 Click: Microchip RN4871 Bluetooth LE module on the "
+       "UART (115200 baud, ASCII commands), RST_N on RST",
+       TYPE_CHARDEV_RN4871, CLICK_UART, 0, 0,
+diff --git a/hw/nvram/mchp_at24cm02.c b/hw/nvram/mchp_at24cm02.c
+new file mode 100644
+index 0000000..531ce55
+--- /dev/null
++++ b/hw/nvram/mchp_at24cm02.c
+@@ -0,0 +1,280 @@
++/*
++ * Microchip (Atmel) AT24CM02 2-Mbit I2C serial EEPROM
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * AT24CM02 data sheet (Atmel-8828E): 256 KiB in 1024 pages of 256 bytes.
++ * The device address byte is 1010 A2 A17 A16 R/W, so the chip answers at
++ * four I2C addresses in a row, 0x50 + A17:A16 with its A2 pin low ("a2"
++ * property: 0x54 with it high), and two word address bytes (A15..A0)
++ * follow in a write. Data bytes after them go to a page buffer whose
++ * address wraps within the 256-byte page; the write cycle starts at STOP,
++ * if at least one data byte came, and lasts "write-ms" (default 5 ms; the
++ * data sheet gives 10 ms at most), during which the chip does not
++ * acknowledge its address (firmware may poll for the ACK). With "wp" (the
++ * WP pin) high the chip acknowledges everything and writes nothing. Reads
++ * run from the internal address counter, which holds the last address used
++ * plus one and is kept between transfers (a current-address read ignores
++ * A17:A16 of its device address), and wrap from 0x3FFFF to 0. The memory
++ * is erased (0xFF) at power-up: no backing file.
++ *
++ * For a front end, "view-at" (a hex address, as a string) chooses 32
++ * bytes that "view" shows as hex and text. No physical part checked it.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/cutils.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "qemu/units.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/i2c/i2c.h"
++#include "hw/nvram/mchp_at24cm02.h"
++#include "migration/vmstate.h"
++
++#define AT24_SIZE           (256 * KiB)
++#define AT24_PAGE           256
++#define AT24_VIEW           32
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpAt24cm02State, MCHP_AT24CM02)
++
++struct MchpAt24cm02State {
++    I2CSlave parent_obj;
++
++    uint8_t *mem;
++    uint32_t counter;           /* the internal address counter */
++    uint8_t a2;
++    bool wp;
++    uint32_t write_ms;
++    bool busy;                  /* in the write cycle */
++    uint8_t matched;            /* the address of this transfer */
++
++    /* A write transfer: word address bytes, then the page buffer */
++    unsigned nsent;
++    uint32_t page;              /* page base address */
++    uint8_t buf[AT24_PAGE];
++    uint8_t dirty[AT24_PAGE / 8];
++    unsigned nwritten;
++    uint8_t off;                /* next byte in the page */
++
++    uint32_t view_at;
++    QEMUTimer *timer;
++};
++
++static void at24_cycle_done(void *opaque)
++{
++    MCHP_AT24CM02(opaque)->busy = false;
++}
++
++static bool at24_match_and_add(I2CSlave *candidate, uint8_t address,
++                               bool broadcast, I2CNodeList *current_devs)
++{
++    MchpAt24cm02State *s = MCHP_AT24CM02(candidate);
++    I2CNode *node;
++
++    if ((address & 0x7C) != (MCHP_AT24CM02_ADDR | (s->a2 ? 4 : 0)) ||
++        broadcast || s->busy) {
++        return false;               /* busy: no acknowledgement */
++    }
++    s->matched = address;
++    node = g_new(struct I2CNode, 1);
++    node->elt = candidate;
++    QLIST_INSERT_HEAD(current_devs, node, next);
++    return true;
++}
++
++static void at24_commit(MchpAt24cm02State *s)
++{
++    if (!s->wp) {
++        for (unsigned i = 0; i < AT24_PAGE; i++) {
++            if (s->dirty[i / 8] & (1 << (i % 8))) {
++                s->mem[s->page + i] = s->buf[i];
++            }
++        }
++    }
++    s->busy = true;
++    timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++              (int64_t)s->write_ms * SCALE_MS);
++}
++
++static int at24_event(I2CSlave *i2c, enum i2c_event event)
++{
++    MchpAt24cm02State *s = MCHP_AT24CM02(i2c);
++
++    switch (event) {
++    case I2C_START_SEND:
++        s->nsent = 0;
++        s->nwritten = 0;
++        memset(s->dirty, 0, sizeof(s->dirty));
++        break;
++    case I2C_FINISH:
++        if (s->nwritten) {
++            at24_commit(s);
++            s->nwritten = 0;
++        }
++        break;
++    default:
++        break;
++    }
++    return 0;
++}
++
++static int at24_send(I2CSlave *i2c, uint8_t data)
++{
++    MchpAt24cm02State *s = MCHP_AT24CM02(i2c);
++
++    if (s->nsent == 0) {
++        s->counter = (uint32_t)(s->matched & 3) << 16 | data << 8;
++    } else if (s->nsent == 1) {
++        s->counter |= data;
++        s->page = s->counter & ~(AT24_PAGE - 1);
++        s->off = s->counter & (AT24_PAGE - 1);
++    } else {
++        s->buf[s->off] = data;
++        s->dirty[s->off / 8] |= 1 << (s->off % 8);
++        s->off++;                   /* wraps within the page */
++        s->nwritten++;
++        s->counter = s->page | s->off;
++    }
++    s->nsent++;
++    return 0;
++}
++
++static uint8_t at24_recv(I2CSlave *i2c)
++{
++    MchpAt24cm02State *s = MCHP_AT24CM02(i2c);
++    uint8_t v = s->mem[s->counter];
++
++    s->counter = (s->counter + 1) % AT24_SIZE;
++    return v;
++}
++
++static char *at24_get_view_at(Object *obj, Error **errp)
++{
++    return g_strdup_printf("0x%05X", MCHP_AT24CM02(obj)->view_at);
++}
++
++static void at24_set_view_at(Object *obj, const char *value, Error **errp)
++{
++    uint64_t a;
++
++    if (qemu_strtou64(value, NULL, 0, &a) || a >= AT24_SIZE) {
++        error_setg(errp, "view-at must be an address below 0x40000");
++        return;
++    }
++    MCHP_AT24CM02(obj)->view_at = a & ~(AT24_VIEW - 1);
++}
++
++/* "00100: 4D 69 6B ... |Mik...|" in two lines of 16 */
++static char *at24_get_view(Object *obj, Error **errp)
++{
++    MchpAt24cm02State *s = MCHP_AT24CM02(obj);
++    GString *out = g_string_new(NULL);
++
++    for (unsigned row = 0; row < AT24_VIEW; row += 16) {
++        uint32_t a = (s->view_at + row) % AT24_SIZE;
++
++        g_string_append_printf(out, "%s%05X:", row ? "\n" : "", a);
++        for (unsigned i = 0; i < 16; i++) {
++            g_string_append_printf(out, " %02X", s->mem[(a + i) % AT24_SIZE]);
++        }
++        g_string_append(out, "  ");
++        for (unsigned i = 0; i < 16; i++) {
++            uint8_t c = s->mem[(a + i) % AT24_SIZE];
++
++            g_string_append_c(out, c >= 0x20 && c < 0x7F ? c : '.');
++        }
++    }
++    return g_string_free(out, false);
++}
++
++static void at24_realize(DeviceState *dev, Error **errp)
++{
++    MchpAt24cm02State *s = MCHP_AT24CM02(dev);
++
++    if (s->a2 > 1) {
++        error_setg(errp, "a2 is a pin: 0 or 1");
++        return;
++    }
++    s->mem = g_malloc(AT24_SIZE);
++    memset(s->mem, 0xFF, AT24_SIZE);        /* erased */
++}
++
++static void at24_unrealize(DeviceState *dev)
++{
++    g_free(MCHP_AT24CM02(dev)->mem);
++}
++
++static void at24_init(Object *obj)
++{
++    MchpAt24cm02State *s = MCHP_AT24CM02(obj);
++
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, at24_cycle_done, s);
++    object_property_add_str(obj, "view-at", at24_get_view_at,
++                            at24_set_view_at);
++    object_property_add_str(obj, "view", at24_get_view, NULL);
++}
++
++static void at24_finalize(Object *obj)
++{
++    timer_free(MCHP_AT24CM02(obj)->timer);
++}
++
++static const Property at24_properties[] = {
++    DEFINE_PROP_UINT8("a2", MchpAt24cm02State, a2, 0),
++    DEFINE_PROP_BOOL("wp", MchpAt24cm02State, wp, false),
++    DEFINE_PROP_UINT32("write-ms", MchpAt24cm02State, write_ms, 5),
++};
++
++static const VMStateDescription vmstate_at24 = {
++    .name = TYPE_MCHP_AT24CM02,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, MchpAt24cm02State),
++        VMSTATE_UINT32(counter, MchpAt24cm02State),
++        VMSTATE_BOOL(busy, MchpAt24cm02State),
++        VMSTATE_UINT8(matched, MchpAt24cm02State),
++        VMSTATE_UINT32(nsent, MchpAt24cm02State),
++        VMSTATE_UINT32(page, MchpAt24cm02State),
++        VMSTATE_UINT8_ARRAY(buf, MchpAt24cm02State, AT24_PAGE),
++        VMSTATE_UINT8_ARRAY(dirty, MchpAt24cm02State, AT24_PAGE / 8),
++        VMSTATE_UINT32(nwritten, MchpAt24cm02State),
++        VMSTATE_UINT8(off, MchpAt24cm02State),
++        VMSTATE_TIMER_PTR(timer, MchpAt24cm02State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void at24_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
++
++    dc->desc = "AT24CM02 2-Mbit I2C EEPROM";
++    dc->realize = at24_realize;
++    dc->unrealize = at24_unrealize;
++    dc->vmsd = &vmstate_at24;
++    device_class_set_props(dc, at24_properties);
++    k->event = at24_event;
++    k->send = at24_send;
++    k->recv = at24_recv;
++    k->match_and_add = at24_match_and_add;
++}
++
++static const TypeInfo at24_types[] = {
++    {
++        .name = TYPE_MCHP_AT24CM02,
++        .parent = TYPE_I2C_SLAVE,
++        .instance_size = sizeof(MchpAt24cm02State),
++        .instance_init = at24_init,
++        .instance_finalize = at24_finalize,
++        .class_init = at24_class_init,
++    },
++};
++
++DEFINE_TYPES(at24_types)
+diff --git a/hw/nvram/meson.build b/hw/nvram/meson.build
+index 2634335..7908d71 100644
+--- a/hw/nvram/meson.build
++++ b/hw/nvram/meson.build
+@@ -23,3 +23,4 @@ system_ss.add(when: 'CONFIG_ACPI', if_true: files('fw_cfg-acpi.c'))
+ system_ss.add(when: 'CONFIG_ASPEED_SOC', if_true: files(
+   'aspeed_otp.c',
+   ))
++system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_at24cm02.c'))
+diff --git a/include/hw/nvram/mchp_at24cm02.h b/include/hw/nvram/mchp_at24cm02.h
+new file mode 100644
+index 0000000..8dee509
+--- /dev/null
++++ b/include/hw/nvram/mchp_at24cm02.h
+@@ -0,0 +1,18 @@
++/*
++ * Microchip (Atmel) AT24CM02 2-Mbit I2C serial EEPROM
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_NVRAM_MCHP_AT24CM02_H
++#define HW_NVRAM_MCHP_AT24CM02_H
++
++#define TYPE_MCHP_AT24CM02 "mchp-at24cm02"
++
++/* Base I2C address (A2 = 0); A17:A16 select one of four in a row */
++#define MCHP_AT24CM02_ADDR 0x50
++
++#endif /* HW_NVRAM_MCHP_AT24CM02_H */
+-- 
+2.53.0.windows.2
+

@@ -1832,5 +1832,47 @@
         "color": "#ff5a4a"
       }
     ]
+  },
+  "eeprom3": {
+    "name": "EEPROM 3 Click",
+    "vendor": "MikroElektronika",
+    "chip": "AT24CM02",
+    "bus": "I2C 0x50-0x53",
+    "description": "256 KiB serial EEPROM: 256-byte pages, 5 ms write cycle (no ACK meanwhile); A17:A16 in the I2C address",
+    "controls": [],
+    "inputs": [
+      {
+        "id": "at",
+        "label": "Show address (hex, Enter)",
+        "property": "view-at"
+      }
+    ],
+    "monitors": [
+      {
+        "id": "view",
+        "label": "Memory",
+        "property": "view"
+      }
+    ],
+    "signals": [],
+    "image": "eeprom3/top.png",
+    "origin_mm": [
+      -1.27,
+      24.765
+    ],
+    "size_mm": [
+      25.4,
+      28.575
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          4.96,
+          2.59
+        ],
+        "color": "#5dff7a"
+      }
+    ]
   }
 }

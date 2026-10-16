@@ -1306,3 +1306,41 @@ def test_session_rn4871(qemu_path, qemu_machines):
     assert "status: STREAM_OPEN" in lines and "phone: hello twin" in lines
     assert "echo: hello twin" in rx, rx
     assert "status: DISCONNECT" in lines, uart
+
+
+EEPROM3_DEMO = BUILD / "eeprom3.elf"
+
+
+@pytest.mark.qemu
+def test_session_eeprom3(qemu_path, qemu_machines):
+    """eeprom3.elf with an EEPROM 3 Click on EXT1: its checks (blank part,
+    a write with ACK polling through the write cycle, current-address
+    reads, page wrap, A17:A16 in the device address, wrap-around reads)
+    pass, and the panel's memory view shows what it wrote."""
+    from tools.pp_web import server
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not EEPROM3_DEMO.is_file():
+        pytest.skip("eeprom3.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=eeprom3)")
+
+    async def scenario():
+        app = server.App("ev15n46a", EEPROM3_DEMO)
+        await app.plug("ext1", "eeprom3")
+        try:
+            for _ in range(50):
+                await asyncio.sleep(0.1)
+                if "PP:EXIT" in app.uart_log:
+                    break
+            await app.click_text("ext1", "at", "0x100")
+            view = await app.session.qmp.execute(
+                "qom-get", path="/machine/ext1-click", property="view")
+        finally:
+            await app.session.stop()
+        return app.uart_log, view
+
+    uart, view = asyncio.run(scenario())
+    assert "PP:EXIT 0" in uart, uart
+    assert "FAIL" not in uart, uart
+    assert view.startswith("00100: A3 A4 6B 72 6F 65"), view   # wrapped
+    assert "..kroe" in view, view

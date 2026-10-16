@@ -104,7 +104,8 @@ static int i2c_write(uint8_t addr, uint8_t reg, const uint8_t *d,
 }
 
 /* Read @n bytes from @reg on; 0 if the target answered */
-static int i2c_read(uint8_t addr, uint8_t reg, uint8_t *d, unsigned int n)
+static int __attribute__((unused))
+i2c_read(uint8_t addr, uint8_t reg, uint8_t *d, unsigned int n)
 {
     if (i2c_write(addr, reg, 0, 0) != 0) {
         return -1;
@@ -130,7 +131,8 @@ static int i2c_read(uint8_t addr, uint8_t reg, uint8_t *d, unsigned int n)
     return 0;
 }
 
-static int i2c_write1(uint8_t addr, uint8_t reg, uint8_t v)
+static int __attribute__((unused))
+i2c_write1(uint8_t addr, uint8_t reg, uint8_t v)
 {
     return i2c_write(addr, reg, &v, 1);
 }

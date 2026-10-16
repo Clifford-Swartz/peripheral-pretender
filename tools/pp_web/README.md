@@ -329,6 +329,12 @@ module sent the phone). Demo: `make -C firmware/hello BOARD=pic32cm_mc00_cpro AP
 (EXT1; MikroElektronika's start-up sequence with every reply printed, then it echoes each line
 the phone sends; LED0 while connected).
 
+The EEPROM 3 Click (`clicks/eeprom3/`) uses the same panel kinds: type an address to watch
+(`view-at`) and the monitor shows 32 bytes there, hex and text, as the firmware writes them.
+`make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=eeprom3` is a self-check (EXT1; blank part,
+"Mikroe" at 0x100 with ACK polling through the write cycle, page wrap, A17:A16 in the device
+address, wrap-around reads; ends with `PP:EXIT n`).
+
 Colour variants: 8x8 R, Y and B and Button R and Y share their device with 8x8 G and Button G
 and have their own art and LED colours. The 8x8 B Click's page links the 8x8 R Click's 2D files,
 so its art is the 8x8 R DXF with the silkscreen letter replaced (`silk_label`).
