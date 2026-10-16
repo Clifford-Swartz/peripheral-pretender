@@ -52,6 +52,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0043 | PIC32CM MC00 sigma-delta ADC (SDADC U2260): three differential pairs (`ain`), INTREF/AREFB/DAC/INTVCC, 24-bit result with offset (added), gain and shift correction and saturation, window, free-running; checked on MC00 silicon (`APP=sdadc`); `sdadc_u2260` overlay |
 | 0044 | mikroBUS AN (a Click's analog output in mV onto the ADC channels behind the pad; MC00 EXT1/EXT2) and UART (a UART Click is a chardev on the socket's UART, linked as `/machine/<socket>-click`; MC00 SERCOM3, Nano Base sockets 1/3 USART2); POT Click (`click-pot`, MCP1501 2.048 V, buffered onto AN); qtest |
 | 0045 | GNSS Click: Quectel L86 (`chardev-quectel-l86`) on the socket's UART, 9600 baud paced; boot lines, NMEA 4.10 sentences in the module's order and talkers with and without a fix, PMTK220/251/314/161/101-104 with ACKs, RESET on RST; position, altitude, satellites as QOM properties |
+| 0046 | Rotary G/R/B/Y Click (`click-rotary`: two 74HC595 for the 16-LED ring plus an EC12D encoder, quadrature on PWM and AN, A = B at detents, A leading clockwise, push switch on INT); mikroBUS AN as a digital pin (`an_pin`); four outputs per Click; qtest |
 
 ## Setting it up
 

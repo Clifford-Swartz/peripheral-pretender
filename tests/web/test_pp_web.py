@@ -1203,3 +1203,56 @@ def test_session_gnss(qemu_path, qemu_machines):
     assert "fix lat 3317.7900 N lon 11153.8200 W alt 370.0 m sats 8" in lines
     assert "fix lat 3351.4080 S lon 15112.9180 E alt 12.0 m sats 8" in lines
     assert lines[-1] == "waiting for a fix", uart
+
+
+ROTARY_DEMO = BUILD / "rotary.elf"
+
+
+@pytest.mark.qemu
+def test_session_rotary(qemu_path, qemu_machines):
+    """rotary.elf with a Rotary G Click on EXT1, through the server's
+    control and button paths: turning the knob makes quadrature on PWM and
+    AN (as a digital pin) that the firmware counts per detent, in both
+    directions; its LED follows on the 74HC595 ring; pushing it lights the
+    whole ring."""
+    from tools.pp_web import server
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not ROTARY_DEMO.is_file():
+        pytest.skip("rotary.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=rotary)")
+
+    async def ring():
+        return int(await app.session.qmp.execute(
+            "qom-get", path="/machine/ext1-click", property="outputs"))
+
+    async def scenario():
+        nonlocal app
+        app = server.App("ev15n46a", ROTARY_DEMO)
+        await app.plug("ext1", "rotaryg")
+        try:
+            await asyncio.sleep(0.6)
+            await app.control("ext1", "position", 3)
+            await asyncio.sleep(0.4)
+            at3 = await ring()
+            await app.control("ext1", "position", -2)
+            await asyncio.sleep(0.4)
+            at_m2 = await ring()
+            await app.control("ext1", "push", 1)
+            await asyncio.sleep(0.3)
+            pushed = await ring()
+            await app.control("ext1", "push", 0)
+            await asyncio.sleep(0.3)
+        finally:
+            await app.session.stop()
+        return app.uart_log, at3, at_m2, pushed
+
+    app = None
+    uart, at3, at_m2, pushed = asyncio.run(scenario())
+    lines = uart.splitlines()
+    for n in ("position 1", "position 2", "position 3", "position -1",
+              "position -2"):
+        assert n in lines, uart
+    assert at3 == 1 << 3 and at_m2 == 1 << 14, (hex(at3), hex(at_m2))
+    assert pushed == 0xFFFF
+    assert "pressed" in lines and "released" in lines, uart

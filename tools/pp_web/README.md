@@ -312,6 +312,15 @@ BOARD=pic32cm_mc00_cpro APP=gnss` (EXT1; echoes the boot lines, sends PMTK314 an
 acknowledgement, the first RMC sentence, then each GGA's position, as MikroElektronika's
 example parses it). One UART Click at a time: the MC00's EXT1 and EXT2 share their UART.
 
+The Rotary G, R, B and Y Clicks (`clicks/rotary*/`) bring a `display` of type `bits`: LEDs at
+`at_mm`, each lit by bit `bit` of a polled property (the 74HC595s' `outputs`; bit n is LED
+n+1). The `Knob` slider turns the encoder to a detent position, one detent at a time; the
+shaft is a button (push). The renderer now follows arcs in DXF outlines (the Rotary Click's
+round top) and turns parts by `rotate_deg` (the ring's LEDs). Demo: `make -C firmware/hello
+BOARD=pic32cm_mc00_cpro APP=rotary` (EXT1; counts detents as MikroElektronika's driver does and
+lights the LED of the position, the whole ring while pushed). The Rotary O Click's files are
+not downloadable, so it is not in the catalog.
+
 Colour variants: 8x8 R, Y and B and Button R and Y share their device with 8x8 G and Button G
 and have their own art and LED colours. The 8x8 B Click's page links the 8x8 R Click's 2D files,
 so its art is the 8x8 R DXF with the silkscreen letter replaced (`silk_label`).

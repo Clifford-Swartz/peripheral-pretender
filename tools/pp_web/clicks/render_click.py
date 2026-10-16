@@ -67,6 +67,15 @@ def flat(entity):
         yield entity
 
 
+def poly_points(v) -> list[tuple[float, float]]:
+    """A POLYLINE's points with its arcs (bulges) flattened."""
+    from ezdxf import path
+
+    if any(getattr(p.dxf, "bulge", 0) for p in v.vertices):
+        return [(q.x, q.y) for q in path.make_path(v).flattening(0.002)]
+    return [(p.x, p.y) for p in v.points()]
+
+
 def read_dxf(path: str):
     import ezdxf
 
@@ -80,7 +89,7 @@ def read_dxf(path: str):
     for e in layers["GKO"]:
         for v in flat(e):
             if v.dxftype() == "POLYLINE":
-                outline += [(p.x, p.y) for p in v.points()]
+                outline += poly_points(v)
             elif v.dxftype() == "LINE":
                 outline += [(v.dxf.start.x, v.dxf.start.y),
                             (v.dxf.end.x, v.dxf.end.y)]
@@ -153,7 +162,7 @@ def main(dxf: str, parts_file: str, out: str) -> None:
             if t == "SOLID":
                 svg.append(f'<path d="{solid(v)}" fill="{SILK}"/>')
             elif t == "POLYLINE":
-                pts = [(p.x, p.y) for p in v.points()]
+                pts = poly_points(v)
                 width = (v.dxf.get("default_start_width", 0) or 0.15 / k) * k
                 svg.append(f'<polyline points="{" ".join(pt(*p) for p in pts)}" '
                            f'fill="none" stroke="{SILK}" stroke-width="{width:.4f}"/>')
@@ -179,6 +188,7 @@ def main(dxf: str, parts_file: str, out: str) -> None:
     for p in parts["parts"]:
         cx, cy = p["at_mm"]
         pw, ph = p["size_mm"]
+        first = len(svg)                # a rotated part: its elements
         x, y = cx - pw / 2, Y(cy / k) - ph / 2
         kind = p["kind"]
         if kind == "ic":
@@ -315,6 +325,9 @@ def main(dxf: str, parts_file: str, out: str) -> None:
             svg.append(f'<rect x="{x:.3f}" y="{y:.3f}" width="{pw}" height="{ph}" '
                        f'rx="{min(pw, ph) / 2:.3f}" fill="#c9ccd0" stroke="#8d9299" '
                        'stroke-width="0.1"/>')
+        if p.get("rotate_deg"):
+            svg[first:] = ([f'<g transform="rotate({-p["rotate_deg"]} {cx:.3f} '
+                            f'{Y(cy / k):.3f})">'] + svg[first:] + ["</g>"])
     svg.append("</svg>")
     Path(out).write_text("\n".join(svg), encoding="utf-8")
     print(json.dumps({"origin_mm": [round(vx, 4), round(y1 * k, 4)],

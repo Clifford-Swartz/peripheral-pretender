@@ -1,0 +1,446 @@
+From e64832354652ba0e09eed73629e26a7ba655470b Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 15 Oct 2026 18:29:13 -0700
+Subject: [PATCH] hw/ssi: the Rotary G/R/B/Y Click; mikroBUS AN as a digital
+ pin
+
+click-rotary is the Rotary Click's two 74HC595 (the LED ring) with its
+EC12D encoder and push switch: quadrature on PWM and AN, A = B at each
+of the 30 detents, A leading clockwise, 1 ms per edge; the switch drives
+INT high while pressed. Sockets gain AN as a digital pin (an_pin) for
+it; a Click may now have four outputs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  10 ++
+ hw/arm/pic32cm_mc00_cpro.c            |   1 +
+ hw/avr/avr64ea48_cnano.c              |   1 +
+ hw/misc/mikrobus.c                    |  58 ++++++++-
+ hw/ssi/ti_74hc595.c                   | 172 ++++++++++++++++++++++++++
+ include/hw/misc/mikrobus.h            |   4 +
+ include/hw/ssi/ti_74hc595.h           |   6 +
+ tests/qtest/pic32cm-click-test.c      |  32 +++++
+ 8 files changed, 283 insertions(+), 1 deletion(-)
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 4a544d6..ae546fc 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -155,6 +155,16 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   ``speed-ckn``, ``course-cdeg``; the date and time come from the RTC
+   (``-rtc``).
+ 
++``rotaryg``, ``rotaryr``, ``rotaryb``, ``rotaryy``
++  Rotary G/R/B/Y Click (v100): a ring of 16 LEDs on two 74HC595 (LATCH on
++  CS with R19 4.7 kOhm pull-down, MR# on RST with R18 4.7 kOhm pull-up;
++  ``outputs`` bit n lights LED n+1, LED1 at six o'clock, clockwise) and an
++  EC12D incremental encoder (``click-rotary``): A on PWM, B on AN used as a
++  digital pin (R25/R24 10 kOhm pull-downs), 30 detents a turn with A = B
++  at each, A leading clockwise, 1 ms per edge; the push switch on INT
++  drives high while pressed and floats otherwise (no pull on the Click).
++  QOM properties ``position`` (detents, clockwise up) and ``pressed``.
++
+ SPI Clicks on both headers share the SPI bus; each listens only while its
+ own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
+ 
+diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
+index 8be098e..818bca3 100644
+--- a/hw/arm/pic32cm_mc00_cpro.c
++++ b/hw/arm/pic32cm_mc00_cpro.c
+@@ -177,6 +177,7 @@ static void pic32cm_mc00_cpro_add_clicks(Pic32cmMc00CproState *s)
+             .name = n ? "ext2" : "ext1", .port = port,
+             .port_in = MCHP_PORT_IN, .port_pad = MCHP_PORT_PAD,
+             .i2c = i2c, .spi = spi, .uart = s->ext_uart[n],
++            .an_pin = n ? MCHP_PORT_PIN('A', 8) : MCHP_PORT_PIN('B', 8),
+         };
+         memcpy(sockets[n].pins, pic32cm_mc00_cpro_ext_pins[n],
+                sizeof(sockets[n].pins));
+diff --git a/hw/avr/avr64ea48_cnano.c b/hw/avr/avr64ea48_cnano.c
+index d45f483..ce7f054 100644
+--- a/hw/avr/avr64ea48_cnano.c
++++ b/hw/avr/avr64ea48_cnano.c
+@@ -157,6 +157,7 @@ static void avr64ea48_cnano_add_clicks(Avr64ea48CnanoState *s)
+             .name = names[n], .port = DEVICE(&s->soc.port),
+             .port_in = AVR8X_PORT_IN, .port_pad = AVR8X_PORT_PAD,
+             .i2c = i2c, .spi = spi, .uart = s->mb_uart[n],
++            .an_pin = -1,       /* not wired yet */
+         };
+         memcpy(sockets[n].pins, avr64ea48_cnano_mb_pins[n],
+                sizeof(sockets[n].pins));
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index 659e53f..745f738 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -59,7 +59,7 @@ typedef struct ClickInfo {
+     ClickBus bus;
+     uint8_t addr;               /* on the I2C bus */
+     uint32_t length;            /* "length" property, 0 for none */
+-    ClickLine outs[2];          /* device output onto a socket pin */
++    ClickLine outs[4];          /* device output onto a socket pin */
+     ClickLine ins[4];           /* socket pin into a device input */
+     ClickPull pulls[4];
+     qemu_irq_handler uart_pin;  /* a UART Click's socket pin inputs */
+@@ -153,6 +153,54 @@ static const ClickInfo mikrobus_clicks[] = {
+       .pulls = { { true, MIKROBUS_CS, 1 },                /* R4 10k */
+                  { true, MIKROBUS_RST, 1 } },             /* the module's */
+       .uart_pin = quectel_l86_pin },
++    { "rotaryg", "Rotary G Click: EC12D encoder (A on PWM, B on AN, switch on "
++      "INT), ring of 16 green LEDs on two 74HC595 (LATCH on CS, MR# on RST)",
++      TYPE_CLICK_ROTARY, CLICK_SPI, 0, 2,
++      .outs = { { CLICK_ROTARY_ENC_A, MIKROBUS_PWM },
++                { CLICK_ROTARY_ENC_B, MIKROBUS_AN_PIN },
++                { CLICK_ROTARY_SW, MIKROBUS_INT } },
++      .ins = { { TI_74HC595_LATCH, MIKROBUS_CS },
++               { TI_74HC595_MR, MIKROBUS_RST } },
++      .pulls = { { true, MIKROBUS_RST, 1 },               /* R18 4.7k */
++                 { true, MIKROBUS_CS, 0 },                /* R19 4.7k */
++                 { true, MIKROBUS_AN_PIN, 0 },            /* R24 10k */
++                 { true, MIKROBUS_PWM, 0 } } },          /* R25 10k */
++    { "rotaryr", "Rotary R Click: EC12D encoder (A on PWM, B on AN, switch on "
++      "INT), ring of 16 red LEDs on two 74HC595 (LATCH on CS, MR# on RST)",
++      TYPE_CLICK_ROTARY, CLICK_SPI, 0, 2,
++      .outs = { { CLICK_ROTARY_ENC_A, MIKROBUS_PWM },
++                { CLICK_ROTARY_ENC_B, MIKROBUS_AN_PIN },
++                { CLICK_ROTARY_SW, MIKROBUS_INT } },
++      .ins = { { TI_74HC595_LATCH, MIKROBUS_CS },
++               { TI_74HC595_MR, MIKROBUS_RST } },
++      .pulls = { { true, MIKROBUS_RST, 1 },               /* R18 4.7k */
++                 { true, MIKROBUS_CS, 0 },                /* R19 4.7k */
++                 { true, MIKROBUS_AN_PIN, 0 },            /* R24 10k */
++                 { true, MIKROBUS_PWM, 0 } } },          /* R25 10k */
++    { "rotaryb", "Rotary B Click: EC12D encoder (A on PWM, B on AN, switch on "
++      "INT), ring of 16 blue LEDs on two 74HC595 (LATCH on CS, MR# on RST)",
++      TYPE_CLICK_ROTARY, CLICK_SPI, 0, 2,
++      .outs = { { CLICK_ROTARY_ENC_A, MIKROBUS_PWM },
++                { CLICK_ROTARY_ENC_B, MIKROBUS_AN_PIN },
++                { CLICK_ROTARY_SW, MIKROBUS_INT } },
++      .ins = { { TI_74HC595_LATCH, MIKROBUS_CS },
++               { TI_74HC595_MR, MIKROBUS_RST } },
++      .pulls = { { true, MIKROBUS_RST, 1 },               /* R18 4.7k */
++                 { true, MIKROBUS_CS, 0 },                /* R19 4.7k */
++                 { true, MIKROBUS_AN_PIN, 0 },            /* R24 10k */
++                 { true, MIKROBUS_PWM, 0 } } },          /* R25 10k */
++    { "rotaryy", "Rotary Y Click: EC12D encoder (A on PWM, B on AN, switch on "
++      "INT), ring of 16 yellow LEDs on two 74HC595 (LATCH on CS, MR# on RST)",
++      TYPE_CLICK_ROTARY, CLICK_SPI, 0, 2,
++      .outs = { { CLICK_ROTARY_ENC_A, MIKROBUS_PWM },
++                { CLICK_ROTARY_ENC_B, MIKROBUS_AN_PIN },
++                { CLICK_ROTARY_SW, MIKROBUS_INT } },
++      .ins = { { TI_74HC595_LATCH, MIKROBUS_CS },
++               { TI_74HC595_MR, MIKROBUS_RST } },
++      .pulls = { { true, MIKROBUS_RST, 1 },               /* R18 4.7k */
++                 { true, MIKROBUS_CS, 0 },                /* R19 4.7k */
++                 { true, MIKROBUS_AN_PIN, 0 },            /* R24 10k */
++                 { true, MIKROBUS_PWM, 0 } } },          /* R25 10k */
+ };
+ 
+ const char *mikrobus_click_names(void)
+@@ -212,6 +260,14 @@ static unsigned mikrobus_pin(const MikrobusSocket *sock, const ClickInfo *c,
+ {
+     static const char *const names[] = { "RST", "PWM", "INT", "CS" };
+ 
++    if (role == MIKROBUS_AN_PIN) {
++        if (sock->an_pin < 0) {
++            error_report("%s: %s needs AN as a digital pin, which this "
++                         "board does not wire", sock->name, c->name);
++            exit(1);
++        }
++        return sock->an_pin;
++    }
+     if (sock->pins[role] < 0) {
+         error_report("%s: %s needs %s, which this board does not wire",
+                      sock->name, c->name, names[role]);
+diff --git a/hw/ssi/ti_74hc595.c b/hw/ssi/ti_74hc595.c
+index d70c086..7c66984 100644
+--- a/hw/ssi/ti_74hc595.c
++++ b/hw/ssi/ti_74hc595.c
+@@ -16,6 +16,18 @@
+  * level. QOM property "outputs" (read-only): the latched outputs, register
+  * 0 (the first after DS) in bits 7:0. OE# is assumed tied low.
+  *
++ * "click-rotary" is the Rotary G/R/B/O/Y Click (v100): two 74HC595 (length
++ * 2; bit n of "outputs" lights LED n+1, LED1 at six o'clock, clockwise)
++ * and an EC12D incremental encoder with push switch. The encoder has 30
++ * detents and 15 pulses a turn: at each detent A = B (both high, then both
++ * low, alternating); turning one detent clockwise moves A, then B
++ * (counter-clockwise B, then A), 1 ms apart, so polled firmware sees every
++ * edge; through the Click's 74LVC1T45 level shifters "enc-a" (on PWM) and
++ * "enc-b" (on AN) drive 0/1. The switch "sw" (on INT) drives 1 while
++ * pressed and nothing (-1) while released: the Click has no pull on INT.
++ * QOM properties: "position" (detents, the encoder turns to it one detent
++ * at a time; clockwise counts up), "pressed". No physical Click checked it.
++ *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+ 
+@@ -27,6 +39,7 @@
+ #include "hw/ssi/ssi.h"
+ #include "hw/ssi/ti_74hc595.h"
+ #include "migration/vmstate.h"
++#include "qemu/timer.h"
+ #include "trace.h"
+ 
+ #define HC595_MAX_CHAIN 4
+@@ -152,6 +165,157 @@ static void hc595_class_init(ObjectClass *klass, const void *data)
+     k->cs_polarity = SSI_CS_NONE;   /* shifts on every clock; STCP latches */
+ }
+ 
++/* The Rotary Click: the chain plus the encoder and its switch */
++OBJECT_DECLARE_SIMPLE_TYPE(ClickRotaryState, CLICK_ROTARY)
++
++#define ROTARY_EDGE_NS      (1 * SCALE_MS)
++
++struct ClickRotaryState {
++    Ti74hc595State parent_obj;
++
++    qemu_irq enc_a;
++    qemu_irq enc_b;
++    qemu_irq sw;
++    int32_t position;           /* where the knob is going (detents) */
++    int32_t at;                 /* the detent the contacts show */
++    bool half;                  /* between detents: the first edge done */
++    bool pressed;
++    QEMUTimer *timer;
++};
++
++/* Contact levels: at even detents both high, at odd ones both low */
++static void rotary_drive(ClickRotaryState *s)
++{
++    bool rest = !(s->at & 1);
++    bool cw = s->position > s->at;
++    bool a = rest, b = rest;
++
++    if (s->half) {
++        /* clockwise A has moved, counter-clockwise B */
++        if (cw) {
++            a = !rest;
++        } else {
++            b = !rest;
++        }
++    }
++    qemu_set_irq(s->enc_a, a);
++    qemu_set_irq(s->enc_b, b);
++}
++
++static void rotary_step(void *opaque)
++{
++    ClickRotaryState *s = opaque;
++
++    if (s->at == s->position) {
++        s->half = false;
++        return;
++    }
++    if (!s->half) {
++        s->half = true;             /* the leading contact */
++    } else {
++        s->half = false;            /* the other one: the next detent */
++        s->at += s->position > s->at ? 1 : -1;
++    }
++    rotary_drive(s);
++    if (s->at != s->position || s->half) {
++        timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                  ROTARY_EDGE_NS);
++    }
++}
++
++static void rotary_get_position(Object *obj, Visitor *v, const char *name,
++                                void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, &CLICK_ROTARY(obj)->position, errp);
++}
++
++static void rotary_set_position(Object *obj, Visitor *v, const char *name,
++                                void *opaque, Error **errp)
++{
++    ClickRotaryState *s = CLICK_ROTARY(obj);
++    int32_t value;
++
++    if (!visit_type_int32(v, name, &value, errp)) {
++        return;
++    }
++    s->position = value;
++    if (!timer_pending(s->timer)) {
++        timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                  ROTARY_EDGE_NS);
++    }
++}
++
++static bool rotary_get_pressed(Object *obj, Error **errp)
++{
++    return CLICK_ROTARY(obj)->pressed;
++}
++
++static void rotary_set_pressed(Object *obj, bool value, Error **errp)
++{
++    ClickRotaryState *s = CLICK_ROTARY(obj);
++
++    s->pressed = value;
++    qemu_set_irq(s->sw, value ? 1 : -1);
++}
++
++static void rotary_reset(DeviceState *dev)
++{
++    ClickRotaryState *s = CLICK_ROTARY(dev);
++
++    hc595_reset(dev);
++    /* The knob stays where it is: the contacts at its detent */
++    timer_del(s->timer);
++    s->at = s->position;
++    s->half = false;
++    rotary_drive(s);
++    qemu_set_irq(s->sw, s->pressed ? 1 : -1);
++}
++
++static void rotary_init(Object *obj)
++{
++    ClickRotaryState *s = CLICK_ROTARY(obj);
++    DeviceState *dev = DEVICE(obj);
++
++    qdev_init_gpio_out_named(dev, &s->enc_a, CLICK_ROTARY_ENC_A, 1);
++    qdev_init_gpio_out_named(dev, &s->enc_b, CLICK_ROTARY_ENC_B, 1);
++    qdev_init_gpio_out_named(dev, &s->sw, CLICK_ROTARY_SW, 1);
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, rotary_step, s);
++    object_property_add(obj, "position", "int32", rotary_get_position,
++                        rotary_set_position, NULL, NULL);
++    object_property_add_bool(obj, "pressed", rotary_get_pressed,
++                             rotary_set_pressed);
++}
++
++static void rotary_finalize(Object *obj)
++{
++    timer_free(CLICK_ROTARY(obj)->timer);
++}
++
++static const VMStateDescription vmstate_rotary = {
++    .name = TYPE_CLICK_ROTARY,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, ClickRotaryState, 1, vmstate_hc595,
++                       Ti74hc595State),
++        VMSTATE_INT32(position, ClickRotaryState),
++        VMSTATE_INT32(at, ClickRotaryState),
++        VMSTATE_BOOL(half, ClickRotaryState),
++        VMSTATE_BOOL(pressed, ClickRotaryState),
++        VMSTATE_TIMER_PTR(timer, ClickRotaryState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void rotary_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->desc = "Rotary Click: LED ring on two 74HC595, encoder, switch";
++    dc->vmsd = &vmstate_rotary;
++    device_class_set_legacy_reset(dc, rotary_reset);
++}
++
+ static const TypeInfo hc595_types[] = {
+     {
+         .name = TYPE_TI_74HC595,
+@@ -160,6 +324,14 @@ static const TypeInfo hc595_types[] = {
+         .instance_init = hc595_init,
+         .class_init = hc595_class_init,
+     },
++    {
++        .name = TYPE_CLICK_ROTARY,
++        .parent = TYPE_TI_74HC595,
++        .instance_size = sizeof(ClickRotaryState),
++        .instance_init = rotary_init,
++        .instance_finalize = rotary_finalize,
++        .class_init = rotary_class_init,
++    },
+ };
+ 
+ DEFINE_TYPES(hc595_types)
+diff --git a/include/hw/misc/mikrobus.h b/include/hw/misc/mikrobus.h
+index e67db14..de8ee05 100644
+--- a/include/hw/misc/mikrobus.h
++++ b/include/hw/misc/mikrobus.h
+@@ -30,6 +30,8 @@ enum { MIKROBUS_RST, MIKROBUS_PWM, MIKROBUS_INT, MIKROBUS_CS,
+  */
+ #define MIKROBUS_AN         MIKROBUS_ROLES
+ #define MIKROBUS_AN_ADCS    2
++/* AN used as a digital pin (a Click output or pull on it): "an_pin" */
++#define MIKROBUS_AN_PIN     (MIKROBUS_ROLES + 1)
+ 
+ typedef struct MikrobusAnalog {
+     Object *adc;                /* an ADC with an "ain" property; NULL: none */
+@@ -45,6 +47,8 @@ typedef struct MikrobusSocket {
+     I2CBus *i2c;                /* NULL: none on this socket */
+     SSIBus *spi;
+     MikrobusAnalog an[MIKROBUS_AN_ADCS];    /* AN's channels (pad on both) */
++    int an_pin;                 /* AN's pad in the port arrays; -1: not wired
++                                   (set it: 0 is a pad) */
+     Chardev *uart;              /* mikrobus_uart_chardev() for this socket */
+ } MikrobusSocket;
+ 
+diff --git a/include/hw/ssi/ti_74hc595.h b/include/hw/ssi/ti_74hc595.h
+index 454856e..783e5e4 100644
+--- a/include/hw/ssi/ti_74hc595.h
++++ b/include/hw/ssi/ti_74hc595.h
+@@ -17,4 +17,10 @@
+ #define TI_74HC595_LATCH "latch"
+ #define TI_74HC595_MR "mr"
+ 
++/* The Rotary Click (a 74HC595 chain with an encoder and its switch) */
++#define TYPE_CLICK_ROTARY "click-rotary"
++#define CLICK_ROTARY_ENC_A "enc-a"
++#define CLICK_ROTARY_ENC_B "enc-b"
++#define CLICK_ROTARY_SW "sw"
++
+ #endif /* HW_SSI_TI_74HC595_H */
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index 81610de..0b0eb01 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -957,6 +957,37 @@ static void test_8x8_variants(void)
+     }
+ }
+ 
++/*
++ * Rotary G Click: A on PWM (PB10), B on AN (PB08) as a digital pin; at a
++ * detent A = B, clockwise A moves first, 1 ms per edge; the switch on INT
++ * (PB02) drives high while pressed and floats while released
++ */
++static void test_rotary(void)
++{
++    QTestState *qts = qtest_init("-M pic32cm-mc00-cpro,ext1=rotaryg ");
++    static const bool cw[][2] = {
++        { 0, 1 }, { 0, 0 }, { 1, 0 }, { 1, 1 },        /* two detents */
++    };
++    static const bool ccw[][2] = { { 1, 0 }, { 0, 0 } };   /* one back */
++
++    g_assert_true(pin_high(qts, PB, 10) && pin_high(qts, PB, 8));
++    qom_set_int(qts, CLICK1, "position", 2);
++    for (unsigned i = 0; i < ARRAY_SIZE(cw); i++) {
++        qtest_clock_step(qts, 1000000);
++        g_assert_cmpint(pin_high(qts, PB, 10), ==, cw[i][0]);
++        g_assert_cmpint(pin_high(qts, PB, 8), ==, cw[i][1]);
++    }
++    qom_set_int(qts, CLICK1, "position", 1);
++    for (unsigned i = 0; i < ARRAY_SIZE(ccw); i++) {
++        qtest_clock_step(qts, 1000000);
++        g_assert_cmpint(pin_high(qts, PB, 10), ==, ccw[i][0]);
++        g_assert_cmpint(pin_high(qts, PB, 8), ==, ccw[i][1]);
++    }
++    qtest_qom_set_bool(qts, CLICK1, "pressed", true);
++    g_assert_true(pin_high(qts, PB, 2));
++    qtest_quit(qts);
++}
++
+ /*
+  * POT Click: the knob's voltage (0-2.048 V) on the socket's AN pin, which
+  * is ADC0 AIN2 and ADC1 AIN4 on EXT1 (PB08), AIN8/AIN10 on EXT2 (PA08)
+@@ -994,6 +1025,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/button-variants", test_button_variants);
+     qtest_add_func("pic32cm-click/8x8-variants", test_8x8_variants);
+     qtest_add_func("pic32cm-click/pot", test_pot);
++    qtest_add_func("pic32cm-click/rotary", test_rotary);
+     qtest_add_func("pic32cm-click/thermo8-identity", test_identity);
+     qtest_add_func("pic32cm-click/not-fitted", test_not_fitted);
+     qtest_add_func("pic32cm-click/thermo8-int-pullup", test_int_pullup);
+-- 
+2.53.0.windows.2
+

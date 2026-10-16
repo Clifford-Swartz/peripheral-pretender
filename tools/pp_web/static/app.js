@@ -341,6 +341,19 @@ function drawClick(stack, h, id, def) {
           m.size_mm[1]);
     }));
   }
+  // LEDs driven by bits of a polled property (the Rotary Click's ring on
+  // two 74HC595: "outputs" bit n is LED n+1)
+  if (def.display && def.display.type === "bits") {
+    for (const led of def.display.leds) {
+      const el = document.createElement("div");
+      el.className = "click-led pinned bits";
+      el.style.background = `radial-gradient(circle, #fff 0 12%, ${def.display.color} 25%, ${def.display.color}55 48%, transparent 70%)`;
+      el.title = led.id || `bit ${led.bit}`;
+      el.dataset.prop = `${h.slot}.${def.display.property}`;
+      el.dataset.bit = led.bit;
+      put(el, led.at_mm, def.display.size_mm || 3.2);
+    }
+  }
   // A display panel (OLED C's SSD1351, later TFTs): the controller's
   // "frame" (base64 RGB565, rows top to bottom) on a canvas over the glass
   if (def.display && def.display.type === "panel") {
@@ -450,7 +463,7 @@ function showClicks(state) {
 // A Click output is "active" while its pad sits at the active level
 // Pin-driven parts on the Clicks: LEDs, relays, seven-segment digits
 function updateClickParts() {
-  for (const el of document.querySelectorAll(".click-led.pinned")) {
+  for (const el of document.querySelectorAll(".click-led.pinned:not(.bits)")) {
     const f = pinHigh(el.dataset.pin);
     el.style.opacity = Math.min(1, el.dataset.activeLow ? 1 - f : f);
   }
@@ -464,6 +477,10 @@ function updateClickParts() {
     const bytes = String(clickState[el.dataset.prop] || "").split(" ");
     const v = parseInt(bytes[Number(el.dataset.digit)] || "0", 16) || 0;
     el.classList.toggle("on", ((v >>> Number(el.dataset.bit)) & 1) === 1);
+  }
+  for (const el of document.querySelectorAll(".click-led.bits")) {
+    const v = Number(clickState[el.dataset.prop] || 0);
+    el.style.opacity = ((v >>> Number(el.dataset.bit)) & 1) ? 1 : 0;
   }
   for (const cv of document.querySelectorAll(".click-panel")) {
     const frame = clickState[cv.dataset.prop] || "";

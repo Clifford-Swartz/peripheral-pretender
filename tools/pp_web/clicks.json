@@ -974,5 +974,805 @@
         "color": "#ffd84a"
       }
     ]
+  },
+  "rotaryg": {
+    "name": "Rotary G Click",
+    "vendor": "MikroElektronika",
+    "chip": "EC12D encoder + 2x 74HC595",
+    "bus": "SPI + GPIO",
+    "description": "Incremental encoder (A on PWM, B on AN, push switch on INT) in a ring of 16 green LEDs on two 74HC595 (LATCH on CS)",
+    "controls": [
+      {
+        "id": "position",
+        "label": "Knob (detents)",
+        "property": "position",
+        "unit": "",
+        "min": -60,
+        "max": 60,
+        "step": 1,
+        "scale": 1,
+        "default": 0
+      }
+    ],
+    "buttons": [
+      {
+        "id": "push",
+        "property": "pressed",
+        "at_mm": [
+          10.98,
+          43.03
+        ],
+        "size_mm": [
+          6.0,
+          6.0
+        ]
+      }
+    ],
+    "display": {
+      "type": "bits",
+      "property": "outputs",
+      "color": "#4cd964",
+      "size_mm": 2.6,
+      "leds": [
+        {
+          "id": "LED1",
+          "bit": 0,
+          "at_mm": [
+            10.96,
+            32.77
+          ]
+        },
+        {
+          "id": "LED2",
+          "bit": 1,
+          "at_mm": [
+            6.99,
+            33.56
+          ]
+        },
+        {
+          "id": "LED3",
+          "bit": 2,
+          "at_mm": [
+            3.63,
+            35.81
+          ]
+        },
+        {
+          "id": "LED4",
+          "bit": 3,
+          "at_mm": [
+            1.38,
+            39.17
+          ]
+        },
+        {
+          "id": "LED5",
+          "bit": 4,
+          "at_mm": [
+            0.6,
+            43.13
+          ]
+        },
+        {
+          "id": "LED6",
+          "bit": 5,
+          "at_mm": [
+            1.38,
+            47.1
+          ]
+        },
+        {
+          "id": "LED7",
+          "bit": 6,
+          "at_mm": [
+            3.63,
+            50.46
+          ]
+        },
+        {
+          "id": "LED8",
+          "bit": 7,
+          "at_mm": [
+            6.99,
+            52.7
+          ]
+        },
+        {
+          "id": "LED9",
+          "bit": 8,
+          "at_mm": [
+            10.95,
+            53.49
+          ]
+        },
+        {
+          "id": "LED10",
+          "bit": 9,
+          "at_mm": [
+            14.92,
+            52.7
+          ]
+        },
+        {
+          "id": "LED11",
+          "bit": 10,
+          "at_mm": [
+            18.28,
+            50.46
+          ]
+        },
+        {
+          "id": "LED12",
+          "bit": 11,
+          "at_mm": [
+            20.53,
+            47.1
+          ]
+        },
+        {
+          "id": "LED13",
+          "bit": 12,
+          "at_mm": [
+            21.31,
+            43.13
+          ]
+        },
+        {
+          "id": "LED14",
+          "bit": 13,
+          "at_mm": [
+            20.53,
+            39.17
+          ]
+        },
+        {
+          "id": "LED15",
+          "bit": 14,
+          "at_mm": [
+            18.28,
+            35.81
+          ]
+        },
+        {
+          "id": "LED16",
+          "bit": 15,
+          "at_mm": [
+            14.92,
+            33.56
+          ]
+        }
+      ]
+    },
+    "signals": [
+      {
+        "id": "SW",
+        "pin": "int",
+        "active_low": false,
+        "at_mm": [
+          22.39,
+          17.73
+        ]
+      }
+    ],
+    "image": "rotaryg/top.png",
+    "origin_mm": [
+      -1.7577,
+      55.8457
+    ],
+    "size_mm": [
+      25.4178,
+      57.1614
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          4.12,
+          3.31
+        ],
+        "color": "#5dff7a"
+      }
+    ]
+  },
+  "rotaryr": {
+    "name": "Rotary R Click",
+    "vendor": "MikroElektronika",
+    "chip": "EC12D encoder + 2x 74HC595",
+    "bus": "SPI + GPIO",
+    "description": "Incremental encoder (A on PWM, B on AN, push switch on INT) in a ring of 16 red LEDs on two 74HC595 (LATCH on CS)",
+    "controls": [
+      {
+        "id": "position",
+        "label": "Knob (detents)",
+        "property": "position",
+        "unit": "",
+        "min": -60,
+        "max": 60,
+        "step": 1,
+        "scale": 1,
+        "default": 0
+      }
+    ],
+    "buttons": [
+      {
+        "id": "push",
+        "property": "pressed",
+        "at_mm": [
+          10.98,
+          43.03
+        ],
+        "size_mm": [
+          6.0,
+          6.0
+        ]
+      }
+    ],
+    "display": {
+      "type": "bits",
+      "property": "outputs",
+      "color": "#ff3b30",
+      "size_mm": 2.6,
+      "leds": [
+        {
+          "id": "LED1",
+          "bit": 0,
+          "at_mm": [
+            10.96,
+            32.77
+          ]
+        },
+        {
+          "id": "LED2",
+          "bit": 1,
+          "at_mm": [
+            6.99,
+            33.56
+          ]
+        },
+        {
+          "id": "LED3",
+          "bit": 2,
+          "at_mm": [
+            3.63,
+            35.81
+          ]
+        },
+        {
+          "id": "LED4",
+          "bit": 3,
+          "at_mm": [
+            1.38,
+            39.17
+          ]
+        },
+        {
+          "id": "LED5",
+          "bit": 4,
+          "at_mm": [
+            0.6,
+            43.13
+          ]
+        },
+        {
+          "id": "LED6",
+          "bit": 5,
+          "at_mm": [
+            1.38,
+            47.1
+          ]
+        },
+        {
+          "id": "LED7",
+          "bit": 6,
+          "at_mm": [
+            3.63,
+            50.46
+          ]
+        },
+        {
+          "id": "LED8",
+          "bit": 7,
+          "at_mm": [
+            6.99,
+            52.7
+          ]
+        },
+        {
+          "id": "LED9",
+          "bit": 8,
+          "at_mm": [
+            10.95,
+            53.49
+          ]
+        },
+        {
+          "id": "LED10",
+          "bit": 9,
+          "at_mm": [
+            14.92,
+            52.7
+          ]
+        },
+        {
+          "id": "LED11",
+          "bit": 10,
+          "at_mm": [
+            18.28,
+            50.46
+          ]
+        },
+        {
+          "id": "LED12",
+          "bit": 11,
+          "at_mm": [
+            20.53,
+            47.1
+          ]
+        },
+        {
+          "id": "LED13",
+          "bit": 12,
+          "at_mm": [
+            21.31,
+            43.13
+          ]
+        },
+        {
+          "id": "LED14",
+          "bit": 13,
+          "at_mm": [
+            20.53,
+            39.17
+          ]
+        },
+        {
+          "id": "LED15",
+          "bit": 14,
+          "at_mm": [
+            18.28,
+            35.81
+          ]
+        },
+        {
+          "id": "LED16",
+          "bit": 15,
+          "at_mm": [
+            14.92,
+            33.56
+          ]
+        }
+      ]
+    },
+    "signals": [
+      {
+        "id": "SW",
+        "pin": "int",
+        "active_low": false,
+        "at_mm": [
+          22.39,
+          17.73
+        ]
+      }
+    ],
+    "image": "rotaryr/top.png",
+    "origin_mm": [
+      -1.7577,
+      55.8457
+    ],
+    "size_mm": [
+      25.4178,
+      57.1614
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          4.12,
+          3.31
+        ],
+        "color": "#5dff7a"
+      }
+    ]
+  },
+  "rotaryb": {
+    "name": "Rotary B Click",
+    "vendor": "MikroElektronika",
+    "chip": "EC12D encoder + 2x 74HC595",
+    "bus": "SPI + GPIO",
+    "description": "Incremental encoder (A on PWM, B on AN, push switch on INT) in a ring of 16 blue LEDs on two 74HC595 (LATCH on CS)",
+    "controls": [
+      {
+        "id": "position",
+        "label": "Knob (detents)",
+        "property": "position",
+        "unit": "",
+        "min": -60,
+        "max": 60,
+        "step": 1,
+        "scale": 1,
+        "default": 0
+      }
+    ],
+    "buttons": [
+      {
+        "id": "push",
+        "property": "pressed",
+        "at_mm": [
+          10.98,
+          43.03
+        ],
+        "size_mm": [
+          6.0,
+          6.0
+        ]
+      }
+    ],
+    "display": {
+      "type": "bits",
+      "property": "outputs",
+      "color": "#3d8bff",
+      "size_mm": 2.6,
+      "leds": [
+        {
+          "id": "LED1",
+          "bit": 0,
+          "at_mm": [
+            10.96,
+            32.77
+          ]
+        },
+        {
+          "id": "LED2",
+          "bit": 1,
+          "at_mm": [
+            6.99,
+            33.56
+          ]
+        },
+        {
+          "id": "LED3",
+          "bit": 2,
+          "at_mm": [
+            3.63,
+            35.81
+          ]
+        },
+        {
+          "id": "LED4",
+          "bit": 3,
+          "at_mm": [
+            1.38,
+            39.17
+          ]
+        },
+        {
+          "id": "LED5",
+          "bit": 4,
+          "at_mm": [
+            0.6,
+            43.13
+          ]
+        },
+        {
+          "id": "LED6",
+          "bit": 5,
+          "at_mm": [
+            1.38,
+            47.1
+          ]
+        },
+        {
+          "id": "LED7",
+          "bit": 6,
+          "at_mm": [
+            3.63,
+            50.46
+          ]
+        },
+        {
+          "id": "LED8",
+          "bit": 7,
+          "at_mm": [
+            6.99,
+            52.7
+          ]
+        },
+        {
+          "id": "LED9",
+          "bit": 8,
+          "at_mm": [
+            10.95,
+            53.49
+          ]
+        },
+        {
+          "id": "LED10",
+          "bit": 9,
+          "at_mm": [
+            14.92,
+            52.7
+          ]
+        },
+        {
+          "id": "LED11",
+          "bit": 10,
+          "at_mm": [
+            18.28,
+            50.46
+          ]
+        },
+        {
+          "id": "LED12",
+          "bit": 11,
+          "at_mm": [
+            20.53,
+            47.1
+          ]
+        },
+        {
+          "id": "LED13",
+          "bit": 12,
+          "at_mm": [
+            21.31,
+            43.13
+          ]
+        },
+        {
+          "id": "LED14",
+          "bit": 13,
+          "at_mm": [
+            20.53,
+            39.17
+          ]
+        },
+        {
+          "id": "LED15",
+          "bit": 14,
+          "at_mm": [
+            18.28,
+            35.81
+          ]
+        },
+        {
+          "id": "LED16",
+          "bit": 15,
+          "at_mm": [
+            14.92,
+            33.56
+          ]
+        }
+      ]
+    },
+    "signals": [
+      {
+        "id": "SW",
+        "pin": "int",
+        "active_low": false,
+        "at_mm": [
+          22.39,
+          17.73
+        ]
+      }
+    ],
+    "image": "rotaryb/top.png",
+    "origin_mm": [
+      -1.7577,
+      55.8457
+    ],
+    "size_mm": [
+      25.4178,
+      57.1614
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          4.12,
+          3.31
+        ],
+        "color": "#5dff7a"
+      }
+    ]
+  },
+  "rotaryy": {
+    "name": "Rotary Y Click",
+    "vendor": "MikroElektronika",
+    "chip": "EC12D encoder + 2x 74HC595",
+    "bus": "SPI + GPIO",
+    "description": "Incremental encoder (A on PWM, B on AN, push switch on INT) in a ring of 16 yellow LEDs on two 74HC595 (LATCH on CS)",
+    "controls": [
+      {
+        "id": "position",
+        "label": "Knob (detents)",
+        "property": "position",
+        "unit": "",
+        "min": -60,
+        "max": 60,
+        "step": 1,
+        "scale": 1,
+        "default": 0
+      }
+    ],
+    "buttons": [
+      {
+        "id": "push",
+        "property": "pressed",
+        "at_mm": [
+          10.98,
+          43.03
+        ],
+        "size_mm": [
+          6.0,
+          6.0
+        ]
+      }
+    ],
+    "display": {
+      "type": "bits",
+      "property": "outputs",
+      "color": "#ffd60a",
+      "size_mm": 2.6,
+      "leds": [
+        {
+          "id": "LED1",
+          "bit": 0,
+          "at_mm": [
+            10.96,
+            32.77
+          ]
+        },
+        {
+          "id": "LED2",
+          "bit": 1,
+          "at_mm": [
+            6.99,
+            33.56
+          ]
+        },
+        {
+          "id": "LED3",
+          "bit": 2,
+          "at_mm": [
+            3.63,
+            35.81
+          ]
+        },
+        {
+          "id": "LED4",
+          "bit": 3,
+          "at_mm": [
+            1.38,
+            39.17
+          ]
+        },
+        {
+          "id": "LED5",
+          "bit": 4,
+          "at_mm": [
+            0.6,
+            43.13
+          ]
+        },
+        {
+          "id": "LED6",
+          "bit": 5,
+          "at_mm": [
+            1.38,
+            47.1
+          ]
+        },
+        {
+          "id": "LED7",
+          "bit": 6,
+          "at_mm": [
+            3.63,
+            50.46
+          ]
+        },
+        {
+          "id": "LED8",
+          "bit": 7,
+          "at_mm": [
+            6.99,
+            52.7
+          ]
+        },
+        {
+          "id": "LED9",
+          "bit": 8,
+          "at_mm": [
+            10.95,
+            53.49
+          ]
+        },
+        {
+          "id": "LED10",
+          "bit": 9,
+          "at_mm": [
+            14.92,
+            52.7
+          ]
+        },
+        {
+          "id": "LED11",
+          "bit": 10,
+          "at_mm": [
+            18.28,
+            50.46
+          ]
+        },
+        {
+          "id": "LED12",
+          "bit": 11,
+          "at_mm": [
+            20.53,
+            47.1
+          ]
+        },
+        {
+          "id": "LED13",
+          "bit": 12,
+          "at_mm": [
+            21.31,
+            43.13
+          ]
+        },
+        {
+          "id": "LED14",
+          "bit": 13,
+          "at_mm": [
+            20.53,
+            39.17
+          ]
+        },
+        {
+          "id": "LED15",
+          "bit": 14,
+          "at_mm": [
+            18.28,
+            35.81
+          ]
+        },
+        {
+          "id": "LED16",
+          "bit": 15,
+          "at_mm": [
+            14.92,
+            33.56
+          ]
+        }
+      ]
+    },
+    "signals": [
+      {
+        "id": "SW",
+        "pin": "int",
+        "active_low": false,
+        "at_mm": [
+          22.39,
+          17.73
+        ]
+      }
+    ],
+    "image": "rotaryy/top.png",
+    "origin_mm": [
+      -1.7577,
+      55.8457
+    ],
+    "size_mm": [
+      25.4178,
+      57.1614
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          4.12,
+          3.31
+        ],
+        "color": "#5dff7a"
+      }
+    ]
   }
 }

@@ -1,0 +1,767 @@
+{
+ "source": "MikroElektronika Rotary Y Click v100: 2D and 3D files (ROTARY_Y_Click_2d_3d_files.zip, CAD/rotary y_click_v100.dxf; silkscreen ROTARY G click) and schematic v100 (2022). Positions from the STEP's component placements (CAD/ROTARY G_click_v100.step) and the DXF's mask openings; LED centres on a circle r=10.36 mm about (10.955, 43.133), LED n at -90-(n-1)*22.5 deg (n=1 at 6 o'clock, increasing clockwise). Outline: the DXF's top edge is a semicircle (POLYLINE bulge 1.0, centre 10.95,43.13, r 12.71) that render_click.py does not yet draw. rotate_deg is not supported by render_click.py yet. Body sizes estimated from package standards.",
+ "parts": [
+  {
+   "ref": "U1",
+   "kind": "encoder",
+   "value": "ALPS EC12D1564402 (15 pulses / 30 detents, push switch)",
+   "at_mm": [
+    10.98,
+    43.03
+   ],
+   "size_mm": [
+    12.5,
+    11.7
+   ],
+   "shaft_mm": 6.0
+  },
+  {
+   "ref": "LED1",
+   "kind": "led",
+   "value": "0805 yellow LED (Q0 of U2, bit 0)",
+   "at_mm": [
+    10.96,
+    32.77
+   ],
+   "size_mm": [
+    1.25,
+    2.0
+   ],
+   "rotate_deg": 0.0,
+   "color": "#fff0a0"
+  },
+  {
+   "ref": "LED2",
+   "kind": "led",
+   "value": "0805 yellow LED (Q1 of U2, bit 1)",
+   "at_mm": [
+    6.99,
+    33.56
+   ],
+   "size_mm": [
+    1.6,
+    1.6
+   ],
+   "rotate_deg": -22.5,
+   "color": "#fff0a0"
+  },
+  {
+   "ref": "LED3",
+   "kind": "led",
+   "value": "0805 yellow LED (Q2 of U2, bit 2)",
+   "at_mm": [
+    3.63,
+    35.81
+   ],
+   "size_mm": [
+    1.6,
+    1.6
+   ],
+   "rotate_deg": -45.0,
+   "color": "#fff0a0"
+  },
+  {
+   "ref": "LED4",
+   "kind": "led",
+   "value": "0805 yellow LED (Q3 of U2, bit 3)",
+   "at_mm": [
+    1.38,
+    39.17
+   ],
+   "size_mm": [
+    1.6,
+    1.6
+   ],
+   "rotate_deg": -67.5,
+   "color": "#fff0a0"
+  },
+  {
+   "ref": "LED5",
+   "kind": "led",
+   "value": "0805 yellow LED (Q4 of U2, bit 4)",
+   "at_mm": [
+    0.6,
+    43.13
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ],
+   "rotate_deg": -90.0,
+   "color": "#fff0a0"
+  },
+  {
+   "ref": "LED6",
+   "kind": "led",
+   "value": "0805 yellow LED (Q5 of U2, bit 5)",
+   "at_mm": [
+    1.38,
+    47.1
+   ],
+   "size_mm": [
+    1.6,
+    1.6
+   ],
+   "rotate_deg": -112.5,
+   "color": "#fff0a0"
+  },
+  {
+   "ref": "LED7",
+   "kind": "led",
+   "value": "0805 yellow LED (Q6 of U2, bit 6)",
+   "at_mm": [
+    3.63,
+    50.46
+   ],
+   "size_mm": [
+    1.6,
+    1.6
+   ],
+   "rotate_deg": -135.0,
+   "color": "#fff0a0"
+  },
+  {
+   "ref": "LED8",
+   "kind": "led",
+   "value": "0805 yellow LED (Q7 of U2, bit 7)",
+   "at_mm": [
+    6.99,
+    52.7
+   ],
+   "size_mm": [
+    1.6,
+    1.6
+   ],
+   "rotate_deg": -157.5,
+   "color": "#fff0a0"
+  },
+  {
+   "ref": "LED9",
+   "kind": "led",
+   "value": "0805 yellow LED (Q0 of U3, bit 8)",
+   "at_mm": [
+    10.95,
+    53.49
+   ],
+   "size_mm": [
+    1.25,
+    2.0
+   ],
+   "rotate_deg": -180.0,
+   "color": "#fff0a0"
+  },
+  {
+   "ref": "LED10",
+   "kind": "led",
+   "value": "0805 yellow LED (Q1 of U3, bit 9)",
+   "at_mm": [
+    14.92,
+    52.7
+   ],
+   "size_mm": [
+    1.6,
+    1.6
+   ],
+   "rotate_deg": -202.5,
+   "color": "#fff0a0"
+  },
+  {
+   "ref": "LED11",
+   "kind": "led",
+   "value": "0805 yellow LED (Q2 of U3, bit 10)",
+   "at_mm": [
+    18.28,
+    50.46
+   ],
+   "size_mm": [
+    1.6,
+    1.6
+   ],
+   "rotate_deg": -225.0,
+   "color": "#fff0a0"
+  },
+  {
+   "ref": "LED12",
+   "kind": "led",
+   "value": "0805 yellow LED (Q3 of U3, bit 11)",
+   "at_mm": [
+    20.53,
+    47.1
+   ],
+   "size_mm": [
+    1.6,
+    1.6
+   ],
+   "rotate_deg": -247.5,
+   "color": "#fff0a0"
+  },
+  {
+   "ref": "LED13",
+   "kind": "led",
+   "value": "0805 yellow LED (Q4 of U3, bit 12)",
+   "at_mm": [
+    21.31,
+    43.13
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ],
+   "rotate_deg": -270.0,
+   "color": "#fff0a0"
+  },
+  {
+   "ref": "LED14",
+   "kind": "led",
+   "value": "0805 yellow LED (Q5 of U3, bit 13)",
+   "at_mm": [
+    20.53,
+    39.17
+   ],
+   "size_mm": [
+    1.6,
+    1.6
+   ],
+   "rotate_deg": -292.5,
+   "color": "#fff0a0"
+  },
+  {
+   "ref": "LED15",
+   "kind": "led",
+   "value": "0805 yellow LED (Q6 of U3, bit 14)",
+   "at_mm": [
+    18.28,
+    35.81
+   ],
+   "size_mm": [
+    1.6,
+    1.6
+   ],
+   "rotate_deg": -315.0,
+   "color": "#fff0a0"
+  },
+  {
+   "ref": "LED16",
+   "kind": "led",
+   "value": "0805 yellow LED (Q7 of U3, bit 15)",
+   "at_mm": [
+    14.92,
+    33.56
+   ],
+   "size_mm": [
+    1.6,
+    1.6
+   ],
+   "rotate_deg": -337.5,
+   "color": "#fff0a0"
+  },
+  {
+   "ref": "U2",
+   "kind": "ic",
+   "value": "74HC595 SOIC-16 (LED1-8)",
+   "at_mm": [
+    6.03,
+    15.45
+   ],
+   "size_mm": [
+    3.9,
+    9.9
+   ]
+  },
+  {
+   "ref": "U3",
+   "kind": "ic",
+   "value": "74HC595 SOIC-16 (LED9-16)",
+   "at_mm": [
+    15.93,
+    15.45
+   ],
+   "size_mm": [
+    3.9,
+    9.9
+   ]
+  },
+  {
+   "ref": "U4",
+   "kind": "ic",
+   "value": "74LVC1T45 SOT-23-6 (ENC_B -> AN)",
+   "at_mm": [
+    7.56,
+    7.16
+   ],
+   "size_mm": [
+    1.6,
+    2.9
+   ]
+  },
+  {
+   "ref": "U5",
+   "kind": "ic",
+   "value": "74LVC1T45 SOT-23-6 (ENC_A -> PWM)",
+   "at_mm": [
+    14.36,
+    7.16
+   ],
+   "size_mm": [
+    1.6,
+    2.9
+   ]
+  },
+  {
+   "ref": "R1",
+   "kind": "resistor",
+   "value": "220R 0603",
+   "at_mm": [
+    9.98,
+    24.4
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R2",
+   "kind": "resistor",
+   "value": "220R 0603",
+   "at_mm": [
+    5.87,
+    28.11
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R3",
+   "kind": "resistor",
+   "value": "220R 0603",
+   "at_mm": [
+    3.83,
+    24.4
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R4",
+   "kind": "resistor",
+   "value": "220R 0603",
+   "at_mm": [
+    -0.23,
+    28.11
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R5",
+   "kind": "resistor",
+   "value": "220R 0603",
+   "at_mm": [
+    -0.23,
+    24.4
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R6",
+   "kind": "resistor",
+   "value": "220R 0603",
+   "at_mm": [
+    1.8,
+    24.4
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R7",
+   "kind": "resistor",
+   "value": "220R 0603",
+   "at_mm": [
+    5.87,
+    24.4
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R8",
+   "kind": "resistor",
+   "value": "220R 0603",
+   "at_mm": [
+    7.99,
+    28.11
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R9",
+   "kind": "resistor",
+   "value": "220R 0603",
+   "at_mm": [
+    11.97,
+    24.4
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R10",
+   "kind": "resistor",
+   "value": "220R 0603",
+   "at_mm": [
+    18.06,
+    28.11
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R11",
+   "kind": "resistor",
+   "value": "220R 0603",
+   "at_mm": [
+    16.02,
+    24.4
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R12",
+   "kind": "resistor",
+   "value": "220R 0603",
+   "at_mm": [
+    20.09,
+    24.4
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R13",
+   "kind": "resistor",
+   "value": "220R 0603",
+   "at_mm": [
+    22.12,
+    28.11
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R14",
+   "kind": "resistor",
+   "value": "220R 0603",
+   "at_mm": [
+    22.12,
+    24.4
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R15",
+   "kind": "resistor",
+   "value": "220R 0603",
+   "at_mm": [
+    20.08,
+    28.11
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R16",
+   "kind": "resistor",
+   "value": "220R 0603",
+   "at_mm": [
+    14.02,
+    24.38
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R17",
+   "kind": "resistor",
+   "value": "2K2 0603",
+   "at_mm": [
+    8.0,
+    3.37
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R18",
+   "kind": "resistor",
+   "value": "4K7 0603",
+   "at_mm": [
+    10.99,
+    4.19
+   ],
+   "size_mm": [
+    1.7,
+    0.9
+   ]
+  },
+  {
+   "ref": "R19",
+   "kind": "resistor",
+   "value": "4K7 0603",
+   "at_mm": [
+    3.52,
+    8.16
+   ],
+   "size_mm": [
+    1.7,
+    0.9
+   ]
+  },
+  {
+   "ref": "R20",
+   "kind": "resistor",
+   "value": "22K 0603",
+   "at_mm": [
+    3.84,
+    28.11
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R21",
+   "kind": "resistor",
+   "value": "22K 0603",
+   "at_mm": [
+    13.99,
+    28.11
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R22",
+   "kind": "zero_ohm",
+   "value": "0R 0603",
+   "at_mm": [
+    7.98,
+    24.4
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R23",
+   "kind": "zero_ohm",
+   "value": "0R 0603",
+   "at_mm": [
+    10.95,
+    28.11
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "R24",
+   "kind": "resistor",
+   "value": "10K 0603",
+   "at_mm": [
+    10.97,
+    6.18
+   ],
+   "size_mm": [
+    1.7,
+    0.9
+   ]
+  },
+  {
+   "ref": "R25",
+   "kind": "resistor",
+   "value": "10K 0603",
+   "at_mm": [
+    17.85,
+    6.41
+   ],
+   "size_mm": [
+    1.7,
+    0.9
+   ]
+  },
+  {
+   "ref": "C1",
+   "kind": "capacitor",
+   "value": "100nF 0603",
+   "at_mm": [
+    10.95,
+    17.52
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "C2",
+   "kind": "capacitor",
+   "value": "100nF 0603",
+   "at_mm": [
+    18.05,
+    24.4
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "C3",
+   "kind": "capacitor",
+   "value": "100nF 0603",
+   "at_mm": [
+    17.85,
+    8.16
+   ],
+   "size_mm": [
+    1.7,
+    0.9
+   ]
+  },
+  {
+   "ref": "C4",
+   "kind": "capacitor",
+   "value": "100nF 0603",
+   "at_mm": [
+    10.94,
+    2.34
+   ],
+   "size_mm": [
+    1.7,
+    0.9
+   ]
+  },
+  {
+   "ref": "C5",
+   "kind": "capacitor",
+   "value": "100nF 0603",
+   "at_mm": [
+    3.52,
+    6.41
+   ],
+   "size_mm": [
+    1.7,
+    0.9
+   ]
+  },
+  {
+   "ref": "C6",
+   "kind": "capacitor",
+   "value": "100nF 0603",
+   "at_mm": [
+    10.97,
+    8.11
+   ],
+   "size_mm": [
+    1.7,
+    0.9
+   ]
+  },
+  {
+   "ref": "C7",
+   "kind": "capacitor",
+   "value": "10nF 0603",
+   "at_mm": [
+    1.81,
+    28.11
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "C8",
+   "kind": "capacitor",
+   "value": "10nF 0603",
+   "at_mm": [
+    16.02,
+    28.11
+   ],
+   "size_mm": [
+    0.9,
+    1.7
+   ]
+  },
+  {
+   "ref": "PWR",
+   "kind": "led",
+   "value": "PWR LED (PLCC-2, Everlight 67-21 package), R17 2K2",
+   "at_mm": [
+    4.12,
+    3.31
+   ],
+   "size_mm": [
+    2.2,
+    3.6
+   ],
+   "color": "#9fe0a8"
+  },
+  {
+   "ref": "J1",
+   "kind": "zero_ohm",
+   "value": "PWR SEL. 0603 zero-ohm jumper, fitted 3.3V (pads 1-2)",
+   "at_mm": [
+    15.74,
+    3.31
+   ],
+   "size_mm": [
+    1.7,
+    0.9
+   ]
+  }
+ ]
+}
