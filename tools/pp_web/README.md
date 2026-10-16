@@ -321,6 +321,14 @@ BOARD=pic32cm_mc00_cpro APP=rotary` (EXT1; counts detents as MikroElektronika's 
 lights the LED of the position, the whole ring while pushed). The Rotary O Click's files are
 not downloadable, so it is not in the catalog.
 
+The RN4871 Click (`clicks/rn4871/`) puts a phone in the Click's panel, with three catalog
+kinds any Click can use: `toggles` (a checkbox on a boolean property, polled: here
+`connected`), `inputs` (a line sent to a string property, with an optional `suffix`: here
+`central-tx`, what the phone sends) and `monitors` (a polled string: `central-rx`, what the
+module sent the phone). Demo: `make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=rn4871`
+(EXT1; MikroElektronika's start-up sequence with every reply printed, then it echoes each line
+the phone sends; LED0 while connected).
+
 Colour variants: 8x8 R, Y and B and Button R and Y share their device with 8x8 G and Button G
 and have their own art and LED colours. The 8x8 B Click's page links the 8x8 R Click's 2D files,
 so its art is the 8x8 R DXF with the silkscreen letter replaced (`silk_label`).

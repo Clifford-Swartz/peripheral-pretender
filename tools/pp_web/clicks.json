@@ -1774,5 +1774,63 @@
         "color": "#5dff7a"
       }
     ]
+  },
+  "rn4871": {
+    "name": "RN4871 Click",
+    "vendor": "MikroElektronika",
+    "chip": "Microchip RN4871",
+    "bus": "UART 115200",
+    "description": "Bluetooth LE 4.2 module with ASCII commands ($$$, AOK, %status%); the panel below is a phone connected to it",
+    "controls": [],
+    "toggles": [
+      {
+        "id": "connected",
+        "label": "Phone connected",
+        "property": "connected"
+      }
+    ],
+    "inputs": [
+      {
+        "id": "send",
+        "label": "Phone sends (Enter)",
+        "property": "central-tx",
+        "suffix": "\r\n"
+      }
+    ],
+    "monitors": [
+      {
+        "id": "rx",
+        "label": "Module sent to the phone",
+        "property": "central-rx"
+      }
+    ],
+    "signals": [],
+    "image": "rn4871/top.png",
+    "origin_mm": [
+      -1.27,
+      39.116
+    ],
+    "size_mm": [
+      25.4,
+      42.926
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          11.43,
+          3.56
+        ],
+        "color": "#5dff7a"
+      },
+      {
+        "id": "STAT",
+        "at_mm": [
+          11.43,
+          16.76
+        ],
+        "color": "#ff5a4a"
+      }
+    ]
   }
 }

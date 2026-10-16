@@ -1256,3 +1256,53 @@ def test_session_rotary(qemu_path, qemu_machines):
     assert at3 == 1 << 3 and at_m2 == 1 << 14, (hex(at3), hex(at_m2))
     assert pushed == 0xFFFF
     assert "pressed" in lines and "released" in lines, uart
+
+
+RN4871_DEMO = BUILD / "rn4871.elf"
+
+
+@pytest.mark.qemu
+def test_session_rn4871(qemu_path, qemu_machines):
+    """rn4871.elf with an RN4871 Click on EXT1 (a UART Click on SERCOM3):
+    MikroElektronika's start-up sequence ("$", a pause, "$$$" each time)
+    reaches command mode, SF,1 and SS,C0 hold across R,1; the phone in the
+    Click's panel (toggle, text input, monitor) connects, sends a line and
+    reads the firmware's echo."""
+    from tools.pp_web import server
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not RN4871_DEMO.is_file():
+        pytest.skip("rn4871.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=rn4871)")
+
+    async def scenario():
+        app = server.App("ev15n46a", RN4871_DEMO)
+        await app.plug("ext1", "rn4871")
+        try:
+            for _ in range(60):
+                await asyncio.sleep(0.1)
+                if "waiting for a phone" in app.uart_log:
+                    break
+            await app.control("ext1", "connected", 1)
+            await asyncio.sleep(0.3)
+            await app.click_text("ext1", "send", "hello twin\r\n")
+            await asyncio.sleep(0.3)
+            rx = await app.session.qmp.execute(
+                "qom-get", path="/machine/ext1-click", property="central-rx")
+            await app.control("ext1", "connected", 0)
+            await asyncio.sleep(0.3)
+        finally:
+            await app.session.stop()
+        return app.uart_log, rx
+
+    uart, rx = asyncio.run(scenario())
+    lines = uart.splitlines()
+    assert lines.count("module: %REBOOT%") == 3, uart       # reset, SF, R,1
+    assert "module: RN4871 V1.40 7/9/2019 (c)Microchip Technology Inc" in lines
+    assert "module: Reboot after Factory Reset" in lines, uart
+    assert "module: Name=RN4871-0001" in lines and "module: Services=C0" in lines
+    assert "module: Err" not in lines, uart
+    assert "status: CONNECT,0,D88039FA0001" in lines, uart
+    assert "status: STREAM_OPEN" in lines and "phone: hello twin" in lines
+    assert "echo: hello twin" in rx, rx
+    assert "status: DISCONNECT" in lines, uart

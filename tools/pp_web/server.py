@@ -130,6 +130,10 @@ def watched(click: dict) -> list[tuple[str, ...]]:
     (property, generation property): it is fetched only when the
     generation moves."""
     props = []
+    # Toggles and monitors in the Click's panel (a BLE module's link and
+    # what it sent the phone) follow their properties
+    props += [(x["property"],) for x in click.get("toggles", [])]
+    props += [(x["property"],) for x in click.get("monitors", [])]
     if "display" in click:
         d = click["display"]
         props.append((d["property"], d["gen_property"]) if "gen_property" in d
@@ -516,7 +520,8 @@ class App:
         c = self.clicks.get(slot)
         ctl = c and next((x for x in CLICKS[c["id"]]["controls"]
                           if x["id"] == cid), None)
-        btn = c and next((x for x in CLICKS[c["id"]].get("buttons", [])
+        btn = c and next((x for x in CLICKS[c["id"]].get("buttons", []) +
+                          CLICKS[c["id"]].get("toggles", [])
                           if x["id"] == cid), None)
         if btn and self.session and self.session.qmp:
             try:                        # a button on the Click: held or not
@@ -535,6 +540,18 @@ class App:
                                              round(value * ctl["scale"]))
             except (RuntimeError, ConnectionError):
                 pass                    # restarting; run() applies it
+
+    async def click_text(self, slot: str, iid: str, text: str) -> None:
+        """A text input of the Click's panel ("inputs": what a phone sends
+        the BLE module): the string to its property."""
+        c = self.clicks.get(slot)
+        inp = c and next((x for x in CLICKS[c["id"]].get("inputs", [])
+                          if x["id"] == iid), None)
+        if inp and self.session and self.session.qmp:
+            try:
+                await self.session.set_click(slot, inp["property"], text)
+            except (RuntimeError, ConnectionError):
+                pass
 
     async def part_stick(self, pid: str, sid: str, x: float,
                          y: float) -> None:
@@ -736,6 +753,11 @@ class App:
             if req.get("type") == "control":
                 await self.control(str(req.get("slot")), str(req.get("id")),
                                    req.get("value", 0))
+                continue
+            if req.get("type") == "click-text":
+                await self.click_text(str(req.get("slot")),
+                                      str(req.get("id")),
+                                      str(req.get("text", ""))[:200])
                 continue
             if not self.session:
                 continue

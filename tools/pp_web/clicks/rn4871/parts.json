@@ -1,0 +1,147 @@
+{
+ "source": "MikroElektronika RN4871 Click: 2D and 3D files (RN4871_Click_2d_3d_files.zip, 'RN4871 Click_v101.dxf'), schematic rn4871-click-schematic-v100.pdf (page titled 'schematic v101'). Unlabelled R4 and U2 identified by elimination; SOT-23 position read from the render; module body from the RN4871 data sheet (9 x 11.5 mm), antenna end at the top edge. MODE switch drawn as an ic placeholder (no switch kind). U1 drawn as a module: 9 x 11.5 mm, its PCB antenna (3.2 mm) at the board edge.",
+ "parts": [
+  {
+   "ref": "U1",
+   "kind": "module",
+   "value": "RN4871 (BLE 4.2 module, antenna at top)",
+   "at_mm": [
+    11.43,
+    33.39
+   ],
+   "size_mm": [
+    9.0,
+    11.5
+   ],
+   "label": "RN4871",
+   "label_size": 1.4,
+   "antenna_mm": [
+    9.0,
+    3.2
+   ],
+   "antenna_at_mm": [
+    11.43,
+    37.53
+   ],
+   "antenna_color": "#2f6b3a"
+  },
+  {
+   "ref": "R1",
+   "kind": "resistor",
+   "value": "10k",
+   "at_mm": [
+    5.59,
+    16.76
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ]
+  },
+  {
+   "ref": "C1",
+   "kind": "capacitor",
+   "value": "1u",
+   "at_mm": [
+    5.59,
+    14.22
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ]
+  },
+  {
+   "ref": "STAT",
+   "kind": "led",
+   "value": "LD1 red",
+   "color": "#f08a8a",
+   "at_mm": [
+    11.43,
+    16.76
+   ],
+   "size_mm": [
+    1.6,
+    0.8
+   ]
+  },
+  {
+   "ref": "R2",
+   "kind": "resistor",
+   "value": "470",
+   "at_mm": [
+    11.43,
+    14.22
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ]
+  },
+  {
+   "ref": "R4",
+   "kind": "resistor",
+   "value": "100k",
+   "at_mm": [
+    11.43,
+    10.92
+   ],
+   "size_mm": [
+    0.85,
+    1.6
+   ]
+  },
+  {
+   "ref": "U2",
+   "kind": "ic",
+   "value": "MCP112T (SOT-23)",
+   "at_mm": [
+    5.7,
+    10.85
+   ],
+   "size_mm": [
+    1.3,
+    2.9
+   ]
+  },
+  {
+   "ref": "SW1",
+   "kind": "ic",
+   "value": "MODE slide switch, position 1 (application)",
+   "at_mm": [
+    17.27,
+    16.0
+   ],
+   "size_mm": [
+    2.2,
+    5.4
+   ]
+  },
+  {
+   "ref": "PWR",
+   "kind": "led",
+   "value": "LD2 green",
+   "at_mm": [
+    11.43,
+    3.56
+   ],
+   "size_mm": [
+    1.6,
+    0.8
+   ]
+  },
+  {
+   "ref": "R3",
+   "kind": "resistor",
+   "value": "470",
+   "at_mm": [
+    11.43,
+    1.27
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ]
+  }
+ ]
+}

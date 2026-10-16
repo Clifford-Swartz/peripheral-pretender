@@ -1,0 +1,306 @@
+From 8dbcd6185fb6ab4be5f15ac4365cf41f0cc44ae7 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 15 Oct 2026 18:46:35 -0700
+Subject: [PATCH] hw/misc: the RN4871 Click; RNBD451 model follows the user's
+ guide closer
+
+chardev-rn4871 is the RNBD451 model with the RN4871's version string,
+name and services. Both now count "$$$" only for '$' close together
+("$", a pause, "$$$" enters once, as MikroElektronika's driver sends
+it), drop leading '$' of a command, answer SF (factory reset), C, K,1, I,
+B, & and GN, and send %STREAM_OPEN% only with Transparent UART. MIKROBUS
+selects RNBD451 so the AVR build has it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  10 ++
+ hw/misc/Kconfig                       |   1 +
+ hw/misc/mikrobus.c                    |   7 ++
+ hw/misc/rnbd451.c                     | 127 +++++++++++++++++++++++++-
+ include/hw/misc/rnbd451.h             |   1 +
+ 5 files changed, 142 insertions(+), 4 deletions(-)
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index ae546fc..017a462 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -165,6 +165,16 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   drives high while pressed and floats otherwise (no pull on the Click).
+   QOM properties ``position`` (detents, clockwise up) and ``pressed``.
+ 
++``rn4871``
++  RN4871 Click (v101): Microchip's RN4871 Bluetooth LE module on the UART
++  (``chardev-rn4871``, the RNBD451 model's command set with the RN4871's
++  identity), 115200 baud; RST_N on RST (R1 10 kOhm pull-up). "$$$" enters
++  command mode ("CMD> "), with a pause before it as the user's guide
++  asks; V, D, S..., SF, R,1, C, K,1, I, B, & and GN answer as the module
++  does; %REBOOT% after a reset pulse. The phone is QOM properties
++  ``connected``, ``central-tx`` (what it sends) and ``central-rx`` (what it
++  received). CS (RTS) and INT (CTS) are not modelled.
++
+ SPI Clicks on both headers share the SPI bus; each listens only while its
+ own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
+ 
+diff --git a/hw/misc/Kconfig b/hw/misc/Kconfig
+index 1b25bdf..a069ba9 100644
+--- a/hw/misc/Kconfig
++++ b/hw/misc/Kconfig
+@@ -213,6 +213,7 @@ config MIKROBUS
+     bool
+     select I2C
+     select SSI
++    select RNBD451              # the RN4871 Click's module
+ 
+ config MCHP_PFSOC_IOSCB
+     bool
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index 745f738..a17209a 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -23,6 +23,7 @@
+ #include "hw/misc/click_pot.h"
+ #include "hw/misc/mikrobus.h"
+ #include "hw/misc/quectel_l86.h"
++#include "hw/misc/rnbd451.h"
+ #include "hw/adc/mchp_mcp3204.h"
+ #include "hw/display/ssd1351.h"
+ #include "hw/rtc/mchp_mcp7941x.h"
+@@ -153,6 +154,12 @@ static const ClickInfo mikrobus_clicks[] = {
+       .pulls = { { true, MIKROBUS_CS, 1 },                /* R4 10k */
+                  { true, MIKROBUS_RST, 1 } },             /* the module's */
+       .uart_pin = quectel_l86_pin },
++    { "rn4871", "RN4871 Click: Microchip RN4871 Bluetooth LE module on the "
++      "UART (115200 baud, ASCII commands), RST_N on RST",
++      TYPE_CHARDEV_RN4871, CLICK_UART, 0, 0,
++      .ins = { { "reset", MIKROBUS_RST } },
++      .pulls = { { true, MIKROBUS_RST, 1 } },             /* R1 10k */
++      .uart_pin = rnbd451_reset_pin },
+     { "rotaryg", "Rotary G Click: EC12D encoder (A on PWM, B on AN, switch on "
+       "INT), ring of 16 green LEDs on two 74HC595 (LATCH on CS, MR# on RST)",
+       TYPE_CLICK_ROTARY, CLICK_SPI, 0, 2,
+diff --git a/hw/misc/rnbd451.c b/hw/misc/rnbd451.c
+index 3b6ad42..badc298 100644
+--- a/hw/misc/rnbd451.c
++++ b/hw/misc/rnbd451.c
+@@ -22,8 +22,22 @@
+  * %STREAM_OPEN%, false: %DISCONNECT%), "central-rx" (the last data-mode
+  * bytes the module sent to it), "central-rx-gen" (bumped per chunk) and
+  * "central-tx" (set: bytes the central sends, delivered to the MCU while
+- * connected). Not modelled: radio timing, bonding, scanning, connecting
+- * out, GATT services, settings that persist across resets.
++ * connected). Not modelled: radio timing, bonding, scanning, GATT
++ * services, settings that persist across resets.
++ *
++ * Also as in the RN4870/71 user's guide (DS50002466C): "$$$" counts only
++ * '$' that follow each other closely (a pause over 50 ms starts over, so
++ * "$", a pause, "$$$" enters command mode once), leading '$' of a command
++ * line are dropped; SF,1/SF,2 answer "Reboot after Factory Reset", restore
++ * the defaults and reboot; C,<0|1>,<address> answers "Trying" and
++ * connects to that peer 0.3 s later (%CONNECT,<type>,<address>%); K,1
++ * disconnects, I opens the stream, B secures the link, &... and GN answer;
++ * %STREAM_OPEN% comes only with the Transparent UART service (SS 0x40),
++ * and then the module leaves command mode on a connection.
++ *
++ * "chardev-rn4871" is the RN4871 (the RN4871 Click): the same command
++ * set with its own version string, name (RN4871-<last MAC bytes>) and no
++ * services by default; its RST_N is the Click's RST (10 kOhm pull-up).
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -40,6 +54,8 @@
+ #define RNBD_LINE           128
+ #define RNBD_CENTRAL_RX     512
+ #define RNBD_OUT            1024
++#define RNBD_DOLLAR_GAP_NS  (50 * SCALE_MS)
++#define RNBD_CONNECT_NS     (300 * SCALE_MS)
+ 
+ OBJECT_DECLARE_SIMPLE_TYPE(Rnbd451Chardev, CHARDEV_RNBD451)
+ 
+@@ -57,6 +73,13 @@ struct Rnbd451Chardev {
+     uint16_t features;          /* SR */
+     uint8_t services;           /* SS */
+     uint8_t authen;             /* SA */
++    int64_t last_dollar_ns;
++    char peer[16];              /* the connected peer's address */
++    unsigned peer_type;         /* 0 public, 1 random */
++    QEMUTimer *connect_timer;   /* C,..: the link comes up */
++    /* What SF (factory reset) restores; set by each module's init */
++    const char *default_name;
++    uint8_t default_services;
+ 
+     GString *central_rx;
+     uint32_t central_rx_gen;
+@@ -114,13 +137,66 @@ static void rnbd_reboot(Rnbd451Chardev *s)
+     rnbd_say(s, "%REBOOT%");
+ }
+ 
++static void rnbd_link_up(Rnbd451Chardev *s)
++{
++    g_autofree char *msg = NULL;
++
++    s->connected = true;
++    msg = g_strdup_printf("%%CONNECT,%u,%s%%%s", s->peer_type, s->peer,
++                          (s->services & 0x40) ? "%STREAM_OPEN%" : "");
++    if (s->services & 0x40) {
++        s->cmd_mode = false;        /* transparent UART: data mode */
++    }
++    rnbd_say(s, msg);
++}
++
++static void rnbd_connect_timer(void *opaque)
++{
++    rnbd_link_up(opaque);
++}
++
++static void rnbd_factory(Rnbd451Chardev *s)
++{
++    g_free(s->name);
++    s->name = g_strdup(s->default_name);
++    s->services = s->default_services;
++    s->features = 0;
++    s->authen = 2;
++}
++
+ static void rnbd_command(Rnbd451Chardev *s, const char *cmd)
+ {
+     g_autofree char *reply = NULL;
+ 
++    while (*cmd == '$') {
++        cmd++;                      /* an escape sent again */
++    }
+     if (!*cmd) {
+         return;
+     }
++    if (!strcmp(cmd, "SF,1") || !strcmp(cmd, "SF,2")) {
++        rnbd_say(s, "Reboot after Factory Reset\r\n");
++        rnbd_factory(s);
++        rnbd_reboot(s);
++        return;
++    }
++    if (!strncmp(cmd, "C,", 2) && strlen(cmd) >= 16) {
++        s->peer_type = cmd[2] == '1';
++        g_strlcpy(s->peer, cmd + 4, sizeof(s->peer));
++        rnbd_say(s, "Trying\r\n");
++        timer_mod(s->connect_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                  RNBD_CONNECT_NS);
++        return;
++    }
++    if (!strcmp(cmd, "K,1")) {
++        if (!s->connected) {
++            rnbd_say(s, "Err\r\nCMD> ");
++            return;
++        }
++        s->connected = false;
++        rnbd_say(s, "AOK\r\nCMD> %DISCONNECT%");
++        return;
++    }
+     if (!strcmp(cmd, "---")) {
+         s->cmd_mode = false;
+         rnbd_say(s, "END\r\n");
+@@ -155,6 +231,16 @@ static void rnbd_command(Rnbd451Chardev *s, const char *cmd)
+     } else if (cmd[0] == 'S' || cmd[0] == 'U' || cmd[0] == 'A' ||
+                cmd[0] == 'Y' || cmd[0] == 'N' || cmd[0] == 'Z') {
+         reply = g_strdup("AOK\r\nCMD> ");
++    } else if (!strcmp(cmd, "I")) {
++        reply = g_strdup(s->connected ? "AOK\r\nCMD> %STREAM_OPEN%"
++                                      : "Err\r\nCMD> ");
++    } else if (!strcmp(cmd, "B")) {
++        reply = g_strdup(s->connected ? "AOK\r\nCMD> %SECURED%%BONDED%"
++                                      : "Err\r\nCMD> ");
++    } else if (cmd[0] == '&') {
++        reply = g_strdup("AOK\r\nCMD> ");
++    } else if (!strcmp(cmd, "GN")) {
++        reply = g_strdup_printf("%s\r\nCMD> ", s->name);
+     } else if (!strcmp(cmd, "GK")) {
+         reply = g_strdup_printf("%s\r\nCMD> ", s->connected ?
+                                 "1,0,D88039FA0001" : "none");
+@@ -178,6 +264,14 @@ static int rnbd_chr_write(Chardev *chr, const uint8_t *buf, int len)
+         char c = buf[i];
+ 
+         if (!s->cmd_mode) {
++            int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++            if (c == '$' && now - s->last_dollar_ns > RNBD_DOLLAR_GAP_NS) {
++                s->dollars = 0;     /* a pause: a new escape */
++            }
++            if (c == '$') {
++                s->last_dollar_ns = now;
++            }
+             s->dollars = c == '$' ? s->dollars + 1 : 0;
+             if (s->dollars == 3) {
+                 s->dollars = 0;
+@@ -238,10 +332,12 @@ static void rnbd_set_connected(Object *obj, bool value, Error **errp)
+     if (value == s->connected) {
+         return;
+     }
+-    s->connected = value;
+     if (value) {
+-        rnbd_say(s, "%CONNECT,0,D88039FA0001%%STREAM_OPEN%");
++        s->peer_type = 0;
++        g_strlcpy(s->peer, "D88039FA0001", sizeof(s->peer));
++        rnbd_link_up(s);
+     } else {
++        s->connected = false;
+         rnbd_say(s, "%DISCONNECT%");
+     }
+ }
+@@ -301,7 +397,11 @@ static void rnbd_init(Object *obj)
+     s->authen = 2;
+     s->name = g_strdup("RNBD451_0001");
+     s->central_rx = g_string_new(NULL);
++    s->default_name = "RNBD451_0001";
++    s->default_services = 0xC0;
+     s->tx_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, rnbd_tx_timer, s);
++    s->connect_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, rnbd_connect_timer,
++                                    s);
+     object_property_add_bool(obj, "connected", rnbd_get_connected,
+                              rnbd_set_connected);
+     object_property_add_str(obj, "central-rx", rnbd_get_central_rx, NULL);
+@@ -321,6 +421,20 @@ static void rnbd_finalize(Object *obj)
+     g_free(s->name);
+     g_string_free(s->central_rx, true);
+     timer_free(s->tx_timer);
++    timer_free(s->connect_timer);
++}
++
++/* The RN4871: the same command set, its own identity and defaults */
++static void rn4871_init(Object *obj)
++{
++    Rnbd451Chardev *s = CHARDEV_RNBD451(obj);
++
++    g_free(s->version);
++    s->version = g_strdup("RN4871 V1.40 7/9/2019 (c)Microchip Technology "
++                          "Inc");
++    s->default_name = "RN4871-0001";
++    s->default_services = 0x00;
++    rnbd_factory(s);
+ }
+ 
+ static void rnbd_class_init(ObjectClass *oc, const void *data)
+@@ -341,6 +455,11 @@ static const TypeInfo rnbd_types[] = {
+         .instance_finalize = rnbd_finalize,
+         .class_init = rnbd_class_init,
+     },
++    {
++        .name = TYPE_CHARDEV_RN4871,
++        .parent = TYPE_CHARDEV_RNBD451,
++        .instance_init = rn4871_init,
++    },
+ };
+ 
+ DEFINE_TYPES(rnbd_types)
+diff --git a/include/hw/misc/rnbd451.h b/include/hw/misc/rnbd451.h
+index 8fc2085..2a4d5a3 100644
+--- a/include/hw/misc/rnbd451.h
++++ b/include/hw/misc/rnbd451.h
+@@ -16,6 +16,7 @@
+ #define HW_MISC_RNBD451_H
+ 
+ #define TYPE_CHARDEV_RNBD451 "chardev-rnbd451"
++#define TYPE_CHARDEV_RN4871 "chardev-rn4871"
+ 
+ void rnbd451_reset_pin(void *opaque, int n, int level);
+ 
+-- 
+2.53.0.windows.2
+

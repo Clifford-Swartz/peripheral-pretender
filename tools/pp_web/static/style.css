@@ -293,3 +293,15 @@ h2 small { color: var(--muted); font-weight: normal; }
   border-radius: 6px; font: 12px/1.35 ui-monospace, Consolas, monospace; padding: 6px; resize: vertical; }
 #files .files-row { margin: 4px 0; }
 #file-list { max-height: 7em; overflow: auto; font-size: 11px; color: var(--muted); margin: 0; }
+
+/* A BLE module's phone in the Click's panel */
+.control.toggle { grid-template-columns: 90px auto; justify-content: start; }
+.click-input { display: flex; gap: 6px; margin: 4px 0; }
+.click-input input { flex: 1; min-width: 0; background: #0b0d10; color: var(--text);
+  border: 1px solid #2c333c; border-radius: 6px; padding: 4px 8px; font: inherit; }
+.click-input button { background: #2c333c; color: var(--text); border: 0; border-radius: 6px;
+  padding: 4px 10px; cursor: pointer; }
+.click-monitor small { color: var(--muted); }
+.click-monitor pre { margin: 2px 0 0; padding: 6px 8px; background: #0b0d10; border-radius: 6px;
+  max-height: 90px; overflow: auto; font: 12px/1.4 ui-monospace, Consolas, monospace;
+  white-space: pre-wrap; word-break: break-all; }

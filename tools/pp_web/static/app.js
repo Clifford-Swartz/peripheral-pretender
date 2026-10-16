@@ -441,6 +441,37 @@ function showClicks(state) {
         });
         body.appendChild(r);
       }
+      // A BLE module's phone: link toggles, a line to send, what it sent
+      for (const tg of def.toggles || []) {
+        const r = document.createElement("label");
+        r.className = "control toggle";
+        r.innerHTML = `<span>${tg.label}</span><input type="checkbox">`;
+        const box = r.querySelector("input");
+        box.dataset.prop = `${h.slot}.${tg.property}`;
+        box.addEventListener("change", () =>
+          send({ type: "control", slot: h.slot, id: tg.id, value: box.checked ? 1 : 0 }));
+        body.appendChild(r);
+      }
+      for (const inp of def.inputs || []) {
+        const f = document.createElement("form");
+        f.className = "click-input";
+        f.innerHTML = `<input placeholder="${inp.label}" autocomplete="off"><button>Send</button>`;
+        f.addEventListener("submit", (e) => {
+          e.preventDefault();
+          const field = f.querySelector("input");
+          send({ type: "click-text", slot: h.slot, id: inp.id,
+                 text: field.value + (inp.suffix || "") });
+          field.value = "";
+        });
+        body.appendChild(f);
+      }
+      for (const mon of def.monitors || []) {
+        const m = document.createElement("div");
+        m.className = "click-monitor";
+        m.innerHTML = `<small>${mon.label}</small><pre></pre>`;
+        m.querySelector("pre").dataset.prop = `${h.slot}.${mon.property}`;
+        body.appendChild(m);
+      }
       for (const sig of def.signals) {
         const s = document.createElement("div");
         s.className = "signal";
@@ -477,6 +508,16 @@ function updateClickParts() {
     const bytes = String(clickState[el.dataset.prop] || "").split(" ");
     const v = parseInt(bytes[Number(el.dataset.digit)] || "0", 16) || 0;
     el.classList.toggle("on", ((v >>> Number(el.dataset.bit)) & 1) === 1);
+  }
+  for (const box of document.querySelectorAll(".control.toggle input")) {
+    if (box.dataset.prop in clickState) box.checked = clickState[box.dataset.prop] === true;
+  }
+  for (const pre of document.querySelectorAll(".click-monitor pre")) {
+    const v = String(clickState[pre.dataset.prop] ?? "");
+    if (pre.textContent !== v) {
+      pre.textContent = v;
+      pre.scrollTop = pre.scrollHeight;
+    }
   }
   for (const el of document.querySelectorAll(".click-led.bits")) {
     const v = Number(clickState[el.dataset.prop] || 0);
