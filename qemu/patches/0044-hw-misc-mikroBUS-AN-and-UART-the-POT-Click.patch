@@ -1,0 +1,662 @@
+From 6a114da8106e12411a7250dee63c810aed6ebaf8 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 15 Oct 2026 18:08:11 -0700
+Subject: [PATCH] hw/misc: mikroBUS AN and UART; the POT Click
+
+Sockets gain the analog pin AN (a Click's analog output, in millivolts,
+set on the ADC channels behind the pad) and a UART (a UART Click is a
+chardev the board connects to the socket's UART before realizing the
+MCU, linked as /machine/<socket>-click). The MC00 Curiosity Pro wires AN
+to ADC0/ADC1 and both headers' shared SERCOM3; the AVR64EA48 Nano Base
+sockets 1 and 3 share USART2. First user: the POT Click (click-pot), a
+potentiometer on an MCP1501 2.048 V reference buffered onto AN.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  14 ++-
+ docs/system/avr/avr64ea48-cnano.rst   |   4 +-
+ hw/arm/pic32cm_mc00_cpro.c            |  50 +++++++++-
+ hw/avr/avr64ea48_cnano.c              |  26 ++++-
+ hw/misc/click_pot.c                   | 135 ++++++++++++++++++++++++++
+ hw/misc/meson.build                   |   1 +
+ hw/misc/mikrobus.c                    |  99 +++++++++++++++++--
+ include/hw/misc/click_pot.h           |  18 ++++
+ include/hw/misc/mikrobus.h            |  23 +++++
+ tests/qtest/pic32cm-click-test.c      |  21 ++++
+ 10 files changed, 373 insertions(+), 18 deletions(-)
+ create mode 100644 hw/misc/click_pot.c
+ create mode 100644 include/hw/misc/click_pot.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index c8c26d7..1d4c059 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -51,7 +51,13 @@ on SERCOM1 (PA16 MISO, PA18 MOSI, PA19 SCK), and the mikroBUS RST, PWM, INT
+ and CS signals on the header's pins 5, 7, 9 and 15 (EXT1: PA20, PB10, PB02,
+ PA17; EXT2: PA10, PB22, PA28, PA15). A Click's device, if it has one, is
+ ``/machine/ext1-click`` or ``/machine/ext2-click``. The Clicks' pull
+-resistors are modelled (from their schematics, v100).
++resistors are modelled (from their schematics, v100). The analog pin AN is
++the header's pin 3 (EXT1 PB08: ADC0 AIN2 and ADC1 AIN4; EXT2 PA08: ADC0
++AIN8 and ADC1 AIN10): a Click's analog output sets those channels'
++``ain``. The UART (SERCOM3, PA22 TX and PA23 RX) is shared by both
++headers, so one UART Click at a time; it then takes SERCOM3's place in
++``-serial`` (the second one). A UART Click's module is a chardev
++(``/chardevs/ext1-click``), linked as ``/machine/ext1-click``.
+ 
+ ``thermo8``
+   Thermo 8 Click: an MCP9808 temperature sensor (``mchp-mcp9808``) at I2C
+@@ -130,6 +136,12 @@ resistors are modelled (from their schematics, v100).
+   ``eui48``. Trimming, power-fail time-stamps and the faster square waves
+   are not modelled.
+ 
++``pot``
++  POT Click (v101): a potentiometer across an MCP1501 2.048 V reference
++  (jumper OUT SEL on REF), buffered by an op-amp onto AN: 0-2.048 V
++  (``click-pot``). QOM property ``position`` (per mille of the travel,
++  500 at start); ``top-mv`` is 3300 for OUT SEL on 3V3.
++
+ SPI Clicks on both headers share the SPI bus; each listens only while its
+ own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
+ 
+diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
+index eff31bb..c24097a 100644
+--- a/docs/system/avr/avr64ea48-cnano.rst
++++ b/docs/system/avr/avr64ea48-cnano.rst
+@@ -34,7 +34,9 @@ on TWI0 (PA2 SDA, PA3 SCL; host mode, ``avr8x-twi``). Every Click of the
+ shared catalog works here: ``thermo8``, ``accel``, ``buttong``/``r``/``y``,
+ ``7seg``, ``relay``, ``8x8g``/``r``/``y``/``b``, ``buzz``, ``oledc``,
+ ``thumbstick`` and ``rtc6`` (see the PIC32CM MC00 Curiosity Pro for what
+-each one models). The Click is ``/machine/mbN-click``.
++each one models). The Click is ``/machine/mbN-click``. A UART Click on
++socket 1 or 3 takes their shared USART2 (PF4/PF5, the second
++``-serial``). AN is not wired yet, so the ``pot`` Click is refused here.
+ 
+ Firmware comes from ``-kernel`` or ``-bios``::
+ 
+diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
+index 0f683f8..8be098e 100644
+--- a/hw/arm/pic32cm_mc00_cpro.c
++++ b/hw/arm/pic32cm_mc00_cpro.c
+@@ -11,8 +11,12 @@
+  * Machine options ext1=<click> and ext2=<click> plug a MikroElektronika
+  * Click board into EXT1/EXT2 through a mikroBUS Xplained Pro adapter
+  * (DS50002671A): I2C on SERCOM2 (PA12/PA13), SPI on SERCOM1 (PA16 MISO,
+- * PA18 MOSI, PA19 SCK), RST/PWM/INT/CS on the header's pins 5/7/9/15.
+- * The Click's device, if it has one, is /machine/extN-click.
++ * PA18 MOSI, PA19 SCK), RST/PWM/INT/CS on the header's pins 5/7/9/15,
++ * AN on pin 3 (EXT1 PB08: ADC0 AIN2, ADC1 AIN4; EXT2 PA08: ADC0 AIN8, ADC1
++ * AIN10), and the UART on SERCOM3 (PA22 TX, PA23 RX) shared by both
++ * headers: one UART Click at a time, which then takes the place of
++ * serial_hd(1). The Click's device, if it has one, is /machine/extN-click
++ * (a UART Click's chardev, /chardevs/extN-click, linked there).
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -68,6 +72,16 @@ static const int pic32cm_mc00_cpro_ext_pins[CPRO_EXT_NUM][MIKROBUS_ROLES] = {
+       MCHP_PORT_PIN('A', 28), MCHP_PORT_PIN('A', 15) },
+ };
+ 
++/* AN (header pin 3) on ADC0 and ADC1 channels: EXT1 PB08, EXT2 PA08 */
++static const struct {
++    const char *adc;
++    unsigned channel;
++} pic32cm_mc00_cpro_ext_an[CPRO_EXT_NUM][MIKROBUS_AN_ADCS] = {
++    { { "ADC0", 2 }, { "ADC1", 4 } },
++    { { "ADC0", 8 }, { "ADC1", 10 } },
++};
++#define CPRO_EXT_UART       1   /* pic32cm_mc00_cpro_serial[] index */
++
+ /* serial_hd(i) is wired to SERCOM pic32cm_mc00_cpro_serial[i] */
+ static const unsigned pic32cm_mc00_cpro_serial[] = {
+     0,                          /* EDBG virtual COM port (PA06/PA07) */
+@@ -87,6 +101,7 @@ struct Pic32cmMc00CproState {
+     qemu_irq sw0;
+     bool sw0_pressed;
+     char *ext[CPRO_EXT_NUM];
++    Chardev *ext_uart[CPRO_EXT_NUM];    /* a UART Click's module */
+     char *dgi;                  /* chardev id of the EDBG data gateway */
+ };
+ 
+@@ -161,10 +176,17 @@ static void pic32cm_mc00_cpro_add_clicks(Pic32cmMc00CproState *s)
+         sockets[n] = (MikrobusSocket) {
+             .name = n ? "ext2" : "ext1", .port = port,
+             .port_in = MCHP_PORT_IN, .port_pad = MCHP_PORT_PAD,
+-            .i2c = i2c, .spi = spi,
++            .i2c = i2c, .spi = spi, .uart = s->ext_uart[n],
+         };
+         memcpy(sockets[n].pins, pic32cm_mc00_cpro_ext_pins[n],
+                sizeof(sockets[n].pins));
++        for (unsigned a = 0; a < MIKROBUS_AN_ADCS; a++) {
++            sockets[n].an[a] = (MikrobusAnalog) {
++                OBJECT(pic32cm_soc_periph(&s->soc,
++                                          pic32cm_mc00_cpro_ext_an[n][a].adc)),
++                pic32cm_mc00_cpro_ext_an[n][a].channel,
++            };
++        }
+     }
+     mikrobus_plug(OBJECT(s), sockets, s->ext, CPRO_EXT_NUM);
+ }
+@@ -244,9 +266,27 @@ static void pic32cm_mc00_cpro_init(MachineState *machine)
+     soc = DEVICE(&s->soc);
+     qdev_connect_clock_in(soc, "xosc", s->xosc);
+     qdev_connect_clock_in(soc, "xosc32k", s->xosc32k);
++    /* A UART Click takes the headers' shared UART (SERCOM3) */
++    for (unsigned n = 0; n < CPRO_EXT_NUM; n++) {
++        s->ext_uart[n] = mikrobus_uart_chardev(n ? "ext2" : "ext1",
++                                               s->ext[n]);
++    }
++    if (s->ext_uart[0] && s->ext_uart[1]) {
++        error_report("ext1 and ext2 share one UART: plug one UART Click");
++        exit(1);
++    }
+     for (unsigned i = 0; i < ARRAY_SIZE(pic32cm_mc00_cpro_serial); i++) {
+-        pic32cm_soc_connect_serial(&s->soc, pic32cm_mc00_cpro_serial[i],
+-                                   serial_hd(i));
++        Chardev *chr = serial_hd(i);
++
++        if (i == CPRO_EXT_UART && (s->ext_uart[0] || s->ext_uart[1])) {
++            if (chr) {
++                error_report("a UART Click on ext1/ext2 takes SERCOM3, "
++                             "which serial %u also names", i);
++                exit(1);
++            }
++            chr = s->ext_uart[0] ? s->ext_uart[0] : s->ext_uart[1];
++        }
++        pic32cm_soc_connect_serial(&s->soc, pic32cm_mc00_cpro_serial[i], chr);
+     }
+     sysbus_realize(SYS_BUS_DEVICE(soc), &error_fatal);
+ 
+diff --git a/hw/avr/avr64ea48_cnano.c b/hw/avr/avr64ea48_cnano.c
+index b37586c..d45f483 100644
+--- a/hw/avr/avr64ea48_cnano.c
++++ b/hw/avr/avr64ea48_cnano.c
+@@ -19,8 +19,11 @@
+  * guide DS50002839B Figure 3-1 and schematic rev 7, through the Nano's
+  * edge pins, schematic sheet 2): SPI0 on PA4 MOSI, PA5 MISO, PA6 SCK for
+  * all three; RST/PWM/INT/CS on PD6/PD0/PD3/PA7, PF3/PD1/PF2/PE2 and
+- * PE1/PD2/PE0/PE3; I2C on TWI0 (PA2 SDA, PA3 SCL) for all three. The
+- * Click's device, if it has one, is /machine/mbN-click.
++ * PE1/PD2/PE0/PE3; I2C on TWI0 (PA2 SDA, PA3 SCL) for all three; the UART
++ * of sockets 1 and 3 is USART2 (PF4/PF5), so a UART Click on one of them
++ * takes the place of serial_hd(1). Not wired yet: AN, and socket 2's
++ * UART. The Click's device, if it has one, is /machine/mbN-click (a UART
++ * Click's chardev, /chardevs/mbN-click, linked there).
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -67,6 +70,7 @@ struct Avr64ea48CnanoState {
+     qemu_irq sw0;
+     bool sw0_pressed;
+     char *mb[CNANO_MB_NUM];
++    Chardev *mb_uart[CNANO_MB_NUM];     /* a UART Click's module */
+ };
+ 
+ /* A pressed SW0 pulls PB2 low; a released one leaves the pad undriven. */
+@@ -152,7 +156,7 @@ static void avr64ea48_cnano_add_clicks(Avr64ea48CnanoState *s)
+         sockets[n] = (MikrobusSocket) {
+             .name = names[n], .port = DEVICE(&s->soc.port),
+             .port_in = AVR8X_PORT_IN, .port_pad = AVR8X_PORT_PAD,
+-            .i2c = i2c, .spi = spi,
++            .i2c = i2c, .spi = spi, .uart = s->mb_uart[n],
+         };
+         memcpy(sockets[n].pins, avr64ea48_cnano_mb_pins[n],
+                sizeof(sockets[n].pins));
+@@ -171,7 +175,21 @@ static void avr64ea48_cnano_init(MachineState *machine)
+     soc = DEVICE(&s->soc);
+     qdev_prop_set_uint32(soc, "xoschf-hz", CNANO_XOSCHF_HZ);
+     avr8x_soc_connect_serial(&s->soc, 1, serial_hd(0));
+-    avr8x_soc_connect_serial(&s->soc, 2, serial_hd(1));
++    /* A UART Click on socket 1 or 3 takes their shared USART2 */
++    s->mb_uart[0] = mikrobus_uart_chardev("mb1", s->mb[0]);
++    s->mb_uart[2] = mikrobus_uart_chardev("mb3", s->mb[2]);
++    if (s->mb_uart[0] && s->mb_uart[2]) {
++        error_report("mb1 and mb3 share one UART: plug one UART Click");
++        exit(1);
++    }
++    if ((s->mb_uart[0] || s->mb_uart[2]) && serial_hd(1)) {
++        error_report("a UART Click on mb1/mb3 takes USART2, which serial 1 "
++                     "also names");
++        exit(1);
++    }
++    avr8x_soc_connect_serial(&s->soc, 2,
++                             s->mb_uart[0] ? s->mb_uart[0] :
++                             s->mb_uart[2] ? s->mb_uart[2] : serial_hd(1));
+     sysbus_realize(SYS_BUS_DEVICE(soc), &error_fatal);
+ 
+     port = DEVICE(&s->soc.port);
+diff --git a/hw/misc/click_pot.c b/hw/misc/click_pot.c
+new file mode 100644
+index 0000000..6c5833e
+--- /dev/null
++++ b/hw/misc/click_pot.c
+@@ -0,0 +1,135 @@
++/*
++ * A potentiometer on a Click board, driving the mikroBUS AN pin
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * QOM property "position" (per mille of the travel, 0-1000, settable while
++ * running). GPIO output "an": the wiper voltage in millivolts,
++ * "bottom-mv" + position x ("top-mv" - "bottom-mv") / 1000, an analog line
++ * that mikrobus sets on the ADC channels behind the socket's AN pin. The
++ * defaults are the POT Click's (v101: MCP1501T-20 2.048 V reference on
++ * the track, jumper OUT SEL on REF; on 3V3 the top is 3.3 V, top-mv 3300;
++ * an OPA344 and an emitter follower buffer the wiper onto AN, so the ADC
++ * does not load it; turning direction not documented). Not modelled: the
++ * track's taper and tolerance, wiper noise. No physical Click checked it.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "system/reset.h"
++#include "hw/misc/click_pot.h"
++#include "migration/vmstate.h"
++
++OBJECT_DECLARE_SIMPLE_TYPE(ClickPotState, CLICK_POT)
++
++struct ClickPotState {
++    DeviceState parent_obj;
++
++    qemu_irq an;
++    uint32_t position;          /* per mille */
++    uint32_t bottom_mv;
++    uint32_t top_mv;
++};
++
++static void click_pot_update(ClickPotState *s)
++{
++    int64_t span = (int64_t)s->top_mv - s->bottom_mv;
++
++    qemu_set_irq(s->an, s->bottom_mv + span * s->position / 1000);
++}
++
++static void click_pot_get_position(Object *obj, Visitor *v, const char *name,
++                                   void *opaque, Error **errp)
++{
++    visit_type_uint32(v, name, &CLICK_POT(obj)->position, errp);
++}
++
++static void click_pot_set_position(Object *obj, Visitor *v, const char *name,
++                                   void *opaque, Error **errp)
++{
++    ClickPotState *s = CLICK_POT(obj);
++    uint32_t value;
++
++    if (!visit_type_uint32(v, name, &value, errp)) {
++        return;
++    }
++    if (value > 1000) {
++        error_setg(errp, "position is per mille: 0-1000");
++        return;
++    }
++    s->position = value;
++    click_pot_update(s);
++}
++
++/*
++ * On machine reset (a Click is on no bus, so no device reset reaches it):
++ * the wiper's voltage onto AN, connected by then; the knob stays put
++ */
++static void click_pot_reset(void *opaque)
++{
++    click_pot_update(opaque);
++}
++
++static void click_pot_realize(DeviceState *dev, Error **errp)
++{
++    qemu_register_reset(click_pot_reset, dev);
++}
++
++static void click_pot_unrealize(DeviceState *dev)
++{
++    qemu_unregister_reset(click_pot_reset, dev);
++}
++
++static void click_pot_init(Object *obj)
++{
++    ClickPotState *s = CLICK_POT(obj);
++
++    s->position = 500;
++    qdev_init_gpio_out_named(DEVICE(obj), &s->an, CLICK_POT_AN, 1);
++    object_property_add(obj, "position", "uint32", click_pot_get_position,
++                        click_pot_set_position, NULL, NULL);
++}
++
++static const Property click_pot_properties[] = {
++    DEFINE_PROP_UINT32("bottom-mv", ClickPotState, bottom_mv, 0),
++    DEFINE_PROP_UINT32("top-mv", ClickPotState, top_mv, 2048),
++};
++
++static const VMStateDescription vmstate_click_pot = {
++    .name = TYPE_CLICK_POT,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_UINT32(position, ClickPotState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void click_pot_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->desc = "Click board potentiometer on AN";
++    dc->vmsd = &vmstate_click_pot;
++    device_class_set_props(dc, click_pot_properties);
++    dc->realize = click_pot_realize;
++    dc->unrealize = click_pot_unrealize;
++}
++
++static const TypeInfo click_pot_types[] = {
++    {
++        .name = TYPE_CLICK_POT,
++        .parent = TYPE_DEVICE,
++        .instance_size = sizeof(ClickPotState),
++        .instance_init = click_pot_init,
++        .class_init = click_pot_class_init,
++    },
++};
++
++DEFINE_TYPES(click_pot_types)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index c58f623..53c6c5c 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -25,6 +25,7 @@ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files(
+   'mikrobus.c',
+   'click_button.c',
+   'click_buzzer.c',
++  'click_pot.c',
+ ))
+ system_ss.add(when: 'CONFIG_WS2812', if_true: files('ws2812.c'))
+ system_ss.add(when: 'CONFIG_RNBD451', if_true: files('rnbd451.c'))
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index 4c851ad..51da5d5 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -15,10 +15,12 @@
+ #include "qemu/osdep.h"
+ #include "qapi/error.h"
+ #include "qemu/error-report.h"
++#include "chardev/char.h"
+ #include "hw/core/irq.h"
+ #include "hw/core/qdev-properties.h"
+ #include "hw/misc/click_button.h"
+ #include "hw/misc/click_buzzer.h"
++#include "hw/misc/click_pot.h"
+ #include "hw/misc/mikrobus.h"
+ #include "hw/adc/mchp_mcp3204.h"
+ #include "hw/display/ssd1351.h"
+@@ -28,9 +30,15 @@
+ #include "hw/ssi/max7219.h"
+ #include "hw/ssi/ti_74hc595.h"
+ 
+-typedef enum { CLICK_GPIO, CLICK_I2C, CLICK_SPI } ClickBus;
++/* CLICK_UART: the type is a chardev on the socket's TX/RX (see
++   mikrobus_uart_chardev()) */
++typedef enum { CLICK_GPIO, CLICK_I2C, CLICK_SPI, CLICK_UART } ClickBus;
+ 
+-/* A GPIO line between the Click's device and a socket pin */
++/*
++ * A GPIO line between the Click's device and a socket pin (role: a
++ * MIKROBUS_ pin, or MIKROBUS_AN for an analog output in millivolts). On a
++ * UART Click, the ins go to its uart_pin handler with the role as n.
++ */
+ typedef struct ClickLine {
+     const char *gpio;           /* NULL: unused */
+     unsigned role;
+@@ -53,6 +61,7 @@ typedef struct ClickInfo {
+     ClickLine outs[2];          /* device output onto a socket pin */
+     ClickLine ins[4];           /* socket pin into a device input */
+     ClickPull pulls[4];
++    qemu_irq_handler uart_pin;  /* a UART Click's socket pin inputs */
+ } ClickInfo;
+ 
+ static const ClickInfo mikrobus_clicks[] = {
+@@ -132,6 +141,10 @@ static const ClickInfo mikrobus_clicks[] = {
+       TYPE_MCHP_MCP79411, CLICK_I2C, MCHP_MCP7941X_RTCC_ADDR, 0,
+       .outs = { { MCHP_MCP7941X_MFP, MIKROBUS_INT } },
+       .pulls = { { true, MIKROBUS_INT, 1 } } },           /* R2 10k */
++    { "pot", "POT Click: potentiometer across an MCP1501 2.048 V reference "
++      "(OUT SEL on REF), buffered onto AN: 0-2.048 V",
++      TYPE_CLICK_POT, CLICK_GPIO, 0, 0,
++      .outs = { { CLICK_POT_AN, MIKROBUS_AN } } },        /* U2, Q1 buffer */
+ };
+ 
+ const char *mikrobus_click_names(void)
+@@ -160,6 +173,19 @@ static void mikrobus_pull_down(void *opaque, int n, int level)
+     qemu_set_irq(opaque, level < 0 ? 0 : level);
+ }
+ 
++/* AN: the Click's analog output (mV, < 0: released) on the ADC channels */
++static void mikrobus_an(void *opaque, int n, int mv)
++{
++    const MikrobusAnalog *an = opaque;
++
++    for (unsigned i = 0; i < MIKROBUS_AN_ADCS && an[i].adc; i++) {
++        g_autofree char *item = g_strdup_printf("%u=%d", an[i].channel,
++                                                mv < 0 ? -1 : mv);
++
++        object_property_set_str(an[i].adc, "ain", item, &error_abort);
++    }
++}
++
+ static const ClickInfo *mikrobus_find(const char *socket, const char *name)
+ {
+     for (unsigned i = 0; i < ARRAY_SIZE(mikrobus_clicks); i++) {
+@@ -186,14 +212,59 @@ static unsigned mikrobus_pin(const MikrobusSocket *sock, const ClickInfo *c,
+     return sock->pins[role];
+ }
+ 
++static bool mikrobus_none(const char *click)
++{
++    return !click || !*click || !strcmp(click, "none");
++}
++
++Chardev *mikrobus_uart_chardev(const char *socket, const char *click)
++{
++    const ClickInfo *c;
++    g_autofree char *id = NULL;
++
++    if (mikrobus_none(click)) {
++        return NULL;
++    }
++    c = mikrobus_find(socket, click);
++    if (c->bus != CLICK_UART) {
++        return NULL;
++    }
++    id = g_strdup_printf("%s-click", socket);
++    return qemu_chardev_new(id, c->type, NULL, NULL, &error_fatal);
++}
++
+ static void mikrobus_plug_one(Object *machine, const MikrobusSocket *sock,
+                               unsigned index, const ClickInfo *c)
+ {
+     DeviceState *dev = NULL;
++    g_autofree char *child = g_strdup_printf("%s-click", sock->name);
+ 
++    if (c->bus == CLICK_UART) {
++        if (!sock->uart) {
++            error_report("%s: %s needs a UART, which this socket lacks "
++                         "(or another Click on its UART has it)",
++                         sock->name, c->name);
++            exit(1);
++        }
++        /* The module is a chardev: reachable where other Clicks are */
++        object_property_add_const_link(machine, child, OBJECT(sock->uart));
++        for (unsigned i = 0; i < ARRAY_SIZE(c->ins) && c->ins[i].gpio; i++) {
++            qdev_connect_gpio_out_named(sock->port, sock->port_pad,
++                                        mikrobus_pin(sock, c, c->ins[i].role),
++                                        qemu_allocate_irq(c->uart_pin,
++                                                          sock->uart,
++                                                          c->ins[i].role));
++        }
++        for (unsigned i = 0; i < ARRAY_SIZE(c->pulls) && c->pulls[i].used;
++             i++) {
++            qemu_set_irq(qdev_get_gpio_in_named(sock->port, sock->port_in,
++                                                mikrobus_pin(sock, c,
++                                                    c->pulls[i].role)),
++                         c->pulls[i].level);
++        }
++        return;
++    }
+     if (c->type) {
+-        g_autofree char *child = g_strdup_printf("%s-click", sock->name);
+-
+         if ((c->bus == CLICK_I2C && !sock->i2c) ||
+             (c->bus == CLICK_SPI && !sock->spi)) {
+             error_report("%s: %s needs %s, which this socket lacks",
+@@ -234,8 +305,22 @@ static void mikrobus_plug_one(Object *machine, const MikrobusSocket *sock,
+     }
+     for (unsigned i = 0; i < ARRAY_SIZE(c->outs) && c->outs[i].gpio; i++) {
+         unsigned role = c->outs[i].role;
+-        qemu_irq pad = qdev_get_gpio_in_named(sock->port, sock->port_in,
+-                                              mikrobus_pin(sock, c, role));
++        qemu_irq pad;
++
++        if (role == MIKROBUS_AN) {
++            if (!sock->an[0].adc) {
++                error_report("%s: %s needs AN, which this board does not "
++                             "wire to an ADC", sock->name, c->name);
++                exit(1);
++            }
++            qdev_connect_gpio_out_named(dev, c->outs[i].gpio, 0,
++                                        qemu_allocate_irq(mikrobus_an,
++                                            g_memdup2(sock->an,
++                                                      sizeof(sock->an)), 0));
++            continue;
++        }
++        pad = qdev_get_gpio_in_named(sock->port, sock->port_in,
++                                     mikrobus_pin(sock, c, role));
+ 
+         for (unsigned j = 0; j < ARRAY_SIZE(c->pulls); j++) {
+             if (c->pulls[j].used && c->pulls[j].role == role) {
+@@ -262,7 +347,7 @@ void mikrobus_plug(Object *machine, const MikrobusSocket *sockets,
+     for (unsigned i = 0; i < n; i++) {
+         const ClickInfo *c;
+ 
+-        if (!clicks[i] || !*clicks[i] || !strcmp(clicks[i], "none")) {
++        if (mikrobus_none(clicks[i])) {
+             continue;
+         }
+         c = mikrobus_find(sockets[i].name, clicks[i]);
+diff --git a/include/hw/misc/click_pot.h b/include/hw/misc/click_pot.h
+new file mode 100644
+index 0000000..bb4cb5b
+--- /dev/null
++++ b/include/hw/misc/click_pot.h
+@@ -0,0 +1,18 @@
++/*
++ * A potentiometer on a Click board, driving the mikroBUS AN pin
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_CLICK_POT_H
++#define HW_MISC_CLICK_POT_H
++
++#define TYPE_CLICK_POT "click-pot"
++
++/* GPIO output: the wiper voltage in millivolts (an analog line) */
++#define CLICK_POT_AN "an"
++
++#endif /* HW_MISC_CLICK_POT_H */
+diff --git a/include/hw/misc/mikrobus.h b/include/hw/misc/mikrobus.h
+index 1abf89a..e67db14 100644
+--- a/include/hw/misc/mikrobus.h
++++ b/include/hw/misc/mikrobus.h
+@@ -24,6 +24,18 @@
+ enum { MIKROBUS_RST, MIKROBUS_PWM, MIKROBUS_INT, MIKROBUS_CS,
+        MIKROBUS_ROLES };
+ 
++/*
++ * The analog pin AN: a Click's analog output is a GPIO line whose level is
++ * millivolts (negative: not driving), set on these ADC channels
++ */
++#define MIKROBUS_AN         MIKROBUS_ROLES
++#define MIKROBUS_AN_ADCS    2
++
++typedef struct MikrobusAnalog {
++    Object *adc;                /* an ADC with an "ain" property; NULL: none */
++    unsigned channel;
++} MikrobusAnalog;
++
+ typedef struct MikrobusSocket {
+     const char *name;           /* machine option, e.g. "ext1" or "mb1" */
+     DeviceState *port;          /* the GPIO controller with the pads */
+@@ -32,11 +44,22 @@ typedef struct MikrobusSocket {
+     int pins[MIKROBUS_ROLES];   /* index into both arrays, -1: not wired */
+     I2CBus *i2c;                /* NULL: none on this socket */
+     SSIBus *spi;
++    MikrobusAnalog an[MIKROBUS_AN_ADCS];    /* AN's channels (pad on both) */
++    Chardev *uart;              /* mikrobus_uart_chardev() for this socket */
+ } MikrobusSocket;
+ 
+ /* Comma-separated names of the catalog, for option descriptions */
+ const char *mikrobus_click_names(void);
+ 
++/*
++ * The chardev of a UART Click (a module on the socket's TX/RX) for the
++ * socket named @socket when @click is one, else NULL. The board creates it
++ * before realizing the MCU, connects it to the UART behind the socket and
++ * puts it in the socket's "uart" for mikrobus_plug(); it is
++ * /chardevs/<socket>-click, linked as /machine/<socket>-click.
++ */
++Chardev *mikrobus_uart_chardev(const char *socket, const char *click);
++
+ /*
+  * Plug the Click @click (a catalog name; NULL, "" or "none": nothing)
+  * into each of @n sockets; exits with an error for unknown Clicks, a bus
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index 523a60d..81610de 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -957,6 +957,26 @@ static void test_8x8_variants(void)
+     }
+ }
+ 
++/*
++ * POT Click: the knob's voltage (0-2.048 V) on the socket's AN pin, which
++ * is ADC0 AIN2 and ADC1 AIN4 on EXT1 (PB08), AIN8/AIN10 on EXT2 (PA08)
++ */
++static void test_pot(void)
++{
++    QTestState *qts = qtest_init("-M pic32cm-mc00-cpro,ext1=pot,ext2=pot ");
++    g_autofree char *mid = qom_str(qts, "/machine/soc/adc0", "ain");
++    g_autofree char *top0 = NULL, *top1 = NULL, *ext2 = NULL;
++
++    g_assert_cmpstr(mid, ==, "2=1024,8=1024");      /* starts at half */
++    qom_set_int(qts, CLICK1, "position", 1000);
++    qom_set_int(qts, "/machine/ext2-click", "position", 100);
++    top0 = qom_str(qts, "/machine/soc/adc0", "ain");
++    top1 = qom_str(qts, "/machine/soc/adc1", "ain");
++    g_assert_cmpstr(top0, ==, "2=2048,8=204");
++    g_assert_cmpstr(top1, ==, "4=2048,10=204");
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+@@ -973,6 +993,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/rtc6-memories", test_rtc6_memories);
+     qtest_add_func("pic32cm-click/button-variants", test_button_variants);
+     qtest_add_func("pic32cm-click/8x8-variants", test_8x8_variants);
++    qtest_add_func("pic32cm-click/pot", test_pot);
+     qtest_add_func("pic32cm-click/thermo8-identity", test_identity);
+     qtest_add_func("pic32cm-click/not-fitted", test_not_fitted);
+     qtest_add_func("pic32cm-click/thermo8-int-pullup", test_int_pullup);
+-- 
+2.53.0.windows.2
+

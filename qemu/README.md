@@ -50,6 +50,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0041 | AVR8X 12-bit differential ADC (AVR64EA48): single/8-bit/series/burst with accumulation and scaling, differential, window, three vectors; AIN0-31 (`ain`), VDD/10, temperature sensor via SIGROW calibration; all references; overlay |
 | 0042 | AVR8X ADC checked on AVR64EA48 silicon (`APP=adc`): an internal reference above VDD acts as VDD; the desk kit's SIGROW TEMPSENSE0/1 in the device descriptor |
 | 0043 | PIC32CM MC00 sigma-delta ADC (SDADC U2260): three differential pairs (`ain`), INTREF/AREFB/DAC/INTVCC, 24-bit result with offset (added), gain and shift correction and saturation, window, free-running; checked on MC00 silicon (`APP=sdadc`); `sdadc_u2260` overlay |
+| 0044 | mikroBUS AN (a Click's analog output in mV onto the ADC channels behind the pad; MC00 EXT1/EXT2) and UART (a UART Click is a chardev on the socket's UART, linked as `/machine/<socket>-click`; MC00 SERCOM3, Nano Base sockets 1/3 USART2); POT Click (`click-pot`, MCP1501 2.048 V, buffered onto AN); qtest |
 
 ## Setting it up
 

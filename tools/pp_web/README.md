@@ -297,6 +297,13 @@ APP=rtc6` (EXT1; starts the stopped clock at 2026-10-14 12:00:00, prints the tim
 and an alarm every five seconds, LED0 with each alarm). The model starts from the chip's
 power-on state like a Click without a battery; the firmware sets the time.
 
+The POT Click (`clicks/pot/`) is the first Click on the analog pin AN: its `Knob` slider sets
+the `click-pot`'s `position`, and the wiper's voltage (0-2.048 V, the MCP1501 reference) goes
+to the ADC channels behind the socket's AN (EXT1 PB08 = ADC0 AIN2). Demo: `make -C
+firmware/hello BOARD=pic32cm_mc00_cpro APP=pot` (EXT1; prints the voltage when it moves, LED0
+above half travel). AN is not wired on the Nano Base yet, so the POT Click plugs into the MC00
+only.
+
 Colour variants: 8x8 R, Y and B and Button R and Y share their device with 8x8 G and Button G
 and have their own art and LED colours. The 8x8 B Click's page links the 8x8 R Click's 2D files,
 so its art is the 8x8 R DXF with the silkscreen letter replaced (`silk_label`).

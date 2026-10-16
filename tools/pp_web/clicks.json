@@ -853,5 +853,45 @@
         ]
       }
     ]
+  },
+  "pot": {
+    "name": "POT Click",
+    "vendor": "MikroElektronika",
+    "chip": "MCP1501 + potentiometer",
+    "bus": "AN (analog)",
+    "description": "Potentiometer across an MCP1501 2.048 V reference (OUT SEL on REF), buffered onto AN: 0-2.048 V",
+    "controls": [
+      {
+        "id": "position",
+        "label": "Knob",
+        "property": "position",
+        "unit": "%",
+        "min": 0,
+        "max": 100,
+        "step": 1,
+        "scale": 10,
+        "default": 50
+      }
+    ],
+    "image": "pot/top.png",
+    "origin_mm": [
+      -1.27,
+      39.116
+    ],
+    "size_mm": [
+      25.4,
+      42.926
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          8.75,
+          0.76
+        ],
+        "color": "#5dff7a"
+      }
+    ],
+    "signals": []
   }
 }

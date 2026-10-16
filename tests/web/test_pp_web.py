@@ -1109,3 +1109,45 @@ def test_session_pykit_audio(tmp_path, qemu_path, qemu_machines):
     assert abs(hz - 400) < 8 and lo < -25000 and hi > 25000, (hz, lo, hi)
     hz, lo, hi = pitch(chunks["synth"])
     assert abs(hz - 440) < 8, hz
+
+
+POT_DEMO = BUILD / "pot.elf"
+
+
+@pytest.mark.qemu
+def test_session_pot(qemu_path, qemu_machines):
+    """pot.elf with a POT Click on EXT1, turned through the server's control
+    path (what the page's slider sends): the knob's voltage reaches ADC0
+    AIN2 through the socket's AN pin, 0-2.048 V; LED0 lights above half."""
+    from tools.pp_web import server
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not POT_DEMO.is_file():
+        pytest.skip("pot.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=pot)")
+
+    def readings(uart):
+        return [int(line.split()[1]) for line in uart.splitlines()
+                if line.startswith("pot ") and line.endswith(" mV")]
+
+    async def scenario():
+        app = server.App("ev15n46a", POT_DEMO)
+        await app.plug("ext1", "pot")
+        try:
+            await asyncio.sleep(0.8)
+            mid = readings(app.uart_log)
+            await app.control("ext1", "position", 100)
+            await asyncio.sleep(0.5)
+            led = app.session.pins["a"][24][1]      # driven low: lit
+            top = readings(app.uart_log)
+            await app.control("ext1", "position", 10)
+            await asyncio.sleep(0.5)
+        finally:
+            await app.session.stop()
+        return mid, top, readings(app.uart_log), led
+
+    mid, top, low, led = asyncio.run(scenario())
+    assert mid and abs(mid[0] - 1024) <= 8, mid             # default 50 %
+    assert abs(top[-1] - 2048) <= 8, top
+    assert abs(low[-1] - 205) <= 8, low
+    assert led > 0.9

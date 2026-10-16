@@ -271,6 +271,46 @@ def main(dxf: str, parts_file: str, out: str) -> None:
                        'font-family="Arial, Helvetica, sans-serif" font-weight="bold" '
                        f'font-size="{ph * 0.95:.3f}" text-anchor="middle" '
                        f'dominant-baseline="central">{p["value"]}</text>')
+        elif kind == "potentiometer":   # rotary pot: housing, slotted shaft
+            cyy = Y(cy / k)
+            svg.append(f'<rect x="{x:.3f}" y="{y:.3f}" width="{pw}" height="{ph}" '
+                       'rx="0.5" fill="#2b4f8f" stroke="#16294a" stroke-width="0.15"/>')
+            r = p.get("shaft_mm", min(pw, ph) * 0.55) / 2
+            svg.append(f'<circle cx="{cx:.3f}" cy="{cyy:.3f}" r="{r:.3f}" '
+                       'fill="#d4d7db" stroke="#8a9097" stroke-width="0.2"/>')
+            svg.append(f'<rect x="{cx - r * 0.82:.3f}" y="{cyy - r * 0.12:.3f}" '
+                       f'width="{r * 1.64:.3f}" height="{r * 0.24:.3f}" '
+                       'fill="#6d7279"/>')
+        elif kind == "encoder":         # rotary encoder: metal body, knurled shaft
+            cyy = Y(cy / k)
+            svg.append(f'<rect x="{x:.3f}" y="{y:.3f}" width="{pw}" height="{ph}" '
+                       'rx="0.3" fill="#b9bdc2" stroke="#7d838a" stroke-width="0.15"/>')
+            r = p.get("shaft_mm", min(pw, ph) * 0.5) / 2
+            svg.append(f'<circle cx="{cx:.3f}" cy="{cyy:.3f}" r="{r:.3f}" '
+                       'fill="#2a2c30" stroke="#111" stroke-width="0.2"/>')
+            for i in range(18):         # knurling
+                a = i * 3.14159 / 9
+                svg.append(f'<line x1="{cx + r * 0.62 * math.cos(a):.3f}" '
+                           f'y1="{cyy + r * 0.62 * math.sin(a):.3f}" '
+                           f'x2="{cx + r * 0.95 * math.cos(a):.3f}" '
+                           f'y2="{cyy + r * 0.95 * math.sin(a):.3f}" '
+                           'stroke="#4a4d53" stroke-width="0.12"/>')
+        elif kind == "module":          # shielded RF/GNSS module, its name
+            svg.append(f'<rect x="{x:.3f}" y="{y:.3f}" width="{pw}" height="{ph}" '
+                       'rx="0.25" fill="#c8ccd1" stroke="#878d94" stroke-width="0.12"/>')
+            if p.get("antenna_mm"):     # a patch antenna or antenna end
+                ax, ay = p["antenna_mm"]
+                acx, acy = p.get("antenna_at_mm", [cx, cy])
+                svg.append(f'<rect x="{acx - ax / 2:.3f}" y="{Y(acy / k) - ay / 2:.3f}" '
+                           f'width="{ax}" height="{ay}" rx="0.3" '
+                           f'fill="{p.get("antenna_color", "#d8c9a3")}" '
+                           'stroke="#9a8c66" stroke-width="0.1"/>')
+            if p.get("label"):
+                svg.append(f'<text x="{cx:.3f}" y="{Y(cy / k):.3f}" fill="#4a4f56" '
+                           'font-family="Arial, sans-serif" font-weight="bold" '
+                           f'font-size="{p.get("label_size", 1.3)}" '
+                           'text-anchor="middle" dominant-baseline="central">'
+                           f'{p["label"]}</text>')
         elif kind == "crystal":         # small metal can
             svg.append(f'<rect x="{x:.3f}" y="{y:.3f}" width="{pw}" height="{ph}" '
                        f'rx="{min(pw, ph) / 2:.3f}" fill="#c9ccd0" stroke="#8d9299" '
