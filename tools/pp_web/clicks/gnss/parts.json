@@ -1,0 +1,240 @@
+{
+ "source": "MikroElektronika GNSS Click v100 (MIKROE-1850): 2D and 3D files (GNSS_Click_2d_3d_files.zip, CAD/GNSS_click_v100.dxf; silkscreen GNSS click, PPS, EXT ANT, AADET, VBAT, VCC VBAT, R5 R4 C1 C2, PWR) and schematic v100 (Quectel L86-M33, LD1 PWR green, LD2 PPS red, LD3 AADET yellow, J2 V_BCKP source, CN1 battery pads, CN2 U.FL). Positions from the DXF pads. Estimated: the L86 body (centred on its 12 pads, drawn at the 18.4 mm patch size; the silk box is ~16.3 x 16.5), which tantalum is E1/E2 (unlabelled on the silk), and J2's fitted end (VCC side assumed at the bottom pad, by the silk text order). U1 drawn as a module: 18.4 x 18.4 mm with a 15 x 15 mm ceramic patch on top.",
+ "parts": [
+  {
+   "ref": "U1",
+   "kind": "module",
+   "value": "Quectel L86-M33 GNSS module with its patch antenna",
+   "at_mm": [
+    11.93,
+    25.99
+   ],
+   "size_mm": [
+    18.4,
+    18.4
+   ],
+   "antenna_mm": [
+    15.0,
+    15.0
+   ],
+   "antenna_at_mm": [
+    11.93,
+    25.99
+   ],
+   "antenna_color": "#cdb98c",
+   "label": "L86",
+   "label_size": 2.2
+  },
+  {
+   "ref": "CN2",
+   "kind": "ic",
+   "value": "U.FL (EXT ANT)",
+   "at_mm": [
+    11.43,
+    39.23
+   ],
+   "size_mm": [
+    2.8,
+    2.8
+   ]
+  },
+  {
+   "ref": "LD2",
+   "kind": "led",
+   "value": "red (PPS)",
+   "at_mm": [
+    1.27,
+    39.98
+   ],
+   "size_mm": [
+    3.6,
+    1.8
+   ],
+   "color": "#ff5a4a"
+  },
+  {
+   "ref": "LD3",
+   "kind": "led",
+   "value": "yellow (AADET)",
+   "at_mm": [
+    21.59,
+    39.98
+   ],
+   "size_mm": [
+    3.6,
+    1.8
+   ],
+   "color": "#ffd84a"
+  },
+  {
+   "ref": "R2",
+   "kind": "resistor",
+   "value": "3K3",
+   "at_mm": [
+    0.08,
+    37.1
+   ],
+   "size_mm": [
+    1.4,
+    3.0
+   ]
+  },
+  {
+   "ref": "R3",
+   "kind": "resistor",
+   "value": "3K3",
+   "at_mm": [
+    22.78,
+    37.1
+   ],
+   "size_mm": [
+    1.4,
+    3.0
+   ]
+  },
+  {
+   "ref": "Q2",
+   "kind": "ic",
+   "value": "PDTC114EU (SOT-323)",
+   "at_mm": [
+    2.3,
+    36.74
+   ],
+   "size_mm": [
+    2.0,
+    2.1
+   ]
+  },
+  {
+   "ref": "Q1",
+   "kind": "ic",
+   "value": "PDTC114EU (SOT-323)",
+   "at_mm": [
+    20.58,
+    36.74
+   ],
+   "size_mm": [
+    2.0,
+    2.1
+   ]
+  },
+  {
+   "ref": "J2",
+   "kind": "zero_ohm",
+   "value": "VCC (V_BCKP from 3.3V)",
+   "at_mm": [
+    22.68,
+    29.87
+   ],
+   "size_mm": [
+    1.5,
+    3.4
+   ]
+  },
+  {
+   "ref": "R5",
+   "kind": "zero_ohm",
+   "value": "0R (CS to FORCE_ON)",
+   "at_mm": [
+    4.04,
+    14.0
+   ],
+   "size_mm": [
+    1.4,
+    3.0
+   ]
+  },
+  {
+   "ref": "R4",
+   "kind": "resistor",
+   "value": "10K",
+   "at_mm": [
+    6.02,
+    14.0
+   ],
+   "size_mm": [
+    1.4,
+    3.0
+   ]
+  },
+  {
+   "ref": "C1",
+   "kind": "capacitor",
+   "value": "100nF",
+   "at_mm": [
+    12.37,
+    14.0
+   ],
+   "size_mm": [
+    1.4,
+    3.0
+   ]
+  },
+  {
+   "ref": "C2",
+   "kind": "capacitor",
+   "value": "100nF",
+   "at_mm": [
+    14.45,
+    14.0
+   ],
+   "size_mm": [
+    1.4,
+    3.0
+   ]
+  },
+  {
+   "ref": "E1",
+   "kind": "capacitor",
+   "value": "10uF tantalum",
+   "at_mm": [
+    9.14,
+    12.7
+   ],
+   "size_mm": [
+    3.4,
+    5.0
+   ]
+  },
+  {
+   "ref": "E2",
+   "kind": "capacitor",
+   "value": "4.7uF tantalum",
+   "at_mm": [
+    17.68,
+    12.7
+   ],
+   "size_mm": [
+    3.4,
+    5.0
+   ]
+  },
+  {
+   "ref": "R1",
+   "kind": "resistor",
+   "value": "2K2",
+   "at_mm": [
+    8.0,
+    4.5
+   ],
+   "size_mm": [
+    1.4,
+    3.0
+   ]
+  },
+  {
+   "ref": "LD1",
+   "kind": "led",
+   "value": "green (PWR)",
+   "at_mm": [
+    18.18,
+    4.85
+   ],
+   "size_mm": [
+    1.8,
+    3.6
+   ],
+   "color": "#7be38a"
+  }
+ ]
+}

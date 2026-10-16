@@ -1151,3 +1151,55 @@ def test_session_pot(qemu_path, qemu_machines):
     assert abs(top[-1] - 2048) <= 8, top
     assert abs(low[-1] - 205) <= 8, low
     assert led > 0.9
+
+
+GNSS_DEMO = BUILD / "gnss.elf"
+
+
+def _nmea_ok(sentence: str) -> bool:
+    body, _, cs = sentence[1:].partition("*")
+    x = 0
+    for c in body:
+        x ^= ord(c)
+    return sentence.startswith("$") and cs == f"{x:02X}"
+
+
+@pytest.mark.qemu
+def test_session_gnss(qemu_path, qemu_machines):
+    """gnss.elf with a GNSS Click on EXT1 (a UART Click: the L86 chardev on
+    SERCOM3), through the server's control path: the module boots, takes
+    the firmware's PMTK314, sends checksummed NMEA, follows the position
+    sliders and loses its fix below 4 satellites."""
+    from tools.pp_web import server
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not GNSS_DEMO.is_file():
+        pytest.skip("gnss.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=gnss)")
+
+    async def scenario():
+        app = server.App("ev15n46a", GNSS_DEMO)
+        await app.plug("ext1", "gnss")
+        try:
+            await asyncio.sleep(2.5)
+            await app.control("ext1", "lat", -33.8568)        # Sydney
+            await app.control("ext1", "lon", 151.2153)
+            await app.control("ext1", "alt", 12)
+            await asyncio.sleep(1.5)
+            await app.control("ext1", "sats", 2)
+            await asyncio.sleep(1.5)
+        finally:
+            await app.session.stop()
+        return app.uart_log
+
+    uart = asyncio.run(scenario())
+    lines = uart.splitlines()
+    assert "module: $PMTK010,001*2E" in lines, uart
+    assert "module: $PMTK010,002*2D" in lines, uart
+    assert "ack: $PMTK001,314,3*36" in lines, uart
+    rmc = next(line[5:] for line in lines if line.startswith("rmc: "))
+    assert rmc.startswith("$GNRMC,") and _nmea_ok(rmc), rmc
+    assert ",A,3317.7900,N,11153.8200,W," in rmc, rmc
+    assert "fix lat 3317.7900 N lon 11153.8200 W alt 370.0 m sats 8" in lines
+    assert "fix lat 3351.4080 S lon 15112.9180 E alt 12.0 m sats 8" in lines
+    assert lines[-1] == "waiting for a fix", uart

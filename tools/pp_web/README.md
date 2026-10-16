@@ -304,6 +304,14 @@ firmware/hello BOARD=pic32cm_mc00_cpro APP=pot` (EXT1; prints the voltage when i
 above half travel). AN is not wired on the Nano Base yet, so the POT Click plugs into the MC00
 only.
 
+The GNSS Click (`clicks/gnss/`) is the first UART Click: its L86 module is a chardev on the
+headers' UART (MC00 SERCOM3; Nano Base sockets 1 and 3, USART2), reachable at
+`/machine/ext1-click` like any Click. Sliders set latitude, longitude, altitude and the
+satellites in use (below 4 there is no fix). Demo: `make -C firmware/hello
+BOARD=pic32cm_mc00_cpro APP=gnss` (EXT1; echoes the boot lines, sends PMTK314 and prints the
+acknowledgement, the first RMC sentence, then each GGA's position, as MikroElektronika's
+example parses it). One UART Click at a time: the MC00's EXT1 and EXT2 share their UART.
+
 Colour variants: 8x8 R, Y and B and Button R and Y share their device with 8x8 G and Button G
 and have their own art and LED colours. The 8x8 B Click's page links the 8x8 R Click's 2D files,
 so its art is the 8x8 R DXF with the silkscreen letter replaced (`silk_label`).

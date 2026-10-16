@@ -1,0 +1,712 @@
+From 539d70de79ea3aec0724de2f05ba03d381259495 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 15 Oct 2026 18:20:39 -0700
+Subject: [PATCH] hw/misc: Quectel L86 GNSS module, the GNSS Click
+
+A chardev on the socket's UART, 9600 baud paced at the baud rate: the
+L86's boot lines, NMEA 4.10 sentences in its order and talkers with and
+without a fix, PMTK220/251/314/161/101-104 with their acknowledgements,
+RESET on RST. Position, altitude, satellites (below 4: no fix), speed
+and course are QOM properties; date and time come from the RTC.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  13 +
+ hw/misc/meson.build                   |   1 +
+ hw/misc/mikrobus.c                    |   8 +
+ hw/misc/quectel_l86.c                 | 595 ++++++++++++++++++++++++++
+ include/hw/misc/quectel_l86.h         |  18 +
+ 5 files changed, 635 insertions(+)
+ create mode 100644 hw/misc/quectel_l86.c
+ create mode 100644 include/hw/misc/quectel_l86.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 1d4c059..4a544d6 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -142,6 +142,19 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   (``click-pot``). QOM property ``position`` (per mille of the travel,
+   500 at start); ``top-mv`` is 3300 for OUT SEL on 3V3.
+ 
++``gnss``
++  GNSS Click (v100): a Quectel L86 GNSS module on the UART
++  (``chardev-quectel-l86``), 9600 baud, paced at the baud rate. It sends
++  the boot lines ($PMTK011, $PMTK010,001/002), then NMEA sentences once per
++  fix interval in the module's order and talkers (GNRMC, GPVTG, GPGGA,
++  GNGSA, GPGSV, GLGSV, GNGLL, GPTXT; all GP without a fix, the clock then
++  counting from 1980-01-05 23:59:42), and answers PMTK220, 251, 314, 161
++  and 101-104. RESET on RST (active low), FORCE_ON on CS (R4 10 kOhm
++  pull-up; backup mode not modelled). QOM properties ``lat-udeg``,
++  ``lon-udeg``, ``alt-dm``, ``satellites`` (below 4: no fix), ``fix``,
++  ``speed-ckn``, ``course-cdeg``; the date and time come from the RTC
++  (``-rtc``).
++
+ SPI Clicks on both headers share the SPI bus; each listens only while its
+ own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
+ 
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 53c6c5c..e7b892a 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -26,6 +26,7 @@ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files(
+   'click_button.c',
+   'click_buzzer.c',
+   'click_pot.c',
++  'quectel_l86.c',
+ ))
+ system_ss.add(when: 'CONFIG_WS2812', if_true: files('ws2812.c'))
+ system_ss.add(when: 'CONFIG_RNBD451', if_true: files('rnbd451.c'))
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index 51da5d5..659e53f 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -22,6 +22,7 @@
+ #include "hw/misc/click_buzzer.h"
+ #include "hw/misc/click_pot.h"
+ #include "hw/misc/mikrobus.h"
++#include "hw/misc/quectel_l86.h"
+ #include "hw/adc/mchp_mcp3204.h"
+ #include "hw/display/ssd1351.h"
+ #include "hw/rtc/mchp_mcp7941x.h"
+@@ -145,6 +146,13 @@ static const ClickInfo mikrobus_clicks[] = {
+       "(OUT SEL on REF), buffered onto AN: 0-2.048 V",
+       TYPE_CLICK_POT, CLICK_GPIO, 0, 0,
+       .outs = { { CLICK_POT_AN, MIKROBUS_AN } } },        /* U2, Q1 buffer */
++    { "gnss", "GNSS Click: Quectel L86 GNSS module on the UART (9600 baud, "
++      "NMEA), RESET on RST, FORCE_ON on CS",
++      TYPE_CHARDEV_QUECTEL_L86, CLICK_UART, 0, 0,
++      .ins = { { "reset", MIKROBUS_RST }, { "force-on", MIKROBUS_CS } },
++      .pulls = { { true, MIKROBUS_CS, 1 },                /* R4 10k */
++                 { true, MIKROBUS_RST, 1 } },             /* the module's */
++      .uart_pin = quectel_l86_pin },
+ };
+ 
+ const char *mikrobus_click_names(void)
+diff --git a/hw/misc/quectel_l86.c b/hw/misc/quectel_l86.c
+new file mode 100644
+index 0000000..06fe3cb
+--- /dev/null
++++ b/hw/misc/quectel_l86.c
+@@ -0,0 +1,595 @@
++/*
++ * Quectel L86 GNSS module on a UART (the GNSS Click)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * A chardev on the UART the module sits on (a MediaTek MT3333 inside):
++ * 9600 baud 8N1, paced at the baud rate. After power-up or a RESET pulse
++ * (quectel_l86_pin(), active low) it sends "$PMTK011,MTKGPS*08",
++ * "$PMTK010,001*2E", 0.8 s later "$PMTK011,MTKGPS*08", "$PMTK010,002*2D",
++ * then once per fix interval (1 s; PMTK220) NMEA 4.10 sentences in the
++ * module's order: RMC, VTG, GGA, GSA (GPS), GSA (GLONASS), GPGSV, GLGSV,
++ * GLL, GPTXT ANTSTATUS. Talkers as an L86 sends them: with a fix GNRMC,
++ * GPVTG, GPGGA (GGA keeps GP, which MikroElektronika's driver relies on),
++ * GNGSA, GNGLL; without one every sentence is GP and the clock runs from
++ * 1980-01-05 23:59:42 (the GPS epoch minus 18 s) since power-up, as a
++ * module without its backup supply does. Sentences follow the formats of
++ * real L86 captures (time hhmmss.sss, latitude ddmm.mmmm, longitude
++ * dddmm.mmmm, HDOP with two decimals, altitude with one).
++ *
++ * PMTK commands ($PMTKnnn,...*CS, checksum checked): 220 (fix interval
++ * 100-10000 ms), 314 (output rate per sentence: GLL, RMC, VTG, GGA, GSA,
++ * GSV; -1 restores the defaults), 251 (baud rate), 161 (standby: no output
++ * until the next byte the MCU sends) answer $PMTK001,<cmd>,3; 101-104
++ * (restarts) answer with the boot lines; other commands $PMTK001,<cmd>,1,
++ * a bad checksum $PMTK001,<cmd>,0.
++ *
++ * The receiver's situation is QOM properties: "fix" (bool), "lat-udeg",
++ * "lon-udeg" (micro-degrees, north and east positive), "alt-dm"
++ * (decimetres above mean sea level), "satellites" (GPS satellites in use,
++ * 0-12: below 4 there is no fix, whatever "fix" says), "speed-ckn"
++ * (centi-knots), "course-cdeg" (centi-degrees). The
++ * date and time with a fix are the machine's RTC time (-rtc base=...).
++ * Defaults: a fix at Microchip in Chandler, Arizona. Not modelled: time
++ * to first fix, signal levels as measured, GLONASS satellites in view,
++ * FORCE_ON and backup mode, 1PPS (it only lights an LED on the Click),
++ * settings kept across resets.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "qemu/cutils.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "chardev/char.h"
++#include "hw/misc/mikrobus.h"
++#include "hw/misc/quectel_l86.h"
++#include "system/rtc.h"
++
++#define L86_OUT             4096
++#define L86_LINE            128
++#define L86_BOOT2_NS        (800 * SCALE_MS)
++#define L86_FIRST_FIX_NS    (200 * SCALE_MS)
++
++/* PMTK314 fields the model sends, in their order there */
++enum { NMEA_GLL, NMEA_RMC, NMEA_VTG, NMEA_GGA, NMEA_GSA, NMEA_GSV,
++       NMEA_KINDS };
++
++OBJECT_DECLARE_SIMPLE_TYPE(QuectelL86Chardev, CHARDEV_QUECTEL_L86)
++
++struct QuectelL86Chardev {
++    Chardev parent_obj;
++
++    bool in_reset;
++    bool standby;
++    bool fix;
++    int32_t lat_udeg;
++    int32_t lon_udeg;
++    int32_t alt_dm;
++    uint32_t satellites;
++    uint32_t speed_ckn;
++    uint32_t course_cdeg;
++    uint32_t interval_ms;
++    uint32_t baud;
++    uint8_t rates[NMEA_KINDS];
++    uint32_t fixes;             /* intervals since boot */
++    int64_t boot_ns;            /* virtual time of the boot */
++
++    char line[L86_LINE];
++    unsigned nline;
++    uint8_t out[L86_OUT];       /* module to MCU, paced at the baud rate */
++    unsigned nout;
++    QEMUTimer *tx_timer;
++    QEMUTimer *fix_timer;
++    QEMUTimer *boot_timer;
++};
++
++/* GPS satellites in view: PRN, elevation, azimuth, SNR (from a capture) */
++static const uint8_t l86_sky[12][4] = {
++    { 26, 60, 27, 36 }, { 29, 51, 8, 30 }, { 16, 37, 30, 40 },
++    { 5, 32, 6, 34 }, { 20, 45, 21, 38 }, { 27, 28, 12, 31 },
++    { 18, 22, 25, 29 }, { 13, 15, 33, 27 }, { 15, 40, 16, 35 },
++    { 24, 12, 10, 25 }, { 10, 55, 23, 37 }, { 23, 18, 2, 28 },
++};
++
++static void l86_tx(void *opaque)
++{
++    QuectelL86Chardev *s = opaque;
++    Chardev *chr = CHARDEV(s);
++
++    if (!s->nout || s->in_reset) {
++        return;
++    }
++    if (qemu_chr_be_can_write(chr) > 0) {
++        qemu_chr_be_write(chr, s->out, 1);
++        memmove(s->out, s->out + 1, s->nout - 1);
++        s->nout--;
++    }
++    if (s->nout) {
++        /* 10 bits a character */
++        timer_mod(s->tx_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                  NANOSECONDS_PER_SECOND * 10 / s->baud);
++    }
++}
++
++static void l86_put(QuectelL86Chardev *s, const char *text)
++{
++    size_t len = strlen(text);
++
++    if (s->in_reset || s->standby) {
++        return;
++    }
++    if (len > L86_OUT - s->nout) {
++        qemu_log_mask(LOG_GUEST_ERROR, "quectel-l86: the MCU is not reading "
++                      "its UART: output dropped\n");
++        len = L86_OUT - s->nout;
++    }
++    memcpy(s->out + s->nout, text, len);
++    s->nout += len;
++    if (!timer_pending(s->tx_timer)) {
++        timer_mod(s->tx_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                  NANOSECONDS_PER_SECOND * 10 / s->baud);
++    }
++}
++
++/* "$<body>*CS\r\n": the checksum is the XOR of the body's bytes */
++static void l86_sentence(QuectelL86Chardev *s, const char *body)
++{
++    uint8_t cs = 0;
++    g_autofree char *line = NULL;
++
++    for (const char *p = body; *p; p++) {
++        cs ^= (uint8_t)*p;
++    }
++    line = g_strdup_printf("$%s*%02X\r\n", body, cs);
++    l86_put(s, line);
++}
++
++static void l86_boot_lines(QuectelL86Chardev *s, unsigned stage)
++{
++    l86_sentence(s, "PMTK011,MTKGPS");
++    l86_sentence(s, stage == 1 ? "PMTK010,001" : "PMTK010,002");
++}
++
++static void l86_schedule_fix(QuectelL86Chardev *s, int64_t delay_ns)
++{
++    timer_mod(s->fix_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + delay_ns);
++}
++
++static void l86_boot(QuectelL86Chardev *s)
++{
++    s->nout = 0;
++    s->nline = 0;
++    s->standby = false;
++    s->fixes = 0;
++    s->boot_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    timer_del(s->fix_timer);
++    l86_boot_lines(s, 1);
++    timer_mod(s->boot_timer, s->boot_ns + L86_BOOT2_NS);
++}
++
++static void l86_boot2(void *opaque)
++{
++    QuectelL86Chardev *s = opaque;
++
++    l86_boot_lines(s, 2);
++    l86_schedule_fix(s, L86_FIRST_FIX_NS);
++}
++
++/* "ddmm.mmmm,N" or "dddmm.mmmm,E" */
++static char *l86_coord(int32_t udeg, bool lon)
++{
++    int64_t a = udeg < 0 ? -(int64_t)udeg : udeg;
++    int64_t deg = a / 1000000;
++    int64_t min_e4 = (a % 1000000) * 60 / 100;  /* minutes x 10^4 */
++
++    return g_strdup_printf(lon ? "%03" PRId64 "%02" PRId64 ".%04" PRId64
++                                 ",%c"
++                               : "%02" PRId64 "%02" PRId64 ".%04" PRId64
++                                 ",%c",
++                           deg, min_e4 / 10000, min_e4 % 10000,
++                           lon ? (udeg < 0 ? 'W' : 'E')
++                               : (udeg < 0 ? 'S' : 'N'));
++}
++
++static unsigned l86_isqrt(unsigned v)
++{
++    unsigned r = 0;
++
++    while ((r + 1) * (r + 1) <= v) {
++        r++;
++    }
++    return r;
++}
++
++static bool l86_due(QuectelL86Chardev *s, unsigned kind)
++{
++    return s->rates[kind] && s->fixes % s->rates[kind] == 0;
++}
++
++static void l86_send_fix(QuectelL86Chardev *s)
++{
++    bool fix = s->fix && s->satellites >= 4;
++    unsigned sats = MIN(MAX(s->satellites, 4), 12);
++    /* A plausible DOP for the satellites used */
++    unsigned hdop = 80 + 400 / sats, vdop = 90 + 300 / sats;
++    unsigned pdop = l86_isqrt(hdop * hdop + vdop * vdop);
++    g_autofree char *lat = l86_coord(s->lat_udeg, false);
++    g_autofree char *lon = l86_coord(s->lon_udeg, true);
++    char time[16], date[16], used[64] = "";
++    struct tm tm;
++    int64_t up_ms = (qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - s->boot_ns) /
++                    SCALE_MS;
++    const char *gn = fix ? "GN" : "GP";
++
++    if (fix) {
++        qemu_get_timedate(&tm, 0);
++        snprintf(time, sizeof(time), "%02d%02d%02d.%03d", tm.tm_hour,
++                 tm.tm_min, tm.tm_sec, (int)(up_ms % 1000));
++        snprintf(date, sizeof(date), "%02d%02d%02d", tm.tm_mday,
++                 tm.tm_mon + 1, tm.tm_year % 100);
++    } else {
++        /* 1980-01-05 23:59:42 at power-up, then the receiver's clock */
++        int64_t t = 23 * 3600 + 59 * 60 + 42 + up_ms / 1000;
++
++        snprintf(time, sizeof(time), "%02d%02d%02d.%03d",
++                 (int)(t / 3600 % 24), (int)(t / 60 % 60), (int)(t % 60),
++                 (int)(up_ms % 1000));
++        snprintf(date, sizeof(date), "%02d0180", (int)(5 + t / 86400));
++    }
++    for (unsigned i = 0; i < sats; i++) {
++        g_strlcat(used, i ? "," : "", sizeof(used));
++        snprintf(used + strlen(used), sizeof(used) - strlen(used), "%02u",
++                 l86_sky[i][0]);
++    }
++    for (unsigned i = sats; i < 12; i++) {
++        g_strlcat(used, ",", sizeof(used));
++    }
++
++    if (l86_due(s, NMEA_RMC)) {
++        g_autofree char *b = fix ?
++            g_strdup_printf("GNRMC,%s,A,%s,%s,%u.%02u,%u.%02u,%s,,,A,V", time,
++                            lat, lon, s->speed_ckn / 100, s->speed_ckn % 100,
++                            s->course_cdeg / 100, s->course_cdeg % 100, date) :
++            g_strdup_printf("GPRMC,%s,V,,,,,0.00,0.00,%s,,,N,V", time, date);
++        l86_sentence(s, b);
++    }
++    if (l86_due(s, NMEA_VTG)) {
++        unsigned kmh = s->speed_ckn * 1852 / 1000;     /* centi-km/h */
++        g_autofree char *b = fix ?
++            g_strdup_printf("GPVTG,%u.%02u,T,,M,%u.%02u,N,%u.%02u,K,A",
++                            s->course_cdeg / 100, s->course_cdeg % 100,
++                            s->speed_ckn / 100, s->speed_ckn % 100,
++                            kmh / 100, kmh % 100) :
++            g_strdup("GPVTG,0.00,T,,M,0.00,N,0.00,K,N");
++        l86_sentence(s, b);
++    }
++    if (l86_due(s, NMEA_GGA)) {
++        int32_t a = s->alt_dm;
++        g_autofree char *b = fix ?
++            g_strdup_printf("GPGGA,%s,%s,%s,1,%u,%u.%02u,%s%d.%d,M,0.0,M,,",
++                            time, lat, lon, sats, hdop / 100, hdop % 100,
++                            a < 0 ? "-" : "", abs(a) / 10, abs(a) % 10) :
++            g_strdup_printf("GPGGA,%s,,,,,0,0,,,M,,M,,", time);
++        l86_sentence(s, b);
++    }
++    if (l86_due(s, NMEA_GSA)) {
++        g_autofree char *gps = fix ?
++            g_strdup_printf("GNGSA,A,3,%s,%u.%02u,%u.%02u,%u.%02u,1", used,
++                            pdop / 100, pdop % 100, hdop / 100, hdop % 100,
++                            vdop / 100, vdop % 100) :
++            g_strdup("GPGSA,A,1,,,,,,,,,,,,,,,,1");
++        g_autofree char *glo = fix ?
++            g_strdup_printf("GNGSA,A,3,,,,,,,,,,,,,%u.%02u,%u.%02u,%u.%02u,2",
++                            pdop / 100, pdop % 100, hdop / 100, hdop % 100,
++                            vdop / 100, vdop % 100) :
++            g_strdup("GPGSA,A,1,,,,,,,,,,,,,,,,2");
++        l86_sentence(s, gps);
++        l86_sentence(s, glo);
++    }
++    if (l86_due(s, NMEA_GSV)) {
++        unsigned n = fix ? sats : 0, msgs = MAX((n + 3) / 4, 1);
++
++        for (unsigned m = 0; m < msgs; m++) {
++            g_autoptr(GString) b = g_string_new(NULL);
++
++            g_string_printf(b, "GPGSV,%u,%u,%02u", msgs, m + 1, n);
++            for (unsigned i = m * 4; i < MIN(n, m * 4 + 4); i++) {
++                g_string_append_printf(b, ",%02u,%02u,%03u,%02u", l86_sky[i][0],
++                                       l86_sky[i][1], l86_sky[i][2] * 10,
++                                       l86_sky[i][3]);
++            }
++            g_string_append(b, ",0");
++            l86_sentence(s, b->str);
++        }
++        l86_sentence(s, "GLGSV,1,1,00,1");
++    }
++    if (l86_due(s, NMEA_GLL)) {
++        g_autofree char *b = fix ?
++            g_strdup_printf("%sGLL,%s,%s,%s,A,A", gn, lat, lon, time) :
++            g_strdup_printf("GPGLL,,,,,%s,V,N", time);
++        l86_sentence(s, b);
++    }
++    l86_sentence(s, "GPTXT,01,01,02,ANTSTATUS=OPEN");
++}
++
++static void l86_fix_timer(void *opaque)
++{
++    QuectelL86Chardev *s = opaque;
++
++    if (!s->in_reset && !s->standby) {
++        l86_send_fix(s);
++    }
++    s->fixes++;
++    l86_schedule_fix(s, (int64_t)s->interval_ms * SCALE_MS);
++}
++
++static void l86_ack(QuectelL86Chardev *s, unsigned cmd, unsigned flag)
++{
++    g_autofree char *b = g_strdup_printf("PMTK001,%u,%u", cmd, flag);
++
++    l86_sentence(s, b);
++}
++
++static void l86_default_rates(QuectelL86Chardev *s)
++{
++    memset(s->rates, 1, sizeof(s->rates));
++}
++
++/* "$PMTKnnn,args*CS" (without CR LF) */
++static void l86_command(QuectelL86Chardev *s, const char *line)
++{
++    const char *star = strrchr(line, '*');
++    unsigned cmd = 0;
++    uint8_t cs = 0;
++    const char *args;
++    char *end;
++
++    if (strncmp(line, "$PMTK", 5) || !star) {
++        if (*line) {
++            qemu_log_mask(LOG_GUEST_ERROR, "quectel-l86: not a PMTK "
++                          "command: \"%s\"\n", line);
++        }
++        return;
++    }
++    cmd = strtoul(line + 5, &end, 10);
++    args = *end == ',' ? end + 1 : end;
++    for (const char *p = line + 1; p < star; p++) {
++        cs ^= (uint8_t)*p;
++    }
++    if (strtoul(star + 1, NULL, 16) != cs) {
++        l86_ack(s, cmd, 0);
++        return;
++    }
++    switch (cmd) {
++    case 101: case 102: case 103: case 104:     /* hot .. full cold start */
++        l86_default_rates(s);
++        s->interval_ms = 1000;
++        l86_boot(s);
++        return;
++    case 220: {
++        unsigned ms = strtoul(args, NULL, 10);
++
++        if (ms < 100 || ms > 10000) {
++            l86_ack(s, cmd, 0);
++            return;
++        }
++        s->interval_ms = ms;
++        break;
++    }
++    case 251: {
++        unsigned baud = strtoul(args, NULL, 10);
++
++        s->baud = baud ? baud : 9600;
++        break;
++    }
++    case 314: {
++        g_auto(GStrv) f = g_strsplit(args, ",", -1);
++
++        if (f[0] && !strncmp(f[0], "-1", 2)) {
++            l86_default_rates(s);
++            break;
++        }
++        for (unsigned i = 0; i < NMEA_KINDS && f[i]; i++) {
++            s->rates[i] = MIN(strtoul(f[i], NULL, 10), 5);
++        }
++        break;
++    }
++    case 161:
++        l86_ack(s, cmd, 3);
++        s->standby = true;          /* after the acknowledgement */
++        return;
++    default:
++        qemu_log_mask(LOG_UNIMP, "quectel-l86: PMTK%u not modelled\n", cmd);
++        l86_ack(s, cmd, 1);
++        return;
++    }
++    l86_ack(s, cmd, 3);
++}
++
++/* MCU to module */
++static int l86_chr_write(Chardev *chr, const uint8_t *buf, int len)
++{
++    QuectelL86Chardev *s = CHARDEV_QUECTEL_L86(chr);
++
++    if (s->in_reset) {
++        return len;
++    }
++    if (s->standby && len) {
++        s->standby = false;         /* any byte wakes it */
++    }
++    for (int i = 0; i < len; i++) {
++        char c = buf[i];
++
++        if (c == '$') {
++            s->nline = 0;
++        }
++        if (c == '\n' || c == '\r') {
++            s->line[s->nline] = 0;
++            if (s->nline) {
++                l86_command(s, s->line);
++            }
++            s->nline = 0;
++        } else if (s->nline < L86_LINE - 1) {
++            s->line[s->nline++] = c;
++        }
++    }
++    return len;
++}
++
++static void l86_chr_accept_input(Chardev *chr)
++{
++    QuectelL86Chardev *s = CHARDEV_QUECTEL_L86(chr);
++
++    if (s->nout && !timer_pending(s->tx_timer)) {
++        l86_tx(s);
++    }
++}
++
++void quectel_l86_pin(void *opaque, int n, int level)
++{
++    QuectelL86Chardev *s = opaque;
++    bool low = level == 0;
++
++    if (n != MIKROBUS_RST) {
++        return;                     /* FORCE_ON: backup mode not modelled */
++    }
++    if (low && !s->in_reset) {
++        s->in_reset = true;
++        s->nout = 0;
++        timer_del(s->fix_timer);
++        timer_del(s->boot_timer);
++    } else if (!low && s->in_reset) {
++        s->in_reset = false;
++        l86_boot(s);
++    }
++}
++
++static bool l86_chr_open(Chardev *chr, ChardevBackend *backend, Error **errp)
++{
++    l86_boot(CHARDEV_QUECTEL_L86(chr));         /* powered with the board */
++    return true;
++}
++
++static bool l86_get_fix(Object *obj, Error **errp)
++{
++    return CHARDEV_QUECTEL_L86(obj)->fix;
++}
++
++static void l86_set_fix(Object *obj, bool value, Error **errp)
++{
++    CHARDEV_QUECTEL_L86(obj)->fix = value;
++}
++
++static void l86_get_i32(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, opaque, errp);
++}
++
++static void l86_set_i32(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    int32_t value;
++
++    if (!visit_type_int32(v, name, &value, errp)) {
++        return;
++    }
++    if ((!strcmp(name, "lat-udeg") && abs(value) > 90000000) ||
++        (!strcmp(name, "lon-udeg") && abs(value) > 180000000)) {
++        error_setg(errp, "%s is out of range", name);
++        return;
++    }
++    *(int32_t *)opaque = value;
++}
++
++static void l86_get_u32(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    visit_type_uint32(v, name, opaque, errp);
++}
++
++static void l86_set_u32(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    uint32_t value;
++
++    if (!visit_type_uint32(v, name, &value, errp)) {
++        return;
++    }
++    if (!strcmp(name, "satellites") && value > 12) {
++        error_setg(errp, "satellites must be 0-12");
++        return;
++    }
++    if (!strcmp(name, "course-cdeg") && value >= 36000) {
++        error_setg(errp, "course-cdeg must be below 36000");
++        return;
++    }
++    *(uint32_t *)opaque = value;
++}
++
++static void l86_init(Object *obj)
++{
++    QuectelL86Chardev *s = CHARDEV_QUECTEL_L86(obj);
++
++    /* Microchip Technology, Chandler, Arizona */
++    s->fix = true;
++    s->lat_udeg = 33296500;
++    s->lon_udeg = -111897000;
++    s->alt_dm = 3700;
++    s->satellites = 8;
++    s->interval_ms = 1000;
++    s->baud = 9600;
++    l86_default_rates(s);
++    s->tx_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, l86_tx, s);
++    s->fix_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, l86_fix_timer, s);
++    s->boot_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, l86_boot2, s);
++    object_property_add_bool(obj, "fix", l86_get_fix, l86_set_fix);
++    object_property_add(obj, "lat-udeg", "int32", l86_get_i32, l86_set_i32,
++                        NULL, &s->lat_udeg);
++    object_property_add(obj, "lon-udeg", "int32", l86_get_i32, l86_set_i32,
++                        NULL, &s->lon_udeg);
++    object_property_add(obj, "alt-dm", "int32", l86_get_i32, l86_set_i32,
++                        NULL, &s->alt_dm);
++    object_property_add(obj, "satellites", "uint32", l86_get_u32,
++                        l86_set_u32, NULL, &s->satellites);
++    object_property_add(obj, "speed-ckn", "uint32", l86_get_u32,
++                        l86_set_u32, NULL, &s->speed_ckn);
++    object_property_add(obj, "course-cdeg", "uint32", l86_get_u32,
++                        l86_set_u32, NULL, &s->course_cdeg);
++}
++
++static void l86_finalize(Object *obj)
++{
++    QuectelL86Chardev *s = CHARDEV_QUECTEL_L86(obj);
++
++    timer_free(s->tx_timer);
++    timer_free(s->fix_timer);
++    timer_free(s->boot_timer);
++}
++
++static void l86_class_init(ObjectClass *oc, const void *data)
++{
++    ChardevClass *cc = CHARDEV_CLASS(oc);
++
++    cc->chr_open = l86_chr_open;
++    cc->chr_write = l86_chr_write;
++    cc->chr_accept_input = l86_chr_accept_input;
++}
++
++static const TypeInfo l86_types[] = {
++    {
++        .name = TYPE_CHARDEV_QUECTEL_L86,
++        .parent = TYPE_CHARDEV,
++        .instance_size = sizeof(QuectelL86Chardev),
++        .instance_init = l86_init,
++        .instance_finalize = l86_finalize,
++        .class_init = l86_class_init,
++    },
++};
++
++DEFINE_TYPES(l86_types)
+diff --git a/include/hw/misc/quectel_l86.h b/include/hw/misc/quectel_l86.h
+new file mode 100644
+index 0000000..59bd2ba
+--- /dev/null
++++ b/include/hw/misc/quectel_l86.h
+@@ -0,0 +1,18 @@
++/*
++ * Quectel L86 GNSS module on a UART (the GNSS Click)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_QUECTEL_L86_H
++#define HW_MISC_QUECTEL_L86_H
++
++#define TYPE_CHARDEV_QUECTEL_L86 "chardev-quectel-l86"
++
++/* Socket pin inputs: n = the mikroBUS role (RST: RESET, active low) */
++void quectel_l86_pin(void *opaque, int n, int level);
++
++#endif /* HW_MISC_QUECTEL_L86_H */
+-- 
+2.53.0.windows.2
+

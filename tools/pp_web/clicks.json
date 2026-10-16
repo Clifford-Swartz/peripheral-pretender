@@ -893,5 +893,86 @@
       }
     ],
     "signals": []
+  },
+  "gnss": {
+    "name": "GNSS Click",
+    "vendor": "MikroElektronika",
+    "chip": "Quectel L86",
+    "bus": "UART 9600",
+    "description": "GPS/GLONASS receiver with a patch antenna: NMEA sentences once a second on the UART, PMTK commands; RESET on RST",
+    "controls": [
+      {
+        "id": "lat",
+        "label": "Latitude",
+        "property": "lat-udeg",
+        "unit": "°",
+        "min": -90,
+        "max": 90,
+        "step": 0.0001,
+        "scale": 1000000,
+        "default": 33.2965
+      },
+      {
+        "id": "lon",
+        "label": "Longitude",
+        "property": "lon-udeg",
+        "unit": "°",
+        "min": -180,
+        "max": 180,
+        "step": 0.0001,
+        "scale": 1000000,
+        "default": -111.897
+      },
+      {
+        "id": "alt",
+        "label": "Altitude",
+        "property": "alt-dm",
+        "unit": "m",
+        "min": -100,
+        "max": 5000,
+        "step": 1,
+        "scale": 10,
+        "default": 370
+      },
+      {
+        "id": "sats",
+        "label": "Satellites (< 4: no fix)",
+        "property": "satellites",
+        "unit": "",
+        "min": 0,
+        "max": 12,
+        "step": 1,
+        "scale": 1,
+        "default": 8
+      }
+    ],
+    "signals": [],
+    "image": "gnss/top.png",
+    "origin_mm": [
+      -1.27,
+      41.4274
+    ],
+    "size_mm": [
+      25.4,
+      42.926
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          18.18,
+          4.85
+        ],
+        "color": "#5dff7a"
+      },
+      {
+        "id": "AADET",
+        "at_mm": [
+          21.59,
+          39.98
+        ],
+        "color": "#ffd84a"
+      }
+    ]
   }
 }
