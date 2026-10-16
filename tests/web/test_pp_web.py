@@ -1435,3 +1435,50 @@ def test_session_oledb(qemu_path, qemu_machines):
     for x, y in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
         assert px[y * w + x], (x, y)
     assert len(lit) == 2 * w + 2 * (h - 2) + 25         # frame and ball
+
+
+ANGLE_ELF = (ROOT / "examples" / "mplab" / "rotary_oled_angle" / "firmware" /
+             "pic32cm_mc00_curiosity_pro.X" / "dist" /
+             "pic32cm_mc00_curiosity_pro" / "production" /
+             "pic32cm_mc00_curiosity_pro.X.production.elf")
+
+
+@pytest.mark.qemu
+def test_mplab_rotary_oled_angle(qemu_path, qemu_machines):
+    """The MPLAB example (Harmony project, XC32 build) with a Rotary G Click
+    on EXT1 and an OLED B Click on EXT2: the EIC counts the encoder while
+    the OLED redraws, the push sets 0, the ring follows."""
+    from tools.pp_web import server
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not ANGLE_ELF.is_file():
+        pytest.skip("the MPLAB example is not built (examples/mplab/"
+                    "rotary_oled_angle/README.md)")
+
+    async def scenario():
+        app = server.App("ev15n46a", ANGLE_ELF)
+        app.clicks["ext2"] = {"id": "oledb", "values": {}}
+        await app.plug("ext1", "rotaryg")
+        seen = []
+        try:
+            await asyncio.sleep(1.0)
+            for pos in (5, 12, -3, 30):
+                await app.control("ext1", "position", pos)
+                await asyncio.sleep(0.8)
+                ring = await app.session.qmp.execute(
+                    "qom-get", path="/machine/ext1-click", property="outputs")
+                seen.append((app.uart_log.splitlines()[-1], ring))
+            await app.control("ext1", "push", 1)
+            await asyncio.sleep(0.3)
+            await app.control("ext1", "push", 0)
+            await app.control("ext1", "position", 28)
+            await asyncio.sleep(0.8)
+            seen.append((app.uart_log.splitlines()[-1], 0))
+        finally:
+            await app.session.stop()
+        return seen
+
+    seen = asyncio.run(scenario())
+    assert [s[0] for s in seen] == ["angle 60", "angle 144", "angle 324",
+                                    "angle 0", "angle 336"], seen
+    assert [s[1] for s in seen[:4]] == [1 << 11, 1 << 14, 1 << 6, 1 << 8]

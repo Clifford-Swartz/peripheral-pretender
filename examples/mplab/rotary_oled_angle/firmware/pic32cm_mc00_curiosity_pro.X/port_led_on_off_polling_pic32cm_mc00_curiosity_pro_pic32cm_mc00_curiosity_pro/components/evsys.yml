@@ -1,0 +1,167 @@
+configVersion: 1.0.0
+componentName: evsys
+coreVersion: 5.8.2
+device: PIC32CM1216MC00048
+library: []
+dependency:
+- dependencyPackage: class com.microchip.mcc.harmony.HarmonyModule
+  name: evsys
+  type: module
+  version: ''
+- dependencyPackage: ''
+  name: CMSIS_5
+  type: package
+  version: 5.9.0
+- dependencyPackage: ''
+  name: csp
+  type: package
+  version: v3.23.0
+customDataClassName: com.microchip.utils_mh3.utils.persistence.CustomModuleData
+data:
+  attachments: {}
+  elementPosition:
+    attributes:
+      id: __ROOTVIEW
+    children:
+    - children:
+      - attributes:
+          id: evsys
+          x: '160'
+          y: '20'
+        type: ElementPosition
+      type: ElementPositions
+    type: ComponentGraph
+  symbols:
+    EVSYS_CHANNEL_0_USER_READY:
+      attributes:
+        id: EVSYS_CHANNEL_0_USER_READY
+      children:
+      - children:
+        - attributes:
+            id: evsys
+            value: 'false'
+          type: Dynamic
+        type: Values
+      type: Boolean
+    EVSYS_CHANNEL_10_USER_READY:
+      attributes:
+        id: EVSYS_CHANNEL_10_USER_READY
+      children:
+      - children:
+        - attributes:
+            id: evsys
+            value: 'false'
+          type: Dynamic
+        type: Values
+      type: Boolean
+    EVSYS_CHANNEL_11_USER_READY:
+      attributes:
+        id: EVSYS_CHANNEL_11_USER_READY
+      children:
+      - children:
+        - attributes:
+            id: evsys
+            value: 'false'
+          type: Dynamic
+        type: Values
+      type: Boolean
+    EVSYS_CHANNEL_1_USER_READY:
+      attributes:
+        id: EVSYS_CHANNEL_1_USER_READY
+      children:
+      - children:
+        - attributes:
+            id: evsys
+            value: 'false'
+          type: Dynamic
+        type: Values
+      type: Boolean
+    EVSYS_CHANNEL_2_USER_READY:
+      attributes:
+        id: EVSYS_CHANNEL_2_USER_READY
+      children:
+      - children:
+        - attributes:
+            id: evsys
+            value: 'false'
+          type: Dynamic
+        type: Values
+      type: Boolean
+    EVSYS_CHANNEL_3_USER_READY:
+      attributes:
+        id: EVSYS_CHANNEL_3_USER_READY
+      children:
+      - children:
+        - attributes:
+            id: evsys
+            value: 'false'
+          type: Dynamic
+        type: Values
+      type: Boolean
+    EVSYS_CHANNEL_4_USER_READY:
+      attributes:
+        id: EVSYS_CHANNEL_4_USER_READY
+      children:
+      - children:
+        - attributes:
+            id: evsys
+            value: 'false'
+          type: Dynamic
+        type: Values
+      type: Boolean
+    EVSYS_CHANNEL_5_USER_READY:
+      attributes:
+        id: EVSYS_CHANNEL_5_USER_READY
+      children:
+      - children:
+        - attributes:
+            id: evsys
+            value: 'false'
+          type: Dynamic
+        type: Values
+      type: Boolean
+    EVSYS_CHANNEL_6_USER_READY:
+      attributes:
+        id: EVSYS_CHANNEL_6_USER_READY
+      children:
+      - children:
+        - attributes:
+            id: evsys
+            value: 'false'
+          type: Dynamic
+        type: Values
+      type: Boolean
+    EVSYS_CHANNEL_7_USER_READY:
+      attributes:
+        id: EVSYS_CHANNEL_7_USER_READY
+      children:
+      - children:
+        - attributes:
+            id: evsys
+            value: 'false'
+          type: Dynamic
+        type: Values
+      type: Boolean
+    EVSYS_CHANNEL_8_USER_READY:
+      attributes:
+        id: EVSYS_CHANNEL_8_USER_READY
+      children:
+      - children:
+        - attributes:
+            id: evsys
+            value: 'false'
+          type: Dynamic
+        type: Values
+      type: Boolean
+    EVSYS_CHANNEL_9_USER_READY:
+      attributes:
+        id: EVSYS_CHANNEL_9_USER_READY
+      children:
+      - children:
+        - attributes:
+            id: evsys
+            value: 'false'
+          type: Dynamic
+        type: Values
+      type: Boolean
+  userData: {}

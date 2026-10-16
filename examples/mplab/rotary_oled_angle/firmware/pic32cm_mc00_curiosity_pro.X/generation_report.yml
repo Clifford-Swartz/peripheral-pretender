@@ -1,0 +1,455 @@
+generatedFiles:
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/peripheral/nvmctrl/plib_nvmctrl.h
+  projectFolder: config/pic32cm_mc00_curiosity_pro/peripheral/nvmctrl
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/peripheral/nvmctrl/plib_nvmctrl.c
+  projectFolder: config/pic32cm_mc00_curiosity_pro/peripheral/nvmctrl
+  type: Source Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/peripheral/evsys/plib_evsys.h
+  projectFolder: config/pic32cm_mc00_curiosity_pro/peripheral/evsys
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/peripheral/evsys/plib_evsys.c
+  projectFolder: config/pic32cm_mc00_curiosity_pro/peripheral/evsys
+  type: Source Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/device_cache.h
+  projectFolder: config/pic32cm_mc00_curiosity_pro
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/toolchain_specifics.h
+  projectFolder: config/pic32cm_mc00_curiosity_pro
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/main.c
+  projectFolder: ''
+  type: Source Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/definitions.h
+  projectFolder: config/pic32cm_mc00_curiosity_pro
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/initialization.c
+  projectFolder: config/pic32cm_mc00_curiosity_pro
+  type: Source Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/interrupts.c
+  projectFolder: config/pic32cm_mc00_curiosity_pro
+  type: Source Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/interrupts.h
+  projectFolder: config/pic32cm_mc00_curiosity_pro
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/device_vectors.h
+  projectFolder: config/pic32cm_mc00_curiosity_pro
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/exceptions.c
+  projectFolder: config/pic32cm_mc00_curiosity_pro
+  type: Source Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/PIC32CM1216MC00048.ld
+  projectFolder: config/pic32cm_mc00_curiosity_pro
+  type: Linker Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/stdio/xc32_monitor.c
+  projectFolder: config/pic32cm_mc00_curiosity_pro/stdio
+  type: Source Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/peripheral/port/plib_port.h
+  projectFolder: config/pic32cm_mc00_curiosity_pro/peripheral/port
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/peripheral/port/plib_port.c
+  projectFolder: config/pic32cm_mc00_curiosity_pro/peripheral/port
+  type: Source Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/pin_configurations.csv
+  projectFolder: ''
+  type: Important Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/peripheral/clock/plib_clock.h
+  projectFolder: config/pic32cm_mc00_curiosity_pro/peripheral/clock
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/peripheral/clock/plib_clock.c
+  projectFolder: config/pic32cm_mc00_curiosity_pro/peripheral/clock
+  type: Source Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/peripheral/nvic/plib_nvic.h
+  projectFolder: config/pic32cm_mc00_curiosity_pro/peripheral/nvic
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/peripheral/nvic/plib_nvic.c
+  projectFolder: config/pic32cm_mc00_curiosity_pro/peripheral/nvic
+  type: Source Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/startup_xc32.c
+  projectFolder: config/pic32cm_mc00_curiosity_pro
+  type: Source Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/libc_syscalls.c
+  projectFolder: config/pic32cm_mc00_curiosity_pro
+  type: Source Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/config/pic32cm_mc00_curiosity_pro/device.h
+  projectFolder: config/pic32cm_mc00_curiosity_pro
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/ac.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/adc.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/ccl.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/dac.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/divas.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/dmac.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/dsu.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/eic.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/evsys.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/freqm.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/fuses.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/gclk.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/hmatrixb.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/mclk.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/mtb.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/nvmctrl.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/osc32kctrl.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/oscctrl.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/pac.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/pdec.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/pm.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/port.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/rstc.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/rtc.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/sdadc.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/sercom.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/supc.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/tc.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/tcc.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/tsens.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/component/wdt.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/component
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/ac.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/adc0.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/adc1.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/ccl.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/dac.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/divas.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/dmac.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/dsu.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/eic.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/evsys.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/freqm.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/fuses.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/gclk.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/hmatrixhs.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/mclk.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/mtb.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/nvmctrl.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/osc32kctrl.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/oscctrl.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/pac.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/pdec.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/pm.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/port.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/rstc.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/rtc.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/sdadc.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/sercom0.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/sercom1.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/sercom2.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/sercom3.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/supc.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/tc0.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/tc1.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/tc2.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/tc3.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/tc4.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/tcc0.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/tcc1.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/tcc2.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/tsens.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/instance/wdt.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/instance
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/pic32cm1216mc00048.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/PIC32CM1216MC00048_DFP/pio/pic32cm1216mc00048.h
+  projectFolder: packs/PIC32CM1216MC00048_DFP/pio
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/CMSIS/CMSIS/Core/Include/cmsis_version.h
+  projectFolder: packs/CMSIS/CMSIS/Core/Include
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/CMSIS/CMSIS/Core/Include/cmsis_compiler.h
+  projectFolder: packs/CMSIS/CMSIS/Core/Include
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/CMSIS/CMSIS/Core/Include/cmsis_iccarm.h
+  projectFolder: packs/CMSIS/CMSIS/Core/Include
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/CMSIS/CMSIS/Core/Include/cmsis_gcc.h
+  projectFolder: packs/CMSIS/CMSIS/Core/Include
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/CMSIS/CMSIS/Core/Include/cmsis_armcc.h
+  projectFolder: packs/CMSIS/CMSIS/Core/Include
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/CMSIS/CMSIS/Core/Include/cmsis_armclang.h
+  projectFolder: packs/CMSIS/CMSIS/Core/Include
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/CMSIS/CMSIS/Core/Include/cmsis_armclang_ltm.h
+  projectFolder: packs/CMSIS/CMSIS/Core/Include
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/CMSIS/CMSIS/Core/Include/core_cm0plus.h
+  projectFolder: packs/CMSIS/CMSIS/Core/Include
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/CMSIS/CMSIS/Core/Include/mpu_armv7.h
+  projectFolder: packs/CMSIS/CMSIS/Core/Include
+  type: Header Files
+- excludeFromProject: false
+  path: /home/svcjenkins/workspace/apps-team/Users/skn/fix-double-type-symbol-issue/csp_apps_pic32cm_mc00/apps/port/port_led_on_off_polling/firmware/src/packs/CMSIS/CMSIS/Core/Include/cachel1_armv7.h
+  projectFolder: packs/CMSIS/CMSIS/Core/Include
+  type: Header Files
+generatedSettings:
+- category: C32-LD
+  key: preprocessor-macros
+  value: ''
+- category: C32-LD
+  key: heap-size
+  value: '512'
+- category: C32
+  key: extra-include-directories
+  value: ../src;../src/config/pic32cm_mc00_curiosity_pro;../src/packs/PIC32CM1216MC00048_DFP;../src/packs/CMSIS/CMSIS/Core/Include;../src/packs/CMSIS/
+- category: C32CPP
+  key: extra-include-directories
+  value: ../src;../src/config/pic32cm_mc00_curiosity_pro;../src/packs/PIC32CM1216MC00048_DFP;../src/packs/CMSIS/CMSIS/Core/Include;../src/packs/CMSIS/
+- category: C32-LD
+  key: no-device-startup-code
+  value: 'true'
+removedFiles: [
+  ]

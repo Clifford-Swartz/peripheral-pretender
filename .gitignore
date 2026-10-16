@@ -8,3 +8,8 @@ generator/out/
 *.log
 .venv/
 .playwright-mcp/
+# MPLAB X build outputs of the example projects
+examples/**/*.X/build/
+examples/**/*.X/dist/
+examples/**/*.X/debug/
+examples/**/*.X/nbproject/private/
