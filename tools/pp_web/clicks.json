@@ -1980,5 +1980,103 @@
         "color": "#5dff7a"
       }
     ]
+  },
+  "color2": {
+    "name": "Color 2 Click",
+    "vendor": "MikroElektronika",
+    "chip": "ISL29125",
+    "bus": "I2C 0x44",
+    "description": "RGB light sensor: green, red, blue counts (375 or 10000 lux full scale, 12 or 16 bits); INT on conversion done or a threshold. Pick the light it sees (WHITE needs about 10000 lux in MikroE's example)",
+    "controls": [
+      {
+        "id": "red",
+        "label": "Red",
+        "property": "red",
+        "unit": "",
+        "min": 0,
+        "max": 255,
+        "step": 1,
+        "scale": 1,
+        "default": 255
+      },
+      {
+        "id": "green",
+        "label": "Green",
+        "property": "green",
+        "unit": "",
+        "min": 0,
+        "max": 255,
+        "step": 1,
+        "scale": 1,
+        "default": 0
+      },
+      {
+        "id": "blue",
+        "label": "Blue",
+        "property": "blue",
+        "unit": "",
+        "min": 0,
+        "max": 255,
+        "step": 1,
+        "scale": 1,
+        "default": 0
+      },
+      {
+        "id": "lux",
+        "label": "Brightness",
+        "property": "lux",
+        "unit": "lux",
+        "min": 0,
+        "max": 10000,
+        "step": 100,
+        "scale": 1,
+        "default": 5000
+      }
+    ],
+    "display": {
+      "type": "swatch",
+      "controls": [
+        "red",
+        "green",
+        "blue"
+      ],
+      "brightness": "lux",
+      "full": 10000,
+      "at_mm": [
+        11.45,
+        20.73
+      ],
+      "size_mm": 3.2
+    },
+    "signals": [
+      {
+        "id": "INT",
+        "pin": "int",
+        "active_low": true,
+        "at_mm": [
+          22.86,
+          15.24
+        ]
+      }
+    ],
+    "image": "color2/top.png",
+    "origin_mm": [
+      -1.27,
+      24.765
+    ],
+    "size_mm": [
+      25.4,
+      28.575
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          11.4,
+          2.57
+        ],
+        "color": "#5dff7a"
+      }
+    ]
   }
 }

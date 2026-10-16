@@ -426,6 +426,8 @@ session scratchpad only; what matters is in each model's header comment.
   (patch 0050, `ssd1306-i2c`): I2C only (v101), SA0 from D/C at each START, the SPI core on a
   private bus inside; blue through the catalog's new `props`; art drawn from its STEP (no DXF;
   silkscreen text estimated).
+- **Color 2** (patch 0051, `isl29125`): G/R/B conversions on the virtual clock, thresholds
+  and the conversion-done interrupt on INT; sliders for the light and a `swatch` display.
 
 The renderer follows DXF arcs and turns parts (`rotate_deg`); new part kinds potentiometer,
 encoder, module. `header_center_mm` places Clicks whose DXF header is off the usual origin

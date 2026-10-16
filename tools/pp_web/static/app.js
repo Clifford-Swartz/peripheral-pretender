@@ -365,6 +365,14 @@ function drawClick(stack, h, id, def) {
     put(cv, [d.at_mm[0] - d.size_mm[0] / 2, d.at_mm[1] + d.size_mm[1] / 2],
         d.size_mm[0], d.size_mm[1]);
   }
+  // A colour sensor: the light it sees, from its controls, over the sensor
+  if (def.display && def.display.type === "swatch") {
+    const d = def.display, el = document.createElement("div");
+    el.className = "click-swatch";
+    el.dataset.slot = h.slot;
+    put(el, [d.at_mm[0] - d.size_mm / 2, d.at_mm[1] + d.size_mm / 2],
+        d.size_mm, d.size_mm);
+  }
   // Sticks: a joystick knob to drag (springs back; hold still to push
   // it), or, in "tilt" mode, which way the Click leans (stays put;
   // double-click levels it)
@@ -486,6 +494,14 @@ function showClicks(state) {
       const v = c.values[ctl.id];
       if (document.activeElement !== range) range.value = v;
       range.parentElement.querySelector("output").textContent = `${(+v).toFixed(2)} ${ctl.unit}`;
+    }
+    const d = def.display, sw = art.querySelector(".click-swatch");
+    if (sw && d) {
+      const [r, g, b] = d.controls.map((id) => Math.round(+c.values[id] || 0));
+      const lit = Math.min(1, (+c.values[d.brightness] || 0) / d.full);
+      sw.style.background = `rgb(${r}, ${g}, ${b})`;
+      sw.style.opacity = 0.25 + 0.75 * lit;
+      sw.style.boxShadow = `0 0 ${(4 + 10 * lit).toFixed(1)}px rgb(${r}, ${g}, ${b})`;
     }
   }
   showSignals(levels);

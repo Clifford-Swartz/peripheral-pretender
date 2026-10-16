@@ -251,6 +251,9 @@ h2 small { color: var(--muted); font-weight: normal; }
 /* A display panel on a Click (OLED C): the controller's picture */
 .click-panel { position: absolute; image-rendering: pixelated; background: #000;
   pointer-events: none; }
+/* The light a colour sensor sees, glowing over it */
+.click-swatch { position: absolute; border-radius: 50%; pointer-events: none;
+  border: 1px solid rgba(255,255,255,.5); }
 
 /* A stick on a Click: joystick knob (Thumbstick) or tilt handle (Accel) */
 .click-stick { position: absolute; border-radius: 50%; cursor: grab; touch-action: none;

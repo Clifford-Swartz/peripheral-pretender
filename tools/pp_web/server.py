@@ -134,7 +134,8 @@ def watched(click: dict) -> list[tuple[str, ...]]:
     # what it sent the phone) follow their properties
     props += [(x["property"],) for x in click.get("toggles", [])]
     props += [(x["property"],) for x in click.get("monitors", [])]
-    if "display" in click:
+    # A swatch shows the Click's own controls: nothing to poll
+    if "display" in click and "property" in click["display"]:
         d = click["display"]
         props.append((d["property"], d["gen_property"]) if "gen_property" in d
                      else (d["property"],))

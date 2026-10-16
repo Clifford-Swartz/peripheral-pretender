@@ -1,0 +1,582 @@
+From 35472b6a498dfc0fe96373864f19328a8ef806c3 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 15 Oct 2026 22:04:22 -0700
+Subject: [PATCH] hw/sensor: ISL29125 RGB light sensor, the Color 2 Click
+
+isl29125 at I2C 0x44: fifteen registers behind an auto-incrementing
+pointer, green/red/blue conversions in the order the mode picks on the
+virtual clock (101 ms each at 16 bits, 1/16 of that at 12), 375 or 10000
+lux full scale, the threshold interrupt with its persistence and the
+conversion-done interrupt on the open-drain INT, both cleared by reading
+STATUS, the brownout flag and the 0x46 reset. The light it sees is a
+colour and a brightness ("red", "green", "blue", "lux"); each channel
+counts the linearised component plus the one-count dark level. qtest.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  10 +
+ hw/misc/mikrobus.c                    |   6 +
+ hw/sensor/isl29125.c                  | 368 ++++++++++++++++++++++++++
+ hw/sensor/meson.build                 |   3 +-
+ include/hw/sensor/isl29125.h          |  22 ++
+ tests/qtest/pic32cm-click-test.c      |  76 ++++++
+ 6 files changed, 484 insertions(+), 1 deletion(-)
+ create mode 100644 hw/sensor/isl29125.c
+ create mode 100644 include/hw/sensor/isl29125.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index c73f122..dac50e3 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -183,6 +183,16 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   counter kept between transfers, reads wrapping at 256 KiB. Erased at
+   power-up. ``view-at`` (hex) and ``view`` show 32 bytes for front ends.
+ 
++``color2``
++  Color 2 Click (v101): an ISL29125 RGB light sensor (``isl29125``) at I2C
++  0x44, its open-drain INT on INT (R4 4.7k pull-up). Green, red and blue
++  conversions in the order the mode picks (101 ms each at 16 bits, 1/16 of
++  that at 12), 375 or 10000 lux full scale, the threshold and
++  conversion-done interrupts, cleared by reading STATUS, and the 0x46 reset.
++  The light it sees is ``red``, ``green``, ``blue`` (sRGB 0-255) and
++  ``lux`` (default pure red at 5000 lux); each channel reads the
++  linearised component times ``lux`` over the full scale, plus one count.
++
+ ``oledw``
+   OLED W Click (v100): an SSD1306 (``ssd1306``) with a 96x39 white OLED
+   (MI9639BO-W) on SPI (jumpers J1-J3 on SPI), CS# on CS, D/C# on PWM, RES#
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index 75f974d..c7d90c4 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -30,6 +30,7 @@
+ #include "hw/display/ssd1351.h"
+ #include "hw/rtc/mchp_mcp7941x.h"
+ #include "hw/sensor/adxl345.h"
++#include "hw/sensor/isl29125.h"
+ #include "hw/sensor/mchp_mcp9808.h"
+ #include "hw/ssi/max7219.h"
+ #include "hw/ssi/ti_74hc595.h"
+@@ -172,6 +173,11 @@ static const ClickInfo mikrobus_clicks[] = {
+     { "eeprom3", "EEPROM 3 Click: AT24CM02 256 KiB EEPROM at I2C 0x50-0x53 "
+       "(ADD jumper on 0, A17:A16 in the address), WP tied low",
+       TYPE_MCHP_AT24CM02, CLICK_I2C, MCHP_AT24CM02_ADDR, 0 },
++    { "color2", "Color 2 Click: ISL29125 RGB light sensor at I2C 0x44, "
++      "INT (open drain) on INT",
++      TYPE_ISL29125, CLICK_I2C, ISL29125_ADDR, 0,
++      .outs = { { ISL29125_INT, MIKROBUS_INT } },
++      .pulls = { { true, MIKROBUS_INT, 1 } } },           /* R4 4.7k */
+     { "rn4871", "RN4871 Click: Microchip RN4871 Bluetooth LE module on the "
+       "UART (115200 baud, ASCII commands), RST_N on RST",
+       TYPE_CHARDEV_RN4871, CLICK_UART, 0, 0,
+diff --git a/hw/sensor/isl29125.c b/hw/sensor/isl29125.c
+new file mode 100644
+index 0000000..01da58c
+--- /dev/null
++++ b/hw/sensor/isl29125.c
+@@ -0,0 +1,368 @@
++/*
++ * Renesas (Intersil) ISL29125 RGB colour light sensor
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * ISL29125 data sheet (FN8424): fifteen byte registers at I2C 0x44, read
++ * and written with an auto-incrementing pointer that wraps from 0x0E to
++ * 0x00. Writing CONFIG1 picks the mode (green, red, blue, or the three,
++ * green/red, green/blue in that order; standby and power-down stop), the
++ * range (375 or 10000 lux full scale) and 12- or 16-bit conversions, and
++ * restarts the conversions. A 16-bit conversion of one channel takes 101
++ * ms, a 12-bit one 1/16 of that; each finished channel lands in its data
++ * registers (green, red, blue, little-endian), STATUS.GRBCF tells which
++ * channel converts now. When the last channel of a cycle finishes,
++ * STATUS.CONVENF sets and, with CONFIG3.CONVEN, INT goes low. The channel
++ * CONFIG3.INTSEL chooses is compared with the thresholds: at or below the
++ * low one or above the high one for PRST (1, 2, 4 or 8) cycles in a row
++ * sets STATUS.RGBTHF and pulls INT low. Reading STATUS clears both flags
++ * and releases INT. STATUS.BOUTF is 1 from power-up until firmware writes
++ * it 0. Writing 0x46 to register 0x00 resets every register. SYNC mode
++ * (INT as a start input) and the IR compensation of CONFIG2 are stored but
++ * not modelled.
++ *
++ * The light: each sRGB component is linearised and times "lux" gives that
++ * channel's illuminance; counts are that over the full scale, plus the
++ * one-count dark level of the data sheet (so no channel reads 0, as
++ * MikroElektronika's colour classifier needs). No physical part checked
++ * it.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/i2c/i2c.h"
++#include "hw/core/irq.h"
++#include "hw/sensor/isl29125.h"
++#include "migration/vmstate.h"
++#include <math.h>
++
++#define REG_ID              0x00
++#define REG_CONFIG1         0x01
++#define REG_CONFIG2         0x02
++#define REG_CONFIG3         0x03
++#define REG_LT_L            0x04
++#define REG_HT_L            0x06
++#define REG_STATUS          0x08
++#define REG_DATA            0x09        /* green, red, blue: L, H */
++#define NREGS               0x0F
++
++#define DEVICE_ID           0x7D
++#define RESET_CMD           0x46
++
++#define CFG1_MODE           0x07
++#define CFG1_RNG            BIT(3)      /* 10000 lux */
++#define CFG1_BITS           BIT(4)      /* 12-bit */
++#define CFG3_INTSEL         0x03
++#define CFG3_PRST_SHIFT     2
++#define CFG3_CONVEN         BIT(4)
++#define ST_RGBTHF           BIT(0)
++#define ST_CONVENF          BIT(1)
++#define ST_BOUTF            BIT(2)
++#define ST_GRBCF_SHIFT      4
++
++#define CONV_NS             (101 * SCALE_MS)
++
++enum { CH_G, CH_R, CH_B, CH_NONE = -1 };
++
++/* The channels each mode converts, in order */
++static const int8_t isl_modes[8][4] = {
++    { CH_NONE },                        /* power-down */
++    { CH_G, CH_NONE },
++    { CH_R, CH_NONE },
++    { CH_B, CH_NONE },
++    { CH_NONE },                        /* standby */
++    { CH_G, CH_R, CH_B, CH_NONE },
++    { CH_G, CH_R, CH_NONE },
++    { CH_G, CH_B, CH_NONE },
++};
++
++OBJECT_DECLARE_SIMPLE_TYPE(Isl29125State, ISL29125)
++
++struct Isl29125State {
++    I2CSlave parent_obj;
++
++    uint8_t regs[NREGS];
++    uint8_t ptr;
++    bool ptr_set;               /* the first byte of a write came */
++    uint8_t step;               /* index into the mode's channels */
++    uint8_t persist;            /* cycles outside the window in a row */
++    bool irq_on;
++
++    uint32_t rgb[3];            /* the light: green, red, blue (sRGB) */
++    uint32_t lux;
++
++    QEMUTimer *timer;
++    qemu_irq irq;
++};
++
++static void isl_update_irq(Isl29125State *s)
++{
++    qemu_set_irq(s->irq, s->irq_on ? 0 : -1);   /* open drain */
++}
++
++static uint16_t isl_counts(Isl29125State *s, int ch)
++{
++    double v = MIN(s->rgb[ch], 255) / 255.0;
++    double lin = v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4);
++    double fs = s->regs[REG_CONFIG1] & CFG1_RNG ? 10000.0 : 375.0;
++    unsigned max = s->regs[REG_CONFIG1] & CFG1_BITS ? 4095 : 65535;
++    double c = lround(MIN(s->lux, 100000) * lin / fs * max) + 1;
++
++    return MIN(c, max);
++}
++
++static void isl_grbcf(Isl29125State *s)
++{
++    int ch = isl_modes[s->regs[REG_CONFIG1] & CFG1_MODE][s->step];
++
++    s->regs[REG_STATUS] &= ~(3 << ST_GRBCF_SHIFT);
++    if (ch != CH_NONE) {
++        s->regs[REG_STATUS] |= (ch + 1) << ST_GRBCF_SHIFT;
++    }
++}
++
++static int64_t isl_conv_ns(Isl29125State *s)
++{
++    return s->regs[REG_CONFIG1] & CFG1_BITS ? CONV_NS / 16 : CONV_NS;
++}
++
++/* CONFIG1 written: start over at the mode's first channel */
++static void isl_restart(Isl29125State *s)
++{
++    s->step = 0;
++    s->persist = 0;
++    isl_grbcf(s);
++    if (isl_modes[s->regs[REG_CONFIG1] & CFG1_MODE][0] != CH_NONE) {
++        timer_mod(s->timer,
++                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + isl_conv_ns(s));
++    } else {
++        timer_del(s->timer);
++    }
++}
++
++static void isl_threshold(Isl29125State *s, int ch, uint16_t v)
++{
++    uint16_t lo = s->regs[REG_LT_L] | s->regs[REG_LT_L + 1] << 8;
++    uint16_t hi = s->regs[REG_HT_L] | s->regs[REG_HT_L + 1] << 8;
++    unsigned sel = s->regs[REG_CONFIG3] & CFG3_INTSEL;
++    unsigned need = 1 << ((s->regs[REG_CONFIG3] >> CFG3_PRST_SHIFT) & 3);
++
++    if (sel != (unsigned)ch + 1) {
++        return;
++    }
++    if (v <= lo || v > hi) {
++        if (++s->persist >= need) {
++            s->persist = need;
++            s->regs[REG_STATUS] |= ST_RGBTHF;
++            s->irq_on = true;
++        }
++    } else {
++        s->persist = 0;
++    }
++}
++
++static void isl_convert(void *opaque)
++{
++    Isl29125State *s = opaque;
++    const int8_t *seq = isl_modes[s->regs[REG_CONFIG1] & CFG1_MODE];
++    int ch = seq[s->step];
++    uint16_t v;
++
++    if (ch == CH_NONE) {
++        return;
++    }
++    v = isl_counts(s, ch);
++    s->regs[REG_DATA + 2 * ch] = v & 0xFF;
++    s->regs[REG_DATA + 2 * ch + 1] = v >> 8;
++    isl_threshold(s, ch, v);
++    if (seq[++s->step] == CH_NONE) {
++        s->step = 0;
++        s->regs[REG_STATUS] |= ST_CONVENF;
++        if (s->regs[REG_CONFIG3] & CFG3_CONVEN) {
++            s->irq_on = true;
++        }
++    }
++    isl_grbcf(s);
++    isl_update_irq(s);
++    timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++              isl_conv_ns(s));
++}
++
++static void isl_reset_regs(Isl29125State *s)
++{
++    memset(s->regs, 0, sizeof(s->regs));
++    s->regs[REG_HT_L] = 0xFF;
++    s->regs[REG_HT_L + 1] = 0xFF;
++    s->regs[REG_STATUS] = ST_BOUTF;
++    s->step = 0;
++    s->persist = 0;
++    s->irq_on = false;
++    timer_del(s->timer);
++    isl_update_irq(s);
++}
++
++static void isl_write(Isl29125State *s, uint8_t reg, uint8_t v)
++{
++    switch (reg) {
++    case REG_ID:
++        if (v == RESET_CMD) {
++            isl_reset_regs(s);
++        }
++        break;
++    case REG_CONFIG1:
++        s->regs[reg] = v & 0x3F;
++        isl_restart(s);
++        break;
++    case REG_CONFIG2:
++        s->regs[reg] = v & 0xBF;
++        break;
++    case REG_CONFIG3:
++        s->regs[reg] = v & 0x1F;
++        break;
++    case REG_LT_L ... REG_HT_L + 1:
++        s->regs[reg] = v;
++        break;
++    case REG_STATUS:
++        if (!(v & ST_BOUTF)) {
++            s->regs[reg] &= ~ST_BOUTF;
++        }
++        break;
++    default:
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "isl29125: write 0x%02x to read-only 0x%02x\n", v, reg);
++        break;
++    }
++}
++
++static uint8_t isl_read(Isl29125State *s, uint8_t reg)
++{
++    uint8_t v;
++
++    if (reg == REG_ID) {
++        return DEVICE_ID;
++    }
++    v = s->regs[reg];
++    if (reg == REG_STATUS) {
++        s->regs[reg] &= ~(ST_RGBTHF | ST_CONVENF);
++        s->irq_on = false;
++        isl_update_irq(s);
++    }
++    return v;
++}
++
++static int isl_event(I2CSlave *i2c, enum i2c_event event)
++{
++    Isl29125State *s = ISL29125(i2c);
++
++    if (event == I2C_START_SEND) {
++        s->ptr_set = false;
++    }
++    return 0;
++}
++
++static int isl_send(I2CSlave *i2c, uint8_t data)
++{
++    Isl29125State *s = ISL29125(i2c);
++
++    if (!s->ptr_set) {
++        s->ptr = data % NREGS;
++        s->ptr_set = true;
++    } else {
++        isl_write(s, s->ptr, data);
++        s->ptr = (s->ptr + 1) % NREGS;
++    }
++    return 0;
++}
++
++static uint8_t isl_recv(I2CSlave *i2c)
++{
++    Isl29125State *s = ISL29125(i2c);
++    uint8_t v = isl_read(s, s->ptr);
++
++    s->ptr = (s->ptr + 1) % NREGS;
++    return v;
++}
++
++static void isl_reset(DeviceState *dev)
++{
++    Isl29125State *s = ISL29125(dev);
++
++    s->ptr = 0;
++    s->ptr_set = false;
++    isl_reset_regs(s);
++}
++
++static void isl_init(Object *obj)
++{
++    Isl29125State *s = ISL29125(obj);
++
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, isl_convert, s);
++    qdev_init_gpio_out_named(DEVICE(obj), &s->irq, ISL29125_INT, 1);
++    s->rgb[CH_R] = 255;
++    s->rgb[CH_G] = 0;
++    s->rgb[CH_B] = 0;
++    s->lux = 5000;
++    object_property_add_uint32_ptr(obj, "green", &s->rgb[CH_G],
++                                   OBJ_PROP_FLAG_READWRITE);
++    object_property_add_uint32_ptr(obj, "red", &s->rgb[CH_R],
++                                   OBJ_PROP_FLAG_READWRITE);
++    object_property_add_uint32_ptr(obj, "blue", &s->rgb[CH_B],
++                                   OBJ_PROP_FLAG_READWRITE);
++    object_property_add_uint32_ptr(obj, "lux", &s->lux,
++                                   OBJ_PROP_FLAG_READWRITE);
++}
++
++static void isl_finalize(Object *obj)
++{
++    timer_free(ISL29125(obj)->timer);
++}
++
++static const VMStateDescription vmstate_isl = {
++    .name = TYPE_ISL29125,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, Isl29125State),
++        VMSTATE_UINT8_ARRAY(regs, Isl29125State, NREGS),
++        VMSTATE_UINT8(ptr, Isl29125State),
++        VMSTATE_BOOL(ptr_set, Isl29125State),
++        VMSTATE_UINT8(step, Isl29125State),
++        VMSTATE_UINT8(persist, Isl29125State),
++        VMSTATE_BOOL(irq_on, Isl29125State),
++        VMSTATE_UINT32_ARRAY(rgb, Isl29125State, 3),
++        VMSTATE_UINT32(lux, Isl29125State),
++        VMSTATE_TIMER_PTR(timer, Isl29125State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void isl_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
++
++    dc->desc = "ISL29125 RGB colour light sensor";
++    dc->vmsd = &vmstate_isl;
++    device_class_set_legacy_reset(dc, isl_reset);
++    k->event = isl_event;
++    k->send = isl_send;
++    k->recv = isl_recv;
++}
++
++static const TypeInfo isl_types[] = {
++    {
++        .name = TYPE_ISL29125,
++        .parent = TYPE_I2C_SLAVE,
++        .instance_size = sizeof(Isl29125State),
++        .instance_init = isl_init,
++        .instance_finalize = isl_finalize,
++        .class_init = isl_class_init,
++    },
++};
++
++DEFINE_TYPES(isl_types)
+diff --git a/hw/sensor/meson.build b/hw/sensor/meson.build
+index e99194a..05fda9f 100644
+--- a/hw/sensor/meson.build
++++ b/hw/sensor/meson.build
+@@ -8,5 +8,6 @@ system_ss.add(when: 'CONFIG_MAX34451', if_true: files('max34451.c'))
+ system_ss.add(when: 'CONFIG_LSM303DLHC_MAG', if_true: files('lsm303dlhc_mag.c'))
+ system_ss.add(when: 'CONFIG_ISL_PMBUS_VR', if_true: files('isl_pmbus_vr.c'))
+ system_ss.add(when: 'CONFIG_MAX31785', if_true: files('max31785.c'))
+-system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp9808.c', 'adxl345.c'))
++system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp9808.c', 'adxl345.c',
++                                                      'isl29125.c'))
+ system_ss.add(when: 'CONFIG_PYKIT_SENSORS', if_true: files('icm20948.c', 'bno085.c'))
+diff --git a/include/hw/sensor/isl29125.h b/include/hw/sensor/isl29125.h
+new file mode 100644
+index 0000000..4d944e4
+--- /dev/null
++++ b/include/hw/sensor/isl29125.h
+@@ -0,0 +1,22 @@
++/*
++ * Renesas (Intersil) ISL29125 RGB colour light sensor
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * I2C address 0x44. The light it sees: "red", "green", "blue" (sRGB,
++ * 0-255) and "lux" (the brightness of white, 0-100000), settable while
++ * running. GPIO output "int": the open-drain INT pin, 0 while driven low,
++ * -1 while released.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_SENSOR_ISL29125_H
++#define HW_SENSOR_ISL29125_H
++
++#define TYPE_ISL29125 "isl29125"
++#define ISL29125_ADDR 0x44
++#define ISL29125_INT "int"
++
++#endif /* HW_SENSOR_ISL29125_H */
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index 0b0eb01..736d1e6 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -1008,6 +1008,81 @@ static void test_pot(void)
+     qtest_quit(qts);
+ }
+ 
++/*
++ * Color 2 Click: ISL29125 at 0x44 on EXT1, INT (PB02) open drain with the
++ * Click's pull-up. G/R/B at 10000 lux and 16 bits (MikroElektronika's
++ * set-up) sees pure red at 5000 lux as half scale on red, the dark count
++ * on the others; the conversion-done interrupt clears on a STATUS read.
++ */
++#define ISL29125        0x44
++
++static uint8_t isl_reg(QTestState *qts, uint8_t reg)
++{
++    uint8_t v;
++
++    i2c_rd(qts, ISL29125, reg, &v, 1);
++    return v;
++}
++
++static void isl_rgb(QTestState *qts, unsigned *g, unsigned *r, unsigned *b)
++{
++    uint8_t d[6];
++
++    i2c_rd(qts, ISL29125, 0x09, d, 6);
++    *g = d[0] | d[1] << 8;
++    *r = d[2] | d[3] << 8;
++    *b = d[4] | d[5] << 8;
++}
++
++static void test_color2(void)
++{
++    QTestState *qts = i2c_init("-M pic32cm-mc00-cpro,ext1=color2 ");
++    unsigned g, r, b;
++
++    g_assert_cmphex(isl_reg(qts, 0x00), ==, 0x7D);
++    g_assert_cmphex(isl_reg(qts, 0x08), ==, 0x04);          /* BOUTF */
++    g_assert_true(int_high(qts));
++    g_assert_true(i2c_wr(qts, ISL29125, 0x01,
++                         (const uint8_t[]){ 0x0D, 0x3F, 0x10 }, 3));
++    g_assert_cmphex(isl_reg(qts, 0x08), ==, 0x14);          /* G now */
++    qtest_clock_step(qts, 2 * 101 * SCALE_MS);
++    g_assert_true(int_high(qts));                           /* G, R done */
++    qtest_clock_step(qts, 101 * SCALE_MS);
++    g_assert_false(int_high(qts));                          /* B done */
++    g_assert_cmphex(isl_reg(qts, 0x08), ==, 0x16);  /* CONVENF, G again */
++    g_assert_true(int_high(qts));
++    isl_rgb(qts, &g, &r, &b);
++    g_assert_cmpuint(g, ==, 1);
++    g_assert_cmpuint(r, ==, 32769);
++    g_assert_cmpuint(b, ==, 1);
++
++    /* Green at the full 10000 lux; 12-bit conversions */
++    qom_set_int(qts, CLICK1, "red", 0);
++    qom_set_int(qts, CLICK1, "green", 255);
++    qom_set_int(qts, CLICK1, "lux", 10000);
++    g_assert_true(i2c_wr(qts, ISL29125, 0x01,
++                         (const uint8_t[]){ 0x1D }, 1));
++    qtest_clock_step(qts, 3 * 101 * SCALE_MS / 16 + SCALE_MS);
++    isl_rgb(qts, &g, &r, &b);
++    g_assert_cmpuint(g, ==, 4095);
++    g_assert_cmpuint(r, ==, 1);
++
++    /* Above the high threshold on green: RGBTHF */
++    g_assert_true(i2c_wr(qts, ISL29125, 0x03,
++                         (const uint8_t[]){ 0x01, 0, 0, 0x00, 0x08 }, 5));
++    isl_reg(qts, 0x08);
++    qtest_clock_step(qts, 101 * SCALE_MS / 16 + SCALE_MS);
++    g_assert_false(int_high(qts));
++    g_assert_cmphex(isl_reg(qts, 0x08) & 0x01, ==, 0x01);
++    g_assert_true(int_high(qts));
++
++    /* Reset: CONFIG1 back to 0, conversions stop */
++    g_assert_true(i2c_wr(qts, ISL29125, 0x00, (const uint8_t[]){ 0x46 }, 1));
++    g_assert_cmphex(isl_reg(qts, 0x01), ==, 0x00);
++    g_assert_cmphex(isl_reg(qts, 0x07), ==, 0xFF);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+@@ -1026,6 +1101,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/8x8-variants", test_8x8_variants);
+     qtest_add_func("pic32cm-click/pot", test_pot);
+     qtest_add_func("pic32cm-click/rotary", test_rotary);
++    qtest_add_func("pic32cm-click/color2", test_color2);
+     qtest_add_func("pic32cm-click/thermo8-identity", test_identity);
+     qtest_add_func("pic32cm-click/not-fitted", test_not_fitted);
+     qtest_add_func("pic32cm-click/thermo8-int-pullup", test_int_pullup);
+-- 
+2.53.0.windows.2
+

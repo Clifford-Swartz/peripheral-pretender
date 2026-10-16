@@ -1346,6 +1346,46 @@ def test_session_eeprom3(qemu_path, qemu_machines):
     assert "..kroe" in view, view
 
 
+COLOR2_DEMO = BUILD / "color2.elf"
+
+
+@pytest.mark.qemu
+def test_session_color2(qemu_path, qemu_machines):
+    """color2.elf with a Color 2 Click on EXT1: MikroElektronika's set-up,
+    the conversion-done interrupt and its clearing pass, the default light
+    reads RED, and turning the page's sliders to pure green makes the
+    firmware (classifying as MikroE's driver does) report GREEN."""
+    from tools.pp_web import server
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not COLOR2_DEMO.is_file():
+        pytest.skip("color2.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=color2)")
+
+    async def scenario():
+        app = server.App("ev15n46a", COLOR2_DEMO)
+        await app.plug("ext1", "color2")
+        try:
+            for _ in range(50):
+                await asyncio.sleep(0.1)
+                if "PP:EXIT" in app.uart_log:
+                    break
+            await app.control("ext1", "red", 0)
+            await app.control("ext1", "green", 255)
+            for _ in range(50):
+                await asyncio.sleep(0.1)
+                if "GREEN" in app.uart_log:
+                    break
+        finally:
+            await app.session.stop()
+        return app.uart_log
+
+    uart = asyncio.run(scenario())
+    assert "PP:EXIT 0" in uart, uart
+    assert "FAIL" not in uart, uart
+    assert "B=1 hue=120 GREEN" in uart, uart
+
+
 OLEDW_DEMO = BUILD / "oledw.elf"
 
 

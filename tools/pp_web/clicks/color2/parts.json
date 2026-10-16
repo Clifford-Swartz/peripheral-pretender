@@ -1,0 +1,15 @@
+{
+ "source": "MikroElektronika Color 2 Click v101: 2D and 3D files (Color_2_Click_2d_3d_files.zip, CAD/Color 2_click_v101.dxf) and schematic v101. Body positions from the DXF pads (dxf_pads.py; U1's ODFN pads with --min 0.05); body sizes estimated: 0805 passives, 0805 LED, U1 ISL29125 6-Ld ODFN 1.65 x 1.65 mm.",
+ "parts": [
+  {"ref": "U1", "kind": "ic", "value": "ISL29125 (ODFN-6)", "at_mm": [11.45, 20.73], "size_mm": [1.65, 1.65]},
+  {"ref": "C1", "kind": "capacitor", "value": "100 nF", "at_mm": [3.15, 19.84], "size_mm": [1.25, 2.0]},
+  {"ref": "C2", "kind": "capacitor", "value": "1 uF", "at_mm": [5.16, 19.84], "size_mm": [1.25, 2.0]},
+  {"ref": "C3", "kind": "capacitor", "value": "330 nF", "at_mm": [7.16, 19.84], "size_mm": [1.25, 2.0]},
+  {"ref": "R2", "kind": "resistor", "value": "4k7 (SDA)", "at_mm": [15.85, 19.84], "size_mm": [1.25, 2.0]},
+  {"ref": "R3", "kind": "resistor", "value": "4k7 (SCL)", "at_mm": [17.79, 19.84], "size_mm": [1.25, 2.0]},
+  {"ref": "R4", "kind": "resistor", "value": "4k7 (INT)", "at_mm": [19.74, 19.81], "size_mm": [1.25, 2.0]},
+  {"ref": "R5", "kind": "zero_ohm", "value": "0R (INT)", "at_mm": [11.43, 18.26], "size_mm": [2.0, 1.25]},
+  {"ref": "R1", "kind": "resistor", "value": "470R (PWR LED)", "at_mm": [5.56, 2.54], "size_mm": [2.0, 1.25]},
+  {"ref": "PWR", "kind": "led", "at_mm": [11.40, 2.57], "size_mm": [2.0, 1.25], "color": "#7bd88f"}
+ ]
+}

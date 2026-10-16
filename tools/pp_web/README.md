@@ -348,6 +348,16 @@ DXF, so its art is drawn without one (`make_art.py -`: `outline_mm`, `header`, `
 `make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=oledb` (EXT1; oledw.c's picture over I2C,
 commands to 0x3C and data to 0x3D as MikroElektronika's driver does).
 
+The Color 2 Click (`clicks/color2/`) has sliders for the light its ISL29125 sees (red, green,
+blue as sRGB, and the brightness of white in lux) and a `display` of type `swatch`: a dot over
+the sensor in that colour, glowing with the brightness. A swatch has no property to poll; it
+names its `controls` (r, g, b), `brightness` and `full` (the brightness of the brightest glow).
+Each channel counts the linearised component times the lux over the full scale, plus one dark
+count, so MikroElektronika's classifier (whose darkness test looks only at red) names pure green
+and blue right. Demo: `make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=color2` (EXT1;
+MikroElektronika's set-up, the conversion-done interrupt; then a line whenever the colour name
+changes; WHITE needs about 10000 lux, equal channels below that read RED, as in their example).
+
 Colour variants: 8x8 R, Y and B and Button R and Y share their device with 8x8 G and Button G
 and have their own art and LED colours. The 8x8 B Click's page links the 8x8 R Click's 2D files,
 so its art is the 8x8 R DXF with the silkscreen letter replaced (`silk_label`).
