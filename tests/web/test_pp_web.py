@@ -1344,3 +1344,55 @@ def test_session_eeprom3(qemu_path, qemu_machines):
     assert "FAIL" not in uart, uart
     assert view.startswith("00100: A3 A4 6B 72 6F 65"), view   # wrapped
     assert "..kroe" in view, view
+
+
+OLEDW_DEMO = BUILD / "oledw.elf"
+
+
+@pytest.mark.qemu
+def test_session_oledw(qemu_path, qemu_machines):
+    """oledw.elf with an OLED W Click on EXT1: MikroElektronika's set-up
+    (MUX 40, C8h, DAh 12h, charge pump on) and page-mode writes put the
+    frame on the edges of the 96x39 glass (screen row y = RAM line y + 1,
+    column x = RAM column 95 - x), and the ball moves."""
+    import base64
+    from tools.pp_web import server
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not OLEDW_DEMO.is_file():
+        pytest.skip("oledw.elf not built (make -C firmware/hello "
+                    "BOARD=pic32cm_mc00_cpro APP=oledw)")
+
+    async def frame():
+        b = await app.session.qmp.execute(
+            "qom-get", path="/machine/ext1-click", property="frame")
+        raw = base64.b64decode(b)
+        return [int.from_bytes(raw[i:i + 2], "little") for i in
+                range(0, len(raw), 2)]
+
+    async def scenario():
+        nonlocal app
+        app = server.App("ev15n46a", OLEDW_DEMO)
+        await app.plug("ext1", "oledw")
+        try:
+            await asyncio.sleep(1.0)
+            first = await frame()
+            await asyncio.sleep(0.3)
+            second = await frame()
+        finally:
+            await app.session.stop()
+        return first, second
+
+    app = None
+    first, second = asyncio.run(scenario())
+    w, h = 96, 39
+    assert len(first) == w * h
+    lit = lambda f, x, y: f[y * w + x] != 0            # noqa: E731
+    for x in (0, 47, 95):
+        assert lit(first, x, 0) and lit(first, x, h - 1), x
+    for y in (0, 19, 38):
+        assert lit(first, 0, y) and lit(first, w - 1, y), y
+    inside = sum(lit(first, x, y) for x in range(2, w - 2)
+                 for y in range(2, h - 2))
+    assert 0 < inside <= 25                            # the 5x5 ball
+    assert first != second                             # it moves

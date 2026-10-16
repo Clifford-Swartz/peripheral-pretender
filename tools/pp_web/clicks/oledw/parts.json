@@ -1,0 +1,283 @@
+{
+ "source": "MikroElektronika OLED W Click v100: 2D and 3D files (oled_w_click_2d_3d_files.zip, CAD/OLED_w_click_v100.dxf; silkscreen OLED W click, SEL COMM. J1-J3 SPI/I2C, U1, R1-R5, C1-C9, PWR, 3.3V) and schematic v100 (MI9639BO-W, SSD1306, AP7331-ADJ). The DXF has the module's FPC pads and its 24.0 x 17.8 mm outline but not the panel: the MI9639BO-W (Multi-Inno spec v1.1: glass 23.8 x 16.2 mm, active area 19.372 x 7.858 mm, 2.21 mm from the left edge and 2.1 mm from the top edge of the glass, FPC folded under at the bottom) is placed in the top of that outline. R1/R6/R7 refs of the three resistors at x 14.2 are guesses (only R1 is labelled). Jumpers J1-J3 drawn in the default SPI position.",
+ "parts": [
+  {
+   "ref": "OLED1",
+   "kind": "oled",
+   "value": "MI9639BO-W 96x39 white",
+   "at_mm": [
+    8.84,
+    31.71
+   ],
+   "size_mm": [
+    23.8,
+    16.2
+   ],
+   "active_mm": [
+    19.37,
+    7.86
+   ],
+   "active_at_mm": [
+    8.84,
+    33.78
+   ]
+  },
+  {
+   "ref": "C1",
+   "kind": "capacitor",
+   "at_mm": [
+    0.51,
+    19.66
+   ],
+   "size_mm": [
+    1.4,
+    3.0
+   ]
+  },
+  {
+   "ref": "C2",
+   "kind": "capacitor",
+   "at_mm": [
+    2.74,
+    19.66
+   ],
+   "size_mm": [
+    1.4,
+    3.0
+   ]
+  },
+  {
+   "ref": "R2",
+   "kind": "resistor",
+   "value": "390k",
+   "at_mm": [
+    13.34,
+    19.66
+   ],
+   "size_mm": [
+    1.4,
+    3.0
+   ]
+  },
+  {
+   "ref": "C7",
+   "kind": "capacitor",
+   "at_mm": [
+    15.21,
+    19.66
+   ],
+   "size_mm": [
+    1.4,
+    3.0
+   ]
+  },
+  {
+   "ref": "C6",
+   "kind": "capacitor",
+   "at_mm": [
+    17.12,
+    19.66
+   ],
+   "size_mm": [
+    1.4,
+    3.0
+   ]
+  },
+  {
+   "ref": "C3",
+   "kind": "capacitor",
+   "at_mm": [
+    6.6,
+    20.52
+   ],
+   "size_mm": [
+    3.0,
+    1.4
+   ]
+  },
+  {
+   "ref": "C5",
+   "kind": "capacitor",
+   "at_mm": [
+    10.24,
+    20.52
+   ],
+   "size_mm": [
+    3.0,
+    1.4
+   ]
+  },
+  {
+   "ref": "C9",
+   "kind": "capacitor",
+   "at_mm": [
+    6.6,
+    16.74
+   ],
+   "size_mm": [
+    3.0,
+    1.4
+   ]
+  },
+  {
+   "ref": "R3",
+   "kind": "resistor",
+   "value": "160k",
+   "at_mm": [
+    10.24,
+    16.74
+   ],
+   "size_mm": [
+    3.0,
+    1.4
+   ]
+  },
+  {
+   "ref": "U1",
+   "kind": "ic",
+   "value": "AP7331-ADJ (SOT-23-5)",
+   "at_mm": [
+    8.32,
+    13.95
+   ],
+   "size_mm": [
+    2.9,
+    1.6
+   ]
+  },
+  {
+   "ref": "R5",
+   "kind": "resistor",
+   "value": "20k",
+   "at_mm": [
+    11.1,
+    12.85
+   ],
+   "size_mm": [
+    1.4,
+    3.0
+   ]
+  },
+  {
+   "ref": "C8",
+   "kind": "capacitor",
+   "at_mm": [
+    6.6,
+    10.06
+   ],
+   "size_mm": [
+    3.0,
+    1.4
+   ]
+  },
+  {
+   "ref": "R4",
+   "kind": "resistor",
+   "value": "0R",
+   "at_mm": [
+    10.24,
+    10.06
+   ],
+   "size_mm": [
+    3.0,
+    1.4
+   ]
+  },
+  {
+   "ref": "R6",
+   "kind": "resistor",
+   "value": "4k7",
+   "at_mm": [
+    14.22,
+    10.39
+   ],
+   "size_mm": [
+    3.0,
+    1.4
+   ]
+  },
+  {
+   "ref": "R7",
+   "kind": "resistor",
+   "value": "4k7",
+   "at_mm": [
+    14.22,
+    8.48
+   ],
+   "size_mm": [
+    3.0,
+    1.4
+   ]
+  },
+  {
+   "ref": "R1",
+   "kind": "resistor",
+   "value": "2k2",
+   "at_mm": [
+    14.22,
+    6.58
+   ],
+   "size_mm": [
+    3.0,
+    1.4
+   ]
+  },
+  {
+   "ref": "J1",
+   "kind": "zero_ohm",
+   "value": "SPI",
+   "at_mm": [
+    3.97,
+    6.5
+   ],
+   "size_mm": [
+    3.3,
+    1.4
+   ]
+  },
+  {
+   "ref": "J2",
+   "kind": "zero_ohm",
+   "value": "SPI",
+   "at_mm": [
+    3.97,
+    4.72
+   ],
+   "size_mm": [
+    3.3,
+    1.4
+   ]
+  },
+  {
+   "ref": "J3",
+   "kind": "zero_ohm",
+   "value": "SPI",
+   "at_mm": [
+    3.97,
+    2.95
+   ],
+   "size_mm": [
+    3.3,
+    1.4
+   ]
+  },
+  {
+   "ref": "PWR",
+   "kind": "led",
+   "value": "green",
+   "at_mm": [
+    13.82,
+    3.51
+   ],
+   "size_mm": [
+    3.2,
+    1.6
+   ],
+   "color": "#7be38a"
+  }
+ ],
+ "header_origin_mm": [
+  -2.57,
+  1.04
+ ]
+}

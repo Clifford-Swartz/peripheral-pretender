@@ -1173,6 +1173,10 @@
         ],
         "color": "#5dff7a"
       }
+    ],
+    "header_center_mm": [
+      10.96,
+      11.38
     ]
   },
   "rotaryr": {
@@ -1373,6 +1377,10 @@
         ],
         "color": "#5dff7a"
       }
+    ],
+    "header_center_mm": [
+      10.96,
+      11.38
     ]
   },
   "rotaryb": {
@@ -1573,6 +1581,10 @@
         ],
         "color": "#5dff7a"
       }
+    ],
+    "header_center_mm": [
+      10.96,
+      11.38
     ]
   },
   "rotaryy": {
@@ -1773,6 +1785,10 @@
         ],
         "color": "#5dff7a"
       }
+    ],
+    "header_center_mm": [
+      10.96,
+      11.38
     ]
   },
   "rn4871": {
@@ -1873,6 +1889,53 @@
         ],
         "color": "#5dff7a"
       }
+    ]
+  },
+  "oledw": {
+    "name": "OLED W Click",
+    "vendor": "MikroElektronika",
+    "chip": "SSD1306",
+    "bus": "SPI",
+    "description": "96x39 white monochrome OLED (MI9639BO-W) on an SSD1306, jumpers on SPI; D/C on PWM, RES# on RST",
+    "controls": [],
+    "display": {
+      "type": "panel",
+      "property": "frame",
+      "gen_property": "frame-gen",
+      "width": 96,
+      "height": 39,
+      "at_mm": [
+        8.84,
+        33.78
+      ],
+      "size_mm": [
+        19.37,
+        7.86
+      ]
+    },
+    "signals": [],
+    "image": "oledw/top.png",
+    "origin_mm": [
+      -3.8354,
+      40.1574
+    ],
+    "size_mm": [
+      25.4,
+      42.926
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          13.82,
+          3.51
+        ],
+        "color": "#5dff7a"
+      }
+    ],
+    "header_center_mm": [
+      8.86,
+      9.93
     ]
   }
 }

@@ -55,6 +55,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0046 | Rotary G/R/B/Y Click (`click-rotary`: two 74HC595 for the 16-LED ring plus an EC12D encoder, quadrature on PWM and AN, A = B at detents, A leading clockwise, push switch on INT); mikroBUS AN as a digital pin (`an_pin`); four outputs per Click; qtest |
 | 0047 | RN4871 Click (`chardev-rn4871`: the RNBD451 model with the RN4871's identity); the shared model follows DS50002466C closer: "$$$" only for close '$' (MikroElektronika's "$", pause, "$$$"), leading '$' dropped, SF/C/K,1/I/B/&/GN, %STREAM_OPEN% only with Transparent UART; MIKROBUS selects RNBD451 |
 | 0048 | EEPROM 3 Click: AT24CM02 (`mchp-at24cm02`) at I2C 0x50-0x53 (A17:A16 in the address), 256-byte page writes wrapping in the page, write cycle at STOP without ACK, address counter kept between transfers; `view-at`/`view` for front ends |
+| 0049 | OLED W Click: SSD1306 (`ssd1306`) on SPI with D/C# and RES#, three addressing modes, re-map, MUX, COM direction/offset/layout, inverse, charge pump; panel geometry as properties (MI9639BO-W 96x39 defaults); PpPanel `frame` |
 
 ## Setting it up
 
