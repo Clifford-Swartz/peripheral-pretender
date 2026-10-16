@@ -399,6 +399,37 @@ that builds the VSIX, a test of the webview's own DOM (the end-to-end test check
 the injected page was checked from a foreign origin with Playwright), marketplace publishing (publisher id, `repository`, licence:
 the bundle includes GPL QEMU binaries, so it must point at their source).
 
+## Six more Clicks (2026-10-16)
+
+Patches 0044-0049, one per Click, each with a demo in `firmware/hello/tests/`, a web session
+test, art and a catalog entry (VSIX 0.3.0 carries them). Research came from five parallel
+agents (schematics, data sheets, MikroElektronika's drivers, DXF/STEP), their notes in the
+session scratchpad only; what matters is in each model's header comment.
+
+- **POT** (`click-pot`): the first Click on AN. Sockets gained AN (a Click's analog output in
+  mV, set on the ADC channels behind the pad: MC00 EXT1 PB08 = ADC0 AIN2/ADC1 AIN4, EXT2 PA08)
+  and a UART (a UART Click is a chardev the board connects before realizing the MCU, linked as
+  `/machine/<socket>-click`: MC00 SERCOM3 shared by EXT1/EXT2, Nano Base sockets 1/3 USART2).
+  **Open:** the Nano Base's AN pins and socket 2's UART (not in the repo; read the AVR64EA48
+  Nano's pinout table), so the POT refuses the AVR board.
+- **GNSS** (`chardev-quectel-l86`): NMEA from real L86 captures, PMTK commands, paced at the
+  baud rate; sliders for position, altitude, satellites (< 4: no fix).
+- **Rotary G/R/B/Y** (`click-rotary`, a 74HC595 subclass): encoder quadrature on PWM and AN
+  used as a digital pin (`an_pin`), the 16-LED ring as a new `bits` display. O is missing
+  (its files return 403).
+- **RN4871** (`chardev-rn4871`, an RNBD451 subclass; the shared model now handles
+  MikroElektronika's "$", pause, "$$$" and more commands). The Click panel gained `toggles`,
+  `inputs` and `monitors`: a phone that connects, sends and shows what it got.
+- **EEPROM 3** (`mchp-at24cm02`): four addresses, page writes, no ACK during the write
+  cycle, an address counter kept across STOP; a memory view in the panel.
+- **OLED W** (`ssd1306`): MikroElektronika's set-up shows RAM lines 1-39 mirrored. **OLED B**
+  is I2C only (v101) with no DXF: not done; it needs an I2C front end on the SSD1306 (SA0 from
+  D/C at each START) and art from its STEP.
+
+The renderer follows DXF arcs and turns parts (`rotate_deg`); new part kinds potentiometer,
+encoder, module. `header_center_mm` places Clicks whose DXF header is off the usual origin
+(OLED W, Rotary). No physical Click has checked any of these.
+
 ## EDBG data gateway (DGI) and a Data Visualizer panel (2026-10-15)
 
 The MC00 twin's debugger has a data gateway (patch 0037): the DGI command protocol on a chardev,
