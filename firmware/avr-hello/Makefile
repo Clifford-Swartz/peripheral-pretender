@@ -2,10 +2,11 @@
 # Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
 #
 # Builds with the avr-gcc in MPLAB XC8 and the AVR-Ex device pack:
-#   make -C firmware/avr-hello [APP=hello|blinky|matrix|dgigpio|adc]   (MSYS2 UCRT64)
+#   make -C firmware/avr-hello [APP=hello|blinky|matrix|dgigpio|adc|nanobase]   (MSYS2 UCRT64)
 # Applications: hello (first light, golden/avr64ea48-b1/hello-vcom.bin),
 # blinky (LED0/SW0 demo for the web view, TCB0 interrupt), matrix (8x8 G
-# Click on mikroBUS socket 1 of a Curiosity Nano Base).
+# Click on mikroBUS socket 1 of a Curiosity Nano Base), nanobase (POT on
+# mb1's AN, GNSS on mb2's UART: mb1=pot,mb2=gnss).
 # XC8 and DFP default to the MPLAB X install; override XC8= / DFP=, or
 # PACKS= (the folder scripts/fetch_packs.py fills) to use its AVR-Ex DFP.
 
@@ -18,7 +19,7 @@ DEVICE := avr64ea48
 CC     := "$(XC8)/avr/bin/avr-gcc"
 OBJCOPY:= "$(XC8)/avr/bin/avr-objcopy"
 BUILD  := build
-APPS   := hello blinky matrix dgigpio adc
+APPS   := hello blinky matrix dgigpio adc nanobase
 APP    ?= $(APPS)
 
 CFLAGS := -mmcu=$(DEVICE) -B "$(DFP)/gcc/dev/$(DEVICE)" -isystem "$(DFP)/include" \

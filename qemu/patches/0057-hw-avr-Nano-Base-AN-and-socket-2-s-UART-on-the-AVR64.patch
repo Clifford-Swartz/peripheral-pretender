@@ -1,0 +1,293 @@
+From 360f52cd8d74e9051eadb29f77b2ac964284e555 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Sun, 18 Oct 2026 05:53:20 -0700
+Subject: [PATCH] hw/avr: Nano Base AN and socket 2's UART on the AVR64EA48
+ Curiosity Nano
+
+AN of the Nano Base's sockets 1-3 is PD4, PD5 and PD7 (ADC0 AIN4, AIN5,
+AIN7; user guide Figure 7-5), as an analog input and as a digital pad, so
+the POT, DC Motor and Rotary Clicks plug in. Socket 2's UART is USART1 on
+PC0/PC1, the debugger's virtual COM port lines: a UART Click there shares
+them with serial 0 through a new chardev-mikrobus-share
+(mikrobus_uart_share()), which sends what the MCU transmits to both and
+passes what either sends to the MCU.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/avr/avr64ea48-cnano.rst | 17 ++---
+ hw/avr/avr64ea48_cnano.c            | 26 ++++++--
+ hw/misc/mikrobus.c                  | 96 +++++++++++++++++++++++++++++
+ include/hw/misc/mikrobus.h          |  9 +++
+ tests/qtest/avr64ea48-cnano-test.c  | 22 +++++++
+ 5 files changed, 159 insertions(+), 11 deletions(-)
+
+diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
+index c24097a..9d19ef8 100644
+--- a/docs/system/avr/avr64ea48-cnano.rst
++++ b/docs/system/avr/avr64ea48-cnano.rst
+@@ -30,13 +30,16 @@ on ``-serial`` 1.
+ 
+ On a Curiosity Nano Base for Click boards (AC164162), ``mb1=``, ``mb2=``
+ and ``mb3=`` plug a Click board into mikroBUS socket 1-3: SPI on SPI0, I2C
+-on TWI0 (PA2 SDA, PA3 SCL; host mode, ``avr8x-twi``). Every Click of the
+-shared catalog works here: ``thermo8``, ``accel``, ``buttong``/``r``/``y``,
+-``7seg``, ``relay``, ``8x8g``/``r``/``y``/``b``, ``buzz``, ``oledc``,
+-``thumbstick`` and ``rtc6`` (see the PIC32CM MC00 Curiosity Pro for what
+-each one models). The Click is ``/machine/mbN-click``. A UART Click on
+-socket 1 or 3 takes their shared USART2 (PF4/PF5, the second
+-``-serial``). AN is not wired yet, so the ``pot`` Click is refused here.
++on TWI0 (PA2 SDA, PA3 SCL; host mode, ``avr8x-twi``), AN on PD4, PD5 and
++PD7 (ADC0 AIN4, AIN5, AIN7; PD7 is also VREFA). Every Click of the shared
++catalog works here (see the PIC32CM MC00 Curiosity Pro for what each one
++models). The Click is ``/machine/mbN-click``. A UART Click on socket 1 or
++3 takes their shared USART2 (PF4/PF5, the second ``-serial``). Socket 2's
++UART is USART1 (PC0/PC1), the virtual COM port's lines: a UART Click there
++shares them with ``-serial`` 0 (``/chardevs/mb2-share``), so the console
++sees what the MCU sends the Click, and what either sends reaches the MCU
++(on the board, both at once would collide). USART1 then runs at the
++Click's baud rate, the console's too.
+ 
+ Firmware comes from ``-kernel`` or ``-bios``::
+ 
+diff --git a/hw/avr/avr64ea48_cnano.c b/hw/avr/avr64ea48_cnano.c
+index ce7f054..0d2a1ca 100644
+--- a/hw/avr/avr64ea48_cnano.c
++++ b/hw/avr/avr64ea48_cnano.c
+@@ -21,8 +21,12 @@
+  * all three; RST/PWM/INT/CS on PD6/PD0/PD3/PA7, PF3/PD1/PF2/PE2 and
+  * PE1/PD2/PE0/PE3; I2C on TWI0 (PA2 SDA, PA3 SCL) for all three; the UART
+  * of sockets 1 and 3 is USART2 (PF4/PF5), so a UART Click on one of them
+- * takes the place of serial_hd(1). Not wired yet: AN, and socket 2's
+- * UART. The Click's device, if it has one, is /machine/mbN-click (a UART
++ * takes the place of serial_hd(1); socket 2's UART is USART1 (PC0/PC1),
++ * the same lines as the debugger's virtual COM port, so a UART Click on
++ * socket 2 shares them with serial_hd(0) (the VCOM sees what the MCU
++ * sends the Click; what either sends reaches the MCU). AN is PD4, PD5
++ * and PD7 (ADC0 AIN4, AIN5, AIN7; PD7 is also VREFA). User guide Figure
++ * 7-5. The Click's device, if it has one, is /machine/mbN-click (a UART
+  * Click's chardev, /chardevs/mbN-click, linked there).
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+@@ -49,6 +53,13 @@
+ 
+ #define CNANO_MB_NUM        3
+ 
++/* mikroBUS AN of sockets 1-3: the pad and its ADC0 input */
++static const int avr64ea48_cnano_mb_an[CNANO_MB_NUM][2] = {
++    { AVR8X_PIN('D', 4), 4 },
++    { AVR8X_PIN('D', 5), 5 },
++    { AVR8X_PIN('D', 7), 7 },
++};
++
+ /* mikroBUS RST, PWM, INT and CS of the Nano Base's sockets 1-3 */
+ static const int avr64ea48_cnano_mb_pins[CNANO_MB_NUM][MIKROBUS_ROLES] = {
+     { AVR8X_PIN('D', 6), AVR8X_PIN('D', 0), AVR8X_PIN('D', 3),
+@@ -148,6 +159,7 @@ static void avr64ea48_cnano_add_clicks(Avr64ea48CnanoState *s)
+     SSIBus *spi = (SSIBus *)qdev_get_child_bus(spi0, "spi0.spi");
+     I2CBus *i2c = I2C_BUS(qdev_get_child_bus(
+         avr8x_soc_periph(&s->soc, "TWI0"), "twi0.i2c"));
++    Object *adc = OBJECT(avr8x_soc_periph(&s->soc, "ADC0"));
+     MikrobusSocket sockets[CNANO_MB_NUM];
+ 
+     for (unsigned n = 0; n < CNANO_MB_NUM; n++) {
+@@ -157,7 +169,8 @@ static void avr64ea48_cnano_add_clicks(Avr64ea48CnanoState *s)
+             .name = names[n], .port = DEVICE(&s->soc.port),
+             .port_in = AVR8X_PORT_IN, .port_pad = AVR8X_PORT_PAD,
+             .i2c = i2c, .spi = spi, .uart = s->mb_uart[n],
+-            .an_pin = -1,       /* not wired yet */
++            .an = { { adc, avr64ea48_cnano_mb_an[n][1] } },
++            .an_pin = avr64ea48_cnano_mb_an[n][0],
+         };
+         memcpy(sockets[n].pins, avr64ea48_cnano_mb_pins[n],
+                sizeof(sockets[n].pins));
+@@ -175,7 +188,12 @@ static void avr64ea48_cnano_init(MachineState *machine)
+                             TYPE_AVR64EA48_SOC);
+     soc = DEVICE(&s->soc);
+     qdev_prop_set_uint32(soc, "xoschf-hz", CNANO_XOSCHF_HZ);
+-    avr8x_soc_connect_serial(&s->soc, 1, serial_hd(0));
++    /* A UART Click on socket 2 shares USART1 with the virtual COM port */
++    s->mb_uart[1] = mikrobus_uart_chardev("mb2", s->mb[1]);
++    avr8x_soc_connect_serial(&s->soc, 1, s->mb_uart[1] ?
++                             mikrobus_uart_share("mb2", s->mb_uart[1],
++                                                 serial_hd(0)) :
++                             serial_hd(0));
+     /* A UART Click on socket 1 or 3 takes their shared USART2 */
+     s->mb_uart[0] = mikrobus_uart_chardev("mb1", s->mb[0]);
+     s->mb_uart[2] = mikrobus_uart_chardev("mb3", s->mb[2]);
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index fd1502f..55c4b99 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -16,6 +16,7 @@
+ #include "qapi/error.h"
+ #include "qemu/error-report.h"
+ #include "chardev/char.h"
++#include "chardev/char-fe.h"
+ #include "hw/core/irq.h"
+ #include "hw/core/qdev-properties.h"
+ #include "hw/misc/click_button.h"
+@@ -366,6 +367,101 @@ Chardev *mikrobus_uart_chardev(const char *socket, const char *click)
+     return qemu_chardev_new(id, c->type, NULL, NULL, &error_fatal);
+ }
+ 
++/*
++ * A UART line two devices hang on (a UART Click and a debugger's virtual
++ * COM port): what the MCU sends goes to both, what either sends reaches
++ * the MCU (on silicon, both at once would collide).
++ */
++#define TYPE_CHARDEV_MIKROBUS_SHARE "chardev-mikrobus-share"
++OBJECT_DECLARE_SIMPLE_TYPE(MikrobusShareChardev, CHARDEV_MIKROBUS_SHARE)
++
++struct MikrobusShareChardev {
++    Chardev parent_obj;
++    CharFrontend fe[2];
++};
++
++static int mikrobus_share_can_read(void *opaque)
++{
++    return qemu_chr_be_can_write(CHARDEV(opaque));
++}
++
++static void mikrobus_share_read(void *opaque, const uint8_t *buf, int size)
++{
++    qemu_chr_be_write(CHARDEV(opaque), buf, size);
++}
++
++static int mikrobus_share_write(Chardev *chr, const uint8_t *buf, int len)
++{
++    MikrobusShareChardev *s = CHARDEV_MIKROBUS_SHARE(chr);
++
++    for (unsigned i = 0; i < 2; i++) {
++        if (s->fe[i].chr) {
++            qemu_chr_fe_write(&s->fe[i], buf, len);
++        }
++    }
++    return len;
++}
++
++static void mikrobus_share_accept_input(Chardev *chr)
++{
++    MikrobusShareChardev *s = CHARDEV_MIKROBUS_SHARE(chr);
++
++    for (unsigned i = 0; i < 2; i++) {
++        if (s->fe[i].chr) {
++            qemu_chr_fe_accept_input(&s->fe[i]);
++        }
++    }
++}
++
++static bool mikrobus_share_open(Chardev *chr, ChardevBackend *backend,
++                                Error **errp)
++{
++    return true;
++}
++
++static void mikrobus_share_class_init(ObjectClass *oc, const void *data)
++{
++    ChardevClass *cc = CHARDEV_CLASS(oc);
++
++    cc->chr_open = mikrobus_share_open;
++    cc->chr_write = mikrobus_share_write;
++    cc->chr_accept_input = mikrobus_share_accept_input;
++}
++
++static const TypeInfo mikrobus_share_type = {
++    .name = TYPE_CHARDEV_MIKROBUS_SHARE,
++    .parent = TYPE_CHARDEV,
++    .instance_size = sizeof(MikrobusShareChardev),
++    .class_init = mikrobus_share_class_init,
++};
++
++static void mikrobus_register_types(void)
++{
++    type_register_static(&mikrobus_share_type);
++}
++
++type_init(mikrobus_register_types)
++
++Chardev *mikrobus_uart_share(const char *socket, Chardev *click,
++                             Chardev *other)
++{
++    g_autofree char *id = g_strdup_printf("%s-share", socket);
++    Chardev *chr = qemu_chardev_new(id, TYPE_CHARDEV_MIKROBUS_SHARE, NULL,
++                                    NULL, &error_fatal);
++    MikrobusShareChardev *s = CHARDEV_MIKROBUS_SHARE(chr);
++    Chardev *be[2] = { click, other };
++
++    for (unsigned i = 0; i < 2; i++) {
++        if (be[i]) {
++            qemu_chr_fe_init(&s->fe[i], be[i], &error_fatal);
++            qemu_chr_fe_set_handlers(&s->fe[i], mikrobus_share_can_read,
++                                     mikrobus_share_read, NULL, NULL, s,
++                                     NULL, true);
++        }
++    }
++    return chr;
++}
++
+ static void mikrobus_plug_one(Object *machine, const MikrobusSocket *sock,
+                               unsigned index, const ClickInfo *c)
+ {
+diff --git a/include/hw/misc/mikrobus.h b/include/hw/misc/mikrobus.h
+index de8ee05..1215d46 100644
+--- a/include/hw/misc/mikrobus.h
++++ b/include/hw/misc/mikrobus.h
+@@ -64,6 +64,15 @@ const char *mikrobus_click_names(void);
+  */
+ Chardev *mikrobus_uart_chardev(const char *socket, const char *click);
+ 
++/*
++ * A UART line shared by a Click's chardev @click and another device
++ * @other (a debugger's virtual COM port; NULL: none): give the returned
++ * chardev (/chardevs/<socket>-share) to the UART. What the MCU sends
++ * reaches both; what either sends reaches the MCU.
++ */
++Chardev *mikrobus_uart_share(const char *socket, Chardev *click,
++                             Chardev *other);
++
+ /*
+  * Plug the Click @click (a catalog name; NULL, "" or "none": nothing)
+  * into each of @n sockets; exits with an error for unknown Clicks, a bus
+diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
+index 6872e20..fed4372 100644
+--- a/tests/qtest/avr64ea48-cnano-test.c
++++ b/tests/qtest/avr64ea48-cnano-test.c
+@@ -432,6 +432,27 @@ static void test_twi_thermo8(const void *fw)
+     qtest_quit(qts);
+ }
+ 
++/*
++ * The Nano Base's AN: a POT on mb1 on ADC0 AIN4 (PD4); the DC Motor on
++ * mb3 pulls its nSLEEP, AN as a digital pad (PD7), high through R3
++ */
++static void test_an(const void *fw)
++{
++    QTestState *qts = qtest_initf("-M avr64ea48-cnano,mb1=pot,mb3=dcmotor "
++                                  "-kernel %s", (const char *)fw);
++    g_autofree char *mid = qom_str(qts, "/machine/soc/adc0", "ain");
++    g_autofree char *top = NULL;
++
++    g_assert_cmpstr(mid, ==, "4=1024");
++    qtest_qmp_assert_success(qts, "{ 'execute': 'qom-set', 'arguments': {"
++                             " 'path': '/machine/mb1-click',"
++                             " 'property': 'position', 'value': 1000 } }");
++    top = qom_str(qts, "/machine/soc/adc0", "ain");
++    g_assert_cmpstr(top, ==, "4=2048");
++    g_assert_cmphex(qtest_readb(qts, PORTD + P_IN) & BIT(7), ==, BIT(7));
++    qtest_quit(qts);
++}
++
+ /* RTC 6 Click (MCP79411) on mikroBUS 3: the clock runs, MFP on INT PE0 */
+ static void test_twi_rtc6(const void *fw)
+ {
+@@ -483,6 +504,7 @@ int main(int argc, char **argv)
+     qtest_add_data_func("avr64ea48-cnano/twi-accel", fw, test_twi_accel);
+     qtest_add_data_func("avr64ea48-cnano/twi-thermo8", fw, test_twi_thermo8);
+     qtest_add_data_func("avr64ea48-cnano/twi-rtc6", fw, test_twi_rtc6);
++    qtest_add_data_func("avr64ea48-cnano/an", fw, test_an);
+     ret = g_test_run();
+     unlink(fw);
+     return ret;
+-- 
+2.53.0.windows.2
+

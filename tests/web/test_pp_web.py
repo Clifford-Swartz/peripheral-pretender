@@ -531,6 +531,41 @@ def _avr_twin():
 
 
 @pytest.mark.qemu
+def test_session_ev66e56a_nanobase_an_uart2():
+    """Nano Base AN and socket 2's UART: a POT Click on mb1 reads on ADC0
+    AIN4 (PD4), a GNSS Click on mb2 talks on USART1, the lines it shares
+    with the virtual COM port; turning the knob changes the reading."""
+    import re
+    from tools.pp_web import server
+    _avr_twin()
+    if not (AVR_BUILD / "nanobase.elf").is_file():
+        pytest.skip("nanobase.elf not built (make -C firmware/avr-hello)")
+
+    async def scenario():
+        app = server.App("ev66e56a", AVR_BUILD / "nanobase.elf")
+        await app.plug("mb1", "pot")
+        await app.plug("mb2", "gnss")
+        try:
+            for _ in range(100):
+                await asyncio.sleep(0.1)
+                if "PP:EXIT" in app.uart_log:
+                    break
+            await app.control("mb1", "position", 100)
+            for _ in range(60):
+                await asyncio.sleep(0.1)
+                if re.search(r"an1 20[0-9]{2} mV", app.uart_log):
+                    break
+        finally:
+            await app.session.stop()
+        return app.uart_log
+
+    uart = asyncio.run(scenario())
+    assert "PP:EXIT 0" in uart, uart
+    assert "gnss $GNRMC," in uart, uart
+    assert re.search(r"an1 20[0-9]{2} mV", uart), uart     # 2.048 V
+
+
+@pytest.mark.qemu
 def test_session_ev66e56a_blinky_and_8x8g():
     """AVR64EA48 Curiosity Nano: LED0 (PB3) blinks from the TCB0 interrupt
     and SW0 (PB2) speeds it up; the 8x8 G Click on mikroBUS 1 shows what

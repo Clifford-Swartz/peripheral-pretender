@@ -410,8 +410,8 @@ session scratchpad only; what matters is in each model's header comment.
   mV, set on the ADC channels behind the pad: MC00 EXT1 PB08 = ADC0 AIN2/ADC1 AIN4, EXT2 PA08)
   and a UART (a UART Click is a chardev the board connects before realizing the MCU, linked as
   `/machine/<socket>-click`: MC00 SERCOM3 shared by EXT1/EXT2, Nano Base sockets 1/3 USART2).
-  **Open:** the Nano Base's AN pins and socket 2's UART (not in the repo; read the AVR64EA48
-  Nano's pinout table), so the POT refuses the AVR board.
+  The Nano Base's AN (PD4/PD5/PD7 = AIN4/5/7) and socket 2's UART (USART1, the VCOM's lines,
+  shared through `chardev-mikrobus-share`) came with patch 0057 (user guide Figure 7-5).
 - **GNSS** (`chardev-quectel-l86`): NMEA from real L86 captures, PMTK commands, paced at the
   baud rate; sliders for position, altitude, satellites (< 4: no fix).
 - **Rotary G/R/B/Y** (`click-rotary`, a 74HC595 subclass): encoder quadrature on PWM and AN
@@ -442,6 +442,14 @@ session scratchpad only; what matters is in each model's header comment.
 - **DC Motor** (patch 0055, `click-dcmotor`): PWM duty timed like the Buzz Click's, the
   4053/DRV8833 table, a motor with lag; a `motor` display. MikroElektronika's example uses
   only slow decay, so its motor slows as its duty rises: true on silicon too.
+- **AVR Nano Base: AN and socket 2's UART** (patch 0057): every Click now plugs into the AVR
+  board. Socket 2's UART is USART1, the VCOM's lines, so a UART Click there shares them with
+  the console (the VCOM hears what the MCU sends the Click), as on the board. `APP=nanobase`
+  (avr-hello) reads a POT on mb1 and a GNSS on mb2. **Found on the way (open):** on the AVR
+  twin, busy-wait delays (`_delay_ms`) are not to scale: QEMU's icount counts instructions
+  (shift=auto paces them to the host), not AVR cycles, so cycle-counted loops run fast or slow
+  against the virtual clock the peripherals use. Timer-based timing (TCB, RTC) is exact. A fix
+  needs cycle counts in the AVR CPU model (each instruction charging its cycles to icount).
 - **Servo** (patch 0056, `click-servo`): PCA9685 plus a minimal LTC2497 in one device; a
   `servos` display. MikroElektronika's driver writes MODE1 0xF1 from awake, which would
   select the grounded EXTCLK if the chip took it: the data sheet's sequence says it does
