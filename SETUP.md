@@ -9,7 +9,7 @@ Pick a path:
 - **A. Just run it.** Install the VS Code extension. It carries QEMU, Python and gdb, so you
   need no compilers or builds. About 5 minutes.
 - **B. Develop it.** Build the QEMU fork, firmware and tools, and run the test suites. About
-  1-2 hours, most of it the QEMU build.
+  an hour, most of it installing tools; the QEMU build itself takes minutes.
 
 Before touching hardware, read the rules in `CLAUDE.md`. A physical board is read-only unless
 its owner approves programming, erasing, resetting or halting it.
@@ -89,7 +89,10 @@ qemu/setup.sh /c/pp/pp-qemu
 ```
 
 This clones QEMU, applies the patches with `git am` and builds `qemu-system-arm` (in
-`build/`) and `qemu-system-avr` (in `build-avr/`). It takes 30-60 minutes.
+`build/`) and `qemu-system-avr` (in `build-avr/`). Measured on a 32-thread PC: 47 s to
+configure and 5 min to compile the Arm build from scratch, the AVR build less; expect 10-30
+minutes depending on cores, plus the clone. Changing a model later rebuilds only what it touches
+(`ninja` in `build/`), usually seconds.
 
 **Check:** `/c/pp/pp-qemu/build/qemu-system-arm.exe -M help | grep pic32cm` lists
 `pic32cm-jh01-cpro` and `pic32cm-mc00-cpro`, and `/c/pp/pp-qemu/build-avr/qemu-system-avr.exe
