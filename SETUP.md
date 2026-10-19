@@ -22,7 +22,7 @@ its owner approves programming, erasing, resetting or halting it.
 
    ```
    gh release download --repo Clifford-Swartz/peripheral-pretender --pattern "*.vsix"
-   code --install-extension peripheral-pretender-win32-x64-0.4.1.vsix
+   code --install-extension peripheral-pretender-win32-x64-0.4.2.vsix
    ```
 
 3. **Check:** reload VS Code. A chip icon appears in the activity bar on the left. Click it and
