@@ -21,9 +21,11 @@ its owner approves programming, erasing, resetting or halting it.
 2. Download the extension from this repository's Releases and install it:
 
    ```
-   gh release download --repo Clifford-Swartz/peripheral-pretender --pattern "*.vsix"
+   curl -LO https://github.com/Clifford-Swartz/peripheral-pretender/releases/latest/download/peripheral-pretender-win32-x64-0.4.2.vsix
    code --install-extension peripheral-pretender-win32-x64-0.4.2.vsix
    ```
+
+   (Or download it from the Releases page in a browser.)
 
 3. **Check:** reload VS Code. A chip icon appears in the activity bar on the left. Click it and
    then a board, for example "PIC32CM MC00 Curiosity Pro". The board opens beside the editor
