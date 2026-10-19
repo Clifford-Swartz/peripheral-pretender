@@ -61,9 +61,12 @@ pacman -S --needed base-devel git \
 ### 2. Clone and Python packages
 
 The repository can live anywhere, even in a path with spaces. The QEMU fork cannot, because
-QEMU's configure rejects spaces, so it goes in `C:\pp\pp-qemu` below.
+QEMU's configure rejects spaces, so it goes in `C:\pp\pp-qemu` below. The MPLAB example has
+paths up to 171 characters inside the repository: clone into a short folder (such as
+`C:\src`), or enable long paths first, or the checkout fails with "Filename too long".
 
 ```
+git config --global core.longpaths true
 git clone https://github.com/Clifford-Swartz/peripheral-pretender.git
 cd peripheral-pretender
 py -m pip install --user -r requirements.txt
