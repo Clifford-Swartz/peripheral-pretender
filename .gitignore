@@ -13,3 +13,6 @@ examples/**/*.X/build/
 examples/**/*.X/dist/
 examples/**/*.X/debug/
 examples/**/*.X/nbproject/private/
+# local tool state
+.claude/
+MPLABXLog.xml

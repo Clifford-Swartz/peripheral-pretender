@@ -6,3 +6,6 @@ golden/** -text
 overlays/*.yaml text eol=lf
 profiles/*.yaml text eol=lf
 devices/*.json text eol=lf
+# git am applies these to QEMU byte for byte; bash rejects CR
+qemu/patches/*.patch -text
+*.sh text eol=lf

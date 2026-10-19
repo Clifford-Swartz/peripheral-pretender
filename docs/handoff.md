@@ -37,6 +37,9 @@ committed tools use `-gdb tcp:127.0.0.1:<port>`; keep it that way.
 
 ## Setting up the new machine
 
+`SETUP.md` at the top of the repository is the current, step-by-step setup (with a check per
+step). The notes below are the history behind it.
+
 Notes from the 2026-10-13 setup on Windows 11 (personal PC):
 - MSYS2 came from `winget install MSYS2.MSYS2`. Running `pacman -Syu` the first time updates the core
   and exits the shell, so run it twice. Also install `mingw-w64-ucrt-x86_64-meson`,
