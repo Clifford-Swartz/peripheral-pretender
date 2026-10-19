@@ -1,7 +1,7 @@
-From f9daa309e8846c43b46ee16cbbf8bc427dd77e3b Mon Sep 17 00:00:00 2001
+From fe1f5ab2db000c7576ade184a26f0cb160d20170 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Tue, 13 Oct 2026 18:28:32 -0700
-Subject: [PATCH] hw/misc: per-instance counter width for TCC registers
+Subject: [PATCH 12/57] hw/misc: per-instance counter width for TCC registers
 
 The TCC instances of the PIC32CM MC00 have different counter widths
 (ATDF parameter SIZE: TCC0/1 24 bits, TCC2 16 bits); the register table
@@ -21,7 +21,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  5 files changed, 49 insertions(+), 10 deletions(-)
 
 diff --git a/hw/misc/mchp_regblock.c b/hw/misc/mchp_regblock.c
-index ddff619..6546526 100644
+index d01ed08..c910c11 100644
 --- a/hw/misc/mchp_regblock.c
 +++ b/hw/misc/mchp_regblock.c
 @@ -68,6 +68,42 @@ static const MchpRegInfo *mchp_regblock_find_ctrl(MchpRegBlock *s)
@@ -98,7 +98,7 @@ index ddff619..6546526 100644
  }
  
 diff --git a/include/hw/arm/pic32cm1216mc00048_gen.h b/include/hw/arm/pic32cm1216mc00048_gen.h
-index 818991b..69e3b2b 100644
+index 0a5a454..cd1e2af 100644
 --- a/include/hw/arm/pic32cm1216mc00048_gen.h
 +++ b/include/hw/arm/pic32cm1216mc00048_gen.h
 @@ -448,7 +448,7 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
@@ -129,7 +129,7 @@ index 818991b..69e3b2b 100644
          .nregs = PIC32CM1216MC00048_TCC_NREGS,
      },
 diff --git a/include/hw/arm/pic32cm5164jh01100_gen.h b/include/hw/arm/pic32cm5164jh01100_gen.h
-index 799885b..df8ca81 100644
+index 624900b..8e282c5 100644
 --- a/include/hw/arm/pic32cm5164jh01100_gen.h
 +++ b/include/hw/arm/pic32cm5164jh01100_gen.h
 @@ -525,7 +525,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
@@ -160,7 +160,7 @@ index 799885b..df8ca81 100644
          .regs = pic32cm5164jh01100_tcc_regs,
          .nregs = PIC32CM5164JH01100_TCC_NREGS,
 diff --git a/include/hw/mchp/mchp_device.h b/include/hw/mchp/mchp_device.h
-index 0bde9a0..e12b295 100644
+index 8bd9bd4..fd30f04 100644
 --- a/include/hw/mchp/mchp_device.h
 +++ b/include/hw/mchp/mchp_device.h
 @@ -68,6 +68,7 @@ typedef struct MchpInstanceInfo {
@@ -172,7 +172,7 @@ index 0bde9a0..e12b295 100644
      const MchpRegInfo *regs;        /* view at reset; NULL: no table */
      unsigned nregs;
 diff --git a/include/hw/misc/mchp_regblock.h b/include/hw/misc/mchp_regblock.h
-index 4cbb501..817bd00 100644
+index dc7f80f..c075ede 100644
 --- a/include/hw/misc/mchp_regblock.h
 +++ b/include/hw/misc/mchp_regblock.h
 @@ -56,6 +56,7 @@ struct MchpRegBlock {

@@ -1,7 +1,8 @@
-From e0548e427d8c59db5d7abac2a8e4850fff5957e5 Mon Sep 17 00:00:00 2001
+From 67d5c00f39f11bee2424eb8b56ec5bd77768b140 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Thu, 15 Oct 2026 19:03:10 -0700
-Subject: [PATCH] hw/display: SSD1306 monochrome OLED driver, the OLED W Click
+Subject: [PATCH 49/57] hw/display: SSD1306 monochrome OLED driver, the OLED W
+ Click
 
 ssd1306 on SPI with D/C# and RES#: the three addressing modes, start
 line, re-map, MUX, COM scan direction, offset and pin layout, inverse,
@@ -22,7 +23,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/display/ssd1306.h
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index 24c0655..98af643 100644
+index 444adc0..2362de5 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -183,6 +183,18 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
@@ -60,7 +61,7 @@ index e6ae252..10213fe 100644
  
 diff --git a/hw/display/ssd1306.c b/hw/display/ssd1306.c
 new file mode 100644
-index 0000000..b2489eb
+index 0000000..8e1b4ca
 --- /dev/null
 +++ b/hw/display/ssd1306.c
 @@ -0,0 +1,466 @@
@@ -531,7 +532,7 @@ index 0000000..b2489eb
 +
 +DEFINE_TYPES(ssd1306_types)
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index 4f0c277..f7c4bfb 100644
+index f07216d..3b6ac55 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -26,6 +26,7 @@
@@ -557,7 +558,7 @@ index 4f0c277..f7c4bfb 100644
        TYPE_MCHP_AT24CM02, CLICK_I2C, MCHP_AT24CM02_ADDR, 0 },
 diff --git a/include/hw/display/ssd1306.h b/include/hw/display/ssd1306.h
 new file mode 100644
-index 0000000..4ec25cd
+index 0000000..dc22df2
 --- /dev/null
 +++ b/include/hw/display/ssd1306.h
 @@ -0,0 +1,19 @@

@@ -1,7 +1,7 @@
-From 687b90eca4ed758fd712c83e070ea754a3865f45 Mon Sep 17 00:00:00 2001
+From c2a6be96bae19adaa0abcf9c3840a01098d56d53 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 14:03:40 -0700
-Subject: [PATCH 24/25] hw/mchp: regenerated AVR64EA48 tables (SPI, TCB,
+Subject: [PATCH 24/57] hw/mchp: regenerated AVR64EA48 tables (SPI, TCB,
  CLKCTRL overlays)
 
 New overlays for the AVR8X SPI (spi_8bit_v2) and TCB
@@ -22,7 +22,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  6 files changed, 23 insertions(+), 17 deletions(-)
 
 diff --git a/include/hw/mchp/gen/avr64ea48/clkctrl_avrea.h b/include/hw/mchp/gen/avr64ea48/clkctrl_avrea.h
-index c898c9c..dc69665 100644
+index 7f8cad0..51d3242 100644
 --- a/include/hw/mchp/gen/avr64ea48/clkctrl_avrea.h
 +++ b/include/hw/mchp/gen/avr64ea48/clkctrl_avrea.h
 @@ -6,7 +6,7 @@
@@ -44,7 +44,7 @@ index c898c9c..dc69665 100644
      {
          .name = "MCLKTIMEBASE", .offset = 0x06, .size = 1, .count = 1,
 diff --git a/include/hw/mchp/gen/avr64ea48/spi_spi_8bit_v2.h b/include/hw/mchp/gen/avr64ea48/spi_spi_8bit_v2.h
-index 655dfea..7f32c3c 100644
+index f176185..ffda0fa 100644
 --- a/include/hw/mchp/gen/avr64ea48/spi_spi_8bit_v2.h
 +++ b/include/hw/mchp/gen/avr64ea48/spi_spi_8bit_v2.h
 @@ -6,7 +6,7 @@
@@ -91,7 +91,7 @@ index 655dfea..7f32c3c 100644
  };
  #define AVR64EA48_SPI_NREGS 5
 diff --git a/include/hw/mchp/gen/avr64ea48/tcb_tmr_16b_capture_v1.h b/include/hw/mchp/gen/avr64ea48/tcb_tmr_16b_capture_v1.h
-index 5ad0282..6357fcd 100644
+index b8bdf62..22d787f 100644
 --- a/include/hw/mchp/gen/avr64ea48/tcb_tmr_16b_capture_v1.h
 +++ b/include/hw/mchp/gen/avr64ea48/tcb_tmr_16b_capture_v1.h
 @@ -6,7 +6,7 @@
@@ -144,7 +144,7 @@ index 5ad0282..6357fcd 100644
  };
  #define AVR64EA48_TCB_NREGS 10
 diff --git a/include/hw/mchp/gen/clkctrl_avrea.h b/include/hw/mchp/gen/clkctrl_avrea.h
-index 7a9133f..f294659 100644
+index dda5182..bae78a1 100644
 --- a/include/hw/mchp/gen/clkctrl_avrea.h
 +++ b/include/hw/mchp/gen/clkctrl_avrea.h
 @@ -8,7 +8,7 @@
@@ -157,7 +157,7 @@ index 7a9133f..f294659 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/spi_spi_8bit_v2.h b/include/hw/mchp/gen/spi_spi_8bit_v2.h
-index 21ab117..ff642e7 100644
+index 63cfaf2..c0b8bf7 100644
 --- a/include/hw/mchp/gen/spi_spi_8bit_v2.h
 +++ b/include/hw/mchp/gen/spi_spi_8bit_v2.h
 @@ -8,7 +8,7 @@
@@ -170,7 +170,7 @@ index 21ab117..ff642e7 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/tcb_tmr_16b_capture_v1.h b/include/hw/mchp/gen/tcb_tmr_16b_capture_v1.h
-index 4c8e434..e14b886 100644
+index 3495f5a..5e0a1d4 100644
 --- a/include/hw/mchp/gen/tcb_tmr_16b_capture_v1.h
 +++ b/include/hw/mchp/gen/tcb_tmr_16b_capture_v1.h
 @@ -8,7 +8,7 @@

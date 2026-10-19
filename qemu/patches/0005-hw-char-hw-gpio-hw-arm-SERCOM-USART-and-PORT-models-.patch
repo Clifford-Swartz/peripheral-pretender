@@ -1,7 +1,7 @@
-From 5f27fdabefa1b40af81d04a705fdec815ccb0281 Mon Sep 17 00:00:00 2001
+From 91724a90f2e9ac012b9e8f7ed025756594d91a6d Mon Sep 17 00:00:00 2001
 From: Clifford Swartz <cliffordswartz1@gmail.com>
 Date: Mon, 12 Oct 2026 11:25:12 -0700
-Subject: [PATCH 5/5] hw/char, hw/gpio, hw/arm: SERCOM USART and PORT models,
+Subject: [PATCH 05/57] hw/char, hw/gpio, hw/arm: SERCOM USART and PORT models,
  LED0 and SW0
 
 Peripheral Pretender v0, part B. mchp-sercom models the SERCOM USART
@@ -47,7 +47,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 tests/qtest/pic32cm-jh-sercom-test.c
 
 diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
-index df39a4b..00c6f2b 100644
+index 766894f..2b5ccce 100644
 --- a/docs/system/arm/pic32cm-jh01-cpro.rst
 +++ b/docs/system/arm/pic32cm-jh01-cpro.rst
 @@ -46,6 +46,25 @@ Supported devices
@@ -134,7 +134,7 @@ index 4b7773e..0d8a0ad 100644
      select UNIMP
  
 diff --git a/hw/arm/pic32cm_jh01_cpro.c b/hw/arm/pic32cm_jh01_cpro.c
-index 010f0c2..ab441d7 100644
+index 538bf5a..f2e1468 100644
 --- a/hw/arm/pic32cm_jh01_cpro.c
 +++ b/hw/arm/pic32cm_jh01_cpro.c
 @@ -16,12 +16,19 @@
@@ -223,7 +223,7 @@ index 010f0c2..ab441d7 100644
  
  static const TypeInfo pic32cm_jh01_cpro_types[] = {
 diff --git a/hw/arm/pic32cm_jh_soc.c b/hw/arm/pic32cm_jh_soc.c
-index 2900c07..9e221a1 100644
+index 099eab3..9e49186 100644
 --- a/hw/arm/pic32cm_jh_soc.c
 +++ b/hw/arm/pic32cm_jh_soc.c
 @@ -17,9 +17,11 @@
@@ -267,7 +267,7 @@ index 020c0a8..123616a 100644
  
 diff --git a/hw/char/mchp_sercom.c b/hw/char/mchp_sercom.c
 new file mode 100644
-index 0000000..4a2a1cc
+index 0000000..d36ddeb
 --- /dev/null
 +++ b/hw/char/mchp_sercom.c
 @@ -0,0 +1,529 @@
@@ -842,7 +842,7 @@ index a209294..e9ec9a3 100644
      depends on I2C
 diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
 new file mode 100644
-index 0000000..c0b358c
+index 0000000..78ebce5
 --- /dev/null
 +++ b/hw/gpio/mchp_port.c
 @@ -0,0 +1,343 @@
@@ -1215,7 +1215,7 @@ index cea896b..c27fea5 100644
 +mchp_port_in(char group, unsigned pin, int level) "P%c%02u: in %d"
 diff --git a/include/hw/char/mchp_sercom.h b/include/hw/char/mchp_sercom.h
 new file mode 100644
-index 0000000..637aa2a
+index 0000000..1a2897f
 --- /dev/null
 +++ b/include/hw/char/mchp_sercom.h
 @@ -0,0 +1,30 @@
@@ -1251,7 +1251,7 @@ index 0000000..637aa2a
 +#endif /* HW_CHAR_MCHP_SERCOM_H */
 diff --git a/include/hw/gpio/mchp_port.h b/include/hw/gpio/mchp_port.h
 new file mode 100644
-index 0000000..c348e5d
+index 0000000..44e7062
 --- /dev/null
 +++ b/include/hw/gpio/mchp_port.h
 @@ -0,0 +1,46 @@
@@ -1316,7 +1316,7 @@ index 51c5a46..2d54c90 100644
    (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
 diff --git a/tests/qtest/pic32cm-jh-port-test.c b/tests/qtest/pic32cm-jh-port-test.c
 new file mode 100644
-index 0000000..69a34c9
+index 0000000..83964b8
 --- /dev/null
 +++ b/tests/qtest/pic32cm-jh-port-test.c
 @@ -0,0 +1,241 @@
@@ -1563,7 +1563,7 @@ index 0000000..69a34c9
 +}
 diff --git a/tests/qtest/pic32cm-jh-sercom-test.c b/tests/qtest/pic32cm-jh-sercom-test.c
 new file mode 100644
-index 0000000..42e69bb
+index 0000000..73b1188
 --- /dev/null
 +++ b/tests/qtest/pic32cm-jh-sercom-test.c
 @@ -0,0 +1,239 @@

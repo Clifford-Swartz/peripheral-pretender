@@ -1,8 +1,8 @@
-From 2d583c1cca0f7289f46006ec619aac6606b74c3c Mon Sep 17 00:00:00 2001
+From 93fb70586edafc3a9f5cbcfad040bf19deb07cae Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 18:00:18 -0700
-Subject: [PATCH] hw/dma, hw/display, hw/misc: SAM D5x DMAC, ST7789, WS2812;
- the PyKit Ruler
+Subject: [PATCH 33/57] hw/dma, hw/display, hw/misc: SAM D5x DMAC, ST7789,
+ WS2812; the PyKit Ruler
 
 DMAC U2503 (mchp-dmac): descriptors and write-back in SRAM, burst/block/
 transaction triggers paced by peripheral flags (SERCOM DRE/RXC, from the
@@ -69,7 +69,7 @@ index e741622..ab95b4b 100644
  config PIC32CM_SOC
      bool
 diff --git a/hw/arm/atsame51j20a_device.h b/hw/arm/atsame51j20a_device.h
-index 6ad7ece..c0ca218 100644
+index 271387b..3272952 100644
 --- a/hw/arm/atsame51j20a_device.h
 +++ b/hw/arm/atsame51j20a_device.h
 @@ -53,6 +53,8 @@ static const MchpDeviceInfo atsame51j20a_device = {
@@ -82,7 +82,7 @@ index 6ad7ece..c0ca218 100644
  
  #endif /* HW_ARM_ATSAME51J20A_DEVICE_H */
 diff --git a/hw/arm/curiosity_circuitpython.c b/hw/arm/curiosity_circuitpython.c
-index a8455f0..97487e2 100644
+index 5db7698..a8af172 100644
 --- a/hw/arm/curiosity_circuitpython.c
 +++ b/hw/arm/curiosity_circuitpython.c
 @@ -13,12 +13,25 @@
@@ -240,7 +240,7 @@ index a8455f0..97487e2 100644
      armv7m_load_kernel(s->soc.armv7m.cpu, machine->kernel_filename,
                         s->soc.dev->flash_base, s->soc.dev->flash_size);
 diff --git a/hw/arm/pic32cm1216mc00048_device.h b/hw/arm/pic32cm1216mc00048_device.h
-index f04dbb4..0d8df9e 100644
+index 96c5580..e72858b 100644
 --- a/hw/arm/pic32cm1216mc00048_device.h
 +++ b/hw/arm/pic32cm1216mc00048_device.h
 @@ -55,6 +55,8 @@ static const MchpDeviceInfo pic32cm1216mc00048_device = {
@@ -253,7 +253,7 @@ index f04dbb4..0d8df9e 100644
  
  #endif /* HW_ARM_PIC32CM1216MC00048_DEVICE_H */
 diff --git a/hw/arm/pic32cm5164jh01100_device.h b/hw/arm/pic32cm5164jh01100_device.h
-index 2733567..5dca537 100644
+index 509b32f..ebaedd2 100644
 --- a/hw/arm/pic32cm5164jh01100_device.h
 +++ b/hw/arm/pic32cm5164jh01100_device.h
 @@ -55,6 +55,8 @@ static const MchpDeviceInfo pic32cm5164jh01100_device = {
@@ -266,7 +266,7 @@ index 2733567..5dca537 100644
  
  #endif /* HW_ARM_PIC32CM5164JH01100_DEVICE_H */
 diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
-index 5fc9b28..0579bbf 100644
+index 7f58a5c..07f43a1 100644
 --- a/hw/arm/pic32cm_soc.c
 +++ b/hw/arm/pic32cm_soc.c
 @@ -32,6 +32,7 @@
@@ -350,7 +350,7 @@ index 93e9081..e6ae252 100644
  system_ss.add(when: 'CONFIG_VGA_PCI', if_true: files('vga-pci.c'))
 diff --git a/hw/display/st7789.c b/hw/display/st7789.c
 new file mode 100644
-index 0000000..9ab08b0
+index 0000000..5331269
 --- /dev/null
 +++ b/hw/display/st7789.c
 @@ -0,0 +1,417 @@
@@ -773,7 +773,7 @@ index 0000000..9ab08b0
 +DEFINE_TYPES(st7789_types)
 diff --git a/hw/dma/mchp_dmac.c b/hw/dma/mchp_dmac.c
 new file mode 100644
-index 0000000..77eb04d
+index 0000000..259300b
 --- /dev/null
 +++ b/hw/dma/mchp_dmac.c
 @@ -0,0 +1,572 @@
@@ -1373,7 +1373,7 @@ index 08167c4..380d9f9 100644
      bool
      select I2C
 diff --git a/hw/misc/mchp_usb.c b/hw/misc/mchp_usb.c
-index 0df02d7..185fa46 100644
+index 1d9562d..a33cfd3 100644
 --- a/hw/misc/mchp_usb.c
 +++ b/hw/misc/mchp_usb.c
 @@ -14,13 +14,13 @@
@@ -1477,7 +1477,7 @@ index 29293cf..becf1b2 100644
    'mchp_edbg_dgi.c',
 diff --git a/hw/misc/ws2812.c b/hw/misc/ws2812.c
 new file mode 100644
-index 0000000..0821f79
+index 0000000..5f9aaa9
 --- /dev/null
 +++ b/hw/misc/ws2812.c
 @@ -0,0 +1,234 @@
@@ -1717,7 +1717,7 @@ index 0000000..0821f79
 +DEFINE_TYPES(ws2812_types)
 diff --git a/include/hw/display/st7789.h b/include/hw/display/st7789.h
 new file mode 100644
-index 0000000..a7b1283
+index 0000000..52a7f78
 --- /dev/null
 +++ b/include/hw/display/st7789.h
 @@ -0,0 +1,23 @@
@@ -1746,7 +1746,7 @@ index 0000000..a7b1283
 +#endif /* HW_DISPLAY_ST7789_H */
 diff --git a/include/hw/dma/mchp_dmac.h b/include/hw/dma/mchp_dmac.h
 new file mode 100644
-index 0000000..f1c1569
+index 0000000..babbb77
 --- /dev/null
 +++ b/include/hw/dma/mchp_dmac.h
 @@ -0,0 +1,35 @@
@@ -1786,7 +1786,7 @@ index 0000000..f1c1569
 +
 +#endif /* HW_DMA_MCHP_DMAC_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/dmac_u2503.h b/include/hw/mchp/gen/atsame51j20a/dmac_u2503.h
-index 7e70350..cbf2f01 100644
+index 0df6b67..042d99d 100644
 --- a/include/hw/mchp/gen/atsame51j20a/dmac_u2503.h
 +++ b/include/hw/mchp/gen/atsame51j20a/dmac_u2503.h
 @@ -6,7 +6,7 @@
@@ -3174,7 +3174,7 @@ index 7e70350..cbf2f01 100644
  };
  #define ATSAME51J20A_DMAC_NREGS 271
 diff --git a/include/hw/mchp/gen/dmac_u2503.h b/include/hw/mchp/gen/dmac_u2503.h
-index 226b9c8..d3464cd 100644
+index 9e7bdc8..14bf918 100644
 --- a/include/hw/mchp/gen/dmac_u2503.h
 +++ b/include/hw/mchp/gen/dmac_u2503.h
 @@ -8,7 +8,7 @@
@@ -3187,7 +3187,7 @@ index 226b9c8..d3464cd 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/mchp_device.h b/include/hw/mchp/mchp_device.h
-index e6fd85c..c9dafc6 100644
+index 3dc9172..141a756 100644
 --- a/include/hw/mchp/mchp_device.h
 +++ b/include/hw/mchp/mchp_device.h
 @@ -171,6 +171,8 @@ typedef struct MchpDeviceInfo {
@@ -3201,7 +3201,7 @@ index e6fd85c..c9dafc6 100644
  /*
 diff --git a/include/hw/misc/ws2812.h b/include/hw/misc/ws2812.h
 new file mode 100644
-index 0000000..21713fb
+index 0000000..4a09bcd
 --- /dev/null
 +++ b/include/hw/misc/ws2812.h
 @@ -0,0 +1,20 @@
@@ -3226,7 +3226,7 @@ index 0000000..21713fb
 +
 +#endif /* HW_MISC_WS2812_H */
 diff --git a/tests/qtest/curiosity-cp-test.c b/tests/qtest/curiosity-cp-test.c
-index f94df7a..e559c2d 100644
+index 7ddf314..85eb6bb 100644
 --- a/tests/qtest/curiosity-cp-test.c
 +++ b/tests/qtest/curiosity-cp-test.c
 @@ -26,6 +26,8 @@

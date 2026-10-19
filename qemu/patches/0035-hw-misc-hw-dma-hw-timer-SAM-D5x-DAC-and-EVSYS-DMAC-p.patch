@@ -1,8 +1,8 @@
-From d52c5e5e76508ae4f5f7d1d12f20ec884615602c Mon Sep 17 00:00:00 2001
+From 05615de720f8438503e5da8ac50cbb17e8661b0d Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 20:00:57 -0700
-Subject: [PATCH] hw/misc, hw/dma, hw/timer: SAM D5x DAC and EVSYS; DMAC pulsed
- triggers
+Subject: [PATCH 35/57] hw/misc, hw/dma, hw/timer: SAM D5x DAC and EVSYS; DMAC
+ pulsed triggers
 
 The speaker of the PyKit Ruler, played the way CircuitPython's audioio
 and synthio drive it:
@@ -57,7 +57,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 diff --git a/docs/system/arm/curiosity-circuitpython.rst b/docs/system/arm/curiosity-circuitpython.rst
 new file mode 100644
-index 0000000..cf52096
+index 0000000..eaf300f
 --- /dev/null
 +++ b/docs/system/arm/curiosity-circuitpython.rst
 @@ -0,0 +1,88 @@
@@ -162,7 +162,7 @@ index 8609fec..cc3c08f 100644
     arm/pic32cm-mc00-cpro
     arm/nrf
 diff --git a/hw/arm/curiosity_circuitpython.c b/hw/arm/curiosity_circuitpython.c
-index 0366a45..d925c71 100644
+index 7f920f7..ed72cbc 100644
 --- a/hw/arm/curiosity_circuitpython.c
 +++ b/hw/arm/curiosity_circuitpython.c
 @@ -34,6 +34,8 @@
@@ -175,7 +175,7 @@ index 0366a45..d925c71 100644
   * Machine option bno085=on plugs a BNO085 breakout (I2C 4Ah) into the
   * QWIIC connector, as on the kit on the desk (/machine/qwiic-bno085).
 diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
-index 93972ef..e3fad61 100644
+index a63ce16..1871202 100644
 --- a/hw/arm/pic32cm_soc.c
 +++ b/hw/arm/pic32cm_soc.c
 @@ -25,6 +25,7 @@
@@ -255,7 +255,7 @@ index 93972ef..e3fad61 100644
  }
  
 diff --git a/hw/dma/mchp_dmac.c b/hw/dma/mchp_dmac.c
-index 77eb04d..65d74a7 100644
+index 259300b..adfcbee 100644
 --- a/hw/dma/mchp_dmac.c
 +++ b/hw/dma/mchp_dmac.c
 @@ -20,9 +20,14 @@
@@ -525,7 +525,7 @@ index 77eb04d..65d74a7 100644
      c->log_writes = false;
 diff --git a/hw/misc/mchp_dac.c b/hw/misc/mchp_dac.c
 new file mode 100644
-index 0000000..8c66c67
+index 0000000..9448c9f
 --- /dev/null
 +++ b/hw/misc/mchp_dac.c
 @@ -0,0 +1,305 @@
@@ -836,7 +836,7 @@ index 0000000..8c66c67
 +DEFINE_TYPES(mchp_dac_types)
 diff --git a/hw/misc/mchp_evsys5x.c b/hw/misc/mchp_evsys5x.c
 new file mode 100644
-index 0000000..511037d
+index 0000000..efd5fc6
 --- /dev/null
 +++ b/hw/misc/mchp_evsys5x.c
 @@ -0,0 +1,326 @@
@@ -1167,7 +1167,7 @@ index 0000000..511037d
 +
 +DEFINE_TYPES(mchp_evsys5x_types)
 diff --git a/hw/misc/mchp_regblock.c b/hw/misc/mchp_regblock.c
-index 2d0284c..287d1c1 100644
+index fee2e4d..c747ac2 100644
 --- a/hw/misc/mchp_regblock.c
 +++ b/hw/misc/mchp_regblock.c
 @@ -200,6 +200,19 @@ static uint32_t mchp_regblock_pending_flags(MchpRegBlock *s)
@@ -1205,7 +1205,7 @@ index e9c785d..f99a1a3 100644
    'mchp_usb.c',
    'mchp_sysctrl.c',
 diff --git a/hw/timer/mchp_tc.c b/hw/timer/mchp_tc.c
-index b08dbf1..6158dd7 100644
+index f8a5f1a..5a2ef89 100644
 --- a/hw/timer/mchp_tc.c
 +++ b/hw/timer/mchp_tc.c
 @@ -28,7 +28,8 @@
@@ -1326,7 +1326,7 @@ index b08dbf1..6158dd7 100644
      qdev_init_gpio_out_named(DEVICE(obj), s->mc_event, MCHP_TC_MC_EVENT,
                               MCHP_TC_CHANNELS);
 diff --git a/include/hw/dma/mchp_dmac.h b/include/hw/dma/mchp_dmac.h
-index f1c1569..eec90cd 100644
+index babbb77..038ae56 100644
 --- a/include/hw/dma/mchp_dmac.h
 +++ b/include/hw/dma/mchp_dmac.h
 @@ -29,6 +29,16 @@
@@ -1347,7 +1347,7 @@ index f1c1569..eec90cd 100644
  void mchp_dmac_kick(DeviceState *dmac);
  
 diff --git a/include/hw/mchp/gen/atsame51j20a/dac_u2502.h b/include/hw/mchp/gen/atsame51j20a/dac_u2502.h
-index 8c6073c..fadb33b 100644
+index 2374ede..e30816a 100644
 --- a/include/hw/mchp/gen/atsame51j20a/dac_u2502.h
 +++ b/include/hw/mchp/gen/atsame51j20a/dac_u2502.h
 @@ -6,7 +6,7 @@
@@ -1435,7 +1435,7 @@ index 8c6073c..fadb33b 100644
  };
  #define ATSAME51J20A_DAC_NREGS 13
 diff --git a/include/hw/mchp/gen/atsame51j20a/evsys_u2504.h b/include/hw/mchp/gen/atsame51j20a/evsys_u2504.h
-index 91498c4..03f45ba 100644
+index da73ad8..6560fcb 100644
 --- a/include/hw/mchp/gen/atsame51j20a/evsys_u2504.h
 +++ b/include/hw/mchp/gen/atsame51j20a/evsys_u2504.h
 @@ -6,7 +6,7 @@
@@ -2521,7 +2521,7 @@ index 91498c4..03f45ba 100644
  };
  #define ATSAME51J20A_EVSYS_NREGS 168
 diff --git a/include/hw/mchp/gen/dac_u2502.h b/include/hw/mchp/gen/dac_u2502.h
-index 121a9e2..0183dd3 100644
+index 589753b..8331182 100644
 --- a/include/hw/mchp/gen/dac_u2502.h
 +++ b/include/hw/mchp/gen/dac_u2502.h
 @@ -8,7 +8,7 @@
@@ -2534,7 +2534,7 @@ index 121a9e2..0183dd3 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/evsys_u2504.h b/include/hw/mchp/gen/evsys_u2504.h
-index bb05650..124962d 100644
+index aaa2fbc..2cf0e2b 100644
 --- a/include/hw/mchp/gen/evsys_u2504.h
 +++ b/include/hw/mchp/gen/evsys_u2504.h
 @@ -8,7 +8,7 @@
@@ -2548,7 +2548,7 @@ index bb05650..124962d 100644
   */
 diff --git a/include/hw/misc/mchp_dac.h b/include/hw/misc/mchp_dac.h
 new file mode 100644
-index 0000000..b1cf146
+index 0000000..cc8610a
 --- /dev/null
 +++ b/include/hw/misc/mchp_dac.h
 @@ -0,0 +1,23 @@
@@ -2576,7 +2576,7 @@ index 0000000..b1cf146
 +
 +#endif /* HW_MISC_MCHP_DAC_H */
 diff --git a/include/hw/misc/mchp_evsys.h b/include/hw/misc/mchp_evsys.h
-index b5285de..fc92026 100644
+index e059adc..82a476f 100644
 --- a/include/hw/misc/mchp_evsys.h
 +++ b/include/hw/misc/mchp_evsys.h
 @@ -25,6 +25,8 @@
@@ -2589,7 +2589,7 @@ index b5285de..fc92026 100644
  #define MCHP_EVSYS_GENERATOR "generator"
  #define MCHP_EVSYS_USER "user"
 diff --git a/include/hw/misc/mchp_regblock.h b/include/hw/misc/mchp_regblock.h
-index 93cef3d..db0f04e 100644
+index 0393c90..6f0002f 100644
 --- a/include/hw/misc/mchp_regblock.h
 +++ b/include/hw/misc/mchp_regblock.h
 @@ -109,6 +109,16 @@ void mchp_regblock_set_info(MchpRegBlock *s, const MchpInstanceInfo *info);
@@ -2610,7 +2610,7 @@ index 93cef3d..db0f04e 100644
  void mchp_regblock_set_clock(MchpRegBlock *s, Clock *out, uint64_t hz);
  
 diff --git a/include/hw/timer/mchp_tc.h b/include/hw/timer/mchp_tc.h
-index ccd86a2..9205cd7 100644
+index 4ac01f2..03f7292 100644
 --- a/include/hw/timer/mchp_tc.h
 +++ b/include/hw/timer/mchp_tc.h
 @@ -24,6 +24,12 @@
@@ -2627,7 +2627,7 @@ index ccd86a2..9205cd7 100644
  #define MCHP_TC_EVU_EVENT_IN "evu-event-in"
  #define MCHP_TC_EVU_BUSY "evu-event-busy"
 diff --git a/tests/qtest/curiosity-cp-test.c b/tests/qtest/curiosity-cp-test.c
-index e559c2d..e3ac4c4 100644
+index 85eb6bb..3e0c05d 100644
 --- a/tests/qtest/curiosity-cp-test.c
 +++ b/tests/qtest/curiosity-cp-test.c
 @@ -27,6 +27,9 @@

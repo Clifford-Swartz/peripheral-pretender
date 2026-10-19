@@ -1,7 +1,7 @@
-From 839bd5427db3b97ebd39b53f781d9f7ff61926e0 Mon Sep 17 00:00:00 2001
+From 68598f51a384b89595a7eb7b11130d314f680863 Mon Sep 17 00:00:00 2001
 From: Clifford Swartz <cliffordswartz1@gmail.com>
 Date: Thu, 15 Oct 2026 06:46:36 -0700
-Subject: [PATCH 40/40] hw/misc: PIC32CM JH/MC DAC (U2214), read back by the
+Subject: [PATCH 40/57] hw/misc: PIC32CM JH/MC DAC (U2214), read back by the
  ADC
 
 One 10-bit channel converting at once on a DATA write (LEFTADJ), against
@@ -29,7 +29,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 hw/misc/mchp_dac_u2214.c
 
 diff --git a/hw/adc/mchp_adc_u2247.c b/hw/adc/mchp_adc_u2247.c
-index 8df645d..52035cd 100644
+index 7e20437..c98da14 100644
 --- a/hw/adc/mchp_adc_u2247.c
 +++ b/hw/adc/mchp_adc_u2247.c
 @@ -26,7 +26,8 @@
@@ -112,7 +112,7 @@ index 8df645d..52035cd 100644
      }
  }
 diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
-index b8c1994..4b95bca 100644
+index 80fe91e..7fcdfb9 100644
 --- a/hw/arm/pic32cm_soc.c
 +++ b/hw/arm/pic32cm_soc.c
 @@ -54,6 +54,7 @@ static const struct {
@@ -125,7 +125,7 @@ index b8c1994..4b95bca 100644
      { "DSU", TYPE_MCHP_DSU, "U2209" },
 diff --git a/hw/misc/mchp_dac_u2214.c b/hw/misc/mchp_dac_u2214.c
 new file mode 100644
-index 0000000..3bf5b0d
+index 0000000..0e92774
 --- /dev/null
 +++ b/hw/misc/mchp_dac_u2214.c
 @@ -0,0 +1,210 @@
@@ -352,7 +352,7 @@ index f99a1a3..c58f623 100644
    'mchp_evsys5x.c',
    'mchp_same5x.c',
 diff --git a/include/hw/mchp/gen/dac_u2214.h b/include/hw/mchp/gen/dac_u2214.h
-index 09e8133..89329e3 100644
+index 1586e18..e2869e8 100644
 --- a/include/hw/mchp/gen/dac_u2214.h
 +++ b/include/hw/mchp/gen/dac_u2214.h
 @@ -9,7 +9,7 @@
@@ -365,7 +365,7 @@ index 09e8133..89329e3 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h b/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h
-index 77287b7..4ba5b5a 100644
+index 6a10f3c..1de9d7d 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h
 @@ -6,7 +6,7 @@
@@ -435,7 +435,7 @@ index 77287b7..4ba5b5a 100644
      {
          .name = "SYNCBUSY", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h b/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h
-index 709201b..e1fe602 100644
+index 11f35cb..ee3ee5b 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h
 @@ -6,7 +6,7 @@
@@ -505,7 +505,7 @@ index 709201b..e1fe602 100644
      {
          .name = "SYNCBUSY", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
 diff --git a/include/hw/misc/mchp_dac.h b/include/hw/misc/mchp_dac.h
-index b1cf146..95e019d 100644
+index cc8610a..ac59b3e 100644
 --- a/include/hw/misc/mchp_dac.h
 +++ b/include/hw/misc/mchp_dac.h
 @@ -18,6 +18,13 @@

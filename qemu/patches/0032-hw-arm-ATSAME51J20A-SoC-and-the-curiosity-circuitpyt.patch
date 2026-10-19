@@ -1,8 +1,8 @@
-From 58dac3138ad2c07e4236514f6e3700368796a2a8 Mon Sep 17 00:00:00 2001
+From dcf41fbe3cecda20a8e4e7bdfbd783ba299f10b9 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 17:21:31 -0700
-Subject: [PATCH] hw/arm: ATSAME51J20A SoC and the curiosity-circuitpython
- board
+Subject: [PATCH 32/57] hw/arm: ATSAME51J20A SoC and the
+ curiosity-circuitpython board
 
 The SAM E51 through the generic SoC, built from the generated
 ATSAME51J20A descriptor: a Cortex-M4F (CPUID r0p1), instances with
@@ -249,7 +249,7 @@ index 0eab3e8..e741622 100644
      select ARM_V7M
 diff --git a/hw/arm/atsame51j20a.c b/hw/arm/atsame51j20a.c
 new file mode 100644
-index 0000000..033d1cb
+index 0000000..0bac194
 --- /dev/null
 +++ b/hw/arm/atsame51j20a.c
 @@ -0,0 +1,18 @@
@@ -273,7 +273,7 @@ index 0000000..033d1cb
 +const MchpDeviceInfo *const atsame51j20a_info = &atsame51j20a_device;
 diff --git a/hw/arm/atsame51j20a_device.h b/hw/arm/atsame51j20a_device.h
 new file mode 100644
-index 0000000..6ad7ece
+index 0000000..271387b
 --- /dev/null
 +++ b/hw/arm/atsame51j20a_device.h
 @@ -0,0 +1,58 @@
@@ -337,7 +337,7 @@ index 0000000..6ad7ece
 +#endif /* HW_ARM_ATSAME51J20A_DEVICE_H */
 diff --git a/hw/arm/atsame51j20a_nvmrows.h b/hw/arm/atsame51j20a_nvmrows.h
 new file mode 100644
-index 0000000..e575d2c
+index 0000000..28c9f9e
 --- /dev/null
 +++ b/hw/arm/atsame51j20a_nvmrows.h
 @@ -0,0 +1,68 @@
@@ -411,7 +411,7 @@ index 0000000..e575d2c
 +#endif /* HW_ARM_ATSAME51J20A_NVMROWS_H */
 diff --git a/hw/arm/curiosity_circuitpython.c b/hw/arm/curiosity_circuitpython.c
 new file mode 100644
-index 0000000..a8455f0
+index 0000000..5db7698
 --- /dev/null
 +++ b/hw/arm/curiosity_circuitpython.c
 @@ -0,0 +1,219 @@
@@ -653,7 +653,7 @@ index 3062b6d..ffc02db 100644
    'xen-stubs.c',
    'xen-pvh.c',
 diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
-index 671573d..5fc9b28 100644
+index e97ad21..7f58a5c 100644
 --- a/hw/arm/pic32cm_soc.c
 +++ b/hw/arm/pic32cm_soc.c
 @@ -1,5 +1,6 @@
@@ -1020,7 +1020,7 @@ index d646323..f877e1c 100644
  system_ss.add(when: 'CONFIG_SWIM', if_true: files('swim.c'))
 diff --git a/hw/block/sst26vf.c b/hw/block/sst26vf.c
 new file mode 100644
-index 0000000..275f338
+index 0000000..292aa1b
 --- /dev/null
 +++ b/hw/block/sst26vf.c
 @@ -0,0 +1,502 @@
@@ -1527,7 +1527,7 @@ index 0000000..275f338
 +
 +DEFINE_TYPES(sst26_types)
 diff --git a/hw/misc/mchp_clock.c b/hw/misc/mchp_clock.c
-index 1444317..78fa90f 100644
+index 8357342..7854171 100644
 --- a/hw/misc/mchp_clock.c
 +++ b/hw/misc/mchp_clock.c
 @@ -511,15 +511,32 @@ static void mchp_osc32kctrl_class_init(ObjectClass *klass, const void *data)
@@ -1668,7 +1668,7 @@ index 1444317..78fa90f 100644
          VMSTATE_ARRAY_CLOCK(pch, MchpGclkState, MCHP_GCLK_PCHCTRL_COUNT),
          VMSTATE_END_OF_LIST()
 diff --git a/hw/misc/mchp_regblock.c b/hw/misc/mchp_regblock.c
-index 6546526..2d0284c 100644
+index c910c11..fee2e4d 100644
 --- a/hw/misc/mchp_regblock.c
 +++ b/hw/misc/mchp_regblock.c
 @@ -190,19 +190,47 @@ static void mchp_regblock_reset_registers(MchpRegBlock *s)
@@ -1736,7 +1736,7 @@ index 6546526..2d0284c 100644
  }
 diff --git a/hw/misc/mchp_same5x.c b/hw/misc/mchp_same5x.c
 new file mode 100644
-index 0000000..d11570d
+index 0000000..15a2eef
 --- /dev/null
 +++ b/hw/misc/mchp_same5x.c
 @@ -0,0 +1,755 @@
@@ -2497,7 +2497,7 @@ index 0000000..d11570d
 +DEFINE_TYPES(same5x_types)
 diff --git a/hw/misc/mchp_usb.c b/hw/misc/mchp_usb.c
 new file mode 100644
-index 0000000..0df02d7
+index 0000000..1d9562d
 --- /dev/null
 +++ b/hw/misc/mchp_usb.c
 @@ -0,0 +1,899 @@
@@ -3415,7 +3415,7 @@ index b6ad612..29293cf 100644
  
 diff --git a/hw/ssi/mchp_qspi.c b/hw/ssi/mchp_qspi.c
 new file mode 100644
-index 0000000..83c3fe9
+index 0000000..7bec159
 --- /dev/null
 +++ b/hw/ssi/mchp_qspi.c
 @@ -0,0 +1,330 @@
@@ -3760,7 +3760,7 @@ index 7a7bff3..edfcd39 100644
 +system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_qspi.c'))
 diff --git a/include/hw/arm/atsame51j20a_gen.h b/include/hw/arm/atsame51j20a_gen.h
 new file mode 100644
-index 0000000..1ce0283
+index 0000000..e4938ff
 --- /dev/null
 +++ b/include/hw/arm/atsame51j20a_gen.h
 @@ -0,0 +1,3441 @@
@@ -7206,7 +7206,7 @@ index 0000000..1ce0283
 +
 +#endif /* HW_ARM_ATSAME51J20A_GEN_H */
 diff --git a/include/hw/arm/pic32cm_soc.h b/include/hw/arm/pic32cm_soc.h
-index 77b7b38..574b43d 100644
+index 148f7d5..561a410 100644
 --- a/include/hw/arm/pic32cm_soc.h
 +++ b/include/hw/arm/pic32cm_soc.h
 @@ -1,17 +1,21 @@
@@ -7290,7 +7290,7 @@ index 77b7b38..574b43d 100644
  
 diff --git a/include/hw/block/sst26vf.h b/include/hw/block/sst26vf.h
 new file mode 100644
-index 0000000..e1d0886
+index 0000000..fc372a5
 --- /dev/null
 +++ b/include/hw/block/sst26vf.h
 @@ -0,0 +1,20 @@
@@ -7316,7 +7316,7 @@ index 0000000..e1d0886
 +#endif /* HW_BLOCK_SST26VF_H */
 diff --git a/include/hw/mchp/gen/ac_u2501.h b/include/hw/mchp/gen/ac_u2501.h
 new file mode 100644
-index 0000000..5a7ed74
+index 0000000..9cbfd56
 --- /dev/null
 +++ b/include/hw/mchp/gen/ac_u2501.h
 @@ -0,0 +1,120 @@
@@ -7442,7 +7442,7 @@ index 0000000..5a7ed74
 +#endif /* HW_MCHP_GEN_AC_U2501_H */
 diff --git a/include/hw/mchp/gen/adc_u2500.h b/include/hw/mchp/gen/adc_u2500.h
 new file mode 100644
-index 0000000..22948f6
+index 0000000..5a69ae1
 --- /dev/null
 +++ b/include/hw/mchp/gen/adc_u2500.h
 @@ -0,0 +1,201 @@
@@ -7649,7 +7649,7 @@ index 0000000..22948f6
 +#endif /* HW_MCHP_GEN_ADC_U2500_H */
 diff --git a/include/hw/mchp/gen/aes_u2238.h b/include/hw/mchp/gen/aes_u2238.h
 new file mode 100644
-index 0000000..efa7b9e
+index 0000000..80553a1
 --- /dev/null
 +++ b/include/hw/mchp/gen/aes_u2238.h
 @@ -0,0 +1,95 @@
@@ -7750,7 +7750,7 @@ index 0000000..efa7b9e
 +#endif /* HW_MCHP_GEN_AES_U2238_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/ac_u2501.h b/include/hw/mchp/gen/atsame51j20a/ac_u2501.h
 new file mode 100644
-index 0000000..c6cda11
+index 0000000..f263190
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/ac_u2501.h
 @@ -0,0 +1,94 @@
@@ -7850,7 +7850,7 @@ index 0000000..c6cda11
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_AC_U2501_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/adc_u2500.h b/include/hw/mchp/gen/atsame51j20a/adc_u2500.h
 new file mode 100644
-index 0000000..fe2abe4
+index 0000000..9381cd9
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/adc_u2500.h
 @@ -0,0 +1,144 @@
@@ -8000,7 +8000,7 @@ index 0000000..fe2abe4
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_ADC_U2500_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/aes_u2238.h b/include/hw/mchp/gen/atsame51j20a/aes_u2238.h
 new file mode 100644
-index 0000000..12f7e95
+index 0000000..68768e2
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/aes_u2238.h
 @@ -0,0 +1,94 @@
@@ -8100,7 +8100,7 @@ index 0000000..12f7e95
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_AES_U2238_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/can_u2003.h b/include/hw/mchp/gen/atsame51j20a/can_u2003.h
 new file mode 100644
-index 0000000..1476b71
+index 0000000..d819abb
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/can_u2003.h
 @@ -0,0 +1,261 @@
@@ -8367,7 +8367,7 @@ index 0000000..1476b71
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_CAN_U2003_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/ccl_u2225.h b/include/hw/mchp/gen/atsame51j20a/ccl_u2225.h
 new file mode 100644
-index 0000000..efc772f
+index 0000000..d462c7b
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/ccl_u2225.h
 @@ -0,0 +1,40 @@
@@ -8413,7 +8413,7 @@ index 0000000..efc772f
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_CCL_U2225_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/cmcc_u2015.h b/include/hw/mchp/gen/atsame51j20a/cmcc_u2015.h
 new file mode 100644
-index 0000000..64d0208
+index 0000000..188e4f7
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/cmcc_u2015.h
 @@ -0,0 +1,81 @@
@@ -8500,7 +8500,7 @@ index 0000000..64d0208
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_CMCC_U2015_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/dac_u2502.h b/include/hw/mchp/gen/atsame51j20a/dac_u2502.h
 new file mode 100644
-index 0000000..8c6073c
+index 0000000..2374ede
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/dac_u2502.h
 @@ -0,0 +1,90 @@
@@ -8596,7 +8596,7 @@ index 0000000..8c6073c
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_DAC_U2502_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/dmac_u2503.h b/include/hw/mchp/gen/atsame51j20a/dmac_u2503.h
 new file mode 100644
-index 0000000..7e70350
+index 0000000..0df6b67
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/dmac_u2503.h
 @@ -0,0 +1,1379 @@
@@ -9981,7 +9981,7 @@ index 0000000..7e70350
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_DMAC_U2503_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/dsu_u2410.h b/include/hw/mchp/gen/atsame51j20a/dsu_u2410.h
 new file mode 100644
-index 0000000..5c308a3
+index 0000000..b57c9bb
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/dsu_u2410.h
 @@ -0,0 +1,155 @@
@@ -10142,7 +10142,7 @@ index 0000000..5c308a3
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_DSU_U2410_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/eic_u2254.h b/include/hw/mchp/gen/atsame51j20a/eic_u2254.h
 new file mode 100644
-index 0000000..99a26a3
+index 0000000..5ff40ed
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/eic_u2254.h
 @@ -0,0 +1,92 @@
@@ -10240,7 +10240,7 @@ index 0000000..99a26a3
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_EIC_U2254_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/evsys_u2504.h b/include/hw/mchp/gen/atsame51j20a/evsys_u2504.h
 new file mode 100644
-index 0000000..91498c4
+index 0000000..da73ad8
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/evsys_u2504.h
 @@ -0,0 +1,865 @@
@@ -11111,7 +11111,7 @@ index 0000000..91498c4
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_EVSYS_U2504_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/freqm_u2257.h b/include/hw/mchp/gen/atsame51j20a/freqm_u2257.h
 new file mode 100644
-index 0000000..3de3e00
+index 0000000..4b054b7
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/freqm_u2257.h
 @@ -0,0 +1,70 @@
@@ -11187,7 +11187,7 @@ index 0000000..3de3e00
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_FREQM_U2257_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/gclk_u2122.h b/include/hw/mchp/gen/atsame51j20a/gclk_u2122.h
 new file mode 100644
-index 0000000..115eae4
+index 0000000..f58587b
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/gclk_u2122.h
 @@ -0,0 +1,53 @@
@@ -11246,7 +11246,7 @@ index 0000000..115eae4
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_GCLK_U2122_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/hmatrixb_i7638.h b/include/hw/mchp/gen/atsame51j20a/hmatrixb_i7638.h
 new file mode 100644
-index 0000000..4d017d0
+index 0000000..bf437e1
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/hmatrixb_i7638.h
 @@ -0,0 +1,186 @@
@@ -11438,7 +11438,7 @@ index 0000000..4d017d0
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_HMATRIXB_I7638_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/i2s_u2224.h b/include/hw/mchp/gen/atsame51j20a/i2s_u2224.h
 new file mode 100644
-index 0000000..88c9e98
+index 0000000..19ec31b
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/i2s_u2224.h
 @@ -0,0 +1,77 @@
@@ -11521,7 +11521,7 @@ index 0000000..88c9e98
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_I2S_U2224_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/icm_u2010.h b/include/hw/mchp/gen/atsame51j20a/icm_u2010.h
 new file mode 100644
-index 0000000..6302288
+index 0000000..f008694
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/icm_u2010.h
 @@ -0,0 +1,83 @@
@@ -11610,7 +11610,7 @@ index 0000000..6302288
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_ICM_U2010_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/mclk_u2408.h b/include/hw/mchp/gen/atsame51j20a/mclk_u2408.h
 new file mode 100644
-index 0000000..71b897f
+index 0000000..53eeb62
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/mclk_u2408.h
 @@ -0,0 +1,76 @@
@@ -11692,7 +11692,7 @@ index 0000000..71b897f
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_MCLK_U2408_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/nvmctrl_u2409.h b/include/hw/mchp/gen/atsame51j20a/nvmctrl_u2409.h
 new file mode 100644
-index 0000000..1449946
+index 0000000..e9f8854
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/nvmctrl_u2409.h
 @@ -0,0 +1,95 @@
@@ -11793,7 +11793,7 @@ index 0000000..1449946
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_NVMCTRL_U2409_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/osc32kctrl_u2400.h b/include/hw/mchp/gen/atsame51j20a/osc32kctrl_u2400.h
 new file mode 100644
-index 0000000..63014a4
+index 0000000..118ab10
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/osc32kctrl_u2400.h
 @@ -0,0 +1,71 @@
@@ -11870,7 +11870,7 @@ index 0000000..63014a4
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_OSC32KCTRL_U2400_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/oscctrl_u2401.h b/include/hw/mchp/gen/atsame51j20a/oscctrl_u2401.h
 new file mode 100644
-index 0000000..f206248
+index 0000000..1abc0b9
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/oscctrl_u2401.h
 @@ -0,0 +1,130 @@
@@ -12006,7 +12006,7 @@ index 0000000..f206248
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_OSCCTRL_U2401_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/pac_u2120.h b/include/hw/mchp/gen/atsame51j20a/pac_u2120.h
 new file mode 100644
-index 0000000..a211ae1
+index 0000000..c6a9c4a
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/pac_u2120.h
 @@ -0,0 +1,90 @@
@@ -12102,7 +12102,7 @@ index 0000000..a211ae1
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_PAC_U2120_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/pcc_u2017.h b/include/hw/mchp/gen/atsame51j20a/pcc_u2017.h
 new file mode 100644
-index 0000000..6deee6f
+index 0000000..32bff94
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/pcc_u2017.h
 @@ -0,0 +1,68 @@
@@ -12176,7 +12176,7 @@ index 0000000..6deee6f
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_PCC_U2017_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/pdec_u2263.h b/include/hw/mchp/gen/atsame51j20a/pdec_u2263.h
 new file mode 100644
-index 0000000..b6a6824
+index 0000000..9ece6a6
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/pdec_u2263.h
 @@ -0,0 +1,111 @@
@@ -12293,7 +12293,7 @@ index 0000000..b6a6824
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_PDEC_U2263_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/pm_u2406.h b/include/hw/mchp/gen/atsame51j20a/pm_u2406.h
 new file mode 100644
-index 0000000..1a173f2
+index 0000000..c7587c2
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/pm_u2406.h
 @@ -0,0 +1,65 @@
@@ -12364,7 +12364,7 @@ index 0000000..1a173f2
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_PM_U2406_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/port_u2210.h b/include/hw/mchp/gen/atsame51j20a/port_u2210.h
 new file mode 100644
-index 0000000..830b0fd
+index 0000000..5220cea
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/port_u2210.h
 @@ -0,0 +1,186 @@
@@ -12556,7 +12556,7 @@ index 0000000..830b0fd
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_PORT_U2210_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/qspi_u2008.h b/include/hw/mchp/gen/atsame51j20a/qspi_u2008.h
 new file mode 100644
-index 0000000..12d0dd4
+index 0000000..64861d1
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/qspi_u2008.h
 @@ -0,0 +1,99 @@
@@ -12661,7 +12661,7 @@ index 0000000..12d0dd4
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_QSPI_U2008_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/ramecc_u2268.h b/include/hw/mchp/gen/atsame51j20a/ramecc_u2268.h
 new file mode 100644
-index 0000000..badf18d
+index 0000000..32909d4
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/ramecc_u2268.h
 @@ -0,0 +1,55 @@
@@ -12722,7 +12722,7 @@ index 0000000..badf18d
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_RAMECC_U2268_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/rstc_u2239.h b/include/hw/mchp/gen/atsame51j20a/rstc_u2239.h
 new file mode 100644
-index 0000000..576747d
+index 0000000..9b6c6f6
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/rstc_u2239.h
 @@ -0,0 +1,36 @@
@@ -12764,7 +12764,7 @@ index 0000000..576747d
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_RSTC_U2239_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/rtc_u2250.h b/include/hw/mchp/gen/atsame51j20a/rtc_u2250.h
 new file mode 100644
-index 0000000..784c678
+index 0000000..e1320a6
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/rtc_u2250.h
 @@ -0,0 +1,329 @@
@@ -13099,7 +13099,7 @@ index 0000000..784c678
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_RTC_U2250_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/sdhc_u2011.h b/include/hw/mchp/gen/atsame51j20a/sdhc_u2011.h
 new file mode 100644
-index 0000000..c89a8fe
+index 0000000..53c0f89
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/sdhc_u2011.h
 @@ -0,0 +1,223 @@
@@ -13328,7 +13328,7 @@ index 0000000..c89a8fe
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_SDHC_U2011_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/sercom_u2201.h b/include/hw/mchp/gen/atsame51j20a/sercom_u2201.h
 new file mode 100644
-index 0000000..7dbc159
+index 0000000..35eed52
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/sercom_u2201.h
 @@ -0,0 +1,501 @@
@@ -13835,7 +13835,7 @@ index 0000000..7dbc159
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_SERCOM_U2201_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/supc_u2407.h b/include/hw/mchp/gen/atsame51j20a/supc_u2407.h
 new file mode 100644
-index 0000000..b55a785
+index 0000000..64f9a79
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/supc_u2407.h
 @@ -0,0 +1,76 @@
@@ -13917,7 +13917,7 @@ index 0000000..b55a785
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_SUPC_U2407_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/tc_u2249.h b/include/hw/mchp/gen/atsame51j20a/tc_u2249.h
 new file mode 100644
-index 0000000..37c6fc3
+index 0000000..9aec17f
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/tc_u2249.h
 @@ -0,0 +1,310 @@
@@ -14233,7 +14233,7 @@ index 0000000..37c6fc3
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_TC_U2249_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/tcc_u2213.h b/include/hw/mchp/gen/atsame51j20a/tcc_u2213.h
 new file mode 100644
-index 0000000..5c9dee9
+index 0000000..e98a416
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/tcc_u2213.h
 @@ -0,0 +1,148 @@
@@ -14387,7 +14387,7 @@ index 0000000..5c9dee9
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_TCC_U2213_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/trng_u2242.h b/include/hw/mchp/gen/atsame51j20a/trng_u2242.h
 new file mode 100644
-index 0000000..d86b53c
+index 0000000..5a77251
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/trng_u2242.h
 @@ -0,0 +1,56 @@
@@ -14449,7 +14449,7 @@ index 0000000..d86b53c
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_TRNG_U2242_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/usb_u2222.h b/include/hw/mchp/gen/atsame51j20a/usb_u2222.h
 new file mode 100644
-index 0000000..1a477af
+index 0000000..d3405e6
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/usb_u2222.h
 @@ -0,0 +1,876 @@
@@ -15331,7 +15331,7 @@ index 0000000..1a477af
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_USB_U2222_H */
 diff --git a/include/hw/mchp/gen/atsame51j20a/wdt_u2251.h b/include/hw/mchp/gen/atsame51j20a/wdt_u2251.h
 new file mode 100644
-index 0000000..dbf91f4
+index 0000000..172f050
 --- /dev/null
 +++ b/include/hw/mchp/gen/atsame51j20a/wdt_u2251.h
 @@ -0,0 +1,103 @@
@@ -15439,7 +15439,7 @@ index 0000000..dbf91f4
 +
 +#endif /* HW_MCHP_GEN_ATSAME51J20A_WDT_U2251_H */
 diff --git a/include/hw/mchp/gen/can_u2003.h b/include/hw/mchp/gen/can_u2003.h
-index c34447b..320b8dc 100644
+index ace148e..99fa729 100644
 --- a/include/hw/mchp/gen/can_u2003.h
 +++ b/include/hw/mchp/gen/can_u2003.h
 @@ -1,13 +1,14 @@
@@ -15460,7 +15460,7 @@ index c34447b..320b8dc 100644
   *
   * SPDX-License-Identifier: GPL-2.0-or-later
 diff --git a/include/hw/mchp/gen/ccl_u2225.h b/include/hw/mchp/gen/ccl_u2225.h
-index 9f86118..31229a4 100644
+index 8fac0e7..5f6dfeb 100644
 --- a/include/hw/mchp/gen/ccl_u2225.h
 +++ b/include/hw/mchp/gen/ccl_u2225.h
 @@ -1,5 +1,5 @@
@@ -15492,7 +15492,7 @@ index 9f86118..31229a4 100644
  #define MCHP_CCL_LUTCTRL_LUTEO_DISABLE 0x0
 diff --git a/include/hw/mchp/gen/cmcc_u2015.h b/include/hw/mchp/gen/cmcc_u2015.h
 new file mode 100644
-index 0000000..49771bf
+index 0000000..de3994b
 --- /dev/null
 +++ b/include/hw/mchp/gen/cmcc_u2015.h
 @@ -0,0 +1,67 @@
@@ -15565,7 +15565,7 @@ index 0000000..49771bf
 +#endif /* HW_MCHP_GEN_CMCC_U2015_H */
 diff --git a/include/hw/mchp/gen/dac_u2502.h b/include/hw/mchp/gen/dac_u2502.h
 new file mode 100644
-index 0000000..121a9e2
+index 0000000..589753b
 --- /dev/null
 +++ b/include/hw/mchp/gen/dac_u2502.h
 @@ -0,0 +1,126 @@
@@ -15697,7 +15697,7 @@ index 0000000..121a9e2
 +#endif /* HW_MCHP_GEN_DAC_U2502_H */
 diff --git a/include/hw/mchp/gen/dmac_u2503.h b/include/hw/mchp/gen/dmac_u2503.h
 new file mode 100644
-index 0000000..226b9c8
+index 0000000..9e7bdc8
 --- /dev/null
 +++ b/include/hw/mchp/gen/dmac_u2503.h
 @@ -0,0 +1,389 @@
@@ -16092,7 +16092,7 @@ index 0000000..226b9c8
 +#endif /* HW_MCHP_GEN_DMAC_U2503_H */
 diff --git a/include/hw/mchp/gen/dsu_u2410.h b/include/hw/mchp/gen/dsu_u2410.h
 new file mode 100644
-index 0000000..0a043d0
+index 0000000..f7a02ec
 --- /dev/null
 +++ b/include/hw/mchp/gen/dsu_u2410.h
 @@ -0,0 +1,109 @@
@@ -16206,7 +16206,7 @@ index 0000000..0a043d0
 +
 +#endif /* HW_MCHP_GEN_DSU_U2410_H */
 diff --git a/include/hw/mchp/gen/eic_u2254.h b/include/hw/mchp/gen/eic_u2254.h
-index 1b4c0e2..8334c79 100644
+index ab484ac..65ce259 100644
 --- a/include/hw/mchp/gen/eic_u2254.h
 +++ b/include/hw/mchp/gen/eic_u2254.h
 @@ -1,5 +1,5 @@
@@ -16369,7 +16369,7 @@ index 1b4c0e2..8334c79 100644
  #endif /* HW_MCHP_GEN_EIC_U2254_H */
 diff --git a/include/hw/mchp/gen/evsys_u2504.h b/include/hw/mchp/gen/evsys_u2504.h
 new file mode 100644
-index 0000000..bb05650
+index 0000000..aaa2fbc
 --- /dev/null
 +++ b/include/hw/mchp/gen/evsys_u2504.h
 @@ -0,0 +1,137 @@
@@ -16511,7 +16511,7 @@ index 0000000..bb05650
 +
 +#endif /* HW_MCHP_GEN_EVSYS_U2504_H */
 diff --git a/include/hw/mchp/gen/freqm_u2257.h b/include/hw/mchp/gen/freqm_u2257.h
-index da82cfe..c341400 100644
+index 40bdc46..b04d354 100644
 --- a/include/hw/mchp/gen/freqm_u2257.h
 +++ b/include/hw/mchp/gen/freqm_u2257.h
 @@ -1,5 +1,5 @@
@@ -16534,7 +16534,7 @@ index da82cfe..c341400 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
 diff --git a/include/hw/mchp/gen/fuses_u2409.h b/include/hw/mchp/gen/fuses_u2409.h
 new file mode 100644
-index 0000000..804705f
+index 0000000..c64e260
 --- /dev/null
 +++ b/include/hw/mchp/gen/fuses_u2409.h
 @@ -0,0 +1,123 @@
@@ -16662,7 +16662,7 @@ index 0000000..804705f
 +
 +#endif /* HW_MCHP_GEN_FUSES_U2409_H */
 diff --git a/include/hw/mchp/gen/gclk_u2122.h b/include/hw/mchp/gen/gclk_u2122.h
-index ccfb7f2..1d802ae 100644
+index 21094da..f586bc4 100644
 --- a/include/hw/mchp/gen/gclk_u2122.h
 +++ b/include/hw/mchp/gen/gclk_u2122.h
 @@ -1,5 +1,5 @@
@@ -16752,7 +16752,7 @@ index ccfb7f2..1d802ae 100644
  
  #endif /* HW_MCHP_GEN_GCLK_U2122_H */
 diff --git a/include/hw/mchp/gen/hmatrixb_i7638.h b/include/hw/mchp/gen/hmatrixb_i7638.h
-index 0b40101..d4cbf69 100644
+index a9cb44b..0bd4f82 100644
 --- a/include/hw/mchp/gen/hmatrixb_i7638.h
 +++ b/include/hw/mchp/gen/hmatrixb_i7638.h
 @@ -1,14 +1,15 @@
@@ -16785,7 +16785,7 @@ index 0b40101..d4cbf69 100644
      FIELD(MCHP_HMATRIXB_PRS_PRAS, M1PR, 4, 4)
 diff --git a/include/hw/mchp/gen/i2s_u2224.h b/include/hw/mchp/gen/i2s_u2224.h
 new file mode 100644
-index 0000000..8ad8352
+index 0000000..1f4ca6d
 --- /dev/null
 +++ b/include/hw/mchp/gen/i2s_u2224.h
 @@ -0,0 +1,191 @@
@@ -16981,7 +16981,7 @@ index 0000000..8ad8352
 +
 +#endif /* HW_MCHP_GEN_I2S_U2224_H */
 diff --git a/include/hw/mchp/gen/icm_u2010.h b/include/hw/mchp/gen/icm_u2010.h
-index ae35fd7..b119dc1 100644
+index 85ce4f8..3956c27 100644
 --- a/include/hw/mchp/gen/icm_u2010.h
 +++ b/include/hw/mchp/gen/icm_u2010.h
 @@ -6,8 +6,9 @@
@@ -16997,7 +16997,7 @@ index ae35fd7..b119dc1 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
 diff --git a/include/hw/mchp/gen/mclk_u2408.h b/include/hw/mchp/gen/mclk_u2408.h
 new file mode 100644
-index 0000000..a535c9b
+index 0000000..35923c3
 --- /dev/null
 +++ b/include/hw/mchp/gen/mclk_u2408.h
 @@ -0,0 +1,112 @@
@@ -17115,7 +17115,7 @@ index 0000000..a535c9b
 +#endif /* HW_MCHP_GEN_MCLK_U2408_H */
 diff --git a/include/hw/mchp/gen/nvmctrl_u2409.h b/include/hw/mchp/gen/nvmctrl_u2409.h
 new file mode 100644
-index 0000000..1ade7d4
+index 0000000..c300c9a
 --- /dev/null
 +++ b/include/hw/mchp/gen/nvmctrl_u2409.h
 @@ -0,0 +1,174 @@
@@ -17295,7 +17295,7 @@ index 0000000..1ade7d4
 +#endif /* HW_MCHP_GEN_NVMCTRL_U2409_H */
 diff --git a/include/hw/mchp/gen/osc32kctrl_u2400.h b/include/hw/mchp/gen/osc32kctrl_u2400.h
 new file mode 100644
-index 0000000..6b4a8f4
+index 0000000..d3f5711
 --- /dev/null
 +++ b/include/hw/mchp/gen/osc32kctrl_u2400.h
 @@ -0,0 +1,70 @@
@@ -17371,7 +17371,7 @@ index 0000000..6b4a8f4
 +#endif /* HW_MCHP_GEN_OSC32KCTRL_U2400_H */
 diff --git a/include/hw/mchp/gen/oscctrl_u2401.h b/include/hw/mchp/gen/oscctrl_u2401.h
 new file mode 100644
-index 0000000..2d92ca6
+index 0000000..5be1ac3
 --- /dev/null
 +++ b/include/hw/mchp/gen/oscctrl_u2401.h
 @@ -0,0 +1,222 @@
@@ -17598,7 +17598,7 @@ index 0000000..2d92ca6
 +
 +#endif /* HW_MCHP_GEN_OSCCTRL_U2401_H */
 diff --git a/include/hw/mchp/gen/pac_u2120.h b/include/hw/mchp/gen/pac_u2120.h
-index 01d7440..6c224bd 100644
+index 512ede6..acaa323 100644
 --- a/include/hw/mchp/gen/pac_u2120.h
 +++ b/include/hw/mchp/gen/pac_u2120.h
 @@ -1,5 +1,5 @@
@@ -17790,7 +17790,7 @@ index 01d7440..6c224bd 100644
  #endif /* HW_MCHP_GEN_PAC_U2120_H */
 diff --git a/include/hw/mchp/gen/pcc_u2017.h b/include/hw/mchp/gen/pcc_u2017.h
 new file mode 100644
-index 0000000..52e77ff
+index 0000000..5733fd3
 --- /dev/null
 +++ b/include/hw/mchp/gen/pcc_u2017.h
 @@ -0,0 +1,59 @@
@@ -17854,7 +17854,7 @@ index 0000000..52e77ff
 +
 +#endif /* HW_MCHP_GEN_PCC_U2017_H */
 diff --git a/include/hw/mchp/gen/pdec_u2263.h b/include/hw/mchp/gen/pdec_u2263.h
-index c17dcbe..9859e34 100644
+index a4c9d6c..778d064 100644
 --- a/include/hw/mchp/gen/pdec_u2263.h
 +++ b/include/hw/mchp/gen/pdec_u2263.h
 @@ -7,8 +7,9 @@
@@ -17869,7 +17869,7 @@ index c17dcbe..9859e34 100644
   *
   * SPDX-License-Identifier: GPL-2.0-or-later
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h b/include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h
-index ae5c7d9..a2cd17e 100644
+index 41da09b..c80fa7a 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h
 @@ -6,7 +6,7 @@
@@ -17882,7 +17882,7 @@ index ae5c7d9..a2cd17e 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/gclk_u2122.h b/include/hw/mchp/gen/pic32cm1216mc00048/gclk_u2122.h
-index a133af6..3ab7e6d 100644
+index c6fafa3..d7487e3 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/gclk_u2122.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/gclk_u2122.h
 @@ -6,7 +6,7 @@
@@ -17895,7 +17895,7 @@ index a133af6..3ab7e6d 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/hmatrixb_i7638.h b/include/hw/mchp/gen/pic32cm1216mc00048/hmatrixb_i7638.h
-index 6a7372c..91f5c50 100644
+index 017b044..a55664b 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/hmatrixb_i7638.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/hmatrixb_i7638.h
 @@ -6,7 +6,7 @@
@@ -17908,7 +17908,7 @@ index 6a7372c..91f5c50 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/pac_u2120.h b/include/hw/mchp/gen/pic32cm1216mc00048/pac_u2120.h
-index 79893a9..b55db67 100644
+index a54a06f..c607a8c 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/pac_u2120.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/pac_u2120.h
 @@ -6,7 +6,7 @@
@@ -17921,7 +17921,7 @@ index 79893a9..b55db67 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h b/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h
-index 3a508fb..cb527be 100644
+index 148db33..04f295f 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h
 @@ -6,7 +6,7 @@
@@ -17934,7 +17934,7 @@ index 3a508fb..cb527be 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/rstc_u2239.h b/include/hw/mchp/gen/pic32cm1216mc00048/rstc_u2239.h
-index 94106cd..ada1a1a 100644
+index 3603e9b..684ac26 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/rstc_u2239.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/rstc_u2239.h
 @@ -6,7 +6,7 @@
@@ -17947,7 +17947,7 @@ index 94106cd..ada1a1a 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h b/include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h
-index aaa59af..6095807 100644
+index aa813e1..3f0cd38 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h
 @@ -6,7 +6,7 @@
@@ -17969,7 +17969,7 @@ index aaa59af..6095807 100644
      },
  };
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h b/include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h
-index 36fdc86..ad6ec3a 100644
+index 39a086c..e65918e 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h
 @@ -6,7 +6,7 @@
@@ -17982,7 +17982,7 @@ index 36fdc86..ad6ec3a 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h b/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
-index 80e9c3f..55ebe40 100644
+index b87d9fd..caee929 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
 @@ -6,7 +6,7 @@
@@ -17995,7 +17995,7 @@ index 80e9c3f..55ebe40 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/wdt_u2251.h b/include/hw/mchp/gen/pic32cm1216mc00048/wdt_u2251.h
-index 86136ce..f9f6e4f 100644
+index e6ccf13..51b76f0 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/wdt_u2251.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/wdt_u2251.h
 @@ -6,7 +6,7 @@
@@ -18008,7 +18008,7 @@ index 86136ce..f9f6e4f 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h b/include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h
-index ba20842..913f387 100644
+index 0f132e3..1d05466 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h
 @@ -6,7 +6,7 @@
@@ -18021,7 +18021,7 @@ index ba20842..913f387 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/gclk_u2122.h b/include/hw/mchp/gen/pic32cm5164jh01100/gclk_u2122.h
-index 5ae2eea..c5cf5d9 100644
+index 81acf3d..91563b6 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/gclk_u2122.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/gclk_u2122.h
 @@ -6,7 +6,7 @@
@@ -18034,7 +18034,7 @@ index 5ae2eea..c5cf5d9 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/pac_u2120.h b/include/hw/mchp/gen/pic32cm5164jh01100/pac_u2120.h
-index 81cdfc7..0038dfa 100644
+index a9bba77..fa92396 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/pac_u2120.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/pac_u2120.h
 @@ -6,7 +6,7 @@
@@ -18047,7 +18047,7 @@ index 81cdfc7..0038dfa 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h b/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h
-index 1d66bb2..4623e12 100644
+index 7ff643d..a253bac 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h
 @@ -6,7 +6,7 @@
@@ -18060,7 +18060,7 @@ index 1d66bb2..4623e12 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/rstc_u2239.h b/include/hw/mchp/gen/pic32cm5164jh01100/rstc_u2239.h
-index 782b3c9..550e49f 100644
+index 0ff1594..cec6f06 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/rstc_u2239.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/rstc_u2239.h
 @@ -6,7 +6,7 @@
@@ -18073,7 +18073,7 @@ index 782b3c9..550e49f 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h b/include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h
-index 6efb292..1109edf 100644
+index 389fcbf..dda9867 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h
 @@ -6,7 +6,7 @@
@@ -18086,7 +18086,7 @@ index 6efb292..1109edf 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h b/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
-index f928654..ffa29eb 100644
+index 0689c1d..9697ad1 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
 @@ -6,7 +6,7 @@
@@ -18099,7 +18099,7 @@ index f928654..ffa29eb 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/wdt_u2251.h b/include/hw/mchp/gen/pic32cm5164jh01100/wdt_u2251.h
-index c5a1c20..c0940c6 100644
+index 84534b9..4264a16 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/wdt_u2251.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/wdt_u2251.h
 @@ -6,7 +6,7 @@
@@ -18113,7 +18113,7 @@ index c5a1c20..c0940c6 100644
   */
 diff --git a/include/hw/mchp/gen/pm_u2406.h b/include/hw/mchp/gen/pm_u2406.h
 new file mode 100644
-index 0000000..79d98fe
+index 0000000..641b416
 --- /dev/null
 +++ b/include/hw/mchp/gen/pm_u2406.h
 @@ -0,0 +1,64 @@
@@ -18182,7 +18182,7 @@ index 0000000..79d98fe
 +
 +#endif /* HW_MCHP_GEN_PM_U2406_H */
 diff --git a/include/hw/mchp/gen/port_u2210.h b/include/hw/mchp/gen/port_u2210.h
-index 5e27855..0ad22c8 100644
+index 30d602a..850c881 100644
 --- a/include/hw/mchp/gen/port_u2210.h
 +++ b/include/hw/mchp/gen/port_u2210.h
 @@ -1,5 +1,5 @@
@@ -18227,7 +18227,7 @@ index 5e27855..0ad22c8 100644
      FIELD(MCHP_PORT_GROUP_PINCFG, INEN, 1, 1)
 diff --git a/include/hw/mchp/gen/qspi_u2008.h b/include/hw/mchp/gen/qspi_u2008.h
 new file mode 100644
-index 0000000..2629ac0
+index 0000000..6f9400b
 --- /dev/null
 +++ b/include/hw/mchp/gen/qspi_u2008.h
 @@ -0,0 +1,123 @@
@@ -18356,7 +18356,7 @@ index 0000000..2629ac0
 +#endif /* HW_MCHP_GEN_QSPI_U2008_H */
 diff --git a/include/hw/mchp/gen/ramecc_u2268.h b/include/hw/mchp/gen/ramecc_u2268.h
 new file mode 100644
-index 0000000..67ce6c2
+index 0000000..e17460b
 --- /dev/null
 +++ b/include/hw/mchp/gen/ramecc_u2268.h
 @@ -0,0 +1,38 @@
@@ -18399,7 +18399,7 @@ index 0000000..67ce6c2
 +
 +#endif /* HW_MCHP_GEN_RAMECC_U2268_H */
 diff --git a/include/hw/mchp/gen/rstc_u2239.h b/include/hw/mchp/gen/rstc_u2239.h
-index 87437b8..f307fe3 100644
+index 5d67a87..f029739 100644
 --- a/include/hw/mchp/gen/rstc_u2239.h
 +++ b/include/hw/mchp/gen/rstc_u2239.h
 @@ -1,5 +1,5 @@
@@ -18435,7 +18435,7 @@ index 87437b8..f307fe3 100644
  
  #endif /* HW_MCHP_GEN_RSTC_U2239_H */
 diff --git a/include/hw/mchp/gen/rtc_u2250.h b/include/hw/mchp/gen/rtc_u2250.h
-index 7211d42..a895d16 100644
+index b0b3c5c..a990116 100644
 --- a/include/hw/mchp/gen/rtc_u2250.h
 +++ b/include/hw/mchp/gen/rtc_u2250.h
 @@ -1,14 +1,15 @@
@@ -18962,7 +18962,7 @@ index 7211d42..a895d16 100644
   * Register views (ATDF register-group modes), selected by CTRLA.MODE
 diff --git a/include/hw/mchp/gen/sdhc_u2011.h b/include/hw/mchp/gen/sdhc_u2011.h
 new file mode 100644
-index 0000000..fa3e404
+index 0000000..fadea4e
 --- /dev/null
 +++ b/include/hw/mchp/gen/sdhc_u2011.h
 @@ -0,0 +1,659 @@
@@ -19626,7 +19626,7 @@ index 0000000..fa3e404
 +
 +#endif /* HW_MCHP_GEN_SDHC_U2011_H */
 diff --git a/include/hw/mchp/gen/sercom_u2201.h b/include/hw/mchp/gen/sercom_u2201.h
-index 4839e7c..b7326d0 100644
+index 3b7ee83..ef09154 100644
 --- a/include/hw/mchp/gen/sercom_u2201.h
 +++ b/include/hw/mchp/gen/sercom_u2201.h
 @@ -1,5 +1,5 @@
@@ -20003,7 +20003,7 @@ index 4839e7c..b7326d0 100644
  
 diff --git a/include/hw/mchp/gen/supc_u2407.h b/include/hw/mchp/gen/supc_u2407.h
 new file mode 100644
-index 0000000..83d5665
+index 0000000..45f885e
 --- /dev/null
 +++ b/include/hw/mchp/gen/supc_u2407.h
 @@ -0,0 +1,109 @@
@@ -20117,7 +20117,7 @@ index 0000000..83d5665
 +
 +#endif /* HW_MCHP_GEN_SUPC_U2407_H */
 diff --git a/include/hw/mchp/gen/tc_u2249.h b/include/hw/mchp/gen/tc_u2249.h
-index db30c1e..04c5376 100644
+index 80692d3..3791a15 100644
 --- a/include/hw/mchp/gen/tc_u2249.h
 +++ b/include/hw/mchp/gen/tc_u2249.h
 @@ -7,8 +7,9 @@
@@ -20132,7 +20132,7 @@ index db30c1e..04c5376 100644
   *
   * SPDX-License-Identifier: GPL-2.0-or-later
 diff --git a/include/hw/mchp/gen/tcc_u2213.h b/include/hw/mchp/gen/tcc_u2213.h
-index c71a186..15e5426 100644
+index 28c1f0c..4de7f97 100644
 --- a/include/hw/mchp/gen/tcc_u2213.h
 +++ b/include/hw/mchp/gen/tcc_u2213.h
 @@ -1,5 +1,5 @@
@@ -20281,7 +20281,7 @@ index c71a186..15e5426 100644
  #endif /* HW_MCHP_GEN_TCC_U2213_H */
 diff --git a/include/hw/mchp/gen/trng_u2242.h b/include/hw/mchp/gen/trng_u2242.h
 new file mode 100644
-index 0000000..c0f4e6e
+index 0000000..1ab97d1
 --- /dev/null
 +++ b/include/hw/mchp/gen/trng_u2242.h
 @@ -0,0 +1,35 @@
@@ -20322,7 +20322,7 @@ index 0000000..c0f4e6e
 +#endif /* HW_MCHP_GEN_TRNG_U2242_H */
 diff --git a/include/hw/mchp/gen/usb_u2222.h b/include/hw/mchp/gen/usb_u2222.h
 new file mode 100644
-index 0000000..64f744a
+index 0000000..71b7eb9
 --- /dev/null
 +++ b/include/hw/mchp/gen/usb_u2222.h
 @@ -0,0 +1,316 @@
@@ -20643,7 +20643,7 @@ index 0000000..64f744a
 +
 +#endif /* HW_MCHP_GEN_USB_U2222_H */
 diff --git a/include/hw/mchp/gen/wdt_u2251.h b/include/hw/mchp/gen/wdt_u2251.h
-index 778f71b..5cb4068 100644
+index d3b5b32..8c94d45 100644
 --- a/include/hw/mchp/gen/wdt_u2251.h
 +++ b/include/hw/mchp/gen/wdt_u2251.h
 @@ -1,5 +1,5 @@
@@ -20667,7 +20667,7 @@ index 778f71b..5cb4068 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/mchp_device.h b/include/hw/mchp/mchp_device.h
-index 46ec381..e6fd85c 100644
+index 5c269e3..3dc9172 100644
 --- a/include/hw/mchp/mchp_device.h
 +++ b/include/hw/mchp/mchp_device.h
 @@ -62,6 +62,8 @@ typedef struct MchpInstanceInfo {
@@ -20680,7 +20680,7 @@ index 46ec381..e6fd85c 100644
      int16_t gclk_core;              /* GCLK channel (GCLK_ID[_CORE]), -1 */
      int16_t gclk_slow;              /* GCLK_ID_SLOW, -1: none */
 diff --git a/include/hw/misc/mchp_regblock.h b/include/hw/misc/mchp_regblock.h
-index 817bd00..93cef3d 100644
+index c075ede..0393c90 100644
 --- a/include/hw/misc/mchp_regblock.h
 +++ b/include/hw/misc/mchp_regblock.h
 @@ -20,8 +20,12 @@
@@ -20729,7 +20729,7 @@ index 817bd00..93cef3d 100644
      void (*reset_hold)(MchpRegBlock *s);
      /* Called after reset_hold, may update outputs such as clocks */
 diff --git a/include/hw/misc/mchp_sysctrl.h b/include/hw/misc/mchp_sysctrl.h
-index 233be95..68a983d 100644
+index ca79688..ab44bc4 100644
 --- a/include/hw/misc/mchp_sysctrl.h
 +++ b/include/hw/misc/mchp_sysctrl.h
 @@ -31,8 +31,10 @@
@@ -20777,7 +20777,7 @@ index 233be95..68a983d 100644
  #endif /* HW_MISC_MCHP_SYSCTRL_H */
 diff --git a/include/hw/misc/mchp_usb.h b/include/hw/misc/mchp_usb.h
 new file mode 100644
-index 0000000..c03b678
+index 0000000..fd29404
 --- /dev/null
 +++ b/include/hw/misc/mchp_usb.h
 @@ -0,0 +1,29 @@
@@ -20812,7 +20812,7 @@ index 0000000..c03b678
 +#endif /* HW_MISC_MCHP_USB_H */
 diff --git a/include/hw/ssi/mchp_qspi.h b/include/hw/ssi/mchp_qspi.h
 new file mode 100644
-index 0000000..b695abb
+index 0000000..9c3363e
 --- /dev/null
 +++ b/include/hw/ssi/mchp_qspi.h
 @@ -0,0 +1,24 @@
@@ -20842,7 +20842,7 @@ index 0000000..b695abb
 +#endif /* HW_SSI_MCHP_QSPI_H */
 diff --git a/tests/qtest/curiosity-cp-test.c b/tests/qtest/curiosity-cp-test.c
 new file mode 100644
-index 0000000..f94df7a
+index 0000000..7ddf314
 --- /dev/null
 +++ b/tests/qtest/curiosity-cp-test.c
 @@ -0,0 +1,232 @@

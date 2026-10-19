@@ -1,7 +1,8 @@
-From e93639b201c2f7e724884274573d959a01549401 Mon Sep 17 00:00:00 2001
+From 5b1fcd3d81cdef51d26cf5e5069fe07a3367397e Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Thu, 15 Oct 2026 22:23:39 -0700
-Subject: [PATCH] hw/misc: EMC2301 fan controller with a fan, the Fan Click
+Subject: [PATCH 53/57] hw/misc: EMC2301 fan controller with a fan, the Fan
+ Click
 
 emc2301 at I2C 0x2F drives a modelled four-wire fan: Direct Setting and
 the RPM-based algorithm (update period, gain, Max Step, Minimum Drive,
@@ -23,7 +24,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/misc/emc2301.h
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index 26b3ca0..7fa0349 100644
+index 23fdf53..8165574 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -204,6 +204,17 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
@@ -46,7 +47,7 @@ index 26b3ca0..7fa0349 100644
    (MI9639BO-W) on SPI (jumpers J1-J3 on SPI), CS# on CS, D/C# on PWM, RES#
 diff --git a/hw/misc/emc2301.c b/hw/misc/emc2301.c
 new file mode 100644
-index 0000000..51afda5
+index 0000000..75692f1
 --- /dev/null
 +++ b/hw/misc/emc2301.c
 @@ -0,0 +1,717 @@
@@ -780,7 +781,7 @@ index e7b892a..8631123 100644
  system_ss.add(when: 'CONFIG_WS2812', if_true: files('ws2812.c'))
  system_ss.add(when: 'CONFIG_RNBD451', if_true: files('rnbd451.c'))
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index f3351ea..7b83081 100644
+index 70e853f..26f4777 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -21,6 +21,7 @@
@@ -805,7 +806,7 @@ index f3351ea..7b83081 100644
        TYPE_CHARDEV_RN4871, CLICK_UART, 0, 0,
 diff --git a/include/hw/misc/emc2301.h b/include/hw/misc/emc2301.h
 new file mode 100644
-index 0000000..b9d9c6c
+index 0000000..8aebaad
 --- /dev/null
 +++ b/include/hw/misc/emc2301.h
 @@ -0,0 +1,24 @@
@@ -834,7 +835,7 @@ index 0000000..b9d9c6c
 +
 +#endif /* HW_MISC_EMC2301_H */
 diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
-index ed1273d..77f3624 100644
+index eb12046..8d5af59 100644
 --- a/tests/qtest/pic32cm-click-test.c
 +++ b/tests/qtest/pic32cm-click-test.c
 @@ -578,6 +578,14 @@ static void qom_set_int(QTestState *qts, const char *path, const char *prop,

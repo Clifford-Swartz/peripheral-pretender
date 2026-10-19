@@ -1,7 +1,8 @@
-From f53312874b8124ea4f590f143a3ffdf6bdfef8b6 Mon Sep 17 00:00:00 2001
+From ed30e775382da3331cabd90d518bfae54b33da6c Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Thu, 15 Oct 2026 18:53:16 -0700
-Subject: [PATCH] hw/nvram: AT24CM02 2-Mbit I2C EEPROM, the EEPROM 3 Click
+Subject: [PATCH 48/57] hw/nvram: AT24CM02 2-Mbit I2C EEPROM, the EEPROM 3
+ Click
 
 mchp-at24cm02 answers at four I2C addresses (A17:A16 in the address),
 takes two word-address bytes, buffers page writes that wrap within the
@@ -22,7 +23,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/nvram/mchp_at24cm02.h
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index 017a462..24c0655 100644
+index 1ebe33a..444adc0 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -175,6 +175,14 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
@@ -41,7 +42,7 @@ index 017a462..24c0655 100644
  own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
  
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index a17209a..4f0c277 100644
+index 55f59e9..f07216d 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -24,6 +24,7 @@
@@ -64,7 +65,7 @@ index a17209a..4f0c277 100644
        TYPE_CHARDEV_RN4871, CLICK_UART, 0, 0,
 diff --git a/hw/nvram/mchp_at24cm02.c b/hw/nvram/mchp_at24cm02.c
 new file mode 100644
-index 0000000..531ce55
+index 0000000..1e72cf0
 --- /dev/null
 +++ b/hw/nvram/mchp_at24cm02.c
 @@ -0,0 +1,280 @@
@@ -359,7 +360,7 @@ index 2634335..7908d71 100644
 +system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_at24cm02.c'))
 diff --git a/include/hw/nvram/mchp_at24cm02.h b/include/hw/nvram/mchp_at24cm02.h
 new file mode 100644
-index 0000000..8dee509
+index 0000000..6ad7cb9
 --- /dev/null
 +++ b/include/hw/nvram/mchp_at24cm02.h
 @@ -0,0 +1,18 @@

@@ -1,8 +1,8 @@
-From c4093e0140d81bd0602676527f73a8f96950d1ca Mon Sep 17 00:00:00 2001
+From 0c536c4d879d4fdab5635063b8de96bd84e03c6a Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 15:27:38 -0700
-Subject: [PATCH] hw/display: SSD1351 OLED driver and OLED C Click; PpPanel for
- headless views
+Subject: [PATCH 27/57] hw/display: SSD1351 OLED driver and OLED C Click;
+ PpPanel for headless views
 
 - pp_panel: what a display panel shows, for front ends without a QEMU
   console: "frame" (base64 RGB565), "frame-gen" (bumped on change),
@@ -47,7 +47,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/display/ssd1351.h
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index 60016c4..af076c4 100644
+index 08a55ac..c7e38c2 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -90,6 +90,15 @@ resistors are modelled (from their schematics, v100).
@@ -67,7 +67,7 @@ index 60016c4..af076c4 100644
  own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
  
 diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
-index 2a5b065..32503a9 100644
+index f368ef2..3140593 100644
 --- a/docs/system/avr/avr64ea48-cnano.rst
 +++ b/docs/system/avr/avr64ea48-cnano.rst
 @@ -31,8 +31,9 @@ on ``-serial`` 1.
@@ -96,7 +96,7 @@ index ffecedb..93e9081 100644
  system_ss.add(when: 'CONFIG_VGA_PCI', if_true: files('vga-pci.c'))
 diff --git a/hw/display/pp_panel.c b/hw/display/pp_panel.c
 new file mode 100644
-index 0000000..0558da8
+index 0000000..0c3e2f7
 --- /dev/null
 +++ b/hw/display/pp_panel.c
 @@ -0,0 +1,53 @@
@@ -155,7 +155,7 @@ index 0000000..0558da8
 +}
 diff --git a/hw/display/ssd1351.c b/hw/display/ssd1351.c
 new file mode 100644
-index 0000000..5b78090
+index 0000000..cf714bf
 --- /dev/null
 +++ b/hw/display/ssd1351.c
 @@ -0,0 +1,509 @@
@@ -669,7 +669,7 @@ index 0000000..5b78090
 +
 +DEFINE_TYPES(ssd1351_types)
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index 44cb4ce..4085c19 100644
+index 21b7da0..4ec199c 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -20,6 +20,7 @@
@@ -699,7 +699,7 @@ index 44cb4ce..4085c19 100644
  const char *mikrobus_click_names(void)
 diff --git a/include/hw/display/pp_panel.h b/include/hw/display/pp_panel.h
 new file mode 100644
-index 0000000..72692d9
+index 0000000..dffad1e
 --- /dev/null
 +++ b/include/hw/display/pp_panel.h
 @@ -0,0 +1,59 @@
@@ -764,7 +764,7 @@ index 0000000..72692d9
 +#endif /* HW_DISPLAY_PP_PANEL_H */
 diff --git a/include/hw/display/ssd1351.h b/include/hw/display/ssd1351.h
 new file mode 100644
-index 0000000..bc15164
+index 0000000..5838b99
 --- /dev/null
 +++ b/include/hw/display/ssd1351.h
 @@ -0,0 +1,23 @@
@@ -792,7 +792,7 @@ index 0000000..bc15164
 +
 +#endif /* HW_DISPLAY_SSD1351_H */
 diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
-index f9fef81..17494d7 100644
+index a3e6067..2c56e54 100644
 --- a/tests/qtest/avr64ea48-cnano-test.c
 +++ b/tests/qtest/avr64ea48-cnano-test.c
 @@ -28,6 +28,8 @@
@@ -876,7 +876,7 @@ index f9fef81..17494d7 100644
      unlink(fw);
      return ret;
 diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
-index 0f9e2a8..5ef5820 100644
+index a2aa5fd..f093a5a 100644
 --- a/tests/qtest/pic32cm-click-test.c
 +++ b/tests/qtest/pic32cm-click-test.c
 @@ -404,6 +404,143 @@ static void test_two_spi(void)

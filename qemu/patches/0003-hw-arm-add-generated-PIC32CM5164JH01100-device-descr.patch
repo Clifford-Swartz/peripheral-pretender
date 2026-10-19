@@ -1,7 +1,7 @@
-From 614a14ec680c536dec96564984e288369d8309f5 Mon Sep 17 00:00:00 2001
+From fd2b3aa8bb06c5fd1497c27f44af91dce6a54300 Mon Sep 17 00:00:00 2001
 From: Clifford Swartz <cliffordswartz1@gmail.com>
 Date: Mon, 12 Oct 2026 11:25:11 -0700
-Subject: [PATCH 3/5] hw/arm: add generated PIC32CM5164JH01100 device
+Subject: [PATCH 03/57] hw/arm: add generated PIC32CM5164JH01100 device
  description
 
 Instance table (memory map, IP ids/versions, IRQ lines and shared
@@ -22,7 +22,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 diff --git a/hw/arm/pic32cm5164jh01100_nvmrows.h b/hw/arm/pic32cm5164jh01100_nvmrows.h
 new file mode 100644
-index 0000000..33ebb74
+index 0000000..9901e80
 --- /dev/null
 +++ b/hw/arm/pic32cm5164jh01100_nvmrows.h
 @@ -0,0 +1,82 @@
@@ -110,7 +110,7 @@ index 0000000..33ebb74
 +#endif /* HW_ARM_PIC32CM5164JH01100_NVMROWS_H */
 diff --git a/include/hw/arm/pic32cm5164jh01100_gen.h b/include/hw/arm/pic32cm5164jh01100_gen.h
 new file mode 100644
-index 0000000..ab246c0
+index 0000000..58fe00f
 --- /dev/null
 +++ b/include/hw/arm/pic32cm5164jh01100_gen.h
 @@ -0,0 +1,3193 @@
@@ -3308,5 +3308,5 @@ index 0000000..ab246c0
 +
 +#endif /* HW_ARM_PIC32CM5164JH01100_GEN_H */
 -- 
-2.51.2.windows.1
+2.53.0.windows.2
 

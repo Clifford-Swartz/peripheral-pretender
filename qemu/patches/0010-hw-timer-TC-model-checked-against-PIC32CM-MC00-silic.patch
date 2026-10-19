@@ -1,7 +1,8 @@
-From b59ea7e99bb27569321ce474ccb81206cf8ad0c7 Mon Sep 17 00:00:00 2001
+From 233885fba6c351a7d2babd8e6def2bc450e5c36f Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Tue, 13 Oct 2026 18:10:34 -0700
-Subject: [PATCH] hw/timer: TC model, checked against PIC32CM MC00 silicon
+Subject: [PATCH 10/57] hw/timer: TC model, checked against PIC32CM MC00
+ silicon
 
 mchp-tc (U2249): COUNT8/16/32 counting from GCLK_TC through the
 prescaler, up or down, TOP per WAVE.WAVEGEN (PER, MAX or CC0), overflow
@@ -43,7 +44,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 tests/qtest/pic32cm-tc-test.c
 
 diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
-index 3c70b49..d7edd41 100644
+index ba6d13b..353eddd 100644
 --- a/hw/arm/pic32cm_soc.c
 +++ b/hw/arm/pic32cm_soc.c
 @@ -24,6 +24,7 @@
@@ -95,7 +96,7 @@ index 3c70b49..d7edd41 100644
          const MchpInstanceInfo *info = &s->dev->instances[i];
          DeviceState *dev = s->periph[i];
 diff --git a/hw/misc/mchp_regblock.c b/hw/misc/mchp_regblock.c
-index af50f5d..9bc367a 100644
+index 60a8147..1d28d18 100644
 --- a/hw/misc/mchp_regblock.c
 +++ b/hw/misc/mchp_regblock.c
 @@ -380,12 +380,24 @@ static void mchp_regblock_realize(DeviceState *dev, Error **errp)
@@ -126,7 +127,7 @@ index af50f5d..9bc367a 100644
  static void mchp_regblock_finalize(Object *obj)
 diff --git a/hw/timer/mchp_tc.c b/hw/timer/mchp_tc.c
 new file mode 100644
-index 0000000..19d0a46
+index 0000000..1e0894c
 --- /dev/null
 +++ b/hw/timer/mchp_tc.c
 @@ -0,0 +1,668 @@
@@ -822,7 +823,7 @@ index 634ba1d..736b214 100644
 +# mchp_tc.c
 +mchp_tc_event(const char *name, uint32_t count, uint32_t flags) "%s: count 0x%x, flags 0x%x"
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/tc_u2249.h b/include/hw/mchp/gen/pic32cm1216mc00048/tc_u2249.h
-index c04110b..d6005d0 100644
+index f2aed70..c74912a 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/tc_u2249.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/tc_u2249.h
 @@ -6,7 +6,7 @@
@@ -1139,7 +1140,7 @@ index c04110b..d6005d0 100644
  };
  #define PIC32CM1216MC00048_TC_COUNT32_NREGS 15
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/tc_u2249.h b/include/hw/mchp/gen/pic32cm5164jh01100/tc_u2249.h
-index e0dc186..53b3df5 100644
+index b7b151f..e697459 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/tc_u2249.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/tc_u2249.h
 @@ -6,7 +6,7 @@
@@ -1456,7 +1457,7 @@ index e0dc186..53b3df5 100644
  };
  #define PIC32CM5164JH01100_TC_COUNT32_NREGS 15
 diff --git a/include/hw/mchp/gen/tc_u2249.h b/include/hw/mchp/gen/tc_u2249.h
-index b36f49d..db30c1e 100644
+index 625d09e..80692d3 100644
 --- a/include/hw/mchp/gen/tc_u2249.h
 +++ b/include/hw/mchp/gen/tc_u2249.h
 @@ -9,7 +9,7 @@
@@ -1469,7 +1470,7 @@ index b36f49d..db30c1e 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/misc/mchp_regblock.h b/include/hw/misc/mchp_regblock.h
-index 72b3359..0678eb9 100644
+index 2ccacc4..6f48c14 100644
 --- a/include/hw/misc/mchp_regblock.h
 +++ b/include/hw/misc/mchp_regblock.h
 @@ -29,6 +29,7 @@
@@ -1491,7 +1492,7 @@ index 72b3359..0678eb9 100644
  };
 diff --git a/include/hw/timer/mchp_tc.h b/include/hw/timer/mchp_tc.h
 new file mode 100644
-index 0000000..ad4411d
+index 0000000..6b28324
 --- /dev/null
 +++ b/include/hw/timer/mchp_tc.h
 @@ -0,0 +1,27 @@
@@ -1537,7 +1538,7 @@ index c7920d4..a0bc644 100644
    (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
 diff --git a/tests/qtest/pic32cm-tc-test.c b/tests/qtest/pic32cm-tc-test.c
 new file mode 100644
-index 0000000..9ff2b52
+index 0000000..78933b5
 --- /dev/null
 +++ b/tests/qtest/pic32cm-tc-test.c
 @@ -0,0 +1,259 @@

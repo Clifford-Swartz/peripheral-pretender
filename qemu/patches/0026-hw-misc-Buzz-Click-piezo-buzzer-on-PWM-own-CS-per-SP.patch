@@ -1,8 +1,8 @@
-From 025dee610d3ddfc0bd892d9a8b9e762cde50ac9d Mon Sep 17 00:00:00 2001
+From f9c8de81f9055d40765d6632a00fed1a44ecff34 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 15:15:51 -0700
-Subject: [PATCH] hw/misc: Buzz Click (piezo buzzer on PWM); own CS per SPI
- Click socket
+Subject: [PATCH 26/57] hw/misc: Buzz Click (piezo buzzer on PWM); own CS per
+ SPI Click socket
 
 - click-buzzer: times the rising edges of its drive pin on the virtual
   clock; "frequency" (Hz) and "duty" (per mille) of the last period, 0
@@ -37,7 +37,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/misc/click_buzzer.h
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index 8004e3b..60016c4 100644
+index 14d53bc..08a55ac 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -80,6 +80,19 @@ resistors are modelled (from their schematics, v100).
@@ -61,7 +61,7 @@ index 8004e3b..60016c4 100644
  
    $ qemu-system-arm -M pic32cm-mc00-cpro,ext1=thermo8 -kernel thermo.elf       -display none -serial stdio
 diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
-index 7f12554..2a5b065 100644
+index 1098f1b..f368ef2 100644
 --- a/docs/system/avr/avr64ea48-cnano.rst
 +++ b/docs/system/avr/avr64ea48-cnano.rst
 @@ -30,8 +30,9 @@ on ``-serial`` 1.
@@ -77,7 +77,7 @@ index 7f12554..2a5b065 100644
  
  Firmware comes from ``-kernel`` or ``-bios``::
 diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
-index c1db36a..0c2187d 100644
+index 3645342..e7c047a 100644
 --- a/hw/arm/pic32cm_mc00_cpro.c
 +++ b/hw/arm/pic32cm_mc00_cpro.c
 @@ -216,14 +216,16 @@ static void pic32cm_mc00_cpro_class_init(ObjectClass *oc, const void *data)
@@ -105,7 +105,7 @@ index c1db36a..0c2187d 100644
  static const TypeInfo pic32cm_mc00_cpro_types[] = {
 diff --git a/hw/misc/click_buzzer.c b/hw/misc/click_buzzer.c
 new file mode 100644
-index 0000000..52fc79a
+index 0000000..65e9e1f
 --- /dev/null
 +++ b/hw/misc/click_buzzer.c
 @@ -0,0 +1,172 @@
@@ -294,7 +294,7 @@ index 0af9659..b6ad612 100644
  system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files(
    'mchp_clock.c',
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index 671ddf5..44cb4ce 100644
+index 8a15bc5..21b7da0 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -18,6 +18,7 @@
@@ -358,7 +358,7 @@ index 671ddf5..44cb4ce 100644
  }
 diff --git a/include/hw/misc/click_buzzer.h b/include/hw/misc/click_buzzer.h
 new file mode 100644
-index 0000000..cc10c47
+index 0000000..576d864
 --- /dev/null
 +++ b/include/hw/misc/click_buzzer.h
 @@ -0,0 +1,21 @@
@@ -384,7 +384,7 @@ index 0000000..cc10c47
 +
 +#endif /* HW_MISC_CLICK_BUZZER_H */
 diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
-index 3c1ca86..f9fef81 100644
+index 3fd2469..a3e6067 100644
 --- a/tests/qtest/avr64ea48-cnano-test.c
 +++ b/tests/qtest/avr64ea48-cnano-test.c
 @@ -27,6 +27,7 @@
@@ -434,7 +434,7 @@ index 3c1ca86..f9fef81 100644
      unlink(fw);
      return ret;
 diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
-index 6d722b9..0f9e2a8 100644
+index 0e904fa..a2aa5fd 100644
 --- a/tests/qtest/pic32cm-click-test.c
 +++ b/tests/qtest/pic32cm-click-test.c
 @@ -337,12 +337,81 @@ static void test_relay(void)

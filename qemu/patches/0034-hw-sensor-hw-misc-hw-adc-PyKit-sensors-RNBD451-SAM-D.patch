@@ -1,8 +1,8 @@
-From 0534e4d8bd46c3fcab8b10b10ff149a405b1e111 Mon Sep 17 00:00:00 2001
+From 0722f1490c09099647a8799dfc4562e146bbeeb8 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 18:35:54 -0700
-Subject: [PATCH] hw/sensor, hw/misc, hw/adc: PyKit sensors, RNBD451, SAM D5x
- ADC
+Subject: [PATCH 34/57] hw/sensor, hw/misc, hw/adc: PyKit sensors, RNBD451, SAM
+ D5x ADC
 
 ICM-20948 (accelerometer, gyroscope, temperature, the AK09916 through the
 auxiliary I2C master's SLV0/SLV4) on the Ruler at 69h; BNO085 (SH-2 over
@@ -59,7 +59,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 diff --git a/hw/adc/mchp_adc.c b/hw/adc/mchp_adc.c
 new file mode 100644
-index 0000000..ada1014
+index 0000000..b5db2a5
 --- /dev/null
 +++ b/hw/adc/mchp_adc.c
 @@ -0,0 +1,357 @@
@@ -443,7 +443,7 @@ index ab95b4b..7866fbe 100644
      select WS2812
  
 diff --git a/hw/arm/atsame51j20a_device.h b/hw/arm/atsame51j20a_device.h
-index c0ca218..fff4090 100644
+index 3272952..20af64a 100644
 --- a/hw/arm/atsame51j20a_device.h
 +++ b/hw/arm/atsame51j20a_device.h
 @@ -6,7 +6,7 @@
@@ -456,7 +456,7 @@ index c0ca218..fff4090 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/hw/arm/atsame51j20a_nvmrows.h b/hw/arm/atsame51j20a_nvmrows.h
-index e575d2c..a0587b1 100644
+index 28c9f9e..2303257 100644
 --- a/hw/arm/atsame51j20a_nvmrows.h
 +++ b/hw/arm/atsame51j20a_nvmrows.h
 @@ -48,6 +48,12 @@ static inline void atsame51j20a_nvmrows_fill(uint8_t *buf,
@@ -473,7 +473,7 @@ index e575d2c..a0587b1 100644
          { 0x00804000, 0xFE9A9239 },
          /* USER row word 1 (production) */
 diff --git a/hw/arm/curiosity_circuitpython.c b/hw/arm/curiosity_circuitpython.c
-index 97487e2..0366a45 100644
+index a8af172..7f920f7 100644
 --- a/hw/arm/curiosity_circuitpython.c
 +++ b/hw/arm/curiosity_circuitpython.c
 @@ -18,8 +18,9 @@
@@ -618,7 +618,7 @@ index 97487e2..0366a45 100644
                                    curiosity_cp_set_console);
      object_class_property_set_description(oc, "console",
 diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
-index 0579bbf..93972ef 100644
+index 07f43a1..a63ce16 100644
 --- a/hw/arm/pic32cm_soc.c
 +++ b/hw/arm/pic32cm_soc.c
 @@ -32,6 +32,7 @@
@@ -638,7 +638,7 @@ index 0579bbf..93972ef 100644
      { "DMAC", TYPE_MCHP_DMAC, "U2503" },
      { "DSU", TYPE_MCHP_DSU, "U2209" },
 diff --git a/hw/char/mchp_sercom.c b/hw/char/mchp_sercom.c
-index d46ac94..fd76a10 100644
+index c8b100d..c2d57fe 100644
 --- a/hw/char/mchp_sercom.c
 +++ b/hw/char/mchp_sercom.c
 @@ -109,6 +109,7 @@ struct MchpSercomState {
@@ -739,7 +739,7 @@ index becf1b2..e9c785d 100644
    'mchp_edbg_dgi.c',
 diff --git a/hw/misc/rnbd451.c b/hw/misc/rnbd451.c
 new file mode 100644
-index 0000000..3b6ad42
+index 0000000..f367155
 --- /dev/null
 +++ b/hw/misc/rnbd451.c
 @@ -0,0 +1,346 @@
@@ -1103,7 +1103,7 @@ index bc6331b..c8de5bd 100644
 +    select I2C
 diff --git a/hw/sensor/bno085.c b/hw/sensor/bno085.c
 new file mode 100644
-index 0000000..ee64c72
+index 0000000..ec7aa51
 --- /dev/null
 +++ b/hw/sensor/bno085.c
 @@ -0,0 +1,504 @@
@@ -1613,7 +1613,7 @@ index 0000000..ee64c72
 +DEFINE_TYPES(bno_types)
 diff --git a/hw/sensor/icm20948.c b/hw/sensor/icm20948.c
 new file mode 100644
-index 0000000..373167a
+index 0000000..66a2638
 --- /dev/null
 +++ b/hw/sensor/icm20948.c
 @@ -0,0 +1,435 @@
@@ -2063,7 +2063,7 @@ index acf95be..e99194a 100644
 +system_ss.add(when: 'CONFIG_PYKIT_SENSORS', if_true: files('icm20948.c', 'bno085.c'))
 diff --git a/include/hw/adc/mchp_adc.h b/include/hw/adc/mchp_adc.h
 new file mode 100644
-index 0000000..0c398af
+index 0000000..4299ac2
 --- /dev/null
 +++ b/include/hw/adc/mchp_adc.h
 @@ -0,0 +1,21 @@
@@ -2089,7 +2089,7 @@ index 0000000..0c398af
 +
 +#endif /* HW_ADC_MCHP_ADC_H */
 diff --git a/include/hw/mchp/gen/adc_u2500.h b/include/hw/mchp/gen/adc_u2500.h
-index 22948f6..cded442 100644
+index 5a69ae1..c16165e 100644
 --- a/include/hw/mchp/gen/adc_u2500.h
 +++ b/include/hw/mchp/gen/adc_u2500.h
 @@ -8,7 +8,7 @@
@@ -2102,7 +2102,7 @@ index 22948f6..cded442 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/atsame51j20a/adc_u2500.h b/include/hw/mchp/gen/atsame51j20a/adc_u2500.h
-index fe2abe4..02ea26f 100644
+index 9381cd9..eb0a990 100644
 --- a/include/hw/mchp/gen/atsame51j20a/adc_u2500.h
 +++ b/include/hw/mchp/gen/atsame51j20a/adc_u2500.h
 @@ -6,7 +6,7 @@
@@ -2174,7 +2174,7 @@ index fe2abe4..02ea26f 100644
      {
          .name = "RESS", .offset = 0x44, .size = 2, .count = 1, .stride = 2,
 diff --git a/include/hw/mchp/gen/atsame51j20a/sercom_u2201.h b/include/hw/mchp/gen/atsame51j20a/sercom_u2201.h
-index 7dbc159..27aa593 100644
+index 35eed52..a688970 100644
 --- a/include/hw/mchp/gen/atsame51j20a/sercom_u2201.h
 +++ b/include/hw/mchp/gen/atsame51j20a/sercom_u2201.h
 @@ -6,7 +6,7 @@
@@ -2196,7 +2196,7 @@ index 7dbc159..27aa593 100644
      {
          .name = "STATUS", .offset = 0x1A, .size = 2, .count = 1, .stride = 2,
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h b/include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h
-index ad6ec3a..16ade60 100644
+index e65918e..bda2005 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h
 @@ -6,7 +6,7 @@
@@ -2218,7 +2218,7 @@ index ad6ec3a..16ade60 100644
      {
          .name = "STATUS", .offset = 0x1A, .size = 2, .count = 1, .stride = 2,
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h b/include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h
-index 1109edf..a908534 100644
+index dda9867..89cec33 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h
 @@ -6,7 +6,7 @@
@@ -2240,7 +2240,7 @@ index 1109edf..a908534 100644
      {
          .name = "STATUS", .offset = 0x1A, .size = 2, .count = 1, .stride = 2,
 diff --git a/include/hw/mchp/gen/sercom_u2201.h b/include/hw/mchp/gen/sercom_u2201.h
-index b7326d0..a4f7398 100644
+index ef09154..d591be4 100644
 --- a/include/hw/mchp/gen/sercom_u2201.h
 +++ b/include/hw/mchp/gen/sercom_u2201.h
 @@ -10,7 +10,7 @@
@@ -2254,7 +2254,7 @@ index b7326d0..a4f7398 100644
   */
 diff --git a/include/hw/misc/rnbd451.h b/include/hw/misc/rnbd451.h
 new file mode 100644
-index 0000000..8fc2085
+index 0000000..31f1739
 --- /dev/null
 +++ b/include/hw/misc/rnbd451.h
 @@ -0,0 +1,22 @@
@@ -2282,7 +2282,7 @@ index 0000000..8fc2085
 +#endif /* HW_MISC_RNBD451_H */
 diff --git a/include/hw/sensor/bno085.h b/include/hw/sensor/bno085.h
 new file mode 100644
-index 0000000..ba430ff
+index 0000000..949629a
 --- /dev/null
 +++ b/include/hw/sensor/bno085.h
 @@ -0,0 +1,18 @@
@@ -2306,7 +2306,7 @@ index 0000000..ba430ff
 +#endif /* HW_SENSOR_BNO085_H */
 diff --git a/include/hw/sensor/icm20948.h b/include/hw/sensor/icm20948.h
 new file mode 100644
-index 0000000..32bcf48
+index 0000000..a05f589
 --- /dev/null
 +++ b/include/hw/sensor/icm20948.h
 @@ -0,0 +1,19 @@

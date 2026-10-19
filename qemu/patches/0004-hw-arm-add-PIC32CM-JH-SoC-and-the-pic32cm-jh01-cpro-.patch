@@ -1,7 +1,7 @@
-From 661fc55f2c3d1d8b940837922e656f7053cc25f9 Mon Sep 17 00:00:00 2001
+From 054a5c5f73848eb880f480925944f473efe837d9 Mon Sep 17 00:00:00 2001
 From: Clifford Swartz <cliffordswartz1@gmail.com>
 Date: Mon, 12 Oct 2026 11:25:11 -0700
-Subject: [PATCH 4/5] hw/arm: add PIC32CM JH SoC and the pic32cm-jh01-cpro
+Subject: [PATCH 04/57] hw/arm: add PIC32CM JH SoC and the pic32cm-jh01-cpro
  board
 
 Peripheral Pretender v0, part A:
@@ -62,7 +62,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
 new file mode 100644
-index 0000000..df39a4b
+index 0000000..766894f
 --- /dev/null
 +++ b/docs/system/arm/pic32cm-jh01-cpro.rst
 @@ -0,0 +1,114 @@
@@ -231,7 +231,7 @@ index 4233a80..00c230a 100644
    'xen-pvh.c',
 diff --git a/hw/arm/pic32cm_jh01_cpro.c b/hw/arm/pic32cm_jh01_cpro.c
 new file mode 100644
-index 0000000..010f0c2
+index 0000000..538bf5a
 --- /dev/null
 +++ b/hw/arm/pic32cm_jh01_cpro.c
 @@ -0,0 +1,104 @@
@@ -341,7 +341,7 @@ index 0000000..010f0c2
 +DEFINE_TYPES(pic32cm_jh01_cpro_types)
 diff --git a/hw/arm/pic32cm_jh_soc.c b/hw/arm/pic32cm_jh_soc.c
 new file mode 100644
-index 0000000..2900c07
+index 0000000..099eab3
 --- /dev/null
 +++ b/hw/arm/pic32cm_jh_soc.c
 @@ -0,0 +1,467 @@
@@ -828,7 +828,7 @@ index 1543ee6..a0a0c23 100644
  
 diff --git a/hw/misc/mchp_clock.c b/hw/misc/mchp_clock.c
 new file mode 100644
-index 0000000..ea1a517
+index 0000000..3cbd4bc
 --- /dev/null
 +++ b/hw/misc/mchp_clock.c
 @@ -0,0 +1,732 @@
@@ -1566,7 +1566,7 @@ index 0000000..ea1a517
 +DEFINE_TYPES(mchp_clock_types)
 diff --git a/hw/misc/mchp_regblock.c b/hw/misc/mchp_regblock.c
 new file mode 100644
-index 0000000..2d23c0b
+index 0000000..977a8a4
 --- /dev/null
 +++ b/hw/misc/mchp_regblock.c
 @@ -0,0 +1,427 @@
@@ -1999,7 +1999,7 @@ index 0000000..2d23c0b
 +DEFINE_TYPES(mchp_regblock_types)
 diff --git a/hw/misc/mchp_regfile.c b/hw/misc/mchp_regfile.c
 new file mode 100644
-index 0000000..523c275
+index 0000000..bc65e8e
 --- /dev/null
 +++ b/hw/misc/mchp_regfile.c
 @@ -0,0 +1,279 @@
@@ -2284,7 +2284,7 @@ index 0000000..523c275
 +}
 diff --git a/hw/misc/mchp_sysctrl.c b/hw/misc/mchp_sysctrl.c
 new file mode 100644
-index 0000000..28c22ee
+index 0000000..2fdb15f
 --- /dev/null
 +++ b/hw/misc/mchp_sysctrl.c
 @@ -0,0 +1,616 @@
@@ -2944,7 +2944,7 @@ index c9a868b..88d4d68 100644
 +mchp_rstc_reset_request(const char *inst, uint8_t rcause) "%s: reset requested, RCAUSE 0x%02x"
 diff --git a/include/hw/arm/pic32cm_jh_soc.h b/include/hw/arm/pic32cm_jh_soc.h
 new file mode 100644
-index 0000000..8aead76
+index 0000000..147d291
 --- /dev/null
 +++ b/include/hw/arm/pic32cm_jh_soc.h
 @@ -0,0 +1,66 @@
@@ -3016,7 +3016,7 @@ index 0000000..8aead76
 +#endif /* HW_ARM_PIC32CM_JH_SOC_H */
 diff --git a/include/hw/misc/mchp_regblock.h b/include/hw/misc/mchp_regblock.h
 new file mode 100644
-index 0000000..b8410aa
+index 0000000..5f55252
 --- /dev/null
 +++ b/include/hw/misc/mchp_regblock.h
 @@ -0,0 +1,91 @@
@@ -3113,7 +3113,7 @@ index 0000000..b8410aa
 +#endif /* HW_MISC_MCHP_REGBLOCK_H */
 diff --git a/include/hw/misc/mchp_regfile.h b/include/hw/misc/mchp_regfile.h
 new file mode 100644
-index 0000000..e18218e
+index 0000000..4862f33
 --- /dev/null
 +++ b/include/hw/misc/mchp_regfile.h
 @@ -0,0 +1,128 @@
@@ -3247,7 +3247,7 @@ index 0000000..e18218e
 +#endif /* HW_MISC_MCHP_REGFILE_H */
 diff --git a/include/hw/misc/mchp_sysctrl.h b/include/hw/misc/mchp_sysctrl.h
 new file mode 100644
-index 0000000..233be95
+index 0000000..ca79688
 --- /dev/null
 +++ b/include/hw/misc/mchp_sysctrl.h
 @@ -0,0 +1,75 @@
@@ -3340,7 +3340,7 @@ index 78b3010..51c5a46 100644
    (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
 diff --git a/tests/qtest/pic32cm-jh-test.c b/tests/qtest/pic32cm-jh-test.c
 new file mode 100644
-index 0000000..f9cddac
+index 0000000..28a3a95
 --- /dev/null
 +++ b/tests/qtest/pic32cm-jh-test.c
 @@ -0,0 +1,399 @@
@@ -3744,5 +3744,5 @@ index 0000000..f9cddac
 +    return g_test_run();
 +}
 -- 
-2.51.2.windows.1
+2.53.0.windows.2
 

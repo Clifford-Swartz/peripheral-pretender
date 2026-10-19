@@ -3611,7 +3611,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/adc_u2247.yaml",
-    "sha1": "574aa9437c7e2ac38b95119628758e37622e9107",
+    "sha1": "ac169f8454b20fbb0cc522d1b39dbd0cf2cad253",
     "status": "applied",
     "versions": [
      "2.2.0",
@@ -11487,7 +11487,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/dac_u2214.yaml",
-    "sha1": "e9d330790b02a6aeb23aa5f3a1eddf761ac39985",
+    "sha1": "9e874c7da06bdfdcebd968c504da4c51dd169e57",
     "status": "applied",
     "versions": [
      "2.0.1",
@@ -12167,7 +12167,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/divas_u2258.yaml",
-    "sha1": "deaff46dbc5986148261e6aa9f68089aaa382ce8",
+    "sha1": "f94a0fbb507d5346f88910fa0191ae76ad539ad6",
     "status": "applied",
     "versions": [
      "1.0.0"
@@ -14718,7 +14718,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/dsu_u2209.yaml",
-    "sha1": "f66d810cec817ed97d12dfb54a4339ca65278ba4",
+    "sha1": "e59ee1e6af6e9d913ec1d9a43d4269ae3de98860",
     "status": "applied",
     "versions": [
      "3.0.0"
@@ -16074,7 +16074,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/eic_u2254.yaml",
-    "sha1": "2384c392b2988ab1bd61eb37261b6e053611b890",
+    "sha1": "99522e3f5cb7d2ed1d61d990b8744b9fd9e9eaa7",
     "status": "applied",
     "versions": [
      "2.0.4",
@@ -18745,7 +18745,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/evsys_u2256.yaml",
-    "sha1": "b3018b9c50f0fbe1284a7613046332251c0228f2",
+    "sha1": "b18fca80fc0d3c0f75c389cb59c5de321d304ebb",
     "status": "applied",
     "versions": [
      "1.0.2"
@@ -20489,7 +20489,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/gclk_u2122.yaml",
-    "sha1": "22a516c4e4753bc946eb47c0208d64fc644938de",
+    "sha1": "16706030724816dd0f8d8631ff94aeec205d7b55",
     "status": "applied",
     "versions": [
      "1.1.1",
@@ -21811,7 +21811,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/mclk_u2234.yaml",
-    "sha1": "015beac9d74189723f879ac21466a3b8b8cc0d07",
+    "sha1": "8273d87233d6ee67fd89da6c21684bae1b833014",
     "status": "applied",
     "versions": [
      "2.0.0"
@@ -23602,7 +23602,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/mtb_u2002.yaml",
-    "sha1": "d4ffe9409e1bb031f4f23f3ed3a6eed331e64b5a",
+    "sha1": "fde61c975aa19464b8d050947c3842874ad459de",
     "status": "applied",
     "versions": [
      "1.0.0"
@@ -25051,7 +25051,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/nvmctrl_03929.yaml",
-    "sha1": "e5ada126136423c49fc8b568a7cf26f8a223f836",
+    "sha1": "0d8cc6f98d4c373ba876c7dda8e3ba8a9c1028b2",
     "status": "applied",
     "versions": [
      "1a0"
@@ -26468,7 +26468,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/osc32kctrl_u2246.yaml",
-    "sha1": "2fe7ba73fddf8fef77350ebb49e2486569a2393b",
+    "sha1": "bc33460243236786c1b8ed6b898c2ab14f2892fc",
     "status": "applied",
     "versions": [
      "2.1.0",
@@ -27248,7 +27248,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/oscctrl_u2119.yaml",
-    "sha1": "d96015c957e217f61fbde864feda7fe7249be4fd",
+    "sha1": "994164312a9e602db6712037f7b7a361ab618317",
     "status": "applied",
     "versions": [
      "2.1.0",
@@ -28845,7 +28845,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/pac_u2120.yaml",
-    "sha1": "95071c417b7f0ce8fab9baed61ec0cedb2853929",
+    "sha1": "68320f4092c78f4c1174b1f13e03b6d163337369",
     "status": "applied",
     "versions": [
      "1.1.0",
@@ -31702,7 +31702,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/pm_u2240.yaml",
-    "sha1": "b3697d8dd83ba99b3cb39500f2df05e0b0fe3d3c",
+    "sha1": "ce2adf5457d23b983c26fd35119308c5dc442a06",
     "status": "applied",
     "versions": [
      "2.1.0",
@@ -31847,7 +31847,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/port_u2210.yaml",
-    "sha1": "94f472d4b7dac6063b5687936e8b293d50dc28d4",
+    "sha1": "596776cf4ad4ef922a137b019e3a2e2fa13be6b4",
     "status": "applied",
     "versions": [
      "2.1.1",
@@ -34704,7 +34704,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/rstc_u2239.yaml",
-    "sha1": "cb039ed18da84f27fdd607d83c884aada2b4346c",
+    "sha1": "c94cccd315a81165781a95a2193b43e7c53289f3",
     "status": "applied",
     "versions": [
      "2.0.2",
@@ -38070,7 +38070,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/sercom_u2201.yaml",
-    "sha1": "60e97667c7f4eb32b1e993fa33b34c8b6c0e603d",
+    "sha1": "2328f1940f23119f4ff15f88e719e03ad730401b",
     "status": "applied",
     "versions": [
      "3.1.1",
@@ -44238,7 +44238,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/supc_u2117.yaml",
-    "sha1": "bc37581564f39761fc32c85f19eae560b6db1468",
+    "sha1": "ecb10b73de26ce30162ef573ebfd651cb7c92e64",
     "status": "applied",
     "versions": [
      "2.1.1"
@@ -45892,7 +45892,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/tc_u2249.yaml",
-    "sha1": "6272e30c87059fdc6dc23bb28c14c74314310acf",
+    "sha1": "41f9f7b2548b6e3933079f9819791456f3b2a4e3",
     "status": "applied",
     "versions": [
      "2.0.0",
@@ -50003,7 +50003,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/tcc_u2213.yaml",
-    "sha1": "6bda44899531bf77fb862afef07d81b722992295",
+    "sha1": "7f219d23569c44c63703167b1fe5b2d397a2fa7a",
     "status": "applied",
     "versions": [
      "3.0.0",
@@ -53347,7 +53347,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/wdt_u2251.yaml",
-    "sha1": "ef6f6b236f04067db9da35bf379f662c86246871",
+    "sha1": "fce913b2a1aa2c2918ca3615801e8282bd347d2e",
     "status": "applied",
     "versions": [
      "1.0.1",

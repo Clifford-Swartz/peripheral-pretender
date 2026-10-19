@@ -1,7 +1,7 @@
-From 214161713ca0fce67057259862f96bed695854bf Mon Sep 17 00:00:00 2001
+From bc30698dfb495eef5eded7bcd4cea6fb484d0e39 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 13:12:03 -0700
-Subject: [PATCH 23/25] hw/avr: AVR8X SoC and the avr64ea48-cnano machine
+Subject: [PATCH 23/57] hw/avr: AVR8X SoC and the avr64ea48-cnano machine
 
 avr8x-soc builds an AVRxt device from its generated descriptor: flash in
 the program space and, through NVMCTRL.CTRLB.FLMAP, in a 32 KB data-space
@@ -96,7 +96,7 @@ index b29937b..01bdfef 100644
      default y
 diff --git a/hw/avr/avr64ea48.c b/hw/avr/avr64ea48.c
 new file mode 100644
-index 0000000..abd7570
+index 0000000..7a3caaf
 --- /dev/null
 +++ b/hw/avr/avr64ea48.c
 @@ -0,0 +1,18 @@
@@ -120,7 +120,7 @@ index 0000000..abd7570
 +const MchpAvrDeviceInfo *const avr64ea48_info = &avr64ea48_device;
 diff --git a/hw/avr/avr64ea48_cnano.c b/hw/avr/avr64ea48_cnano.c
 new file mode 100644
-index 0000000..a2a7609
+index 0000000..e190f21
 --- /dev/null
 +++ b/hw/avr/avr64ea48_cnano.c
 @@ -0,0 +1,140 @@
@@ -266,7 +266,7 @@ index 0000000..a2a7609
 +DEFINE_TYPES(avr64ea48_cnano_types)
 diff --git a/hw/avr/avr8x_periph.c b/hw/avr/avr8x_periph.c
 new file mode 100644
-index 0000000..d765717
+index 0000000..38a7d2e
 --- /dev/null
 +++ b/hw/avr/avr8x_periph.c
 @@ -0,0 +1,415 @@
@@ -687,7 +687,7 @@ index 0000000..d765717
 +DEFINE_TYPES(avr8x_periph_types)
 diff --git a/hw/avr/avr8x_soc.c b/hw/avr/avr8x_soc.c
 new file mode 100644
-index 0000000..98574d0
+index 0000000..cab02df
 --- /dev/null
 +++ b/hw/avr/avr8x_soc.c
 @@ -0,0 +1,464 @@
@@ -1186,7 +1186,7 @@ index 123616a..a6fb5a7 100644
  
 diff --git a/hw/char/avr8x_usart.c b/hw/char/avr8x_usart.c
 new file mode 100644
-index 0000000..b3fd4e0
+index 0000000..c1b5514
 --- /dev/null
 +++ b/hw/char/avr8x_usart.c
 @@ -0,0 +1,380 @@
@@ -1613,7 +1613,7 @@ index e9ec9a3..b8ce362 100644
      depends on I2C
 diff --git a/hw/gpio/avr8x_port.c b/hw/gpio/avr8x_port.c
 new file mode 100644
-index 0000000..7858b2c
+index 0000000..616fe85
 --- /dev/null
 +++ b/hw/gpio/avr8x_port.c
 @@ -0,0 +1,529 @@
@@ -2175,7 +2175,7 @@ index 61ecfa5..9d30242 100644
  mchp_port_in(char group, unsigned pin, int level) "P%c%02u: in %d"
 diff --git a/include/hw/avr/avr8x_periph.h b/include/hw/avr/avr8x_periph.h
 new file mode 100644
-index 0000000..bdfa4b8
+index 0000000..4511fb4
 --- /dev/null
 +++ b/include/hw/avr/avr8x_periph.h
 @@ -0,0 +1,48 @@
@@ -2229,7 +2229,7 @@ index 0000000..bdfa4b8
 +#endif /* HW_AVR_AVR8X_PERIPH_H */
 diff --git a/include/hw/avr/avr8x_soc.h b/include/hw/avr/avr8x_soc.h
 new file mode 100644
-index 0000000..41b6583
+index 0000000..0faf202
 --- /dev/null
 +++ b/include/hw/avr/avr8x_soc.h
 @@ -0,0 +1,81 @@
@@ -2316,7 +2316,7 @@ index 0000000..41b6583
 +#endif /* HW_AVR_AVR8X_SOC_H */
 diff --git a/include/hw/char/avr8x_usart.h b/include/hw/char/avr8x_usart.h
 new file mode 100644
-index 0000000..47e8783
+index 0000000..3340804
 --- /dev/null
 +++ b/include/hw/char/avr8x_usart.h
 @@ -0,0 +1,20 @@
@@ -2342,7 +2342,7 @@ index 0000000..47e8783
 +#endif /* HW_CHAR_AVR8X_USART_H */
 diff --git a/include/hw/gpio/avr8x_port.h b/include/hw/gpio/avr8x_port.h
 new file mode 100644
-index 0000000..8c6b316
+index 0000000..1a8db89
 --- /dev/null
 +++ b/include/hw/gpio/avr8x_port.h
 @@ -0,0 +1,84 @@
@@ -2432,7 +2432,7 @@ index 0000000..8c6b316
 +#endif /* HW_GPIO_AVR8X_PORT_H */
 diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
 new file mode 100644
-index 0000000..90274bb
+index 0000000..7330c4e
 --- /dev/null
 +++ b/tests/qtest/avr64ea48-cnano-test.c
 @@ -0,0 +1,181 @@

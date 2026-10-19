@@ -6,7 +6,8 @@ Curiosity Pro (EV81X90A, machine `pic32cm-jh01-cpro`) and PIC32CM1216MC00048 on 
 Curiosity Pro (EV15N46A, `pic32cm-mc00-cpro`); AVR64EA48 on the AVR64EA48 Curiosity Nano (EV66E56A,
 `avr64ea48-cnano`, QEMU's AVR build) on a Curiosity Nano Base for Click boards; ATSAME51J20A on the
 Curiosity CircuitPython board of the Curiosity PyKit Explorer (`curiosity-circuitpython`, running stock
-CircuitPython). A personal side project; MIT License.
+CircuitPython). A personal side project by Clifford Swartz, not affiliated with or endorsed by
+Microchip. MIT License (see LICENSE); the QEMU fork is GPL-2.0-or-later.
 
 **Start here:** `docs/handoff.md` (status, setup, next steps), then `docs/design/v0-vertical-slice.md`
 (the build contract: architecture, interfaces, acceptance criteria). Background:
@@ -20,7 +21,7 @@ falls short.
 - Customers: professional embedded teams. Delivery: a VS Code extension alongside Microchip's MPLAB
   extensions and AI coding assistant, plus CI (CLI/container) and MCP. The engine stays headless;
   nothing essential lives only in an IDE.
-- Built in-house with heavy AI assistance, as a Microchip-maintained downstream QEMU fork.
+- Built in-house with heavy AI assistance, as a downstream QEMU fork.
   Upstream QEMU declines AI-generated contributions (`docs/devel/code-provenance.rst` in QEMU), so
   never prepare or submit any of this code upstream.
 - Chip models first (validated against silicon), designed from day one to plug into a board layer

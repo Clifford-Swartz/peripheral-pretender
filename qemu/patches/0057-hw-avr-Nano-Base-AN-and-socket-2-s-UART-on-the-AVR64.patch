@@ -1,8 +1,8 @@
-From 360f52cd8d74e9051eadb29f77b2ac964284e555 Mon Sep 17 00:00:00 2001
+From 4bd406be9d6156336f620fa94f1defed07070043 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Sun, 18 Oct 2026 05:53:20 -0700
-Subject: [PATCH] hw/avr: Nano Base AN and socket 2's UART on the AVR64EA48
- Curiosity Nano
+Subject: [PATCH 57/57] hw/avr: Nano Base AN and socket 2's UART on the
+ AVR64EA48 Curiosity Nano
 
 AN of the Nano Base's sockets 1-3 is PD4, PD5 and PD7 (ADC0 AIN4, AIN5,
 AIN7; user guide Figure 7-5), as an analog input and as a digital pad, so
@@ -22,7 +22,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  5 files changed, 159 insertions(+), 11 deletions(-)
 
 diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
-index c24097a..9d19ef8 100644
+index d4a769e..aa08718 100644
 --- a/docs/system/avr/avr64ea48-cnano.rst
 +++ b/docs/system/avr/avr64ea48-cnano.rst
 @@ -30,13 +30,16 @@ on ``-serial`` 1.
@@ -50,7 +50,7 @@ index c24097a..9d19ef8 100644
  Firmware comes from ``-kernel`` or ``-bios``::
  
 diff --git a/hw/avr/avr64ea48_cnano.c b/hw/avr/avr64ea48_cnano.c
-index ce7f054..0d2a1ca 100644
+index 3415afc..94ce382 100644
 --- a/hw/avr/avr64ea48_cnano.c
 +++ b/hw/avr/avr64ea48_cnano.c
 @@ -21,8 +21,12 @@
@@ -115,7 +115,7 @@ index ce7f054..0d2a1ca 100644
      s->mb_uart[0] = mikrobus_uart_chardev("mb1", s->mb[0]);
      s->mb_uart[2] = mikrobus_uart_chardev("mb3", s->mb[2]);
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index fd1502f..55c4b99 100644
+index 2a4e7a7..269c351 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -16,6 +16,7 @@
@@ -229,7 +229,7 @@ index fd1502f..55c4b99 100644
                                unsigned index, const ClickInfo *c)
  {
 diff --git a/include/hw/misc/mikrobus.h b/include/hw/misc/mikrobus.h
-index de8ee05..1215d46 100644
+index db5ccd7..9b7c530 100644
 --- a/include/hw/misc/mikrobus.h
 +++ b/include/hw/misc/mikrobus.h
 @@ -64,6 +64,15 @@ const char *mikrobus_click_names(void);
@@ -249,7 +249,7 @@ index de8ee05..1215d46 100644
   * Plug the Click @click (a catalog name; NULL, "" or "none": nothing)
   * into each of @n sockets; exits with an error for unknown Clicks, a bus
 diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
-index 6872e20..fed4372 100644
+index cf1f398..de8e55c 100644
 --- a/tests/qtest/avr64ea48-cnano-test.c
 +++ b/tests/qtest/avr64ea48-cnano-test.c
 @@ -432,6 +432,27 @@ static void test_twi_thermo8(const void *fw)

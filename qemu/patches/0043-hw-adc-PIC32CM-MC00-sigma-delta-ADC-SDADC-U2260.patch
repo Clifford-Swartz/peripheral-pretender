@@ -1,7 +1,7 @@
-From 8a92d2006010386622b410df0efa198e058f7bb7 Mon Sep 17 00:00:00 2001
+From d9232cf7c7d2156b15bd54d4e6cea7a67a3ce5c3 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Thu, 15 Oct 2026 11:33:43 -0700
-Subject: [PATCH 43/43] hw/adc: PIC32CM MC00 sigma-delta ADC (SDADC U2260)
+Subject: [PATCH 43/57] hw/adc: PIC32CM MC00 sigma-delta ADC (SDADC U2260)
 
 Three differential pairs against INTREF, AREFB, the DAC or INTVCC;
 24-bit result with offset, gain and shift correction as checked on
@@ -21,7 +21,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 diff --git a/hw/adc/mchp_sdadc_u2260.c b/hw/adc/mchp_sdadc_u2260.c
 new file mode 100644
-index 0000000..74a9c70
+index 0000000..078b65d
 --- /dev/null
 +++ b/hw/adc/mchp_sdadc_u2260.c
 @@ -0,0 +1,365 @@
@@ -403,7 +403,7 @@ index 22ed667..6855e7e 100644
 +  'mchp_sdadc_u2260.c'))
  system_ss.add(when: 'CONFIG_AVR8X_ADC', if_true: files('avr8x_adc.c'))
 diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
-index 4b95bca..e25f43f 100644
+index 7fcdfb9..fd8c765 100644
 --- a/hw/arm/pic32cm_soc.c
 +++ b/hw/arm/pic32cm_soc.c
 @@ -76,6 +76,7 @@ static const struct {
@@ -415,7 +415,7 @@ index 4b95bca..e25f43f 100644
      { "SUPC", TYPE_MCHP_SUPC, "U2117" },
      { "TC", TYPE_MCHP_TC },
 diff --git a/include/hw/adc/mchp_adc.h b/include/hw/adc/mchp_adc.h
-index f05e897..cfe1ffa 100644
+index b768144..99e1bde 100644
 --- a/include/hw/adc/mchp_adc.h
 +++ b/include/hw/adc/mchp_adc.h
 @@ -19,5 +19,10 @@
@@ -430,7 +430,7 @@ index f05e897..cfe1ffa 100644
  
  #endif /* HW_ADC_MCHP_ADC_H */
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/sdadc_u2260.h b/include/hw/mchp/gen/pic32cm1216mc00048/sdadc_u2260.h
-index 38f1d54..96987af 100644
+index 19d6f16..fc5b13c 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/sdadc_u2260.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/sdadc_u2260.h
 @@ -6,7 +6,7 @@
@@ -507,7 +507,7 @@ index 38f1d54..96987af 100644
      {
          .name = "SEQCTRL", .offset = 0x28, .size = 1, .count = 1, .stride = 1,
 diff --git a/include/hw/mchp/gen/sdadc_u2260.h b/include/hw/mchp/gen/sdadc_u2260.h
-index b5a136b..c29760e 100644
+index 103180d..684d5c3 100644
 --- a/include/hw/mchp/gen/sdadc_u2260.h
 +++ b/include/hw/mchp/gen/sdadc_u2260.h
 @@ -8,7 +8,7 @@

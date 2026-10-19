@@ -1,7 +1,7 @@
-From e7e2e54a659bc11dae63d1bacae7d1a127d8215c Mon Sep 17 00:00:00 2001
+From 275d0fa9946ad06df6e5d14cca7f6af48c9e4003 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 01:59:08 -0700
-Subject: [PATCH] hw/arm: Thermo 8 Click's pull-up on INT
+Subject: [PATCH 19/57] hw/arm: Thermo 8 Click's pull-up on INT
 
 The Thermo 8 Click has a 4.7 kOhm pull-up (R3) on the MCP9808's
 open-drain ALERT (MikroElektronika schematic v100). Without it, INT
@@ -19,7 +19,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  3 files changed, 32 insertions(+), 6 deletions(-)
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index 9fbe73d..512f1ce 100644
+index e2fe7cb..a6fa7ca 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -52,8 +52,8 @@ is ``/machine/ext1-click`` or ``/machine/ext2-click``.
@@ -34,7 +34,7 @@ index 9fbe73d..512f1ce 100644
    property ``temperature`` (milli-degrees C, -40000 to 125000, default
    25000) sets the temperature, also at run time:
 diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
-index 4fed807..44cfebe 100644
+index b470db2..e9d8ff8 100644
 --- a/hw/arm/pic32cm_mc00_cpro.c
 +++ b/hw/arm/pic32cm_mc00_cpro.c
 @@ -55,11 +55,12 @@ typedef struct CproClick {
@@ -86,7 +86,7 @@ index 4fed807..44cfebe 100644
      }
  }
 diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
-index 5c95e87..19526f0 100644
+index a91294b..58b1586 100644
 --- a/tests/qtest/pic32cm-click-test.c
 +++ b/tests/qtest/pic32cm-click-test.c
 @@ -132,6 +132,16 @@ static void test_identity(void)

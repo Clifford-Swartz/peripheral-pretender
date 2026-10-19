@@ -1,7 +1,7 @@
-From 2608b7b7978ebdc12f60d35e87682cf16d52944c Mon Sep 17 00:00:00 2001
+From c4d8198db09bb0edcb71c65bfca584c4dc448cd2 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Thu, 15 Oct 2026 22:34:27 -0700
-Subject: [PATCH] hw/misc: RN2903 LoRa module on a UART, the LR 2 Click
+Subject: [PATCH 54/57] hw/misc: RN2903 LoRa module on a UART, the LR 2 Click
 
 chardev-rn2903 answers the sys, mac and radio commands firmware uses,
 with the documented errors: OTAA and ABP joins after the join window,
@@ -24,7 +24,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/misc/rn2903.h
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index 7fa0349..94ee56a 100644
+index 8165574..c82952d 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -215,6 +215,17 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
@@ -58,7 +58,7 @@ index 8631123..2b57248 100644
  system_ss.add(when: 'CONFIG_WS2812', if_true: files('ws2812.c'))
  system_ss.add(when: 'CONFIG_RNBD451', if_true: files('rnbd451.c'))
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index 7b83081..b4e1827 100644
+index 26f4777..51c9f1c 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -25,6 +25,7 @@
@@ -86,7 +86,7 @@ index 7b83081..b4e1827 100644
        TYPE_CLICK_ROTARY, CLICK_SPI, 0, 2,
 diff --git a/hw/misc/rn2903.c b/hw/misc/rn2903.c
 new file mode 100644
-index 0000000..adc64ba
+index 0000000..24cde54
 --- /dev/null
 +++ b/hw/misc/rn2903.c
 @@ -0,0 +1,948 @@
@@ -1040,7 +1040,7 @@ index 0000000..adc64ba
 +DEFINE_TYPES(rn_types)
 diff --git a/include/hw/misc/rn2903.h b/include/hw/misc/rn2903.h
 new file mode 100644
-index 0000000..256b63a
+index 0000000..318cae0
 --- /dev/null
 +++ b/include/hw/misc/rn2903.h
 @@ -0,0 +1,22 @@

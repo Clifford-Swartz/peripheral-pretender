@@ -2111,7 +2111,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/adc_adc_12b_diff_ctrl_avr_v2.yaml",
-    "sha1": "c1896584a707db7776dc424af0790863bc0b83e1",
+    "sha1": "d900054102a32f98bfac937a3c16b587fca26838",
     "status": "applied",
     "versions": [
      ""
@@ -6181,7 +6181,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/clkctrl_avrea.yaml",
-    "sha1": "72c0df2949e442c1ab8470cc5c1dec7d38201e4c",
+    "sha1": "581fb0476ee7254570029f3b89971c890a0369c3",
     "status": "applied",
     "versions": [
      ""
@@ -7179,7 +7179,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/cpuint_int_8bit_v3.yaml",
-    "sha1": "ed2ae938cb45cc4495500cc9d3c92cdab3eb47fd",
+    "sha1": "a53b0b8b3e3026b02e252d40850386e4eeb6c17a",
     "status": "applied",
     "versions": [
      ""
@@ -12541,7 +12541,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/nvmctrl_nvm_ctrl_avr_v3.yaml",
-    "sha1": "734e83c3920af69befd60f96f103bf2923af5cec",
+    "sha1": "84bfe595c9a002eb31bd7dd53212c639ae20e4cf",
     "status": "applied",
     "versions": [
      ""
@@ -17602,7 +17602,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/spi_spi_8bit_v2.yaml",
-    "sha1": "ccde426982ecaa65b84513fae158051bae476b88",
+    "sha1": "d4d1cc1635e1f7df4f1b0a39703cc307dba37ec5",
     "status": "applied",
     "versions": [
      ""
@@ -20408,7 +20408,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/tcb_tmr_16b_capture_v1.yaml",
-    "sha1": "e9cfe5df534226a9b4506f968833247d93ebf07f",
+    "sha1": "adfae107e46f70ada94f205d3b31cb6c50ef3033",
     "status": "applied",
     "versions": [
      ""
@@ -21006,7 +21006,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/twi_i2c_8bit_avr_v3.yaml",
-    "sha1": "fb823cddb0359271adfbc9fe8cab297d9477cde7",
+    "sha1": "b527ba06c2811b10afc2bac79e2c9bc7e996ae69",
     "status": "applied",
     "versions": [
      ""
@@ -22128,7 +22128,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/usart_uart_autobd_v4.yaml",
-    "sha1": "d56dc114e61a98d1274f7fe1e46d290321dc5f7d",
+    "sha1": "cba5bd26ee5d0fe808b0dbf39883c051c2693edd",
     "status": "applied",
     "versions": [
      ""

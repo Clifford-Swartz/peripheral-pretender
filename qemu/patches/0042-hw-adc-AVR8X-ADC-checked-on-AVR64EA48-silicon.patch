@@ -1,7 +1,7 @@
-From bedb3a2e9e5e4a81b59c1765f39816619cf1639b Mon Sep 17 00:00:00 2001
+From 26304c1d2211fd1362b938d807831cef568a17bf Mon Sep 17 00:00:00 2001
 From: Clifford Swartz <cliffordswartz1@gmail.com>
 Date: Thu, 15 Oct 2026 11:15:36 -0700
-Subject: [PATCH 42/42] hw/adc: AVR8X ADC checked on AVR64EA48 silicon
+Subject: [PATCH 42/57] hw/adc: AVR8X ADC checked on AVR64EA48 silicon
 
 An internal reference above VDD acts as VDD: on silicon at VDD 3.31 V
 the 4.096 V reference converts VDD/10 to 409, as the VDD reference
@@ -21,7 +21,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  2 files changed, 26 insertions(+), 8 deletions(-)
 
 diff --git a/hw/adc/avr8x_adc.c b/hw/adc/avr8x_adc.c
-index 7920e33..df1554e 100644
+index 8e1c955..e00a64f 100644
 --- a/hw/adc/avr8x_adc.c
 +++ b/hw/adc/avr8x_adc.c
 @@ -25,7 +25,10 @@
@@ -76,7 +76,7 @@ index 7920e33..df1554e 100644
  
  /*
 diff --git a/hw/avr/avr64ea48_device.h b/hw/avr/avr64ea48_device.h
-index 9f77a78..60a19ee 100644
+index 4d1ba18..70a32d4 100644
 --- a/hw/avr/avr64ea48_device.h
 +++ b/hw/avr/avr64ea48_device.h
 @@ -6,7 +6,7 @@

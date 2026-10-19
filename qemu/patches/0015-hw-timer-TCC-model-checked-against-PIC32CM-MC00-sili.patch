@@ -1,7 +1,8 @@
-From a097ceada709b6b6d6c26da9358d26fe7e34ef81 Mon Sep 17 00:00:00 2001
+From 454a8975744a8b08c1ce5c3350e9e6acd092f9aa Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Tue, 13 Oct 2026 22:28:08 -0700
-Subject: [PATCH] hw/timer: TCC model, checked against PIC32CM MC00 silicon
+Subject: [PATCH 15/57] hw/timer: TCC model, checked against PIC32CM MC00
+ silicon
 
 TCC U2213: counting from GCLK_TCC through the prescaler in the single-
 slope (NFRQ, MFRQ, NPWM) and dual-slope waveform modes with the
@@ -40,7 +41,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 tests/qtest/pic32cm-tcc-test.c
 
 diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
-index 65cfee4..4dc6dc6 100644
+index ab619f7..9f1ee0d 100644
 --- a/docs/system/arm/pic32cm-jh01-cpro.rst
 +++ b/docs/system/arm/pic32cm-jh01-cpro.rst
 @@ -75,6 +75,11 @@ Supported devices
@@ -71,7 +72,7 @@ index 65cfee4..4dc6dc6 100644
  Board and SoC properties
  """"""""""""""""""""""""
 diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
-index c0a52c5..89751df 100644
+index d5bffcf..3275d69 100644
 --- a/hw/arm/pic32cm_soc.c
 +++ b/hw/arm/pic32cm_soc.c
 @@ -27,6 +27,7 @@
@@ -92,7 +93,7 @@ index c0a52c5..89751df 100644
  
 diff --git a/hw/timer/mchp_tcc.c b/hw/timer/mchp_tcc.c
 new file mode 100644
-index 0000000..c3b89e7
+index 0000000..8a87010
 --- /dev/null
 +++ b/hw/timer/mchp_tcc.c
 @@ -0,0 +1,1137 @@
@@ -1259,7 +1260,7 @@ index 8614bc7..f4b94ac 100644
 +mchp_tcc_tick(const char *name, uint32_t count, uint32_t flags) "%s: count 0x%x, flags 0x%x"
 +mchp_tcc_event_in(const char *name, int n, int level, uint32_t count) "%s: EV%d level %d, count 0x%x"
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h b/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
-index 02bec9b..80e9c3f 100644
+index b03fbd6..b87d9fd 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
 @@ -6,7 +6,7 @@
@@ -1420,7 +1421,7 @@ index 02bec9b..80e9c3f 100644
  };
  #define PIC32CM1216MC00048_TCC_NREGS 22
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h b/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
-index 922aa78..f928654 100644
+index 4b8a8f3..0689c1d 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
 @@ -6,7 +6,7 @@
@@ -1581,7 +1582,7 @@ index 922aa78..f928654 100644
  };
  #define PIC32CM5164JH01100_TCC_NREGS 22
 diff --git a/include/hw/mchp/gen/tcc_u2213.h b/include/hw/mchp/gen/tcc_u2213.h
-index 000a3a5..c71a186 100644
+index a7e3b88..28c1f0c 100644
 --- a/include/hw/mchp/gen/tcc_u2213.h
 +++ b/include/hw/mchp/gen/tcc_u2213.h
 @@ -10,7 +10,7 @@
@@ -1595,7 +1596,7 @@ index 000a3a5..c71a186 100644
   */
 diff --git a/include/hw/timer/mchp_tcc.h b/include/hw/timer/mchp_tcc.h
 new file mode 100644
-index 0000000..06fb9ec
+index 0000000..bb73b69
 --- /dev/null
 +++ b/include/hw/timer/mchp_tcc.h
 @@ -0,0 +1,32 @@
@@ -1646,7 +1647,7 @@ index c795495..95a96ca 100644
    (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
 diff --git a/tests/qtest/pic32cm-tcc-test.c b/tests/qtest/pic32cm-tcc-test.c
 new file mode 100644
-index 0000000..420279c
+index 0000000..0aa35b0
 --- /dev/null
 +++ b/tests/qtest/pic32cm-tcc-test.c
 @@ -0,0 +1,306 @@

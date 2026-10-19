@@ -1,8 +1,8 @@
-From fea6bcad0996a9c263208763dcc9fcfb848fd5c4 Mon Sep 17 00:00:00 2001
+From 3fc650b6426c3c26c3775a37c2c8b93ef84a97ff Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Thu, 15 Oct 2026 22:12:02 -0700
-Subject: [PATCH] hw/sensor: BME280 humidity, pressure and temperature, the
- Weather Click
+Subject: [PATCH 52/57] hw/sensor: BME280 humidity, pressure and temperature,
+ the Weather Click
 
 bme280 on I2C at 0x76: the register map with a typical calibration
 image, sleep, forced and normal modes with the typical measurement times
@@ -25,7 +25,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/sensor/bme280.h
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index dac50e3..26b3ca0 100644
+index fcbef1f..23fdf53 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -193,6 +193,17 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
@@ -47,7 +47,7 @@ index dac50e3..26b3ca0 100644
    OLED W Click (v100): an SSD1306 (``ssd1306``) with a 96x39 white OLED
    (MI9639BO-W) on SPI (jumpers J1-J3 on SPI), CS# on CS, D/C# on PWM, RES#
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index c7d90c4..f3351ea 100644
+index 8f33ce4..70e853f 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -30,6 +30,7 @@
@@ -71,7 +71,7 @@ index c7d90c4..f3351ea 100644
        TYPE_CHARDEV_RN4871, CLICK_UART, 0, 0,
 diff --git a/hw/sensor/bme280.c b/hw/sensor/bme280.c
 new file mode 100644
-index 0000000..04f78e5
+index 0000000..a65a0cf
 --- /dev/null
 +++ b/hw/sensor/bme280.c
 @@ -0,0 +1,599 @@
@@ -687,7 +687,7 @@ index 05fda9f..a92382e 100644
  system_ss.add(when: 'CONFIG_PYKIT_SENSORS', if_true: files('icm20948.c', 'bno085.c'))
 diff --git a/include/hw/sensor/bme280.h b/include/hw/sensor/bme280.h
 new file mode 100644
-index 0000000..0d8e5df
+index 0000000..e60152d
 --- /dev/null
 +++ b/include/hw/sensor/bme280.h
 @@ -0,0 +1,21 @@
@@ -713,7 +713,7 @@ index 0000000..0d8e5df
 +
 +#endif /* HW_SENSOR_BME280_H */
 diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
-index 736d1e6..ed1273d 100644
+index ed797b0..eb12046 100644
 --- a/tests/qtest/pic32cm-click-test.c
 +++ b/tests/qtest/pic32cm-click-test.c
 @@ -1083,6 +1083,68 @@ static void test_color2(void)

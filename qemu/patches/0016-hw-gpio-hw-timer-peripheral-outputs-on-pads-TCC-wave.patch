@@ -1,8 +1,8 @@
-From 29e772ffb362c4d00dc404ed06418690b71a8ee5 Mon Sep 17 00:00:00 2001
+From 84a9c6ff1cc005152ec658c872fc671ed8553c87 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Tue, 13 Oct 2026 23:21:19 -0700
-Subject: [PATCH] hw/gpio, hw/timer: peripheral outputs on pads, TCC waveform
- pins
+Subject: [PATCH 16/57] hw/gpio, hw/timer: peripheral outputs on pads, TCC
+ waveform pins
 
 PORT: a pin muxed to a peripheral function is driven by that function's
 "pmux-in" line (0, 1, undriven, or floating with the pull off for an
@@ -49,7 +49,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  15 files changed, 509 insertions(+), 41 deletions(-)
 
 diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
-index 4dc6dc6..3b00c76 100644
+index 9f1ee0d..6f07406 100644
 --- a/docs/system/arm/pic32cm-jh01-cpro.rst
 +++ b/docs/system/arm/pic32cm-jh01-cpro.rst
 @@ -66,7 +66,10 @@ Supported devices
@@ -98,7 +98,7 @@ index 611543b..ebad213 100644
  
  config NRF51_SOC
 diff --git a/hw/arm/pic32cm_jh01_cpro.c b/hw/arm/pic32cm_jh01_cpro.c
-index d1b201d..09ecb44 100644
+index 788dc29..b252860 100644
 --- a/hw/arm/pic32cm_jh01_cpro.c
 +++ b/hw/arm/pic32cm_jh01_cpro.c
 @@ -97,8 +97,10 @@ static void pic32cm_jh01_cpro_init(MachineState *machine)
@@ -114,7 +114,7 @@ index d1b201d..09ecb44 100644
      pic32cm_jh01_cpro_update_sw0(s);
  
 diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
-index a9e74d3..c3bde49 100644
+index 2d6c928..bccd97c 100644
 --- a/hw/arm/pic32cm_mc00_cpro.c
 +++ b/hw/arm/pic32cm_mc00_cpro.c
 @@ -95,8 +95,10 @@ static void pic32cm_mc00_cpro_init(MachineState *machine)
@@ -130,7 +130,7 @@ index a9e74d3..c3bde49 100644
      pic32cm_mc00_cpro_update_sw0(s);
  
 diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
-index 89751df..671573d 100644
+index 3275d69..e97ad21 100644
 --- a/hw/arm/pic32cm_soc.c
 +++ b/hw/arm/pic32cm_soc.c
 @@ -22,6 +22,7 @@
@@ -253,7 +253,7 @@ index 89751df..671573d 100644
  
  static const Property pic32cm_soc_properties[] = {
 diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
-index 0e0f2c6..0aeb026 100644
+index 63b02d1..32d143b 100644
 --- a/hw/gpio/mchp_port.c
 +++ b/hw/gpio/mchp_port.c
 @@ -9,14 +9,21 @@
@@ -585,7 +585,7 @@ index c27fea5..61ecfa5 100644
  mchp_port_in(char group, unsigned pin, int level) "P%c%02u: in %d"
 +mchp_port_pmux_in(char group, unsigned pin, unsigned func, int level) "P%c%u: function %u drives %d"
 diff --git a/hw/timer/mchp_tc.c b/hw/timer/mchp_tc.c
-index 0414b5c..b08dbf1 100644
+index 8c8d516..f8a5f1a 100644
 --- a/hw/timer/mchp_tc.c
 +++ b/hw/timer/mchp_tc.c
 @@ -373,17 +373,19 @@ static void mchp_tc_advance(MchpTcState *s, int64_t now)
@@ -615,7 +615,7 @@ index 0414b5c..b08dbf1 100644
          next = ovf;
          for (unsigned ch = 0; ch < MCHP_TC_CHANNELS; ch++) {
 diff --git a/hw/timer/mchp_tcc.c b/hw/timer/mchp_tcc.c
-index c3b89e7..5459894 100644
+index 8a87010..5b98c4f 100644
 --- a/hw/timer/mchp_tcc.c
 +++ b/hw/timer/mchp_tcc.c
 @@ -38,9 +38,14 @@
@@ -856,7 +856,7 @@ index c3b89e7..5459894 100644
          VMSTATE_BOOL_ARRAY(ev_level, MchpTccState, 2),
          VMSTATE_UINT8(toggle, MchpTccState),
 diff --git a/include/hw/arm/pic32cm1216mc00048_gen.h b/include/hw/arm/pic32cm1216mc00048_gen.h
-index 7529eeb..3ece43c 100644
+index f94e37b..479a648 100644
 --- a/include/hw/arm/pic32cm1216mc00048_gen.h
 +++ b/include/hw/arm/pic32cm1216mc00048_gen.h
 @@ -448,7 +448,8 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
@@ -890,7 +890,7 @@ index 7529eeb..3ece43c 100644
          .nregs = PIC32CM1216MC00048_TCC_NREGS,
      },
 diff --git a/include/hw/arm/pic32cm5164jh01100_gen.h b/include/hw/arm/pic32cm5164jh01100_gen.h
-index 1e6669b..2856861 100644
+index b858c5f..9d13e3a 100644
 --- a/include/hw/arm/pic32cm5164jh01100_gen.h
 +++ b/include/hw/arm/pic32cm5164jh01100_gen.h
 @@ -525,7 +525,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
@@ -921,7 +921,7 @@ index 1e6669b..2856861 100644
          .regs = pic32cm5164jh01100_tcc_regs,
          .nregs = PIC32CM5164JH01100_TCC_NREGS,
 diff --git a/include/hw/gpio/mchp_port.h b/include/hw/gpio/mchp_port.h
-index 0017124..efc8689 100644
+index 0c76de2..ae67ba0 100644
 --- a/include/hw/gpio/mchp_port.h
 +++ b/include/hw/gpio/mchp_port.h
 @@ -19,6 +19,13 @@
@@ -961,7 +961,7 @@ index 0017124..efc8689 100644
  /* GPIO line of pin P<group><pin>, for example MCHP_PORT_PIN('C', 5) */
  #define MCHP_PORT_PIN(group, pin) (((group) - 'A') * 32 + (pin))
 diff --git a/include/hw/mchp/mchp_device.h b/include/hw/mchp/mchp_device.h
-index 29f46b0..4173391 100644
+index e366341..bcb1b31 100644
 --- a/include/hw/mchp/mchp_device.h
 +++ b/include/hw/mchp/mchp_device.h
 @@ -69,6 +69,7 @@ typedef struct MchpInstanceInfo {
@@ -973,7 +973,7 @@ index 29f46b0..4173391 100644
      const MchpRegInfo *regs;        /* view at reset; NULL: no table */
      unsigned nregs;
 diff --git a/include/hw/timer/mchp_tcc.h b/include/hw/timer/mchp_tcc.h
-index 06fb9ec..c781e55 100644
+index bb73b69..fdfdfd5 100644
 --- a/include/hw/timer/mchp_tcc.h
 +++ b/include/hw/timer/mchp_tcc.h
 @@ -10,6 +10,8 @@
@@ -994,7 +994,7 @@ index 06fb9ec..c781e55 100644
  
  #endif /* HW_TIMER_MCHP_TCC_H */
 diff --git a/tests/qtest/pic32cm-tcc-test.c b/tests/qtest/pic32cm-tcc-test.c
-index 420279c..ec0e210 100644
+index 0aa35b0..363eecd 100644
 --- a/tests/qtest/pic32cm-tcc-test.c
 +++ b/tests/qtest/pic32cm-tcc-test.c
 @@ -15,12 +15,15 @@

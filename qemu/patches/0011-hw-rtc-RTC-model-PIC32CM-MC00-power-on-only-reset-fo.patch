@@ -1,8 +1,8 @@
-From fa5293af7b982e3b739757256637c86b4f6b555a Mon Sep 17 00:00:00 2001
+From 16a70d574413a2cc2aba6045008469f3f0f8c23e Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Tue, 13 Oct 2026 18:24:43 -0700
-Subject: [PATCH] hw/rtc: RTC model (PIC32CM MC00), power-on-only reset for the
- 32 kHz domain
+Subject: [PATCH 11/57] hw/rtc: RTC model (PIC32CM MC00), power-on-only reset
+ for the 32 kHz domain
 
 mchp-rtc (U2250): the three modes (32-bit counter with COMP0 and
 MATCHCLR, 16-bit counter with PER and COMP0/1, clock/calendar with
@@ -42,7 +42,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 tests/qtest/pic32cm-rtc-test.c
 
 diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
-index d7edd41..adc0272 100644
+index 353eddd..02abc40 100644
 --- a/hw/arm/pic32cm_soc.c
 +++ b/hw/arm/pic32cm_soc.c
 @@ -24,6 +24,7 @@
@@ -102,7 +102,7 @@ index d7edd41..adc0272 100644
      for (unsigned i = 0; i < s->dev->ninstances; i++) {
          const MchpInstanceInfo *info = &s->dev->instances[i];
 diff --git a/hw/misc/mchp_clock.c b/hw/misc/mchp_clock.c
-index 5d4ae7c..1444317 100644
+index 2d3e98a..8357342 100644
 --- a/hw/misc/mchp_clock.c
 +++ b/hw/misc/mchp_clock.c
 @@ -325,6 +325,7 @@ struct MchpOsc32kctrlState {
@@ -198,7 +198,7 @@ index 5d4ae7c..1444317 100644
  }
  
 diff --git a/hw/misc/mchp_regblock.c b/hw/misc/mchp_regblock.c
-index 9bc367a..ddff619 100644
+index 1d28d18..d01ed08 100644
 --- a/hw/misc/mchp_regblock.c
 +++ b/hw/misc/mchp_regblock.c
 @@ -320,6 +320,11 @@ static void mchp_regblock_reset_hold(Object *obj, ResetType type)
@@ -231,7 +231,7 @@ index 9bc367a..ddff619 100644
  };
 diff --git a/hw/rtc/mchp_rtc.c b/hw/rtc/mchp_rtc.c
 new file mode 100644
-index 0000000..f08bede
+index 0000000..491b82c
 --- /dev/null
 +++ b/hw/rtc/mchp_rtc.c
 @@ -0,0 +1,566 @@
@@ -825,7 +825,7 @@ index d2f3621..0cadbaf 100644
 +# mchp_rtc.c
 +mchp_rtc_event(uint64_t value, uint32_t flags) "value 0x%" PRIx64 ", flags 0x%x"
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h b/include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h
-index 1a5df76..aaa59af 100644
+index e1271e2..aa813e1 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h
 @@ -6,7 +6,7 @@
@@ -1041,7 +1041,7 @@ index 1a5df76..aaa59af 100644
  };
  #define PIC32CM1216MC00048_RTC_MODE2_NREGS 11
 diff --git a/include/hw/mchp/gen/rtc_u2250.h b/include/hw/mchp/gen/rtc_u2250.h
-index 7577947..7211d42 100644
+index f44a689..b0b3c5c 100644
 --- a/include/hw/mchp/gen/rtc_u2250.h
 +++ b/include/hw/mchp/gen/rtc_u2250.h
 @@ -8,7 +8,7 @@
@@ -1054,7 +1054,7 @@ index 7577947..7211d42 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/misc/mchp_regblock.h b/include/hw/misc/mchp_regblock.h
-index 0678eb9..4cbb501 100644
+index 6f48c14..dc7f80f 100644
 --- a/include/hw/misc/mchp_regblock.h
 +++ b/include/hw/misc/mchp_regblock.h
 @@ -55,6 +55,7 @@ struct MchpRegBlock {
@@ -1079,7 +1079,7 @@ index 0678eb9..4cbb501 100644
  };
 diff --git a/include/hw/rtc/mchp_rtc.h b/include/hw/rtc/mchp_rtc.h
 new file mode 100644
-index 0000000..ab063f3
+index 0000000..6a5fe0b
 --- /dev/null
 +++ b/include/hw/rtc/mchp_rtc.h
 @@ -0,0 +1,21 @@
@@ -1119,7 +1119,7 @@ index a0bc644..df42336 100644
    (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
 diff --git a/tests/qtest/pic32cm-rtc-test.c b/tests/qtest/pic32cm-rtc-test.c
 new file mode 100644
-index 0000000..fe03fea
+index 0000000..85c6540
 --- /dev/null
 +++ b/tests/qtest/pic32cm-rtc-test.c
 @@ -0,0 +1,207 @@

@@ -1,7 +1,7 @@
-From e4372875dec49f898a6417051672648a3daf022a Mon Sep 17 00:00:00 2001
+From aaec798bc6433d6176411964b161764e9a50e7e0 Mon Sep 17 00:00:00 2001
 From: Clifford Swartz <cliffordswartz1@gmail.com>
 Date: Thu, 15 Oct 2026 02:43:28 -0700
-Subject: [PATCH 36/36] hw/gpio: PORT bench drive layer and pull read-out
+Subject: [PATCH 36/57] hw/gpio: PORT bench drive layer and pull read-out
 
 The web view's parts bench drives pads through "pX-bench" ("<mask>
 <level>" in hex), a layer over the "port-in" drivers so a Click or a
@@ -19,7 +19,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  3 files changed, 164 insertions(+), 17 deletions(-)
 
 diff --git a/hw/gpio/avr8x_port.c b/hw/gpio/avr8x_port.c
-index 7858b2c..9b9c3ef 100644
+index 616fe85..61ffa15 100644
 --- a/hw/gpio/avr8x_port.c
 +++ b/hw/gpio/avr8x_port.c
 @@ -11,7 +11,9 @@
@@ -152,7 +152,7 @@ index 7858b2c..9b9c3ef 100644
          VMSTATE_UINT8(per_level, Avr8xPortGroup),
          VMSTATE_UINT8(in_last, Avr8xPortGroup),
 diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
-index ad6b5fd..7e57cfc 100644
+index c589e83..b5d0c12 100644
 --- a/hw/gpio/mchp_port.c
 +++ b/hw/gpio/mchp_port.c
 @@ -15,7 +15,9 @@
@@ -318,7 +318,7 @@ index ad6b5fd..7e57cfc 100644
          VMSTATE_UINT32_ARRAY(drive_level, MchpPortState,
                               MCHP_PORT_GROUP_COUNT),
 diff --git a/include/hw/gpio/avr8x_port.h b/include/hw/gpio/avr8x_port.h
-index 8c6b316..e134ee8 100644
+index 1a8db89..ec0db1a 100644
 --- a/include/hw/gpio/avr8x_port.h
 +++ b/include/hw/gpio/avr8x_port.h
 @@ -55,6 +55,9 @@ typedef struct Avr8xPortGroup {

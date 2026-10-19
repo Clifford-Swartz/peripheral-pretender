@@ -1,7 +1,7 @@
-From f4d40427575b7dbc3d717ecd815db0e13d70ab83 Mon Sep 17 00:00:00 2001
+From 15a40140cb262274026c1af7fb4fcce17b0cab33 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Thu, 15 Oct 2026 21:17:44 -0700
-Subject: [PATCH] hw/display: SSD1306 on I2C, the OLED B Click
+Subject: [PATCH 50/57] hw/display: SSD1306 on I2C, the OLED B Click
 
 ssd1306-i2c answers at 0x3C, or 0x3D with SA0 (the D/C# input) high at
 the START, takes a control byte (Co, D/C#) at the start of each transfer
@@ -18,7 +18,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  4 files changed, 188 insertions(+), 2 deletions(-)
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index 98af643..c73f122 100644
+index 2362de5..bfd17dc 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -192,8 +192,13 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
@@ -38,7 +38,7 @@ index 98af643..c73f122 100644
  SPI Clicks on both headers share the SPI bus; each listens only while its
  own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
 diff --git a/hw/display/ssd1306.c b/hw/display/ssd1306.c
-index b2489eb..535763c 100644
+index 8e1b4ca..b55f7c7 100644
 --- a/hw/display/ssd1306.c
 +++ b/hw/display/ssd1306.c
 @@ -29,6 +29,16 @@
@@ -232,7 +232,7 @@ index b2489eb..535763c 100644
  
  DEFINE_TYPES(ssd1306_types)
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index f7c4bfb..75f974d 100644
+index 3b6ac55..c2c68ca 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -66,6 +66,7 @@ typedef struct ClickInfo {
@@ -274,7 +274,7 @@ index f7c4bfb..75f974d 100644
              /* Sockets share the SPI bus; each Click has its own CS */
              qdev_prop_set_uint8(dev, "cs", index);
 diff --git a/include/hw/display/ssd1306.h b/include/hw/display/ssd1306.h
-index 4ec25cd..dfec379 100644
+index dc22df2..77356c9 100644
 --- a/include/hw/display/ssd1306.h
 +++ b/include/hw/display/ssd1306.h
 @@ -11,6 +11,8 @@

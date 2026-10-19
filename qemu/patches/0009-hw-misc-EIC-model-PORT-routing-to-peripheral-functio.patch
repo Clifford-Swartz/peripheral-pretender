@@ -1,7 +1,8 @@
-From 83b6ff9e861dd6a8d1143776b36a9fb83dd0be45 Mon Sep 17 00:00:00 2001
+From 2aefe473364689a1a505a7addf0b3c2ad3ee5572 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Tue, 13 Oct 2026 17:52:56 -0700
-Subject: [PATCH] hw/misc: EIC model, PORT routing to peripheral function A
+Subject: [PATCH 09/57] hw/misc: EIC model, PORT routing to peripheral function
+ A
 
 mchp-eic (U2254, PIC32CM MC00 and JH01): edge and level detection on the
 16 EXTINT inputs and NMI, W1C flags with level re-assertion, the EIC
@@ -46,7 +47,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 tests/qtest/pic32cm-eic-test.c
 
 diff --git a/hw/arm/pic32cm1216mc00048_device.h b/hw/arm/pic32cm1216mc00048_device.h
-index 2cd1d78..52b8b85 100644
+index a64b194..e3b90ee 100644
 --- a/hw/arm/pic32cm1216mc00048_device.h
 +++ b/hw/arm/pic32cm1216mc00048_device.h
 @@ -49,6 +49,8 @@ static const MchpDeviceInfo pic32cm1216mc00048_device = {
@@ -59,7 +60,7 @@ index 2cd1d78..52b8b85 100644
      .nrevisions = ARRAY_SIZE(pic32cm1216mc00048_revisions),
  };
 diff --git a/hw/arm/pic32cm5164jh01100_device.h b/hw/arm/pic32cm5164jh01100_device.h
-index 2fd8b05..39a4c3e 100644
+index effd5ec..e2999eb 100644
 --- a/hw/arm/pic32cm5164jh01100_device.h
 +++ b/hw/arm/pic32cm5164jh01100_device.h
 @@ -49,6 +49,8 @@ static const MchpDeviceInfo pic32cm5164jh01100_device = {
@@ -72,7 +73,7 @@ index 2fd8b05..39a4c3e 100644
      .nrevisions = ARRAY_SIZE(pic32cm5164jh01100_revisions),
  };
 diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
-index 2e8c0a3..3c70b49 100644
+index b0be9c6..ba6d13b 100644
 --- a/hw/arm/pic32cm_soc.c
 +++ b/hw/arm/pic32cm_soc.c
 @@ -23,6 +23,7 @@
@@ -162,7 +163,7 @@ index 2e8c0a3..3c70b49 100644
  
  static const Property pic32cm_soc_properties[] = {
 diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
-index e1334d5..378bf3f 100644
+index abcc1a1..012d521 100644
 --- a/hw/gpio/mchp_port.c
 +++ b/hw/gpio/mchp_port.c
 @@ -38,12 +38,15 @@ struct MchpPortState {
@@ -288,7 +289,7 @@ index e1334d5..378bf3f 100644
  };
 diff --git a/hw/misc/mchp_eic.c b/hw/misc/mchp_eic.c
 new file mode 100644
-index 0000000..2c65161
+index 0000000..6c5b8dd
 --- /dev/null
 +++ b/hw/misc/mchp_eic.c
 @@ -0,0 +1,326 @@
@@ -642,7 +643,7 @@ index 88d4d68..591ce20 100644
 +# mchp_eic.c
 +mchp_eic_detect(unsigned line, unsigned sense, int level) "EXTINT%u (16 = NMI): sense %u, level %d"
 diff --git a/include/hw/gpio/mchp_port.h b/include/hw/gpio/mchp_port.h
-index c348e5d..72e7459 100644
+index 44e7062..25b982a 100644
 --- a/include/hw/gpio/mchp_port.h
 +++ b/include/hw/gpio/mchp_port.h
 @@ -15,6 +15,9 @@
@@ -664,7 +665,7 @@ index c348e5d..72e7459 100644
  /* GPIO line of pin P<group><pin>, for example MCHP_PORT_PIN('C', 5) */
  #define MCHP_PORT_PIN(group, pin) (((group) - 'A') * 32 + (pin))
 diff --git a/include/hw/mchp/gen/eic_u2254.h b/include/hw/mchp/gen/eic_u2254.h
-index a73c977..1b4c0e2 100644
+index fb6377f..ab484ac 100644
 --- a/include/hw/mchp/gen/eic_u2254.h
 +++ b/include/hw/mchp/gen/eic_u2254.h
 @@ -9,7 +9,7 @@
@@ -677,7 +678,7 @@ index a73c977..1b4c0e2 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h b/include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h
-index e850c59..ae5c7d9 100644
+index cc45ad4..41da09b 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h
 @@ -6,7 +6,7 @@
@@ -757,7 +758,7 @@ index e850c59..ae5c7d9 100644
  };
  #define PIC32CM1216MC00048_EIC_NREGS 11
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h b/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h
-index e01b025..3a508fb 100644
+index db02b66..148db33 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h
 @@ -6,7 +6,7 @@
@@ -788,7 +789,7 @@ index e01b025..3a508fb 100644
      {
          .name = "GROUP[1].PINCFG", .offset = 0xC0, .size = 1, .count = 32,
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h b/include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h
-index bcaa9ee..ba20842 100644
+index 9273d5e..0f132e3 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h
 @@ -6,7 +6,7 @@
@@ -886,7 +887,7 @@ index bcaa9ee..ba20842 100644
  };
  #define PIC32CM5164JH01100_EIC_NREGS 14
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h b/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h
-index 345002c..1d66bb2 100644
+index cb66581..7ff643d 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h
 @@ -6,7 +6,7 @@
@@ -926,7 +927,7 @@ index 345002c..1d66bb2 100644
      {
          .name = "GROUP[2].PINCFG", .offset = 0x140, .size = 1, .count = 32,
 diff --git a/include/hw/mchp/gen/port_u2210.h b/include/hw/mchp/gen/port_u2210.h
-index 0b66c8d..5e27855 100644
+index ce1bc30..30d602a 100644
 --- a/include/hw/mchp/gen/port_u2210.h
 +++ b/include/hw/mchp/gen/port_u2210.h
 @@ -9,7 +9,7 @@
@@ -939,7 +940,7 @@ index 0b66c8d..5e27855 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/mchp_device.h b/include/hw/mchp/mchp_device.h
-index eba2a92..0bde9a0 100644
+index 687b0fd..8bd9bd4 100644
 --- a/include/hw/mchp/mchp_device.h
 +++ b/include/hw/mchp/mchp_device.h
 @@ -148,6 +148,8 @@ typedef struct MchpDeviceInfo {
@@ -953,7 +954,7 @@ index eba2a92..0bde9a0 100644
  } MchpDeviceInfo;
 diff --git a/include/hw/misc/mchp_eic.h b/include/hw/misc/mchp_eic.h
 new file mode 100644
-index 0000000..b802414
+index 0000000..c3b3d27
 --- /dev/null
 +++ b/include/hw/misc/mchp_eic.h
 @@ -0,0 +1,30 @@
@@ -1002,7 +1003,7 @@ index a55cd1e..c7920d4 100644
    (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
 diff --git a/tests/qtest/pic32cm-eic-test.c b/tests/qtest/pic32cm-eic-test.c
 new file mode 100644
-index 0000000..3c86bec
+index 0000000..5d03a21
 --- /dev/null
 +++ b/tests/qtest/pic32cm-eic-test.c
 @@ -0,0 +1,180 @@

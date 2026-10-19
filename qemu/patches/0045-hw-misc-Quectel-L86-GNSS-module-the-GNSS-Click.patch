@@ -1,7 +1,7 @@
-From 539d70de79ea3aec0724de2f05ba03d381259495 Mon Sep 17 00:00:00 2001
+From 16a189b04780283cd66977d4ef5450c69e751a86 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Thu, 15 Oct 2026 18:20:39 -0700
-Subject: [PATCH] hw/misc: Quectel L86 GNSS module, the GNSS Click
+Subject: [PATCH 45/57] hw/misc: Quectel L86 GNSS module, the GNSS Click
 
 A chardev on the socket's UART, 9600 baud paced at the baud rate: the
 L86's boot lines, NMEA 4.10 sentences in its order and talkers with and
@@ -21,7 +21,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/misc/quectel_l86.h
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index 1d4c059..4a544d6 100644
+index afbe772..e656130 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -142,6 +142,19 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
@@ -57,7 +57,7 @@ index 53c6c5c..e7b892a 100644
  system_ss.add(when: 'CONFIG_WS2812', if_true: files('ws2812.c'))
  system_ss.add(when: 'CONFIG_RNBD451', if_true: files('rnbd451.c'))
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index 51da5d5..659e53f 100644
+index 3221ea1..7c8f202 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -22,6 +22,7 @@
@@ -84,7 +84,7 @@ index 51da5d5..659e53f 100644
  const char *mikrobus_click_names(void)
 diff --git a/hw/misc/quectel_l86.c b/hw/misc/quectel_l86.c
 new file mode 100644
-index 0000000..06fe3cb
+index 0000000..d2616e9
 --- /dev/null
 +++ b/hw/misc/quectel_l86.c
 @@ -0,0 +1,595 @@
@@ -685,7 +685,7 @@ index 0000000..06fe3cb
 +DEFINE_TYPES(l86_types)
 diff --git a/include/hw/misc/quectel_l86.h b/include/hw/misc/quectel_l86.h
 new file mode 100644
-index 0000000..59bd2ba
+index 0000000..d4548c0
 --- /dev/null
 +++ b/include/hw/misc/quectel_l86.h
 @@ -0,0 +1,18 @@

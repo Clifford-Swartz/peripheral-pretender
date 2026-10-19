@@ -1,7 +1,7 @@
-From 39f30fcc26b98e62d4f8f32480b9a49769aac70f Mon Sep 17 00:00:00 2001
+From 6c6b953fb1e45a439320dd55c512620caf75eabc Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 15:35:56 -0700
-Subject: [PATCH] hw/adc: MCP3204 SPI ADC and the Thumbstick Click
+Subject: [PATCH 28/57] hw/adc: MCP3204 SPI ADC and the Thumbstick Click
 
 - mchp-mcp3204: MCP3204 data sheet (DS21298) bit by bit: start bit,
   SGL/DIFF and channel, sample clock, null bit, 12 bits MSB first, then
@@ -36,7 +36,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/adc/mchp_mcp3204.h
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index af076c4..a341b5b 100644
+index c7e38c2..aac8917 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -99,6 +99,14 @@ resistors are modelled (from their schematics, v100).
@@ -55,7 +55,7 @@ index af076c4..a341b5b 100644
  own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
  
 diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
-index 32503a9..40e1d5b 100644
+index 3140593..dede418 100644
 --- a/docs/system/avr/avr64ea48-cnano.rst
 +++ b/docs/system/avr/avr64ea48-cnano.rst
 @@ -33,7 +33,8 @@ and ``mb3=`` plug a Click board into mikroBUS socket 1-3 (``thermo8`` needs
@@ -70,7 +70,7 @@ index 32503a9..40e1d5b 100644
  Firmware comes from ``-kernel`` or ``-bios``::
 diff --git a/hw/adc/mchp_mcp3204.c b/hw/adc/mchp_mcp3204.c
 new file mode 100644
-index 0000000..6630f0e
+index 0000000..e0d2a7e
 --- /dev/null
 +++ b/hw/adc/mchp_mcp3204.c
 @@ -0,0 +1,279 @@
@@ -363,7 +363,7 @@ index 7f7acc1..f5787eb 100644
  system_ss.add(when: 'CONFIG_ZYNQ', if_true: files('zynq-xadc.c'))
 +system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp3204.c'))
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index 4085c19..ac92a91 100644
+index 4ec199c..f9d10a5 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -20,6 +20,7 @@
@@ -390,7 +390,7 @@ index 4085c19..ac92a91 100644
  const char *mikrobus_click_names(void)
 diff --git a/include/hw/adc/mchp_mcp3204.h b/include/hw/adc/mchp_mcp3204.h
 new file mode 100644
-index 0000000..73d09e8
+index 0000000..add5877
 --- /dev/null
 +++ b/include/hw/adc/mchp_mcp3204.h
 @@ -0,0 +1,28 @@
@@ -423,7 +423,7 @@ index 0000000..73d09e8
 +
 +#endif /* HW_ADC_MCHP_MCP3204_H */
 diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
-index 17494d7..0589139 100644
+index 2c56e54..7a2f16b 100644
 --- a/tests/qtest/avr64ea48-cnano-test.c
 +++ b/tests/qtest/avr64ea48-cnano-test.c
 @@ -312,6 +312,38 @@ static void test_oledc(const void *fw)
@@ -474,7 +474,7 @@ index 17494d7..0589139 100644
      unlink(fw);
      return ret;
 diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
-index 5ef5820..fb09758 100644
+index f093a5a..edd4c25 100644
 --- a/tests/qtest/pic32cm-click-test.c
 +++ b/tests/qtest/pic32cm-click-test.c
 @@ -541,6 +541,78 @@ static void test_oledc(void)

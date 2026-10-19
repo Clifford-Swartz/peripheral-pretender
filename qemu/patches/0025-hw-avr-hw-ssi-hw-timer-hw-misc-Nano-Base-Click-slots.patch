@@ -1,7 +1,7 @@
-From 8a5af2fe795295ad768e63c72989319fd0b2ad14 Mon Sep 17 00:00:00 2001
+From f9879f85effc912a299a3352f69ead435dbd501a Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 14:03:40 -0700
-Subject: [PATCH 25/25] hw/avr, hw/ssi, hw/timer, hw/misc: Nano Base Click
+Subject: [PATCH 25/57] hw/avr, hw/ssi, hw/timer, hw/misc: Nano Base Click
  slots, 8x8 G Click
 
 - avr8x-spi: AVR8X SPI host (normal and buffered mode flags, DORD), on an
@@ -64,7 +64,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
 new file mode 100644
-index 0000000..7f12554
+index 0000000..1098f1b
 --- /dev/null
 +++ b/docs/system/avr/avr64ea48-cnano.rst
 @@ -0,0 +1,40 @@
@@ -137,7 +137,7 @@ index 4cf9306..0eab3e8 100644
      select SPLIT_IRQ
      select UNIMP
 diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
-index 0192fea..c1db36a 100644
+index ea4ad8d..3645342 100644
 --- a/hw/arm/pic32cm_mc00_cpro.c
 +++ b/hw/arm/pic32cm_mc00_cpro.c
 @@ -31,10 +31,8 @@
@@ -379,7 +379,7 @@ index 01bdfef..6426067 100644
      select UNIMP
      select LED
 diff --git a/hw/avr/avr64ea48_cnano.c b/hw/avr/avr64ea48_cnano.c
-index a2a7609..118cd36 100644
+index e190f21..f788359 100644
 --- a/hw/avr/avr64ea48_cnano.c
 +++ b/hw/avr/avr64ea48_cnano.c
 @@ -14,6 +14,14 @@
@@ -537,7 +537,7 @@ index a2a7609..118cd36 100644
  
  static const TypeInfo avr64ea48_cnano_types[] = {
 diff --git a/hw/avr/avr8x_soc.c b/hw/avr/avr8x_soc.c
-index 98574d0..a627bb0 100644
+index cab02df..f10f9db 100644
 --- a/hw/avr/avr8x_soc.c
 +++ b/hw/avr/avr8x_soc.c
 @@ -30,6 +30,8 @@
@@ -595,7 +595,7 @@ index ee90075..0af9659 100644
    'mchp_sysctrl.c',
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
 new file mode 100644
-index 0000000..671ddf5
+index 0000000..8a15bc5
 --- /dev/null
 +++ b/hw/misc/mikrobus.c
 @@ -0,0 +1,219 @@
@@ -846,7 +846,7 @@ index 1bd5646..9c27d97 100644
      select SSI
 diff --git a/hw/ssi/avr8x_spi.c b/hw/ssi/avr8x_spi.c
 new file mode 100644
-index 0000000..f9e9238
+index 0000000..bb1ce21
 --- /dev/null
 +++ b/hw/ssi/avr8x_spi.c
 @@ -0,0 +1,257 @@
@@ -1109,7 +1109,7 @@ index 0000000..f9e9238
 +DEFINE_TYPES(avr8x_spi_types)
 diff --git a/hw/ssi/max7219.c b/hw/ssi/max7219.c
 new file mode 100644
-index 0000000..673cd41
+index 0000000..7f33f4b
 --- /dev/null
 +++ b/hw/ssi/max7219.c
 @@ -0,0 +1,214 @@
@@ -1369,7 +1369,7 @@ index b3d823c..91d71cb 100644
 +    select MCHP_REGFILE
 diff --git a/hw/timer/avr8x_tcb.c b/hw/timer/avr8x_tcb.c
 new file mode 100644
-index 0000000..d228a06
+index 0000000..27400ff
 --- /dev/null
 +++ b/hw/timer/avr8x_tcb.c
 @@ -0,0 +1,266 @@
@@ -1661,7 +1661,7 @@ index f4b94ac..c6e7f8f 100644
 +avr8x_tcb_capt(const char *name) "%s: CAPT"
 diff --git a/include/hw/misc/mikrobus.h b/include/hw/misc/mikrobus.h
 new file mode 100644
-index 0000000..1abf89a
+index 0000000..ed627ef
 --- /dev/null
 +++ b/include/hw/misc/mikrobus.h
 @@ -0,0 +1,48 @@
@@ -1715,7 +1715,7 @@ index 0000000..1abf89a
 +#endif /* HW_MISC_MIKROBUS_H */
 diff --git a/include/hw/ssi/avr8x_spi.h b/include/hw/ssi/avr8x_spi.h
 new file mode 100644
-index 0000000..5865609
+index 0000000..d815457
 --- /dev/null
 +++ b/include/hw/ssi/avr8x_spi.h
 @@ -0,0 +1,18 @@
@@ -1739,7 +1739,7 @@ index 0000000..5865609
 +#endif /* HW_SSI_AVR8X_SPI_H */
 diff --git a/include/hw/ssi/max7219.h b/include/hw/ssi/max7219.h
 new file mode 100644
-index 0000000..f47ee5b
+index 0000000..2ee8c05
 --- /dev/null
 +++ b/include/hw/ssi/max7219.h
 @@ -0,0 +1,18 @@
@@ -1763,7 +1763,7 @@ index 0000000..f47ee5b
 +#endif /* HW_SSI_MAX7219_H */
 diff --git a/include/hw/timer/avr8x_tcb.h b/include/hw/timer/avr8x_tcb.h
 new file mode 100644
-index 0000000..2794617
+index 0000000..4abe8a8
 --- /dev/null
 +++ b/include/hw/timer/avr8x_tcb.h
 @@ -0,0 +1,18 @@
@@ -1786,7 +1786,7 @@ index 0000000..2794617
 +
 +#endif /* HW_TIMER_AVR8X_TCB_H */
 diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
-index 90274bb..3c1ca86 100644
+index 7330c4e..3fd2469 100644
 --- a/tests/qtest/avr64ea48-cnano-test.c
 +++ b/tests/qtest/avr64ea48-cnano-test.c
 @@ -26,6 +26,9 @@

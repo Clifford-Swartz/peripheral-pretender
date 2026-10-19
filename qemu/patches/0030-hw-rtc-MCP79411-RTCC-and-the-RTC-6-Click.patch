@@ -1,7 +1,7 @@
-From c3faa4b90ee1ca4e69d2de55ccf04a1f9e8a7359 Mon Sep 17 00:00:00 2001
+From 6f9414ce58445ec30c7be4778d1bf0971d075e03 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 16:05:48 -0700
-Subject: [PATCH] hw/rtc: MCP79411 RTCC and the RTC 6 Click
+Subject: [PATCH 30/57] hw/rtc: MCP79411 RTCC and the RTC 6 Click
 
 - mchp-mcp79411 (MCP7941X data sheet DS20002266H): one device answering
   0x6F (RTCC registers, 64-byte SRAM) and 0x57 (EEPROM, protected block
@@ -37,7 +37,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/rtc/mchp_mcp7941x.h
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index fa2eda7..5406d84 100644
+index 6204847..918ced9 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -118,6 +118,17 @@ resistors are modelled (from their schematics, v100).
@@ -59,7 +59,7 @@ index fa2eda7..5406d84 100644
  own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
  
 diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
-index c8e50f5..10d5b60 100644
+index 5e5976a..d3abee8 100644
 --- a/docs/system/avr/avr64ea48-cnano.rst
 +++ b/docs/system/avr/avr64ea48-cnano.rst
 @@ -32,8 +32,8 @@ On a Curiosity Nano Base for Click boards (AC164162), ``mb1=``, ``mb2=``
@@ -74,7 +74,7 @@ index c8e50f5..10d5b60 100644
  
  Firmware comes from ``-kernel`` or ``-bios``::
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index 5045faa..1e2b12b 100644
+index 666e559..919d034 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -22,6 +22,7 @@
@@ -99,7 +99,7 @@ index 5045faa..1e2b12b 100644
  const char *mikrobus_click_names(void)
 diff --git a/hw/rtc/mchp_mcp7941x.c b/hw/rtc/mchp_mcp7941x.c
 new file mode 100644
-index 0000000..73aa78c
+index 0000000..523c6a0
 --- /dev/null
 +++ b/hw/rtc/mchp_mcp7941x.c
 @@ -0,0 +1,753 @@
@@ -867,7 +867,7 @@ index d3807cd..96e8c70 100644
 +system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp7941x.c'))
 diff --git a/include/hw/rtc/mchp_mcp7941x.h b/include/hw/rtc/mchp_mcp7941x.h
 new file mode 100644
-index 0000000..597c10f
+index 0000000..9ce126a
 --- /dev/null
 +++ b/include/hw/rtc/mchp_mcp7941x.h
 @@ -0,0 +1,27 @@
@@ -899,7 +899,7 @@ index 0000000..597c10f
 +
 +#endif /* HW_RTC_MCHP_MCP7941X_H */
 diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
-index bdcefb8..6872e20 100644
+index 70b0fea..cf1f398 100644
 --- a/tests/qtest/avr64ea48-cnano-test.c
 +++ b/tests/qtest/avr64ea48-cnano-test.c
 @@ -432,6 +432,38 @@ static void test_twi_thermo8(const void *fw)
@@ -950,7 +950,7 @@ index bdcefb8..6872e20 100644
      unlink(fw);
      return ret;
 diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
-index 4eac4f0..efc73bd 100644
+index 530753e..302d7e8 100644
 --- a/tests/qtest/pic32cm-click-test.c
 +++ b/tests/qtest/pic32cm-click-test.c
 @@ -15,6 +15,7 @@

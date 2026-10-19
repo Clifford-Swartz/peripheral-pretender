@@ -1,7 +1,7 @@
-From d99de69ba7e0f6284dc72aadb321f8b5b1b42c53 Mon Sep 17 00:00:00 2001
+From 1b248c57dbff2e5bbc64ab3c06d6e9463d759237 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Tue, 13 Oct 2026 21:35:32 -0700
-Subject: [PATCH] target/arm: cortex-m0plus with the ARMv6-M MPU and
+Subject: [PATCH 14/57] target/arm: cortex-m0plus with the ARMv6-M MPU and
  unprivileged mode
 
 A cortex-m0plus CPU type: the Cortex-M0 ISA with the Cortex-M0+ r0p1
@@ -47,7 +47,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  15 files changed, 100 insertions(+), 49 deletions(-)
 
 diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
-index 5dd67e8..65cfee4 100644
+index 10322a4..ab619f7 100644
 --- a/docs/system/arm/pic32cm-jh01-cpro.rst
 +++ b/docs/system/arm/pic32cm-jh01-cpro.rst
 @@ -23,9 +23,11 @@ channel of each peripheral. Peripherals are QOM children of
@@ -106,7 +106,7 @@ index 5dd67e8..65cfee4 100644
  Board and SoC properties
  """"""""""""""""""""""""
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index 59868ef..2c4e6ed 100644
+index 90651d3..12f8f83 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -21,9 +21,9 @@ instance (``/machine/soc/sercom0``, ``/machine/soc/port``, ...).
@@ -123,7 +123,7 @@ index 59868ef..2c4e6ed 100644
    35 peripheral channels.
  - NVMCTRL has no ECC (no FLASHERR, FLTCAP, SERR or DERR flags).
 diff --git a/hw/arm/pic32cm_jh01_cpro.c b/hw/arm/pic32cm_jh01_cpro.c
-index 2528db8..d1b201d 100644
+index 49a1a0f..788dc29 100644
 --- a/hw/arm/pic32cm_jh01_cpro.c
 +++ b/hw/arm/pic32cm_jh01_cpro.c
 @@ -106,16 +106,11 @@ static void pic32cm_jh01_cpro_init(MachineState *machine)
@@ -154,7 +154,7 @@ index 2528db8..d1b201d 100644
                                     pic32cm_jh01_cpro_get_sw0,
                                     pic32cm_jh01_cpro_set_sw0);
 diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
-index 0d5a057..a9e74d3 100644
+index b3e23b3..2d6c928 100644
 --- a/hw/arm/pic32cm_mc00_cpro.c
 +++ b/hw/arm/pic32cm_mc00_cpro.c
 @@ -104,16 +104,11 @@ static void pic32cm_mc00_cpro_init(MachineState *machine)
@@ -185,7 +185,7 @@ index 0d5a057..a9e74d3 100644
                                     pic32cm_mc00_cpro_get_sw0,
                                     pic32cm_mc00_cpro_set_sw0);
 diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
-index 5c3fc97..c0a52c5 100644
+index 18b5229..d5bffcf 100644
 --- a/hw/arm/pic32cm_soc.c
 +++ b/hw/arm/pic32cm_soc.c
 @@ -364,14 +364,11 @@ static bool pic32cm_realize_cpu(Pic32cmSocState *s, Error **errp)
@@ -233,7 +233,7 @@ index 82183a5..3a99714 100644
          break;
      }
 diff --git a/include/hw/arm/pic32cm_soc.h b/include/hw/arm/pic32cm_soc.h
-index d88edf3..77b7b38 100644
+index e5da315..148f7d5 100644
 --- a/include/hw/arm/pic32cm_soc.h
 +++ b/include/hw/arm/pic32cm_soc.h
 @@ -41,10 +41,7 @@ extern const MchpDeviceInfo *const pic32cm1216mc00048_info;
@@ -368,7 +368,7 @@ index a29de03..e2d80ee 100644
                                         result, fi);
          } else {
 diff --git a/target/arm/tcg/cpu-v7m.c b/target/arm/tcg/cpu-v7m.c
-index dc249ce..0571264 100644
+index dc249ce..db5fc28 100644
 --- a/target/arm/tcg/cpu-v7m.c
 +++ b/target/arm/tcg/cpu-v7m.c
 @@ -76,6 +76,25 @@ static void cortex_m0_initfn(Object *obj)
@@ -421,7 +421,7 @@ index 33c9e7c..39fe468 100644
              env->v7m.control[env->v7m.secure] |= val & R_V7M_CONTROL_NPRIV_MASK;
          }
 diff --git a/tests/qtest/pic32cm-mc00-test.c b/tests/qtest/pic32cm-mc00-test.c
-index ebf94dd..02ef769 100644
+index 5081c32..8c8d1af 100644
 --- a/tests/qtest/pic32cm-mc00-test.c
 +++ b/tests/qtest/pic32cm-mc00-test.c
 @@ -75,6 +75,8 @@ static void test_identity(void)

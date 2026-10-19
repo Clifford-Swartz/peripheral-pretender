@@ -1,7 +1,7 @@
-From 0501856f6a16701caf4da64845f7c8bea56e9519 Mon Sep 17 00:00:00 2001
+From 59e632faf6e269e73f16643864faee87e2c5dbd5 Mon Sep 17 00:00:00 2001
 From: Clifford Swartz <cliffordswartz1@gmail.com>
 Date: Mon, 12 Oct 2026 11:22:16 -0700
-Subject: [PATCH 1/5] scripts/symlink-install-tree: skip symlink failures on
+Subject: [PATCH 01/57] scripts/symlink-install-tree: skip symlink failures on
  Windows
 
 Unprivileged Windows hosts (no Developer Mode, no admin) cannot create
@@ -35,5 +35,5 @@ index b725638..9475326 100644
              print(f'error making symbolic link {dest}', file=sys.stderr)
              raise e
 -- 
-2.51.2.windows.1
+2.53.0.windows.2
 

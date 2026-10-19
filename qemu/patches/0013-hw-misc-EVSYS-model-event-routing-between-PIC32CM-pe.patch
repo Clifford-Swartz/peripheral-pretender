@@ -1,7 +1,7 @@
-From ff51188e028f3f4681a0b23e4cdf5ccbc1e1a837 Mon Sep 17 00:00:00 2001
+From 8d3126a1b198ba4bd50e3b695640f3631a769cad Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Tue, 13 Oct 2026 18:54:02 -0700
-Subject: [PATCH] hw/misc: EVSYS model, event routing between PIC32CM
+Subject: [PATCH 13/57] hw/misc: EVSYS model, event routing between PIC32CM
  peripherals
 
 EVSYS U2256: channels route a generator or a software event to the
@@ -54,7 +54,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 tests/qtest/pic32cm-evsys-test.c
 
 diff --git a/hw/arm/pic32cm1216mc00048_device.h b/hw/arm/pic32cm1216mc00048_device.h
-index 52b8b85..f04dbb4 100644
+index e3b90ee..96c5580 100644
 --- a/hw/arm/pic32cm1216mc00048_device.h
 +++ b/hw/arm/pic32cm1216mc00048_device.h
 @@ -51,6 +51,8 @@ static const MchpDeviceInfo pic32cm1216mc00048_device = {
@@ -67,7 +67,7 @@ index 52b8b85..f04dbb4 100644
      .nrevisions = ARRAY_SIZE(pic32cm1216mc00048_revisions),
  };
 diff --git a/hw/arm/pic32cm5164jh01100_device.h b/hw/arm/pic32cm5164jh01100_device.h
-index 39a4c3e..2733567 100644
+index e2999eb..509b32f 100644
 --- a/hw/arm/pic32cm5164jh01100_device.h
 +++ b/hw/arm/pic32cm5164jh01100_device.h
 @@ -51,6 +51,8 @@ static const MchpDeviceInfo pic32cm5164jh01100_device = {
@@ -80,7 +80,7 @@ index 39a4c3e..2733567 100644
      .nrevisions = ARRAY_SIZE(pic32cm5164jh01100_revisions),
  };
 diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
-index adc0272..5c3fc97 100644
+index 02abc40..18b5229 100644
 --- a/hw/arm/pic32cm_soc.c
 +++ b/hw/arm/pic32cm_soc.c
 @@ -24,6 +24,7 @@
@@ -208,7 +208,7 @@ index adc0272..5c3fc97 100644
  
  static const Property pic32cm_soc_properties[] = {
 diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
-index 378bf3f..0e0f2c6 100644
+index 012d521..63b02d1 100644
 --- a/hw/gpio/mchp_port.c
 +++ b/hw/gpio/mchp_port.c
 @@ -7,13 +7,16 @@
@@ -329,7 +329,7 @@ index 378bf3f..0e0f2c6 100644
      },
  };
 diff --git a/hw/misc/mchp_eic.c b/hw/misc/mchp_eic.c
-index 2c65161..ad87532 100644
+index 6c5b8dd..a798cfb 100644
 --- a/hw/misc/mchp_eic.c
 +++ b/hw/misc/mchp_eic.c
 @@ -11,9 +11,13 @@
@@ -425,7 +425,7 @@ index 2c65161..ad87532 100644
          VMSTATE_END_OF_LIST()
 diff --git a/hw/misc/mchp_evsys.c b/hw/misc/mchp_evsys.c
 new file mode 100644
-index 0000000..5424111
+index 0000000..6b93fae
 --- /dev/null
 +++ b/hw/misc/mchp_evsys.c
 @@ -0,0 +1,408 @@
@@ -861,7 +861,7 @@ index 591ce20..d40da2f 100644
 +# mchp_evsys.c
 +mchp_evsys_event(unsigned channel, uint32_t flags) "channel %u: flags 0x%x"
 diff --git a/hw/rtc/mchp_rtc.c b/hw/rtc/mchp_rtc.c
-index f08bede..549131e 100644
+index 491b82c..fee0b62 100644
 --- a/hw/rtc/mchp_rtc.c
 +++ b/hw/rtc/mchp_rtc.c
 @@ -17,7 +17,7 @@
@@ -955,7 +955,7 @@ index f08bede..549131e 100644
          .class_init = rtc_class_init,
      },
 diff --git a/hw/timer/mchp_tc.c b/hw/timer/mchp_tc.c
-index 19d0a46..0414b5c 100644
+index 1e0894c..8c8d516 100644
 --- a/hw/timer/mchp_tc.c
 +++ b/hw/timer/mchp_tc.c
 @@ -11,8 +11,10 @@
@@ -1185,7 +1185,7 @@ index 736b214..8614bc7 100644
  mchp_tc_event(const char *name, uint32_t count, uint32_t flags) "%s: count 0x%x, flags 0x%x"
 +mchp_tc_event_in(const char *name, unsigned evact, uint32_t count) "%s: event action %u, count 0x%x"
 diff --git a/include/hw/arm/pic32cm1216mc00048_gen.h b/include/hw/arm/pic32cm1216mc00048_gen.h
-index 69e3b2b..7529eeb 100644
+index cd1e2af..f94e37b 100644
 --- a/include/hw/arm/pic32cm1216mc00048_gen.h
 +++ b/include/hw/arm/pic32cm1216mc00048_gen.h
 @@ -1907,4 +1907,331 @@ static const MchpSignalInfo pic32cm1216mc00048_signals[] = {
@@ -1521,7 +1521,7 @@ index 69e3b2b..7529eeb 100644
 +
  #endif /* HW_ARM_PIC32CM1216MC00048_GEN_H */
 diff --git a/include/hw/arm/pic32cm5164jh01100_gen.h b/include/hw/arm/pic32cm5164jh01100_gen.h
-index df8ca81..1e6669b 100644
+index 8e282c5..b858c5f 100644
 --- a/include/hw/arm/pic32cm5164jh01100_gen.h
 +++ b/include/hw/arm/pic32cm5164jh01100_gen.h
 @@ -3284,4 +3284,355 @@ static const MchpSignalInfo pic32cm5164jh01100_signals[] = {
@@ -1881,7 +1881,7 @@ index df8ca81..1e6669b 100644
 +
  #endif /* HW_ARM_PIC32CM5164JH01100_GEN_H */
 diff --git a/include/hw/gpio/mchp_port.h b/include/hw/gpio/mchp_port.h
-index 72e7459..0017124 100644
+index 25b982a..0c76de2 100644
 --- a/include/hw/gpio/mchp_port.h
 +++ b/include/hw/gpio/mchp_port.h
 @@ -18,6 +18,7 @@
@@ -1902,7 +1902,7 @@ index 72e7459..0017124 100644
  /* GPIO line of pin P<group><pin>, for example MCHP_PORT_PIN('C', 5) */
  #define MCHP_PORT_PIN(group, pin) (((group) - 'A') * 32 + (pin))
 diff --git a/include/hw/mchp/gen/evsys_u2256.h b/include/hw/mchp/gen/evsys_u2256.h
-index 6161882..eb9a9df 100644
+index 3c94e7c..8c85546 100644
 --- a/include/hw/mchp/gen/evsys_u2256.h
 +++ b/include/hw/mchp/gen/evsys_u2256.h
 @@ -9,7 +9,7 @@
@@ -1915,7 +1915,7 @@ index 6161882..eb9a9df 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h b/include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h
-index 53ec797..9c09707 100644
+index da75ecb..eb24f4b 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h
 @@ -6,7 +6,7 @@
@@ -1953,7 +1953,7 @@ index 53ec797..9c09707 100644
  };
  #define PIC32CM1216MC00048_EVSYS_NREGS 8
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h b/include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h
-index fb6aeb4..7de5269 100644
+index 8a1e0c9..91fb01c 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h
 @@ -6,7 +6,7 @@
@@ -1991,7 +1991,7 @@ index fb6aeb4..7de5269 100644
  };
  #define PIC32CM5164JH01100_EVSYS_NREGS 8
 diff --git a/include/hw/mchp/mchp_device.h b/include/hw/mchp/mchp_device.h
-index e12b295..29f46b0 100644
+index fd30f04..e366341 100644
 --- a/include/hw/mchp/mchp_device.h
 +++ b/include/hw/mchp/mchp_device.h
 @@ -115,6 +115,19 @@ typedef struct MchpPeriphRef {
@@ -2024,7 +2024,7 @@ index e12b295..29f46b0 100644
      unsigned nrevisions;
  } MchpDeviceInfo;
 diff --git a/include/hw/misc/mchp_eic.h b/include/hw/misc/mchp_eic.h
-index b802414..7d176b2 100644
+index c3b3d27..2d0064d 100644
 --- a/include/hw/misc/mchp_eic.h
 +++ b/include/hw/misc/mchp_eic.h
 @@ -9,7 +9,8 @@
@@ -2047,7 +2047,7 @@ index b802414..7d176b2 100644
  #endif /* HW_MISC_MCHP_EIC_H */
 diff --git a/include/hw/misc/mchp_evsys.h b/include/hw/misc/mchp_evsys.h
 new file mode 100644
-index 0000000..b5285de
+index 0000000..e059adc
 --- /dev/null
 +++ b/include/hw/misc/mchp_evsys.h
 @@ -0,0 +1,37 @@
@@ -2089,7 +2089,7 @@ index 0000000..b5285de
 +
 +#endif /* HW_MISC_MCHP_EVSYS_H */
 diff --git a/include/hw/rtc/mchp_rtc.h b/include/hw/rtc/mchp_rtc.h
-index ab063f3..122f64c 100644
+index 6a5fe0b..e869422 100644
 --- a/include/hw/rtc/mchp_rtc.h
 +++ b/include/hw/rtc/mchp_rtc.h
 @@ -7,6 +7,8 @@
@@ -2111,7 +2111,7 @@ index ab063f3..122f64c 100644
 +
  #endif /* HW_RTC_MCHP_RTC_H */
 diff --git a/include/hw/timer/mchp_tc.h b/include/hw/timer/mchp_tc.h
-index ad4411d..ccd86a2 100644
+index 6b28324..4ac01f2 100644
 --- a/include/hw/timer/mchp_tc.h
 +++ b/include/hw/timer/mchp_tc.h
 @@ -9,7 +9,9 @@
@@ -2148,7 +2148,7 @@ index df42336..c795495 100644
    (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
 diff --git a/tests/qtest/pic32cm-evsys-test.c b/tests/qtest/pic32cm-evsys-test.c
 new file mode 100644
-index 0000000..3502902
+index 0000000..0b026ae
 --- /dev/null
 +++ b/tests/qtest/pic32cm-evsys-test.c
 @@ -0,0 +1,289 @@

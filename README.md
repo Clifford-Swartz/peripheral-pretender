@@ -11,7 +11,9 @@ VS Code extension show the board running your firmware.
 **New machine? Read [`SETUP.md`](SETUP.md)** (written for AI coding agents as much as for people:
 the VS Code extension in five minutes, or the full development setup, each step with a check).
 
-A personal side project; MIT License.
+A personal side project, not affiliated with or endorsed by Microchip Technology Inc. or
+MikroElektronika; built with heavy AI assistance. MIT License (see [`LICENSE`](LICENSE)); the QEMU
+fork's patches are GPL-2.0-or-later.
 
 ## Layout
 

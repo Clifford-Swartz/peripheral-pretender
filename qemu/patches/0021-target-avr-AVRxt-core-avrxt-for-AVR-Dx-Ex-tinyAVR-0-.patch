@@ -1,7 +1,7 @@
-From a22d3e8def5f29378aa548b8c1c1754f0bd833b5 Mon Sep 17 00:00:00 2001
+From 7eeeae0c6952e25b44ff9c91f60c746f483e66ca Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 13:12:03 -0700
-Subject: [PATCH 21/25] target/avr: AVRxt core (avrxt) for AVR Dx/Ex, tinyAVR
+Subject: [PATCH 21/57] target/avr: AVRxt core (avrxt) for AVR Dx/Ex, tinyAVR
  0/1/2, megaAVR 0
 
 The upstream AVR target models the classic cores only (avr5, avr51,

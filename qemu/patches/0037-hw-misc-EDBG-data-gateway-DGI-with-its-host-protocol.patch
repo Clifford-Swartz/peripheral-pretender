@@ -1,7 +1,7 @@
-From 990acfacd1f83342501e0a41bfd2e04bfea250b2 Mon Sep 17 00:00:00 2001
+From b7ea292679244559bdbc491c7044206ff597c441 Mon Sep 17 00:00:00 2001
 From: Clifford Swartz <cliffordswartz1@gmail.com>
 Date: Thu, 15 Oct 2026 05:50:49 -0700
-Subject: [PATCH 37/37] hw/misc: EDBG data gateway (DGI) with its host protocol
+Subject: [PATCH 37/57] hw/misc: EDBG data gateway (DGI) with its host protocol
 
 The MC00 Curiosity Pro's debugger data gateway, both sides. Toward the
 host, the DGI command protocol on a chardev (-M ...,dgi=<chardev>): the
@@ -32,7 +32,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  6 files changed, 738 insertions(+), 25 deletions(-)
 
 diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
-index 0c2187d..0f683f8 100644
+index e7c047a..abbe2fa 100644
 --- a/hw/arm/pic32cm_mc00_cpro.c
 +++ b/hw/arm/pic32cm_mc00_cpro.c
 @@ -31,6 +31,10 @@
@@ -164,7 +164,7 @@ index 0c2187d..0f683f8 100644
                                    pic32cm_mc00_cpro_set_ext1);
      object_class_property_add_str(oc, "ext2", pic32cm_mc00_cpro_get_ext2,
 diff --git a/hw/char/mchp_sercom.c b/hw/char/mchp_sercom.c
-index fd76a10..f2cd2d7 100644
+index c2d57fe..aa5ce40 100644
 --- a/hw/char/mchp_sercom.c
 +++ b/hw/char/mchp_sercom.c
 @@ -36,6 +36,7 @@
@@ -210,7 +210,7 @@ index fd76a10..f2cd2d7 100644
      } else {
          rx = ssi_transfer(s->spi, tx) & MAKE_64BIT_MASK(0, bits);
 diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
-index 7e57cfc..1bf193b 100644
+index b5d0c12..46e2545 100644
 --- a/hw/gpio/mchp_port.c
 +++ b/hw/gpio/mchp_port.c
 @@ -46,6 +46,8 @@
@@ -283,7 +283,7 @@ index 7e57cfc..1bf193b 100644
  /*
   * "pa-stats": "<ns> <high0> <low0> ... <high31> <low31>", the virtual time
 diff --git a/hw/misc/mchp_edbg_dgi.c b/hw/misc/mchp_edbg_dgi.c
-index cac8bf4..52d03f5 100644
+index 484d64a..24aa3bd 100644
 --- a/hw/misc/mchp_edbg_dgi.c
 +++ b/hw/misc/mchp_edbg_dgi.c
 @@ -1,25 +1,479 @@
@@ -893,7 +893,7 @@ index cac8bf4..52d03f5 100644
  };
  
 diff --git a/include/hw/gpio/mchp_port.h b/include/hw/gpio/mchp_port.h
-index 6ae18ef..c61e176 100644
+index df1a8e8..280b0b0 100644
 --- a/include/hw/gpio/mchp_port.h
 +++ b/include/hw/gpio/mchp_port.h
 @@ -50,6 +50,7 @@
@@ -921,7 +921,7 @@ index 6ae18ef..c61e176 100644
 +
  #endif /* HW_GPIO_MCHP_PORT_H */
 diff --git a/include/hw/misc/mchp_edbg_dgi.h b/include/hw/misc/mchp_edbg_dgi.h
-index 19fbdac..a7be094 100644
+index 377ad47..4824883 100644
 --- a/include/hw/misc/mchp_edbg_dgi.h
 +++ b/include/hw/misc/mchp_edbg_dgi.h
 @@ -1,10 +1,21 @@

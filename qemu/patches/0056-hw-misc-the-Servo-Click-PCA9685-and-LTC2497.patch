@@ -1,7 +1,7 @@
-From e81ca094e25a159d0d273cd3cdf515b122db189c Mon Sep 17 00:00:00 2001
+From 4876b227ffb3fa66899060e47e4fdedcef44148a Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Thu, 15 Oct 2026 22:55:22 -0700
-Subject: [PATCH] hw/misc: the Servo Click, PCA9685 and LTC2497
+Subject: [PATCH 56/57] hw/misc: the Servo Click, PCA9685 and LTC2497
 
 click-servo answers for both chips: the PCA9685 at 0x40 (All Call,
 sub-addresses, the general call's software reset, auto-increment,
@@ -24,7 +24,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/misc/click_servo.h
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index 3074309..4e7c680 100644
+index 5848574..4a9f6f8 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -237,6 +237,19 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
@@ -49,7 +49,7 @@ index 3074309..4e7c680 100644
    (MI9639BO-W) on SPI (jumpers J1-J3 on SPI), CS# on CS, D/C# on PWM, RES#
 diff --git a/hw/misc/click_servo.c b/hw/misc/click_servo.c
 new file mode 100644
-index 0000000..4e276f7
+index 0000000..31ed790
 --- /dev/null
 +++ b/hw/misc/click_servo.c
 @@ -0,0 +1,479 @@
@@ -545,7 +545,7 @@ index 3a58ad4..ab3ba46 100644
  system_ss.add(when: 'CONFIG_WS2812', if_true: files('ws2812.c'))
  system_ss.add(when: 'CONFIG_RNBD451', if_true: files('rnbd451.c'))
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index 6c1685e..fd1502f 100644
+index a64b7e6..2a4e7a7 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -22,6 +22,7 @@
@@ -570,7 +570,7 @@ index 6c1685e..fd1502f 100644
        TYPE_CHARDEV_QUECTEL_L86, CLICK_UART, 0, 0,
 diff --git a/include/hw/misc/click_servo.h b/include/hw/misc/click_servo.h
 new file mode 100644
-index 0000000..fd80d00
+index 0000000..4435ec7
 --- /dev/null
 +++ b/include/hw/misc/click_servo.h
 @@ -0,0 +1,28 @@
@@ -603,7 +603,7 @@ index 0000000..fd80d00
 +
 +#endif /* HW_MISC_CLICK_SERVO_H */
 diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
-index ad3af0d..fa940f7 100644
+index c053fc3..11221b2 100644
 --- a/tests/qtest/pic32cm-click-test.c
 +++ b/tests/qtest/pic32cm-click-test.c
 @@ -1292,6 +1292,84 @@ static void test_dcmotor(void)

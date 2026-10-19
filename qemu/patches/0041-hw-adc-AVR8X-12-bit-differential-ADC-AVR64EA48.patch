@@ -1,7 +1,7 @@
-From 58b47adcd6897f4d150387b6f9ed3f73b6f1a7e1 Mon Sep 17 00:00:00 2001
+From a41148565f56b84111a0db4f982e20fbab5f52f2 Mon Sep 17 00:00:00 2001
 From: Clifford Swartz <cliffordswartz1@gmail.com>
 Date: Thu, 15 Oct 2026 07:01:43 -0700
-Subject: [PATCH 41/41] hw/adc: AVR8X 12-bit differential ADC (AVR64EA48)
+Subject: [PATCH 41/57] hw/adc: AVR8X 12-bit differential ADC (AVR64EA48)
 
 Conversions completed at once on COMMAND.START (IMMEDIATE, MUXPOS/MUXNEG
 write; free-running every 20 us of virtual time): single 12-bit, 8-bit,
@@ -43,7 +43,7 @@ index 25d2229..ad96fa6 100644
 +    select MCHP_REGFILE
 diff --git a/hw/adc/avr8x_adc.c b/hw/adc/avr8x_adc.c
 new file mode 100644
-index 0000000..7920e33
+index 0000000..8e1c955
 --- /dev/null
 +++ b/hw/adc/avr8x_adc.c
 @@ -0,0 +1,463 @@
@@ -532,7 +532,7 @@ index 3f91644..6d031fb 100644
      select MIKROBUS
      select MCHP_REGFILE
 diff --git a/hw/avr/avr8x_soc.c b/hw/avr/avr8x_soc.c
-index 9d2fa8a..75c173b 100644
+index 7e93bb3..20593f7 100644
 --- a/hw/avr/avr8x_soc.c
 +++ b/hw/avr/avr8x_soc.c
 @@ -33,6 +33,7 @@
@@ -588,7 +588,7 @@ index 9d2fa8a..75c173b 100644
          qdev_connect_gpio_out_named(nvmctrl, AVR8X_NVMCTRL_FLMAP, 0,
 diff --git a/include/hw/adc/avr8x_adc.h b/include/hw/adc/avr8x_adc.h
 new file mode 100644
-index 0000000..b18d7c4
+index 0000000..b5da10d
 --- /dev/null
 +++ b/include/hw/adc/avr8x_adc.h
 @@ -0,0 +1,15 @@
@@ -608,7 +608,7 @@ index 0000000..b18d7c4
 +
 +#endif /* HW_ADC_AVR8X_ADC_H */
 diff --git a/include/hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h b/include/hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h
-index c310f22..c429280 100644
+index be2b58a..c7f87e0 100644
 --- a/include/hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h
 +++ b/include/hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h
 @@ -9,7 +9,7 @@
@@ -621,7 +621,7 @@ index c310f22..c429280 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h b/include/hw/mchp/gen/avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h
-index c1b70ed..9449829 100644
+index 66e9e5b..4f19712 100644
 --- a/include/hw/mchp/gen/avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h
 +++ b/include/hw/mchp/gen/avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h
 @@ -6,7 +6,7 @@

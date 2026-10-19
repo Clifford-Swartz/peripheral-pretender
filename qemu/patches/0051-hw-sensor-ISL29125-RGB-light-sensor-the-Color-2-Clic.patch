@@ -1,7 +1,7 @@
-From 35472b6a498dfc0fe96373864f19328a8ef806c3 Mon Sep 17 00:00:00 2001
+From ce5a50f54b872ca1c452c8a7760bf96fa56fefdd Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Thu, 15 Oct 2026 22:04:22 -0700
-Subject: [PATCH] hw/sensor: ISL29125 RGB light sensor, the Color 2 Click
+Subject: [PATCH 51/57] hw/sensor: ISL29125 RGB light sensor, the Color 2 Click
 
 isl29125 at I2C 0x44: fifteen registers behind an auto-incrementing
 pointer, green/red/blue conversions in the order the mode picks on the
@@ -25,7 +25,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/sensor/isl29125.h
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index c73f122..dac50e3 100644
+index bfd17dc..fcbef1f 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -183,6 +183,16 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
@@ -46,7 +46,7 @@ index c73f122..dac50e3 100644
    OLED W Click (v100): an SSD1306 (``ssd1306``) with a 96x39 white OLED
    (MI9639BO-W) on SPI (jumpers J1-J3 on SPI), CS# on CS, D/C# on PWM, RES#
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index 75f974d..c7d90c4 100644
+index c2c68ca..8f33ce4 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -30,6 +30,7 @@
@@ -71,7 +71,7 @@ index 75f974d..c7d90c4 100644
        TYPE_CHARDEV_RN4871, CLICK_UART, 0, 0,
 diff --git a/hw/sensor/isl29125.c b/hw/sensor/isl29125.c
 new file mode 100644
-index 0000000..01da58c
+index 0000000..b808c15
 --- /dev/null
 +++ b/hw/sensor/isl29125.c
 @@ -0,0 +1,368 @@
@@ -457,7 +457,7 @@ index e99194a..05fda9f 100644
  system_ss.add(when: 'CONFIG_PYKIT_SENSORS', if_true: files('icm20948.c', 'bno085.c'))
 diff --git a/include/hw/sensor/isl29125.h b/include/hw/sensor/isl29125.h
 new file mode 100644
-index 0000000..4d944e4
+index 0000000..8cf2766
 --- /dev/null
 +++ b/include/hw/sensor/isl29125.h
 @@ -0,0 +1,22 @@
@@ -484,7 +484,7 @@ index 0000000..4d944e4
 +
 +#endif /* HW_SENSOR_ISL29125_H */
 diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
-index 0b0eb01..736d1e6 100644
+index ca83270..ed797b0 100644
 --- a/tests/qtest/pic32cm-click-test.c
 +++ b/tests/qtest/pic32cm-click-test.c
 @@ -1008,6 +1008,81 @@ static void test_pot(void)

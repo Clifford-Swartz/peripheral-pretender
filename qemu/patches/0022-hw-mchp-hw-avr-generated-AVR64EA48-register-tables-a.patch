@@ -1,7 +1,7 @@
-From 808d384fafa6f416e1c7019419e413df057c1022 Mon Sep 17 00:00:00 2001
+From a4c9e11c2061bc46c614ba1690235a1fe81103ee Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 13:12:03 -0700
-Subject: [PATCH 22/25] hw/mchp, hw/avr: generated AVR64EA48 register tables
+Subject: [PATCH 22/57] hw/mchp, hw/avr: generated AVR64EA48 register tables
  and descriptor
 
 generator/atdf2qemu.py now reads 8-bit AVR ATDFs (architecture AVR8X):
@@ -149,7 +149,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 diff --git a/hw/avr/avr64ea48_device.h b/hw/avr/avr64ea48_device.h
 new file mode 100644
-index 0000000..9f77a78
+index 0000000..4d1ba18
 --- /dev/null
 +++ b/hw/avr/avr64ea48_device.h
 @@ -0,0 +1,54 @@
@@ -209,7 +209,7 @@ index 0000000..9f77a78
 +#endif /* HW_AVR_AVR64EA48_DEVICE_H */
 diff --git a/include/hw/avr/avr64ea48_gen.h b/include/hw/avr/avr64ea48_gen.h
 new file mode 100644
-index 0000000..0f6bcc0
+index 0000000..b6db080
 --- /dev/null
 +++ b/include/hw/avr/avr64ea48_gen.h
 @@ -0,0 +1,680 @@
@@ -895,7 +895,7 @@ index 0000000..0f6bcc0
 +#endif /* HW_AVR_AVR64EA48_GEN_H */
 diff --git a/include/hw/mchp/gen/ac_cmp_control_v8.h b/include/hw/mchp/gen/ac_cmp_control_v8.h
 new file mode 100644
-index 0000000..c515245
+index 0000000..761f452
 --- /dev/null
 +++ b/include/hw/mchp/gen/ac_cmp_control_v8.h
 @@ -0,0 +1,77 @@
@@ -978,7 +978,7 @@ index 0000000..c515245
 +#endif /* HW_MCHP_GEN_AC_CMP_CONTROL_V8_H */
 diff --git a/include/hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h b/include/hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h
 new file mode 100644
-index 0000000..c310f22
+index 0000000..be2b58a
 --- /dev/null
 +++ b/include/hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h
 @@ -0,0 +1,210 @@
@@ -1194,7 +1194,7 @@ index 0000000..c310f22
 +#endif /* HW_MCHP_GEN_ADC_ADC_12B_DIFF_CTRL_AVR_V2_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/ac_cmp_control_v8.h b/include/hw/mchp/gen/avr64ea48/ac_cmp_control_v8.h
 new file mode 100644
-index 0000000..9bfcd03
+index 0000000..72cb781
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/ac_cmp_control_v8.h
 @@ -0,0 +1,50 @@
@@ -1250,7 +1250,7 @@ index 0000000..9bfcd03
 +#endif /* HW_MCHP_GEN_AVR64EA48_AC_CMP_CONTROL_V8_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h b/include/hw/mchp/gen/avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h
 new file mode 100644
-index 0000000..c1b70ed
+index 0000000..66e9e5b
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h
 @@ -0,0 +1,116 @@
@@ -1372,7 +1372,7 @@ index 0000000..c1b70ed
 +#endif /* HW_MCHP_GEN_AVR64EA48_ADC_ADC_12B_DIFF_CTRL_AVR_V2_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/bod_bor_lvd_ctrl_avr_v2.h b/include/hw/mchp/gen/avr64ea48/bod_bor_lvd_ctrl_avr_v2.h
 new file mode 100644
-index 0000000..ec320a0
+index 0000000..4a78237
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/bod_bor_lvd_ctrl_avr_v2.h
 @@ -0,0 +1,51 @@
@@ -1429,7 +1429,7 @@ index 0000000..ec320a0
 +#endif /* HW_MCHP_GEN_AVR64EA48_BOD_BOR_LVD_CTRL_AVR_V2_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/ccl_cla_ccl_v1.h b/include/hw/mchp/gen/avr64ea48/ccl_cla_ccl_v1.h
 new file mode 100644
-index 0000000..ac248f5
+index 0000000..0b395e2
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/ccl_cla_ccl_v1.h
 @@ -0,0 +1,111 @@
@@ -1546,7 +1546,7 @@ index 0000000..ac248f5
 +#endif /* HW_MCHP_GEN_AVR64EA48_CCL_CLA_CCL_V1_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/clkctrl_avrea.h b/include/hw/mchp/gen/avr64ea48/clkctrl_avrea.h
 new file mode 100644
-index 0000000..c898c9c
+index 0000000..7f8cad0
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/clkctrl_avrea.h
 @@ -0,0 +1,84 @@
@@ -1636,7 +1636,7 @@ index 0000000..c898c9c
 +#endif /* HW_MCHP_GEN_AVR64EA48_CLKCTRL_AVREA_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/cpu_cpu_avr_xt_v1.h b/include/hw/mchp/gen/avr64ea48/cpu_cpu_avr_xt_v1.h
 new file mode 100644
-index 0000000..fe342ca
+index 0000000..0d05609
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/cpu_cpu_avr_xt_v1.h
 @@ -0,0 +1,39 @@
@@ -1681,7 +1681,7 @@ index 0000000..fe342ca
 +#endif /* HW_MCHP_GEN_AVR64EA48_CPU_CPU_AVR_XT_V1_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/cpuint_int_8bit_v3.h b/include/hw/mchp/gen/avr64ea48/cpuint_int_8bit_v3.h
 new file mode 100644
-index 0000000..ae3343b
+index 0000000..1e5a214
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/cpuint_int_8bit_v3.h
 @@ -0,0 +1,46 @@
@@ -1733,7 +1733,7 @@ index 0000000..ae3343b
 +#endif /* HW_MCHP_GEN_AVR64EA48_CPUINT_INT_8BIT_V3_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/crcscan_math_pdi_crc_v1.h b/include/hw/mchp/gen/avr64ea48/crcscan_math_pdi_crc_v1.h
 new file mode 100644
-index 0000000..b8e1e4b
+index 0000000..e668d6a
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/crcscan_math_pdi_crc_v1.h
 @@ -0,0 +1,39 @@
@@ -1778,7 +1778,7 @@ index 0000000..b8e1e4b
 +#endif /* HW_MCHP_GEN_AVR64EA48_CRCSCAN_MATH_PDI_CRC_V1_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/dac_dac_nbit_ctrl_avr_v6.h b/include/hw/mchp/gen/avr64ea48/dac_dac_nbit_ctrl_avr_v6.h
 new file mode 100644
-index 0000000..0ba4d1a
+index 0000000..431770f
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/dac_dac_nbit_ctrl_avr_v6.h
 @@ -0,0 +1,35 @@
@@ -1819,7 +1819,7 @@ index 0000000..0ba4d1a
 +#endif /* HW_MCHP_GEN_AVR64EA48_DAC_DAC_NBIT_CTRL_AVR_V6_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/evsys_avrea.h b/include/hw/mchp/gen/avr64ea48/evsys_avrea.h
 new file mode 100644
-index 0000000..37e1998
+index 0000000..176c228
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/evsys_avrea.h
 @@ -0,0 +1,204 @@
@@ -2029,7 +2029,7 @@ index 0000000..37e1998
 +#endif /* HW_MCHP_GEN_AVR64EA48_EVSYS_AVREA_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/fuse_avrea.h b/include/hw/mchp/gen/avr64ea48/fuse_avrea.h
 new file mode 100644
-index 0000000..7996298
+index 0000000..ea8da91
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/fuse_avrea.h
 @@ -0,0 +1,54 @@
@@ -2089,7 +2089,7 @@ index 0000000..7996298
 +#endif /* HW_MCHP_GEN_AVR64EA48_FUSE_AVREA_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/gpr_avrea.h b/include/hw/mchp/gen/avr64ea48/gpr_avrea.h
 new file mode 100644
-index 0000000..78218c1
+index 0000000..b10ed9e
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/gpr_avrea.h
 @@ -0,0 +1,42 @@
@@ -2137,7 +2137,7 @@ index 0000000..78218c1
 +#endif /* HW_MCHP_GEN_AVR64EA48_GPR_AVREA_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/lock_avrea.h b/include/hw/mchp/gen/avr64ea48/lock_avrea.h
 new file mode 100644
-index 0000000..c3b4605
+index 0000000..5e2b722
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/lock_avrea.h
 @@ -0,0 +1,31 @@
@@ -2174,7 +2174,7 @@ index 0000000..c3b4605
 +#endif /* HW_MCHP_GEN_AVR64EA48_LOCK_AVREA_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/nvmctrl_nvm_ctrl_avr_v3.h b/include/hw/mchp/gen/avr64ea48/nvmctrl_nvm_ctrl_avr_v3.h
 new file mode 100644
-index 0000000..80cf94b
+index 0000000..4bf211d
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/nvmctrl_nvm_ctrl_avr_v3.h
 @@ -0,0 +1,60 @@
@@ -2240,7 +2240,7 @@ index 0000000..80cf94b
 +#endif /* HW_MCHP_GEN_AVR64EA48_NVMCTRL_NVM_CTRL_AVR_V3_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/port_gpio_ports_avr_v3.h b/include/hw/mchp/gen/avr64ea48/port_gpio_ports_avr_v3.h
 new file mode 100644
-index 0000000..7d55228
+index 0000000..67cf2a5
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/port_gpio_ports_avr_v3.h
 @@ -0,0 +1,130 @@
@@ -2376,7 +2376,7 @@ index 0000000..7d55228
 +#endif /* HW_MCHP_GEN_AVR64EA48_PORT_GPIO_PORTS_AVR_V3_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/portmux_avrea.h b/include/hw/mchp/gen/avr64ea48/portmux_avrea.h
 new file mode 100644
-index 0000000..f8f2641
+index 0000000..95c8ff5
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/portmux_avrea.h
 @@ -0,0 +1,65 @@
@@ -2447,7 +2447,7 @@ index 0000000..f8f2641
 +#endif /* HW_MCHP_GEN_AVR64EA48_PORTMUX_AVREA_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/rstctrl_rst_integration_avr_v2.h b/include/hw/mchp/gen/avr64ea48/rstctrl_rst_integration_avr_v2.h
 new file mode 100644
-index 0000000..37fc933
+index 0000000..bf7a923
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/rstctrl_rst_integration_avr_v2.h
 @@ -0,0 +1,34 @@
@@ -2487,7 +2487,7 @@ index 0000000..37fc933
 +#endif /* HW_MCHP_GEN_AVR64EA48_RSTCTRL_RST_INTEGRATION_AVR_V2_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/rtc_tmr_16b_rtc_avr_v2.h b/include/hw/mchp/gen/avr64ea48/rtc_tmr_16b_rtc_avr_v2.h
 new file mode 100644
-index 0000000..30c2899
+index 0000000..8e0570f
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/rtc_tmr_16b_rtc_avr_v2.h
 @@ -0,0 +1,104 @@
@@ -2597,7 +2597,7 @@ index 0000000..30c2899
 +#endif /* HW_MCHP_GEN_AVR64EA48_RTC_TMR_16B_RTC_AVR_V2_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/sigrow_avrea.h b/include/hw/mchp/gen/avr64ea48/sigrow_avrea.h
 new file mode 100644
-index 0000000..9699b67
+index 0000000..332226a
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/sigrow_avrea.h
 @@ -0,0 +1,131 @@
@@ -2734,7 +2734,7 @@ index 0000000..9699b67
 +#endif /* HW_MCHP_GEN_AVR64EA48_SIGROW_AVREA_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/slpctrl_clk_sleep_ctrl_avr_v1.h b/include/hw/mchp/gen/avr64ea48/slpctrl_clk_sleep_ctrl_avr_v1.h
 new file mode 100644
-index 0000000..bcb13ee
+index 0000000..acb3b51
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/slpctrl_clk_sleep_ctrl_avr_v1.h
 @@ -0,0 +1,30 @@
@@ -2770,7 +2770,7 @@ index 0000000..bcb13ee
 +#endif /* HW_MCHP_GEN_AVR64EA48_SLPCTRL_CLK_SLEEP_CTRL_AVR_V1_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/spi_spi_8bit_v2.h b/include/hw/mchp/gen/avr64ea48/spi_spi_8bit_v2.h
 new file mode 100644
-index 0000000..655dfea
+index 0000000..f176185
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/spi_spi_8bit_v2.h
 @@ -0,0 +1,47 @@
@@ -2823,7 +2823,7 @@ index 0000000..655dfea
 +#endif /* HW_MCHP_GEN_AVR64EA48_SPI_SPI_8BIT_V2_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/syscfg_avrea.h b/include/hw/mchp/gen/avr64ea48/syscfg_avrea.h
 new file mode 100644
-index 0000000..267f250
+index 0000000..b7db379
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/syscfg_avrea.h
 @@ -0,0 +1,40 @@
@@ -2869,7 +2869,7 @@ index 0000000..267f250
 +#endif /* HW_MCHP_GEN_AVR64EA48_SYSCFG_AVREA_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/tca_tmr_16b_pwm_v1.h b/include/hw/mchp/gen/avr64ea48/tca_tmr_16b_pwm_v1.h
 new file mode 100644
-index 0000000..13927c0
+index 0000000..ba702d5
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/tca_tmr_16b_pwm_v1.h
 @@ -0,0 +1,228 @@
@@ -3103,7 +3103,7 @@ index 0000000..13927c0
 +#endif /* HW_MCHP_GEN_AVR64EA48_TCA_TMR_16B_PWM_V1_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/tcb_tmr_16b_capture_v1.h b/include/hw/mchp/gen/avr64ea48/tcb_tmr_16b_capture_v1.h
 new file mode 100644
-index 0000000..5ad0282
+index 0000000..b8bdf62
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/tcb_tmr_16b_capture_v1.h
 @@ -0,0 +1,70 @@
@@ -3179,7 +3179,7 @@ index 0000000..5ad0282
 +#endif /* HW_MCHP_GEN_AVR64EA48_TCB_TMR_16B_CAPTURE_V1_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h b/include/hw/mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h
 new file mode 100644
-index 0000000..dd412f4
+index 0000000..95f4b34
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h
 @@ -0,0 +1,86 @@
@@ -3271,7 +3271,7 @@ index 0000000..dd412f4
 +#endif /* HW_MCHP_GEN_AVR64EA48_TWI_I2C_8BIT_AVR_V3_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/usart_uart_autobd_v4.h b/include/hw/mchp/gen/avr64ea48/usart_uart_autobd_v4.h
 new file mode 100644
-index 0000000..b3933d8
+index 0000000..8d05830
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/usart_uart_autobd_v4.h
 @@ -0,0 +1,90 @@
@@ -3367,7 +3367,7 @@ index 0000000..b3933d8
 +#endif /* HW_MCHP_GEN_AVR64EA48_USART_UART_AUTOBD_V4_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/userrow_avrea.h b/include/hw/mchp/gen/avr64ea48/userrow_avrea.h
 new file mode 100644
-index 0000000..e8b081d
+index 0000000..43eda5f
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/userrow_avrea.h
 @@ -0,0 +1,282 @@
@@ -3655,7 +3655,7 @@ index 0000000..e8b081d
 +#endif /* HW_MCHP_GEN_AVR64EA48_USERROW_AVREA_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/vport_gpio_ports_avr_v3_vport.h b/include/hw/mchp/gen/avr64ea48/vport_gpio_ports_avr_v3_vport.h
 new file mode 100644
-index 0000000..2637b2e
+index 0000000..001c9d0
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/vport_gpio_ports_avr_v3_vport.h
 @@ -0,0 +1,43 @@
@@ -3704,7 +3704,7 @@ index 0000000..2637b2e
 +#endif /* HW_MCHP_GEN_AVR64EA48_VPORT_GPIO_PORTS_AVR_V3_VPORT_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/vref_avrea.h b/include/hw/mchp/gen/avr64ea48/vref_avrea.h
 new file mode 100644
-index 0000000..96982da
+index 0000000..306bdf7
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/vref_avrea.h
 @@ -0,0 +1,34 @@
@@ -3744,7 +3744,7 @@ index 0000000..96982da
 +#endif /* HW_MCHP_GEN_AVR64EA48_VREF_AVREA_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/wdt_wdt_windowed_v2.h b/include/hw/mchp/gen/avr64ea48/wdt_wdt_windowed_v2.h
 new file mode 100644
-index 0000000..657c4f6
+index 0000000..be3667c
 --- /dev/null
 +++ b/include/hw/mchp/gen/avr64ea48/wdt_wdt_windowed_v2.h
 @@ -0,0 +1,34 @@
@@ -3784,7 +3784,7 @@ index 0000000..657c4f6
 +#endif /* HW_MCHP_GEN_AVR64EA48_WDT_WDT_WINDOWED_V2_H */
 diff --git a/include/hw/mchp/gen/bod_bor_lvd_ctrl_avr_v2.h b/include/hw/mchp/gen/bod_bor_lvd_ctrl_avr_v2.h
 new file mode 100644
-index 0000000..5706d0e
+index 0000000..d518952
 --- /dev/null
 +++ b/include/hw/mchp/gen/bod_bor_lvd_ctrl_avr_v2.h
 @@ -0,0 +1,59 @@
@@ -3849,7 +3849,7 @@ index 0000000..5706d0e
 +#endif /* HW_MCHP_GEN_BOD_BOR_LVD_CTRL_AVR_V2_H */
 diff --git a/include/hw/mchp/gen/ccl_cla_ccl_v1.h b/include/hw/mchp/gen/ccl_cla_ccl_v1.h
 new file mode 100644
-index 0000000..559f23f
+index 0000000..803acf6
 --- /dev/null
 +++ b/include/hw/mchp/gen/ccl_cla_ccl_v1.h
 @@ -0,0 +1,298 @@
@@ -4153,7 +4153,7 @@ index 0000000..559f23f
 +#endif /* HW_MCHP_GEN_CCL_CLA_CCL_V1_H */
 diff --git a/include/hw/mchp/gen/clkctrl_avrea.h b/include/hw/mchp/gen/clkctrl_avrea.h
 new file mode 100644
-index 0000000..7a9133f
+index 0000000..dda5182
 --- /dev/null
 +++ b/include/hw/mchp/gen/clkctrl_avrea.h
 @@ -0,0 +1,94 @@
@@ -4253,7 +4253,7 @@ index 0000000..7a9133f
 +#endif /* HW_MCHP_GEN_CLKCTRL_AVREA_H */
 diff --git a/include/hw/mchp/gen/cpu_cpu_avr_xt_v1.h b/include/hw/mchp/gen/cpu_cpu_avr_xt_v1.h
 new file mode 100644
-index 0000000..140e41b
+index 0000000..873dce1
 --- /dev/null
 +++ b/include/hw/mchp/gen/cpu_cpu_avr_xt_v1.h
 @@ -0,0 +1,36 @@
@@ -4295,7 +4295,7 @@ index 0000000..140e41b
 +#endif /* HW_MCHP_GEN_CPU_CPU_AVR_XT_V1_H */
 diff --git a/include/hw/mchp/gen/cpuint_int_8bit_v3.h b/include/hw/mchp/gen/cpuint_int_8bit_v3.h
 new file mode 100644
-index 0000000..1849a6a
+index 0000000..a6fe357
 --- /dev/null
 +++ b/include/hw/mchp/gen/cpuint_int_8bit_v3.h
 @@ -0,0 +1,34 @@
@@ -4335,7 +4335,7 @@ index 0000000..1849a6a
 +#endif /* HW_MCHP_GEN_CPUINT_INT_8BIT_V3_H */
 diff --git a/include/hw/mchp/gen/crcscan_math_pdi_crc_v1.h b/include/hw/mchp/gen/crcscan_math_pdi_crc_v1.h
 new file mode 100644
-index 0000000..aaf5b19
+index 0000000..2c5dd22
 --- /dev/null
 +++ b/include/hw/mchp/gen/crcscan_math_pdi_crc_v1.h
 @@ -0,0 +1,34 @@
@@ -4375,7 +4375,7 @@ index 0000000..aaf5b19
 +#endif /* HW_MCHP_GEN_CRCSCAN_MATH_PDI_CRC_V1_H */
 diff --git a/include/hw/mchp/gen/dac_dac_nbit_ctrl_avr_v6.h b/include/hw/mchp/gen/dac_dac_nbit_ctrl_avr_v6.h
 new file mode 100644
-index 0000000..b1d5eb9
+index 0000000..b219fb0
 --- /dev/null
 +++ b/include/hw/mchp/gen/dac_dac_nbit_ctrl_avr_v6.h
 @@ -0,0 +1,32 @@
@@ -4413,7 +4413,7 @@ index 0000000..b1d5eb9
 +#endif /* HW_MCHP_GEN_DAC_DAC_NBIT_CTRL_AVR_V6_H */
 diff --git a/include/hw/mchp/gen/evsys_avrea.h b/include/hw/mchp/gen/evsys_avrea.h
 new file mode 100644
-index 0000000..dccf8f5
+index 0000000..c1afb11
 --- /dev/null
 +++ b/include/hw/mchp/gen/evsys_avrea.h
 @@ -0,0 +1,608 @@
@@ -5027,7 +5027,7 @@ index 0000000..dccf8f5
 +#endif /* HW_MCHP_GEN_EVSYS_AVREA_H */
 diff --git a/include/hw/mchp/gen/fuse_avrea.h b/include/hw/mchp/gen/fuse_avrea.h
 new file mode 100644
-index 0000000..9dd14c3
+index 0000000..49b6fec
 --- /dev/null
 +++ b/include/hw/mchp/gen/fuse_avrea.h
 @@ -0,0 +1,101 @@
@@ -5134,7 +5134,7 @@ index 0000000..9dd14c3
 +#endif /* HW_MCHP_GEN_FUSE_AVREA_H */
 diff --git a/include/hw/mchp/gen/gpr_avrea.h b/include/hw/mchp/gen/gpr_avrea.h
 new file mode 100644
-index 0000000..82d020e
+index 0000000..0ae568c
 --- /dev/null
 +++ b/include/hw/mchp/gen/gpr_avrea.h
 @@ -0,0 +1,26 @@
@@ -5166,7 +5166,7 @@ index 0000000..82d020e
 +#endif /* HW_MCHP_GEN_GPR_AVREA_H */
 diff --git a/include/hw/mchp/gen/lock_avrea.h b/include/hw/mchp/gen/lock_avrea.h
 new file mode 100644
-index 0000000..22b6205
+index 0000000..45256fe
 --- /dev/null
 +++ b/include/hw/mchp/gen/lock_avrea.h
 @@ -0,0 +1,26 @@
@@ -5198,7 +5198,7 @@ index 0000000..22b6205
 +#endif /* HW_MCHP_GEN_LOCK_AVREA_H */
 diff --git a/include/hw/mchp/gen/nvmctrl_nvm_ctrl_avr_v3.h b/include/hw/mchp/gen/nvmctrl_nvm_ctrl_avr_v3.h
 new file mode 100644
-index 0000000..c2eee6c
+index 0000000..147eb31
 --- /dev/null
 +++ b/include/hw/mchp/gen/nvmctrl_nvm_ctrl_avr_v3.h
 @@ -0,0 +1,68 @@
@@ -5272,7 +5272,7 @@ index 0000000..c2eee6c
 +#endif /* HW_MCHP_GEN_NVMCTRL_NVM_CTRL_AVR_V3_H */
 diff --git a/include/hw/mchp/gen/port_gpio_ports_avr_v3.h b/include/hw/mchp/gen/port_gpio_ports_avr_v3.h
 new file mode 100644
-index 0000000..4eca0e3
+index 0000000..1187fc0
 --- /dev/null
 +++ b/include/hw/mchp/gen/port_gpio_ports_avr_v3.h
 @@ -0,0 +1,174 @@
@@ -5452,7 +5452,7 @@ index 0000000..4eca0e3
 +#endif /* HW_MCHP_GEN_PORT_GPIO_PORTS_AVR_V3_H */
 diff --git a/include/hw/mchp/gen/portmux_avrea.h b/include/hw/mchp/gen/portmux_avrea.h
 new file mode 100644
-index 0000000..9b37c24
+index 0000000..bd82e0d
 --- /dev/null
 +++ b/include/hw/mchp/gen/portmux_avrea.h
 @@ -0,0 +1,115 @@
@@ -5573,7 +5573,7 @@ index 0000000..9b37c24
 +#endif /* HW_MCHP_GEN_PORTMUX_AVREA_H */
 diff --git a/include/hw/mchp/gen/rstctrl_rst_integration_avr_v2.h b/include/hw/mchp/gen/rstctrl_rst_integration_avr_v2.h
 new file mode 100644
-index 0000000..9869515
+index 0000000..797fe10
 --- /dev/null
 +++ b/include/hw/mchp/gen/rstctrl_rst_integration_avr_v2.h
 @@ -0,0 +1,31 @@
@@ -5610,7 +5610,7 @@ index 0000000..9869515
 +#endif /* HW_MCHP_GEN_RSTCTRL_RST_INTEGRATION_AVR_V2_H */
 diff --git a/include/hw/mchp/gen/rtc_tmr_16b_rtc_avr_v2.h b/include/hw/mchp/gen/rtc_tmr_16b_rtc_avr_v2.h
 new file mode 100644
-index 0000000..36ced15
+index 0000000..2085386
 --- /dev/null
 +++ b/include/hw/mchp/gen/rtc_tmr_16b_rtc_avr_v2.h
 @@ -0,0 +1,128 @@
@@ -5744,7 +5744,7 @@ index 0000000..36ced15
 +#endif /* HW_MCHP_GEN_RTC_TMR_16B_RTC_AVR_V2_H */
 diff --git a/include/hw/mchp/gen/sigrow_avrea.h b/include/hw/mchp/gen/sigrow_avrea.h
 new file mode 100644
-index 0000000..41bec53
+index 0000000..d41f700
 --- /dev/null
 +++ b/include/hw/mchp/gen/sigrow_avrea.h
 @@ -0,0 +1,43 @@
@@ -5793,7 +5793,7 @@ index 0000000..41bec53
 +#endif /* HW_MCHP_GEN_SIGROW_AVREA_H */
 diff --git a/include/hw/mchp/gen/slpctrl_clk_sleep_ctrl_avr_v1.h b/include/hw/mchp/gen/slpctrl_clk_sleep_ctrl_avr_v1.h
 new file mode 100644
-index 0000000..419151f
+index 0000000..2aec50c
 --- /dev/null
 +++ b/include/hw/mchp/gen/slpctrl_clk_sleep_ctrl_avr_v1.h
 @@ -0,0 +1,28 @@
@@ -5827,7 +5827,7 @@ index 0000000..419151f
 +#endif /* HW_MCHP_GEN_SLPCTRL_CLK_SLEEP_CTRL_AVR_V1_H */
 diff --git a/include/hw/mchp/gen/spi_spi_8bit_v2.h b/include/hw/mchp/gen/spi_spi_8bit_v2.h
 new file mode 100644
-index 0000000..21ab117
+index 0000000..63cfaf2
 --- /dev/null
 +++ b/include/hw/mchp/gen/spi_spi_8bit_v2.h
 @@ -0,0 +1,57 @@
@@ -5890,7 +5890,7 @@ index 0000000..21ab117
 +#endif /* HW_MCHP_GEN_SPI_SPI_8BIT_V2_H */
 diff --git a/include/hw/mchp/gen/syscfg_avrea.h b/include/hw/mchp/gen/syscfg_avrea.h
 new file mode 100644
-index 0000000..14542c2
+index 0000000..e3f3587
 --- /dev/null
 +++ b/include/hw/mchp/gen/syscfg_avrea.h
 @@ -0,0 +1,29 @@
@@ -5925,7 +5925,7 @@ index 0000000..14542c2
 +#endif /* HW_MCHP_GEN_SYSCFG_AVREA_H */
 diff --git a/include/hw/mchp/gen/tca_tmr_16b_pwm_v1.h b/include/hw/mchp/gen/tca_tmr_16b_pwm_v1.h
 new file mode 100644
-index 0000000..c40be52
+index 0000000..f35f17d
 --- /dev/null
 +++ b/include/hw/mchp/gen/tca_tmr_16b_pwm_v1.h
 @@ -0,0 +1,200 @@
@@ -6131,7 +6131,7 @@ index 0000000..c40be52
 +#endif /* HW_MCHP_GEN_TCA_TMR_16B_PWM_V1_H */
 diff --git a/include/hw/mchp/gen/tcb_tmr_16b_capture_v1.h b/include/hw/mchp/gen/tcb_tmr_16b_capture_v1.h
 new file mode 100644
-index 0000000..4c8e434
+index 0000000..3495f5a
 --- /dev/null
 +++ b/include/hw/mchp/gen/tcb_tmr_16b_capture_v1.h
 @@ -0,0 +1,63 @@
@@ -6200,7 +6200,7 @@ index 0000000..4c8e434
 +#endif /* HW_MCHP_GEN_TCB_TMR_16B_CAPTURE_V1_H */
 diff --git a/include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h b/include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h
 new file mode 100644
-index 0000000..18c3459
+index 0000000..e495f3b
 --- /dev/null
 +++ b/include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h
 @@ -0,0 +1,129 @@
@@ -6335,7 +6335,7 @@ index 0000000..18c3459
 +#endif /* HW_MCHP_GEN_TWI_I2C_8BIT_AVR_V3_H */
 diff --git a/include/hw/mchp/gen/usart_uart_autobd_v4.h b/include/hw/mchp/gen/usart_uart_autobd_v4.h
 new file mode 100644
-index 0000000..f7411a6
+index 0000000..7e6c061
 --- /dev/null
 +++ b/include/hw/mchp/gen/usart_uart_autobd_v4.h
 @@ -0,0 +1,103 @@
@@ -6444,7 +6444,7 @@ index 0000000..f7411a6
 +#endif /* HW_MCHP_GEN_USART_UART_AUTOBD_V4_H */
 diff --git a/include/hw/mchp/gen/userrow_avrea.h b/include/hw/mchp/gen/userrow_avrea.h
 new file mode 100644
-index 0000000..1a0e3a3
+index 0000000..802cb73
 --- /dev/null
 +++ b/include/hw/mchp/gen/userrow_avrea.h
 @@ -0,0 +1,86 @@
@@ -6536,7 +6536,7 @@ index 0000000..1a0e3a3
 +#endif /* HW_MCHP_GEN_USERROW_AVREA_H */
 diff --git a/include/hw/mchp/gen/vport_gpio_ports_avr_v3_vport.h b/include/hw/mchp/gen/vport_gpio_ports_avr_v3_vport.h
 new file mode 100644
-index 0000000..b4e2652
+index 0000000..b927f35
 --- /dev/null
 +++ b/include/hw/mchp/gen/vport_gpio_ports_avr_v3_vport.h
 @@ -0,0 +1,27 @@
@@ -6569,7 +6569,7 @@ index 0000000..b4e2652
 +#endif /* HW_MCHP_GEN_VPORT_GPIO_PORTS_AVR_V3_VPORT_H */
 diff --git a/include/hw/mchp/gen/vref_avrea.h b/include/hw/mchp/gen/vref_avrea.h
 new file mode 100644
-index 0000000..4ac3a06
+index 0000000..3a36cdb
 --- /dev/null
 +++ b/include/hw/mchp/gen/vref_avrea.h
 @@ -0,0 +1,40 @@
@@ -6615,7 +6615,7 @@ index 0000000..4ac3a06
 +#endif /* HW_MCHP_GEN_VREF_AVREA_H */
 diff --git a/include/hw/mchp/gen/wdt_wdt_windowed_v2.h b/include/hw/mchp/gen/wdt_wdt_windowed_v2.h
 new file mode 100644
-index 0000000..f17fc3b
+index 0000000..da36791
 --- /dev/null
 +++ b/include/hw/mchp/gen/wdt_wdt_windowed_v2.h
 @@ -0,0 +1,52 @@
@@ -6672,7 +6672,7 @@ index 0000000..f17fc3b
 +
 +#endif /* HW_MCHP_GEN_WDT_WDT_WINDOWED_V2_H */
 diff --git a/include/hw/mchp/mchp_device.h b/include/hw/mchp/mchp_device.h
-index 4173391..46ec381 100644
+index bcb1b31..5c269e3 100644
 --- a/include/hw/mchp/mchp_device.h
 +++ b/include/hw/mchp/mchp_device.h
 @@ -131,7 +131,7 @@ typedef struct MchpEventInfo {

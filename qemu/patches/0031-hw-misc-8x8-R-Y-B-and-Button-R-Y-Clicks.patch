@@ -1,7 +1,7 @@
-From f56cad1cbfdf486f87052c247adc8189352d6663 Mon Sep 17 00:00:00 2001
+From 66be6d4bd4b47ec09831ea58c1d3ece02a56b560 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 16:10:58 -0700
-Subject: [PATCH] hw/misc: 8x8 R/Y/B and Button R/Y Clicks
+Subject: [PATCH 31/57] hw/misc: 8x8 R/Y/B and Button R/Y Clicks
 
 The colour variants of the 8x8 G and Button G Clicks: the same circuits
 in their v100 schematics (MAX7219 with LOAD on CS and no pull resistors;
@@ -20,7 +20,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  4 files changed, 72 insertions(+), 9 deletions(-)
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index 5406d84..c8c26d7 100644
+index 918ced9..6f848b2 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -62,8 +62,8 @@ resistors are modelled (from their schematics, v100).
@@ -49,7 +49,7 @@ index 5406d84..c8c26d7 100644
  ``buzz``
    Buzz Click: a piezo buzzer (``click-buzzer``) switched by a transistor
 diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
-index 10d5b60..eff31bb 100644
+index d3abee8..f57c632 100644
 --- a/docs/system/avr/avr64ea48-cnano.rst
 +++ b/docs/system/avr/avr64ea48-cnano.rst
 @@ -31,10 +31,10 @@ on ``-serial`` 1.
@@ -68,7 +68,7 @@ index 10d5b60..eff31bb 100644
  Firmware comes from ``-kernel`` or ``-bios``::
  
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index 1e2b12b..4c851ad 100644
+index 919d034..949590c 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -64,6 +64,14 @@ static const ClickInfo mikrobus_clicks[] = {
@@ -106,7 +106,7 @@ index 1e2b12b..4c851ad 100644
        "(jumper J2 in its default position)",
        TYPE_CLICK_BUZZER, CLICK_GPIO, 0, 0,
 diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
-index efc73bd..523a60d 100644
+index 302d7e8..001c751 100644
 --- a/tests/qtest/pic32cm-click-test.c
 +++ b/tests/qtest/pic32cm-click-test.c
 @@ -917,6 +917,46 @@ static void test_rtc6_memories(void)

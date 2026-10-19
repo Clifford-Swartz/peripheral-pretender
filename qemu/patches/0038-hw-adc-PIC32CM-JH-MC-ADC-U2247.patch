@@ -1,7 +1,7 @@
-From 3ff686719d652da3c298f45144c83123d33224b9 Mon Sep 17 00:00:00 2001
+From 28b41386eac97fffdbdeadcc75ca6376312a2b42 Mon Sep 17 00:00:00 2001
 From: Clifford Swartz <cliffordswartz1@gmail.com>
 Date: Thu, 15 Oct 2026 06:13:29 -0700
-Subject: [PATCH 38/38] hw/adc: PIC32CM JH/MC ADC (U2247)
+Subject: [PATCH 38/57] hw/adc: PIC32CM JH/MC ADC (U2247)
 
 Conversions completed at once on SWTRIG.START, on enable and each
 RESULT read in free-running mode: AIN0-11 from the board ("ain", the
@@ -30,7 +30,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 diff --git a/hw/adc/mchp_adc_u2247.c b/hw/adc/mchp_adc_u2247.c
 new file mode 100644
-index 0000000..6928064
+index 0000000..aa178b2
 --- /dev/null
 +++ b/hw/adc/mchp_adc_u2247.c
 @@ -0,0 +1,365 @@
@@ -410,7 +410,7 @@ index bda286f..4ab1059 100644
 -system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_adc.c'))
 +system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_adc.c', 'mchp_adc_u2247.c'))
 diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
-index e3fad61..b8c1994 100644
+index 1871202..80fe91e 100644
 --- a/hw/arm/pic32cm_soc.c
 +++ b/hw/arm/pic32cm_soc.c
 @@ -52,6 +52,7 @@ static const struct {
@@ -422,7 +422,7 @@ index e3fad61..b8c1994 100644
      { "DIVAS", TYPE_MCHP_DIVAS },
      { "DMAC", TYPE_MCHP_DMAC, "U2503" },
 diff --git a/include/hw/adc/mchp_adc.h b/include/hw/adc/mchp_adc.h
-index 0c398af..f05e897 100644
+index 4299ac2..b768144 100644
 --- a/include/hw/adc/mchp_adc.h
 +++ b/include/hw/adc/mchp_adc.h
 @@ -17,5 +17,7 @@
@@ -434,7 +434,7 @@ index 0c398af..f05e897 100644
  
  #endif /* HW_ADC_MCHP_ADC_H */
 diff --git a/include/hw/mchp/gen/adc_u2247.h b/include/hw/mchp/gen/adc_u2247.h
-index 2069aa3..c60eb87 100644
+index b403cd9..d414ae6 100644
 --- a/include/hw/mchp/gen/adc_u2247.h
 +++ b/include/hw/mchp/gen/adc_u2247.h
 @@ -9,7 +9,7 @@
@@ -447,7 +447,7 @@ index 2069aa3..c60eb87 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h b/include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h
-index 2d2a5c7..fde047f 100644
+index a061fd2..ba0de24 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h
 @@ -6,7 +6,7 @@
@@ -513,7 +513,7 @@ index 2d2a5c7..fde047f 100644
      {
          .name = "SEQCTRL", .offset = 0x28, .size = 4, .count = 1, .stride = 4,
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h b/include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h
-index e723b77..96f97ba 100644
+index 0262d0f..1fc4436 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h
 @@ -6,7 +6,7 @@

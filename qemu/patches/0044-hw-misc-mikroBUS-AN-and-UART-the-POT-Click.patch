@@ -1,7 +1,7 @@
-From 6a114da8106e12411a7250dee63c810aed6ebaf8 Mon Sep 17 00:00:00 2001
+From 8e883a898ea1bdc3d17b9151b006e3772a9dada6 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Thu, 15 Oct 2026 18:08:11 -0700
-Subject: [PATCH] hw/misc: mikroBUS AN and UART; the POT Click
+Subject: [PATCH 44/57] hw/misc: mikroBUS AN and UART; the POT Click
 
 Sockets gain the analog pin AN (a Click's analog output, in millivolts,
 set on the ADC channels behind the pad) and a UART (a UART Click is a
@@ -28,7 +28,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/misc/click_pot.h
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index c8c26d7..1d4c059 100644
+index 6f848b2..afbe772 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -51,7 +51,13 @@ on SERCOM1 (PA16 MISO, PA18 MOSI, PA19 SCK), and the mikroBUS RST, PWM, INT
@@ -60,7 +60,7 @@ index c8c26d7..1d4c059 100644
  own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
  
 diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
-index eff31bb..c24097a 100644
+index f57c632..d4a769e 100644
 --- a/docs/system/avr/avr64ea48-cnano.rst
 +++ b/docs/system/avr/avr64ea48-cnano.rst
 @@ -34,7 +34,9 @@ on TWI0 (PA2 SDA, PA3 SCL; host mode, ``avr8x-twi``). Every Click of the
@@ -75,7 +75,7 @@ index eff31bb..c24097a 100644
  Firmware comes from ``-kernel`` or ``-bios``::
  
 diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
-index 0f683f8..8be098e 100644
+index abbe2fa..9361f0f 100644
 --- a/hw/arm/pic32cm_mc00_cpro.c
 +++ b/hw/arm/pic32cm_mc00_cpro.c
 @@ -11,8 +11,12 @@
@@ -168,7 +168,7 @@ index 0f683f8..8be098e 100644
      sysbus_realize(SYS_BUS_DEVICE(soc), &error_fatal);
  
 diff --git a/hw/avr/avr64ea48_cnano.c b/hw/avr/avr64ea48_cnano.c
-index b37586c..d45f483 100644
+index 9693220..c72107a 100644
 --- a/hw/avr/avr64ea48_cnano.c
 +++ b/hw/avr/avr64ea48_cnano.c
 @@ -19,8 +19,11 @@
@@ -227,7 +227,7 @@ index b37586c..d45f483 100644
      port = DEVICE(&s->soc.port);
 diff --git a/hw/misc/click_pot.c b/hw/misc/click_pot.c
 new file mode 100644
-index 0000000..6c5833e
+index 0000000..3dcd30b
 --- /dev/null
 +++ b/hw/misc/click_pot.c
 @@ -0,0 +1,135 @@
@@ -379,7 +379,7 @@ index c58f623..53c6c5c 100644
  system_ss.add(when: 'CONFIG_WS2812', if_true: files('ws2812.c'))
  system_ss.add(when: 'CONFIG_RNBD451', if_true: files('rnbd451.c'))
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index 4c851ad..51da5d5 100644
+index 949590c..3221ea1 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -15,10 +15,12 @@
@@ -550,7 +550,7 @@ index 4c851ad..51da5d5 100644
          c = mikrobus_find(sockets[i].name, clicks[i]);
 diff --git a/include/hw/misc/click_pot.h b/include/hw/misc/click_pot.h
 new file mode 100644
-index 0000000..bb4cb5b
+index 0000000..7c40417
 --- /dev/null
 +++ b/include/hw/misc/click_pot.h
 @@ -0,0 +1,18 @@
@@ -573,7 +573,7 @@ index 0000000..bb4cb5b
 +
 +#endif /* HW_MISC_CLICK_POT_H */
 diff --git a/include/hw/misc/mikrobus.h b/include/hw/misc/mikrobus.h
-index 1abf89a..e67db14 100644
+index ed627ef..a72794e 100644
 --- a/include/hw/misc/mikrobus.h
 +++ b/include/hw/misc/mikrobus.h
 @@ -24,6 +24,18 @@
@@ -619,7 +619,7 @@ index 1abf89a..e67db14 100644
   * Plug the Click @click (a catalog name; NULL, "" or "none": nothing)
   * into each of @n sockets; exits with an error for unknown Clicks, a bus
 diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
-index 523a60d..81610de 100644
+index 001c751..80490b8 100644
 --- a/tests/qtest/pic32cm-click-test.c
 +++ b/tests/qtest/pic32cm-click-test.c
 @@ -957,6 +957,26 @@ static void test_8x8_variants(void)

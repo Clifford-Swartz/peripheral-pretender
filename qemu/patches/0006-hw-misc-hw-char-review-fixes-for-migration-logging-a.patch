@@ -1,7 +1,8 @@
-From d7f6459948640f36d1c7822c79d1ff88e2321849 Mon Sep 17 00:00:00 2001
+From 30c7cba21b3a5dfbba6f055a003e3a3726f36340 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Tue, 13 Oct 2026 14:08:22 -0700
-Subject: [PATCH] hw/misc, hw/char: review fixes for migration, logging and WDT
+Subject: [PATCH 06/57] hw/misc, hw/char: review fixes for migration, logging
+ and WDT
 
 - Clock models migrate every clock: the GCLK source inputs and the
   outputs of OSCCTRL, OSC32KCTRL, GCLK and MCLK. Before, the outputs came
@@ -31,7 +32,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  7 files changed, 119 insertions(+), 16 deletions(-)
 
 diff --git a/hw/char/mchp_sercom.c b/hw/char/mchp_sercom.c
-index 4a2a1cc..32bc20c 100644
+index d36ddeb..d83c945 100644
 --- a/hw/char/mchp_sercom.c
 +++ b/hw/char/mchp_sercom.c
 @@ -64,6 +64,7 @@ struct MchpSercomState {
@@ -143,7 +144,7 @@ index a7651f8..82183a5 100644
          }
          if (attrs.secure) {
 diff --git a/hw/misc/mchp_clock.c b/hw/misc/mchp_clock.c
-index ea1a517..2211304 100644
+index 3cbd4bc..8d29c76 100644
 --- a/hw/misc/mchp_clock.c
 +++ b/hw/misc/mchp_clock.c
 @@ -286,14 +286,17 @@ static void mchp_oscctrl_init(Object *obj)
@@ -225,7 +226,7 @@ index ea1a517..2211304 100644
      },
  };
 diff --git a/hw/misc/mchp_regblock.c b/hw/misc/mchp_regblock.c
-index 2d23c0b..af50f5d 100644
+index 977a8a4..60a8147 100644
 --- a/hw/misc/mchp_regblock.c
 +++ b/hw/misc/mchp_regblock.c
 @@ -190,10 +190,32 @@ static bool mchp_regblock_is_bookkeeping(MchpRegBlock *s,
@@ -270,7 +271,7 @@ index 2d23c0b..af50f5d 100644
  
  static int mchp_regblock_post_load(void *opaque, int version_id)
 diff --git a/include/hw/mchp/gen/wdt_u2251.h b/include/hw/mchp/gen/wdt_u2251.h
-index 8799fc3..2b64e84 100644
+index 42c41b4..cb83ad8 100644
 --- a/include/hw/mchp/gen/wdt_u2251.h
 +++ b/include/hw/mchp/gen/wdt_u2251.h
 @@ -6,7 +6,7 @@
@@ -298,7 +299,7 @@ index 8799fc3..2b64e84 100644
      {
          .name = "INTENCLR", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
 diff --git a/include/hw/misc/mchp_regblock.h b/include/hw/misc/mchp_regblock.h
-index b8410aa..72b3359 100644
+index 5f55252..2ccacc4 100644
 --- a/include/hw/misc/mchp_regblock.h
 +++ b/include/hw/misc/mchp_regblock.h
 @@ -54,6 +54,7 @@ struct MchpRegBlock {
@@ -310,7 +311,7 @@ index b8410aa..72b3359 100644
  
  struct MchpRegBlockClass {
 diff --git a/tests/qtest/pic32cm-jh-test.c b/tests/qtest/pic32cm-jh-test.c
-index f9cddac..d715914 100644
+index 28a3a95..4675333 100644
 --- a/tests/qtest/pic32cm-jh-test.c
 +++ b/tests/qtest/pic32cm-jh-test.c
 @@ -94,6 +94,8 @@ static void test_reset_values(void)

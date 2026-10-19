@@ -1,0 +1,1723 @@
+From 261864ffb64424d92e7c3e773c6e07e38a7f50f4 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Mon, 19 Oct 2026 11:04:36 -0700
+Subject: [PATCH] hw: regenerated tables: new input hashes after the header
+ rewrite
+
+Only the sha1 comments of the overlays and profiles change.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/arm/atsame51j20a_device.h                                 | 2 +-
+ hw/arm/pic32cm1216mc00048_device.h                           | 2 +-
+ hw/arm/pic32cm5164jh01100_device.h                           | 2 +-
+ hw/avr/avr64ea48_device.h                                    | 2 +-
+ include/hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h           | 2 +-
+ include/hw/mchp/gen/adc_u2247.h                              | 2 +-
+ include/hw/mchp/gen/adc_u2500.h                              | 2 +-
+ include/hw/mchp/gen/atsame51j20a/adc_u2500.h                 | 2 +-
+ include/hw/mchp/gen/atsame51j20a/dac_u2502.h                 | 2 +-
+ include/hw/mchp/gen/atsame51j20a/dmac_u2503.h                | 2 +-
+ include/hw/mchp/gen/atsame51j20a/eic_u2254.h                 | 2 +-
+ include/hw/mchp/gen/atsame51j20a/evsys_u2504.h               | 2 +-
+ include/hw/mchp/gen/atsame51j20a/gclk_u2122.h                | 2 +-
+ include/hw/mchp/gen/atsame51j20a/hmatrixb_i7638.h            | 2 +-
+ include/hw/mchp/gen/atsame51j20a/mclk_u2408.h                | 2 +-
+ include/hw/mchp/gen/atsame51j20a/nvmctrl_u2409.h             | 2 +-
+ include/hw/mchp/gen/atsame51j20a/osc32kctrl_u2400.h          | 2 +-
+ include/hw/mchp/gen/atsame51j20a/oscctrl_u2401.h             | 2 +-
+ include/hw/mchp/gen/atsame51j20a/pac_u2120.h                 | 2 +-
+ include/hw/mchp/gen/atsame51j20a/port_u2210.h                | 2 +-
+ include/hw/mchp/gen/atsame51j20a/qspi_u2008.h                | 2 +-
+ include/hw/mchp/gen/atsame51j20a/rstc_u2239.h                | 2 +-
+ include/hw/mchp/gen/atsame51j20a/rtc_u2250.h                 | 2 +-
+ include/hw/mchp/gen/atsame51j20a/sercom_u2201.h              | 2 +-
+ include/hw/mchp/gen/atsame51j20a/tc_u2249.h                  | 2 +-
+ include/hw/mchp/gen/atsame51j20a/tcc_u2213.h                 | 2 +-
+ include/hw/mchp/gen/atsame51j20a/trng_u2242.h                | 2 +-
+ include/hw/mchp/gen/atsame51j20a/usb_u2222.h                 | 2 +-
+ include/hw/mchp/gen/atsame51j20a/wdt_u2251.h                 | 2 +-
+ include/hw/mchp/gen/avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h | 2 +-
+ include/hw/mchp/gen/avr64ea48/clkctrl_avrea.h                | 2 +-
+ include/hw/mchp/gen/avr64ea48/cpuint_int_8bit_v3.h           | 2 +-
+ include/hw/mchp/gen/avr64ea48/nvmctrl_nvm_ctrl_avr_v3.h      | 2 +-
+ include/hw/mchp/gen/avr64ea48/spi_spi_8bit_v2.h              | 2 +-
+ include/hw/mchp/gen/avr64ea48/tcb_tmr_16b_capture_v1.h       | 2 +-
+ include/hw/mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h          | 2 +-
+ include/hw/mchp/gen/avr64ea48/usart_uart_autobd_v4.h         | 2 +-
+ include/hw/mchp/gen/clkctrl_avrea.h                          | 2 +-
+ include/hw/mchp/gen/cpuint_int_8bit_v3.h                     | 2 +-
+ include/hw/mchp/gen/dac_u2214.h                              | 2 +-
+ include/hw/mchp/gen/dac_u2502.h                              | 2 +-
+ include/hw/mchp/gen/divas_u2258.h                            | 2 +-
+ include/hw/mchp/gen/dmac_u2503.h                             | 2 +-
+ include/hw/mchp/gen/dsu_u2209.h                              | 2 +-
+ include/hw/mchp/gen/eic_u2254.h                              | 2 +-
+ include/hw/mchp/gen/evsys_u2256.h                            | 2 +-
+ include/hw/mchp/gen/evsys_u2504.h                            | 2 +-
+ include/hw/mchp/gen/gclk_u2122.h                             | 2 +-
+ include/hw/mchp/gen/hmatrixb_i7638.h                         | 2 +-
+ include/hw/mchp/gen/mclk_u2234.h                             | 2 +-
+ include/hw/mchp/gen/mclk_u2408.h                             | 2 +-
+ include/hw/mchp/gen/mtb_u2002.h                              | 2 +-
+ include/hw/mchp/gen/nvmctrl_03929.h                          | 2 +-
+ include/hw/mchp/gen/nvmctrl_nvm_ctrl_avr_v3.h                | 2 +-
+ include/hw/mchp/gen/nvmctrl_u2409.h                          | 2 +-
+ include/hw/mchp/gen/osc32kctrl_u2246.h                       | 2 +-
+ include/hw/mchp/gen/osc32kctrl_u2400.h                       | 2 +-
+ include/hw/mchp/gen/oscctrl_u2119.h                          | 2 +-
+ include/hw/mchp/gen/oscctrl_u2401.h                          | 2 +-
+ include/hw/mchp/gen/pac_u2120.h                              | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h           | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h           | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/divas_u2258.h         | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/dsu_u2209.h           | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h           | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h         | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/gclk_u2122.h          | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/hmatrixb_i7638.h      | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/mclk_u2234.h          | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/mtb_u2002.h           | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/nvmctrl_03929.h       | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/osc32kctrl_u2246.h    | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/oscctrl_u2119.h       | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/pac_u2120.h           | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/pm_u2240.h            | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h          | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/rstc_u2239.h          | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h           | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/sdadc_u2260.h         | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h        | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/supc_u2117.h          | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/tc_u2249.h            | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h           | 2 +-
+ include/hw/mchp/gen/pic32cm1216mc00048/wdt_u2251.h           | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h           | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h           | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/divas_u2258.h         | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/dsu_u2209.h           | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h           | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h         | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/gclk_u2122.h          | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/mclk_u2234.h          | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/mtb_u2002.h           | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/nvmctrl_03929.h       | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/osc32kctrl_u2246.h    | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/oscctrl_u2119.h       | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/pac_u2120.h           | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/pm_u2240.h            | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h          | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/rstc_u2239.h          | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h        | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/supc_u2117.h          | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/tc_u2249.h            | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h           | 2 +-
+ include/hw/mchp/gen/pic32cm5164jh01100/wdt_u2251.h           | 2 +-
+ include/hw/mchp/gen/pm_u2240.h                               | 2 +-
+ include/hw/mchp/gen/port_u2210.h                             | 2 +-
+ include/hw/mchp/gen/qspi_u2008.h                             | 2 +-
+ include/hw/mchp/gen/rstc_u2239.h                             | 2 +-
+ include/hw/mchp/gen/rtc_u2250.h                              | 2 +-
+ include/hw/mchp/gen/sdadc_u2260.h                            | 2 +-
+ include/hw/mchp/gen/sercom_u2201.h                           | 2 +-
+ include/hw/mchp/gen/spi_spi_8bit_v2.h                        | 2 +-
+ include/hw/mchp/gen/supc_u2117.h                             | 2 +-
+ include/hw/mchp/gen/tc_u2249.h                               | 2 +-
+ include/hw/mchp/gen/tcb_tmr_16b_capture_v1.h                 | 2 +-
+ include/hw/mchp/gen/tcc_u2213.h                              | 2 +-
+ include/hw/mchp/gen/trng_u2242.h                             | 2 +-
+ include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h                    | 2 +-
+ include/hw/mchp/gen/usart_uart_autobd_v4.h                   | 2 +-
+ include/hw/mchp/gen/usb_u2222.h                              | 2 +-
+ include/hw/mchp/gen/wdt_u2251.h                              | 2 +-
+ 122 files changed, 122 insertions(+), 122 deletions(-)
+
+diff --git a/hw/arm/atsame51j20a_device.h b/hw/arm/atsame51j20a_device.h
+index 20af64a..723cb55 100644
+--- a/hw/arm/atsame51j20a_device.h
++++ b/hw/arm/atsame51j20a_device.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Profile: profiles/atsame51j20a.yaml (sha1 ab075c4307ba)
++ * Profile: profiles/atsame51j20a.yaml (sha1 1adbb421f878)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/hw/arm/pic32cm1216mc00048_device.h b/hw/arm/pic32cm1216mc00048_device.h
+index e72858b..41e5e95 100644
+--- a/hw/arm/pic32cm1216mc00048_device.h
++++ b/hw/arm/pic32cm1216mc00048_device.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Profile: profiles/pic32cm1216mc00048.yaml (sha1 cb3f28746b24)
++ * Profile: profiles/pic32cm1216mc00048.yaml (sha1 280c3c52e375)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/hw/arm/pic32cm5164jh01100_device.h b/hw/arm/pic32cm5164jh01100_device.h
+index ebaedd2..d98ae8f 100644
+--- a/hw/arm/pic32cm5164jh01100_device.h
++++ b/hw/arm/pic32cm5164jh01100_device.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Profile: profiles/pic32cm5164jh01100.yaml (sha1 4b4725f5da13)
++ * Profile: profiles/pic32cm5164jh01100.yaml (sha1 c9d35fe3ace2)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/hw/avr/avr64ea48_device.h b/hw/avr/avr64ea48_device.h
+index 70a32d4..5d2ca41 100644
+--- a/hw/avr/avr64ea48_device.h
++++ b/hw/avr/avr64ea48_device.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from AVR64EA48.atdf
+  * (AVR-Ex_DFP 2.8.189). Do not edit.
+- * Profile: profiles/avr64ea48.yaml (sha1 1a409a76d26c)
++ * Profile: profiles/avr64ea48.yaml (sha1 6074479d8282)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h b/include/hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h
+index c7f87e0..ec7a9a9 100644
+--- a/include/hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h
++++ b/include/hw/mchp/gen/adc_adc_12b_diff_ctrl_avr_v2.h
+@@ -9,7 +9,7 @@
+  * Do not edit.
+  * Analog to Digital Converter
+  * Devices: AVR64EA48
+- * Overlay: overlays/adc_adc_12b_diff_ctrl_avr_v2.yaml (sha1 c1896584a707)
++ * Overlay: overlays/adc_adc_12b_diff_ctrl_avr_v2.yaml (sha1 d900054102a3)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/adc_u2247.h b/include/hw/mchp/gen/adc_u2247.h
+index c0cc213..4bd97df 100644
+--- a/include/hw/mchp/gen/adc_u2247.h
++++ b/include/hw/mchp/gen/adc_u2247.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/adc_u2247.yaml (sha1 574aa9437c7e)
++ * Overlay: overlays/adc_u2247.yaml (sha1 ac169f8454b2)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/adc_u2500.h b/include/hw/mchp/gen/adc_u2500.h
+index c16165e..def3128 100644
+--- a/include/hw/mchp/gen/adc_u2500.h
++++ b/include/hw/mchp/gen/adc_u2500.h
+@@ -8,7 +8,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: ATSAME51J20A
+- * Overlay: overlays/adc_u2500.yaml (sha1 0d073b455591)
++ * Overlay: overlays/adc_u2500.yaml (sha1 87452af3d9ab)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/adc_u2500.h b/include/hw/mchp/gen/atsame51j20a/adc_u2500.h
+index eb0a990..0d54d5e 100644
+--- a/include/hw/mchp/gen/atsame51j20a/adc_u2500.h
++++ b/include/hw/mchp/gen/atsame51j20a/adc_u2500.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/adc_u2500.yaml (sha1 0d073b455591)
++ * Overlay: overlays/adc_u2500.yaml (sha1 87452af3d9ab)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/dac_u2502.h b/include/hw/mchp/gen/atsame51j20a/dac_u2502.h
+index e30816a..5a8756b 100644
+--- a/include/hw/mchp/gen/atsame51j20a/dac_u2502.h
++++ b/include/hw/mchp/gen/atsame51j20a/dac_u2502.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/dac_u2502.yaml (sha1 d618e8c69010)
++ * Overlay: overlays/dac_u2502.yaml (sha1 8071ff522023)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/dmac_u2503.h b/include/hw/mchp/gen/atsame51j20a/dmac_u2503.h
+index 042d99d..a95e02a 100644
+--- a/include/hw/mchp/gen/atsame51j20a/dmac_u2503.h
++++ b/include/hw/mchp/gen/atsame51j20a/dmac_u2503.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/dmac_u2503.yaml (sha1 fed14b50059e)
++ * Overlay: overlays/dmac_u2503.yaml (sha1 1ecba457918b)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/eic_u2254.h b/include/hw/mchp/gen/atsame51j20a/eic_u2254.h
+index 5ff40ed..08b67e5 100644
+--- a/include/hw/mchp/gen/atsame51j20a/eic_u2254.h
++++ b/include/hw/mchp/gen/atsame51j20a/eic_u2254.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/eic_u2254.yaml (sha1 2384c392b298)
++ * Overlay: overlays/eic_u2254.yaml (sha1 99522e3f5cb7)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/evsys_u2504.h b/include/hw/mchp/gen/atsame51j20a/evsys_u2504.h
+index 6560fcb..416c702 100644
+--- a/include/hw/mchp/gen/atsame51j20a/evsys_u2504.h
++++ b/include/hw/mchp/gen/atsame51j20a/evsys_u2504.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/evsys_u2504.yaml (sha1 334ac021306f)
++ * Overlay: overlays/evsys_u2504.yaml (sha1 77032e4f5d89)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/gclk_u2122.h b/include/hw/mchp/gen/atsame51j20a/gclk_u2122.h
+index f58587b..3fb6c3c 100644
+--- a/include/hw/mchp/gen/atsame51j20a/gclk_u2122.h
++++ b/include/hw/mchp/gen/atsame51j20a/gclk_u2122.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/gclk_u2122.yaml (sha1 22a516c4e475)
++ * Overlay: overlays/gclk_u2122.yaml (sha1 167060307248)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/hmatrixb_i7638.h b/include/hw/mchp/gen/atsame51j20a/hmatrixb_i7638.h
+index bf437e1..f178b6a 100644
+--- a/include/hw/mchp/gen/atsame51j20a/hmatrixb_i7638.h
++++ b/include/hw/mchp/gen/atsame51j20a/hmatrixb_i7638.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/hmatrixb_i7638.yaml (sha1 9412038cf923)
++ * Overlay: overlays/hmatrixb_i7638.yaml (sha1 a4871b37e8aa)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/mclk_u2408.h b/include/hw/mchp/gen/atsame51j20a/mclk_u2408.h
+index 53eeb62..bb88d92 100644
+--- a/include/hw/mchp/gen/atsame51j20a/mclk_u2408.h
++++ b/include/hw/mchp/gen/atsame51j20a/mclk_u2408.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/mclk_u2408.yaml (sha1 caad2bb1ea66)
++ * Overlay: overlays/mclk_u2408.yaml (sha1 505575d7cd52)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/nvmctrl_u2409.h b/include/hw/mchp/gen/atsame51j20a/nvmctrl_u2409.h
+index e9f8854..d31ecaf 100644
+--- a/include/hw/mchp/gen/atsame51j20a/nvmctrl_u2409.h
++++ b/include/hw/mchp/gen/atsame51j20a/nvmctrl_u2409.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/nvmctrl_u2409.yaml (sha1 586a637e3871)
++ * Overlay: overlays/nvmctrl_u2409.yaml (sha1 fbbfaf7c1815)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/osc32kctrl_u2400.h b/include/hw/mchp/gen/atsame51j20a/osc32kctrl_u2400.h
+index 118ab10..14f2009 100644
+--- a/include/hw/mchp/gen/atsame51j20a/osc32kctrl_u2400.h
++++ b/include/hw/mchp/gen/atsame51j20a/osc32kctrl_u2400.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/osc32kctrl_u2400.yaml (sha1 f46481a4ecd2)
++ * Overlay: overlays/osc32kctrl_u2400.yaml (sha1 5c8fee5e5cf3)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/oscctrl_u2401.h b/include/hw/mchp/gen/atsame51j20a/oscctrl_u2401.h
+index 1abc0b9..cd3303c 100644
+--- a/include/hw/mchp/gen/atsame51j20a/oscctrl_u2401.h
++++ b/include/hw/mchp/gen/atsame51j20a/oscctrl_u2401.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/oscctrl_u2401.yaml (sha1 52d0b4a1c1b4)
++ * Overlay: overlays/oscctrl_u2401.yaml (sha1 a61152875d9c)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/pac_u2120.h b/include/hw/mchp/gen/atsame51j20a/pac_u2120.h
+index c6a9c4a..53f5d33 100644
+--- a/include/hw/mchp/gen/atsame51j20a/pac_u2120.h
++++ b/include/hw/mchp/gen/atsame51j20a/pac_u2120.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/pac_u2120.yaml (sha1 95071c417b7f)
++ * Overlay: overlays/pac_u2120.yaml (sha1 68320f4092c7)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/port_u2210.h b/include/hw/mchp/gen/atsame51j20a/port_u2210.h
+index 5220cea..f890fef 100644
+--- a/include/hw/mchp/gen/atsame51j20a/port_u2210.h
++++ b/include/hw/mchp/gen/atsame51j20a/port_u2210.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/port_u2210.yaml (sha1 94f472d4b7da)
++ * Overlay: overlays/port_u2210.yaml (sha1 596776cf4ad4)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/qspi_u2008.h b/include/hw/mchp/gen/atsame51j20a/qspi_u2008.h
+index 64861d1..5182f74 100644
+--- a/include/hw/mchp/gen/atsame51j20a/qspi_u2008.h
++++ b/include/hw/mchp/gen/atsame51j20a/qspi_u2008.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/qspi_u2008.yaml (sha1 5d086328a69e)
++ * Overlay: overlays/qspi_u2008.yaml (sha1 6f8fc73ded1c)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/rstc_u2239.h b/include/hw/mchp/gen/atsame51j20a/rstc_u2239.h
+index 9b6c6f6..2b02b49 100644
+--- a/include/hw/mchp/gen/atsame51j20a/rstc_u2239.h
++++ b/include/hw/mchp/gen/atsame51j20a/rstc_u2239.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/rstc_u2239.yaml (sha1 cb039ed18da8)
++ * Overlay: overlays/rstc_u2239.yaml (sha1 c94cccd315a8)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/rtc_u2250.h b/include/hw/mchp/gen/atsame51j20a/rtc_u2250.h
+index e1320a6..78e9acb 100644
+--- a/include/hw/mchp/gen/atsame51j20a/rtc_u2250.h
++++ b/include/hw/mchp/gen/atsame51j20a/rtc_u2250.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/rtc_u2250.yaml (sha1 d8044a2c6034)
++ * Overlay: overlays/rtc_u2250.yaml (sha1 4e81b3a6c97c)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/sercom_u2201.h b/include/hw/mchp/gen/atsame51j20a/sercom_u2201.h
+index a688970..6c66475 100644
+--- a/include/hw/mchp/gen/atsame51j20a/sercom_u2201.h
++++ b/include/hw/mchp/gen/atsame51j20a/sercom_u2201.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/sercom_u2201.yaml (sha1 60e97667c7f4)
++ * Overlay: overlays/sercom_u2201.yaml (sha1 2328f1940f23)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/tc_u2249.h b/include/hw/mchp/gen/atsame51j20a/tc_u2249.h
+index 9aec17f..abf94cf 100644
+--- a/include/hw/mchp/gen/atsame51j20a/tc_u2249.h
++++ b/include/hw/mchp/gen/atsame51j20a/tc_u2249.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/tc_u2249.yaml (sha1 6272e30c8705)
++ * Overlay: overlays/tc_u2249.yaml (sha1 41f9f7b2548b)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/tcc_u2213.h b/include/hw/mchp/gen/atsame51j20a/tcc_u2213.h
+index e98a416..71a184d 100644
+--- a/include/hw/mchp/gen/atsame51j20a/tcc_u2213.h
++++ b/include/hw/mchp/gen/atsame51j20a/tcc_u2213.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/tcc_u2213.yaml (sha1 6bda44899531)
++ * Overlay: overlays/tcc_u2213.yaml (sha1 7f219d23569c)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/trng_u2242.h b/include/hw/mchp/gen/atsame51j20a/trng_u2242.h
+index 5a77251..eee7089 100644
+--- a/include/hw/mchp/gen/atsame51j20a/trng_u2242.h
++++ b/include/hw/mchp/gen/atsame51j20a/trng_u2242.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/trng_u2242.yaml (sha1 e8f6c30a4b5f)
++ * Overlay: overlays/trng_u2242.yaml (sha1 cc6b290b0389)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/usb_u2222.h b/include/hw/mchp/gen/atsame51j20a/usb_u2222.h
+index d3405e6..7d61961 100644
+--- a/include/hw/mchp/gen/atsame51j20a/usb_u2222.h
++++ b/include/hw/mchp/gen/atsame51j20a/usb_u2222.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/usb_u2222.yaml (sha1 cbf60551a101)
++ * Overlay: overlays/usb_u2222.yaml (sha1 ecd7a17b603b)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/atsame51j20a/wdt_u2251.h b/include/hw/mchp/gen/atsame51j20a/wdt_u2251.h
+index 172f050..6f98c34 100644
+--- a/include/hw/mchp/gen/atsame51j20a/wdt_u2251.h
++++ b/include/hw/mchp/gen/atsame51j20a/wdt_u2251.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/wdt_u2251.yaml (sha1 ef6f6b236f04)
++ * Overlay: overlays/wdt_u2251.yaml (sha1 fce913b2a1aa)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h b/include/hw/mchp/gen/avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h
+index 4f19712..a0f1287 100644
+--- a/include/hw/mchp/gen/avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h
++++ b/include/hw/mchp/gen/avr64ea48/adc_adc_12b_diff_ctrl_avr_v2.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from AVR64EA48.atdf
+  * (AVR-Ex_DFP 2.8.189). Do not edit.
+- * Overlay: overlays/adc_adc_12b_diff_ctrl_avr_v2.yaml (sha1 c1896584a707)
++ * Overlay: overlays/adc_adc_12b_diff_ctrl_avr_v2.yaml (sha1 d900054102a3)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/avr64ea48/clkctrl_avrea.h b/include/hw/mchp/gen/avr64ea48/clkctrl_avrea.h
+index 51d3242..1fa1732 100644
+--- a/include/hw/mchp/gen/avr64ea48/clkctrl_avrea.h
++++ b/include/hw/mchp/gen/avr64ea48/clkctrl_avrea.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from AVR64EA48.atdf
+  * (AVR-Ex_DFP 2.8.189). Do not edit.
+- * Overlay: overlays/clkctrl_avrea.yaml (sha1 72c0df2949e4)
++ * Overlay: overlays/clkctrl_avrea.yaml (sha1 581fb0476ee7)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/avr64ea48/cpuint_int_8bit_v3.h b/include/hw/mchp/gen/avr64ea48/cpuint_int_8bit_v3.h
+index 1e5a214..fbb5755 100644
+--- a/include/hw/mchp/gen/avr64ea48/cpuint_int_8bit_v3.h
++++ b/include/hw/mchp/gen/avr64ea48/cpuint_int_8bit_v3.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from AVR64EA48.atdf
+  * (AVR-Ex_DFP 2.8.189). Do not edit.
+- * Overlay: overlays/cpuint_int_8bit_v3.yaml (sha1 ed2ae938cb45)
++ * Overlay: overlays/cpuint_int_8bit_v3.yaml (sha1 a53b0b8b3e30)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/avr64ea48/nvmctrl_nvm_ctrl_avr_v3.h b/include/hw/mchp/gen/avr64ea48/nvmctrl_nvm_ctrl_avr_v3.h
+index 4bf211d..289713a 100644
+--- a/include/hw/mchp/gen/avr64ea48/nvmctrl_nvm_ctrl_avr_v3.h
++++ b/include/hw/mchp/gen/avr64ea48/nvmctrl_nvm_ctrl_avr_v3.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from AVR64EA48.atdf
+  * (AVR-Ex_DFP 2.8.189). Do not edit.
+- * Overlay: overlays/nvmctrl_nvm_ctrl_avr_v3.yaml (sha1 734e83c3920a)
++ * Overlay: overlays/nvmctrl_nvm_ctrl_avr_v3.yaml (sha1 84bfe595c9a0)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/avr64ea48/spi_spi_8bit_v2.h b/include/hw/mchp/gen/avr64ea48/spi_spi_8bit_v2.h
+index ffda0fa..7dce87e 100644
+--- a/include/hw/mchp/gen/avr64ea48/spi_spi_8bit_v2.h
++++ b/include/hw/mchp/gen/avr64ea48/spi_spi_8bit_v2.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from AVR64EA48.atdf
+  * (AVR-Ex_DFP 2.8.189). Do not edit.
+- * Overlay: overlays/spi_spi_8bit_v2.yaml (sha1 ccde426982ec)
++ * Overlay: overlays/spi_spi_8bit_v2.yaml (sha1 d4d1cc1635e1)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/avr64ea48/tcb_tmr_16b_capture_v1.h b/include/hw/mchp/gen/avr64ea48/tcb_tmr_16b_capture_v1.h
+index 22d787f..df4162b 100644
+--- a/include/hw/mchp/gen/avr64ea48/tcb_tmr_16b_capture_v1.h
++++ b/include/hw/mchp/gen/avr64ea48/tcb_tmr_16b_capture_v1.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from AVR64EA48.atdf
+  * (AVR-Ex_DFP 2.8.189). Do not edit.
+- * Overlay: overlays/tcb_tmr_16b_capture_v1.yaml (sha1 e9cfe5df5342)
++ * Overlay: overlays/tcb_tmr_16b_capture_v1.yaml (sha1 adfae107e46f)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h b/include/hw/mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h
+index d97d826..21f9096 100644
+--- a/include/hw/mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h
++++ b/include/hw/mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from AVR64EA48.atdf
+  * (AVR-Ex_DFP 2.8.189). Do not edit.
+- * Overlay: overlays/twi_i2c_8bit_avr_v3.yaml (sha1 fb823cddb035)
++ * Overlay: overlays/twi_i2c_8bit_avr_v3.yaml (sha1 b527ba06c281)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/avr64ea48/usart_uart_autobd_v4.h b/include/hw/mchp/gen/avr64ea48/usart_uart_autobd_v4.h
+index 8d05830..5aa93eb 100644
+--- a/include/hw/mchp/gen/avr64ea48/usart_uart_autobd_v4.h
++++ b/include/hw/mchp/gen/avr64ea48/usart_uart_autobd_v4.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from AVR64EA48.atdf
+  * (AVR-Ex_DFP 2.8.189). Do not edit.
+- * Overlay: overlays/usart_uart_autobd_v4.yaml (sha1 d56dc114e61a)
++ * Overlay: overlays/usart_uart_autobd_v4.yaml (sha1 cba5bd26ee5d)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/clkctrl_avrea.h b/include/hw/mchp/gen/clkctrl_avrea.h
+index bae78a1..5a67f26 100644
+--- a/include/hw/mchp/gen/clkctrl_avrea.h
++++ b/include/hw/mchp/gen/clkctrl_avrea.h
+@@ -8,7 +8,7 @@
+  * AVR64EA48.atdf (AVR-Ex_DFP 2.8.189)
+  * Do not edit.
+  * Devices: AVR64EA48
+- * Overlay: overlays/clkctrl_avrea.yaml (sha1 72c0df2949e4)
++ * Overlay: overlays/clkctrl_avrea.yaml (sha1 581fb0476ee7)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/cpuint_int_8bit_v3.h b/include/hw/mchp/gen/cpuint_int_8bit_v3.h
+index a6fe357..97122a4 100644
+--- a/include/hw/mchp/gen/cpuint_int_8bit_v3.h
++++ b/include/hw/mchp/gen/cpuint_int_8bit_v3.h
+@@ -8,7 +8,7 @@
+  * AVR64EA48.atdf (AVR-Ex_DFP 2.8.189)
+  * Do not edit.
+  * Devices: AVR64EA48
+- * Overlay: overlays/cpuint_int_8bit_v3.yaml (sha1 ed2ae938cb45)
++ * Overlay: overlays/cpuint_int_8bit_v3.yaml (sha1 a53b0b8b3e30)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/dac_u2214.h b/include/hw/mchp/gen/dac_u2214.h
+index e2869e8..c9d473e 100644
+--- a/include/hw/mchp/gen/dac_u2214.h
++++ b/include/hw/mchp/gen/dac_u2214.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/dac_u2214.yaml (sha1 e9d330790b02)
++ * Overlay: overlays/dac_u2214.yaml (sha1 9e874c7da06b)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/dac_u2502.h b/include/hw/mchp/gen/dac_u2502.h
+index 8331182..83dade7 100644
+--- a/include/hw/mchp/gen/dac_u2502.h
++++ b/include/hw/mchp/gen/dac_u2502.h
+@@ -8,7 +8,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: ATSAME51J20A
+- * Overlay: overlays/dac_u2502.yaml (sha1 d618e8c69010)
++ * Overlay: overlays/dac_u2502.yaml (sha1 8071ff522023)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/divas_u2258.h b/include/hw/mchp/gen/divas_u2258.h
+index 0383faa..76c9345 100644
+--- a/include/hw/mchp/gen/divas_u2258.h
++++ b/include/hw/mchp/gen/divas_u2258.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/divas_u2258.yaml (sha1 deaff46dbc59)
++ * Overlay: overlays/divas_u2258.yaml (sha1 f94a0fbb507d)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/dmac_u2503.h b/include/hw/mchp/gen/dmac_u2503.h
+index 14bf918..023b4d5 100644
+--- a/include/hw/mchp/gen/dmac_u2503.h
++++ b/include/hw/mchp/gen/dmac_u2503.h
+@@ -8,7 +8,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: ATSAME51J20A
+- * Overlay: overlays/dmac_u2503.yaml (sha1 fed14b50059e)
++ * Overlay: overlays/dmac_u2503.yaml (sha1 1ecba457918b)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/dsu_u2209.h b/include/hw/mchp/gen/dsu_u2209.h
+index 0fbef9c..ba1c9d4 100644
+--- a/include/hw/mchp/gen/dsu_u2209.h
++++ b/include/hw/mchp/gen/dsu_u2209.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/dsu_u2209.yaml (sha1 f66d810cec81)
++ * Overlay: overlays/dsu_u2209.yaml (sha1 e59ee1e6af6e)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/eic_u2254.h b/include/hw/mchp/gen/eic_u2254.h
+index 65ce259..8f413bf 100644
+--- a/include/hw/mchp/gen/eic_u2254.h
++++ b/include/hw/mchp/gen/eic_u2254.h
+@@ -11,7 +11,7 @@
+  * Do not edit.
+  * External Interrupt Controller
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * Overlay: overlays/eic_u2254.yaml (sha1 2384c392b298)
++ * Overlay: overlays/eic_u2254.yaml (sha1 99522e3f5cb7)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/evsys_u2256.h b/include/hw/mchp/gen/evsys_u2256.h
+index 8c85546..feadea1 100644
+--- a/include/hw/mchp/gen/evsys_u2256.h
++++ b/include/hw/mchp/gen/evsys_u2256.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/evsys_u2256.yaml (sha1 b3018b9c50f0)
++ * Overlay: overlays/evsys_u2256.yaml (sha1 b18fca80fc0d)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/evsys_u2504.h b/include/hw/mchp/gen/evsys_u2504.h
+index 2cf0e2b..28ef2c2 100644
+--- a/include/hw/mchp/gen/evsys_u2504.h
++++ b/include/hw/mchp/gen/evsys_u2504.h
+@@ -8,7 +8,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: ATSAME51J20A
+- * Overlay: overlays/evsys_u2504.yaml (sha1 334ac021306f)
++ * Overlay: overlays/evsys_u2504.yaml (sha1 77032e4f5d89)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/gclk_u2122.h b/include/hw/mchp/gen/gclk_u2122.h
+index f586bc4..8e0c199 100644
+--- a/include/hw/mchp/gen/gclk_u2122.h
++++ b/include/hw/mchp/gen/gclk_u2122.h
+@@ -10,7 +10,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * Overlay: overlays/gclk_u2122.yaml (sha1 22a516c4e475)
++ * Overlay: overlays/gclk_u2122.yaml (sha1 167060307248)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/hmatrixb_i7638.h b/include/hw/mchp/gen/hmatrixb_i7638.h
+index 0bd4f82..6ac4cff 100644
+--- a/include/hw/mchp/gen/hmatrixb_i7638.h
++++ b/include/hw/mchp/gen/hmatrixb_i7638.h
+@@ -9,7 +9,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: PIC32CM1216MC00048, ATSAME51J20A
+- * Overlay: overlays/hmatrixb_i7638.yaml (sha1 9412038cf923)
++ * Overlay: overlays/hmatrixb_i7638.yaml (sha1 a4871b37e8aa)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/mclk_u2234.h b/include/hw/mchp/gen/mclk_u2234.h
+index 922222b..460aabd 100644
+--- a/include/hw/mchp/gen/mclk_u2234.h
++++ b/include/hw/mchp/gen/mclk_u2234.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/mclk_u2234.yaml (sha1 015beac9d741)
++ * Overlay: overlays/mclk_u2234.yaml (sha1 8273d87233d6)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/mclk_u2408.h b/include/hw/mchp/gen/mclk_u2408.h
+index 35923c3..63aa016 100644
+--- a/include/hw/mchp/gen/mclk_u2408.h
++++ b/include/hw/mchp/gen/mclk_u2408.h
+@@ -8,7 +8,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: ATSAME51J20A
+- * Overlay: overlays/mclk_u2408.yaml (sha1 caad2bb1ea66)
++ * Overlay: overlays/mclk_u2408.yaml (sha1 505575d7cd52)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/mtb_u2002.h b/include/hw/mchp/gen/mtb_u2002.h
+index 78b1c5e..9312bcb 100644
+--- a/include/hw/mchp/gen/mtb_u2002.h
++++ b/include/hw/mchp/gen/mtb_u2002.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/mtb_u2002.yaml (sha1 d4ffe9409e1b)
++ * Overlay: overlays/mtb_u2002.yaml (sha1 fde61c975aa1)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/nvmctrl_03929.h b/include/hw/mchp/gen/nvmctrl_03929.h
+index cbc3b7b..010a528 100644
+--- a/include/hw/mchp/gen/nvmctrl_03929.h
++++ b/include/hw/mchp/gen/nvmctrl_03929.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/nvmctrl_03929.yaml (sha1 e5ada1261364)
++ * Overlay: overlays/nvmctrl_03929.yaml (sha1 0d8cc6f98d4c)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/nvmctrl_nvm_ctrl_avr_v3.h b/include/hw/mchp/gen/nvmctrl_nvm_ctrl_avr_v3.h
+index 147eb31..adabb93 100644
+--- a/include/hw/mchp/gen/nvmctrl_nvm_ctrl_avr_v3.h
++++ b/include/hw/mchp/gen/nvmctrl_nvm_ctrl_avr_v3.h
+@@ -8,7 +8,7 @@
+  * AVR64EA48.atdf (AVR-Ex_DFP 2.8.189)
+  * Do not edit.
+  * Devices: AVR64EA48
+- * Overlay: overlays/nvmctrl_nvm_ctrl_avr_v3.yaml (sha1 734e83c3920a)
++ * Overlay: overlays/nvmctrl_nvm_ctrl_avr_v3.yaml (sha1 84bfe595c9a0)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/nvmctrl_u2409.h b/include/hw/mchp/gen/nvmctrl_u2409.h
+index c300c9a..f91943b 100644
+--- a/include/hw/mchp/gen/nvmctrl_u2409.h
++++ b/include/hw/mchp/gen/nvmctrl_u2409.h
+@@ -8,7 +8,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: ATSAME51J20A
+- * Overlay: overlays/nvmctrl_u2409.yaml (sha1 586a637e3871)
++ * Overlay: overlays/nvmctrl_u2409.yaml (sha1 fbbfaf7c1815)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/osc32kctrl_u2246.h b/include/hw/mchp/gen/osc32kctrl_u2246.h
+index 9c474c0..4c9ecd3 100644
+--- a/include/hw/mchp/gen/osc32kctrl_u2246.h
++++ b/include/hw/mchp/gen/osc32kctrl_u2246.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/osc32kctrl_u2246.yaml (sha1 2fe7ba73fddf)
++ * Overlay: overlays/osc32kctrl_u2246.yaml (sha1 bc3346024323)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/osc32kctrl_u2400.h b/include/hw/mchp/gen/osc32kctrl_u2400.h
+index d3f5711..872a739 100644
+--- a/include/hw/mchp/gen/osc32kctrl_u2400.h
++++ b/include/hw/mchp/gen/osc32kctrl_u2400.h
+@@ -8,7 +8,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: ATSAME51J20A
+- * Overlay: overlays/osc32kctrl_u2400.yaml (sha1 f46481a4ecd2)
++ * Overlay: overlays/osc32kctrl_u2400.yaml (sha1 5c8fee5e5cf3)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/oscctrl_u2119.h b/include/hw/mchp/gen/oscctrl_u2119.h
+index e62bb5c..2e04e97 100644
+--- a/include/hw/mchp/gen/oscctrl_u2119.h
++++ b/include/hw/mchp/gen/oscctrl_u2119.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/oscctrl_u2119.yaml (sha1 d96015c957e2)
++ * Overlay: overlays/oscctrl_u2119.yaml (sha1 994164312a9e)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/oscctrl_u2401.h b/include/hw/mchp/gen/oscctrl_u2401.h
+index 5be1ac3..875280e 100644
+--- a/include/hw/mchp/gen/oscctrl_u2401.h
++++ b/include/hw/mchp/gen/oscctrl_u2401.h
+@@ -8,7 +8,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: ATSAME51J20A
+- * Overlay: overlays/oscctrl_u2401.yaml (sha1 52d0b4a1c1b4)
++ * Overlay: overlays/oscctrl_u2401.yaml (sha1 a61152875d9c)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pac_u2120.h b/include/hw/mchp/gen/pac_u2120.h
+index acaa323..7d56827 100644
+--- a/include/hw/mchp/gen/pac_u2120.h
++++ b/include/hw/mchp/gen/pac_u2120.h
+@@ -10,7 +10,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * Overlay: overlays/pac_u2120.yaml (sha1 95071c417b7f)
++ * Overlay: overlays/pac_u2120.yaml (sha1 68320f4092c7)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h b/include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h
+index ee6cb8c..7d5eec1 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/adc_u2247.yaml (sha1 574aa9437c7e)
++ * Overlay: overlays/adc_u2247.yaml (sha1 ac169f8454b2)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h b/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h
+index 1de9d7d..b363533 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/dac_u2214.yaml (sha1 e9d330790b02)
++ * Overlay: overlays/dac_u2214.yaml (sha1 9e874c7da06b)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/divas_u2258.h b/include/hw/mchp/gen/pic32cm1216mc00048/divas_u2258.h
+index 284a1b2..beec8b1 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/divas_u2258.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/divas_u2258.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/divas_u2258.yaml (sha1 deaff46dbc59)
++ * Overlay: overlays/divas_u2258.yaml (sha1 f94a0fbb507d)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/dsu_u2209.h b/include/hw/mchp/gen/pic32cm1216mc00048/dsu_u2209.h
+index 652a33c..899e506 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/dsu_u2209.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/dsu_u2209.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/dsu_u2209.yaml (sha1 f66d810cec81)
++ * Overlay: overlays/dsu_u2209.yaml (sha1 e59ee1e6af6e)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h b/include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h
+index c80fa7a..64c3fcf 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/eic_u2254.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/eic_u2254.yaml (sha1 2384c392b298)
++ * Overlay: overlays/eic_u2254.yaml (sha1 99522e3f5cb7)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h b/include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h
+index eb24f4b..5d4c0a4 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/evsys_u2256.yaml (sha1 b3018b9c50f0)
++ * Overlay: overlays/evsys_u2256.yaml (sha1 b18fca80fc0d)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/gclk_u2122.h b/include/hw/mchp/gen/pic32cm1216mc00048/gclk_u2122.h
+index d7487e3..59b4261 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/gclk_u2122.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/gclk_u2122.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/gclk_u2122.yaml (sha1 22a516c4e475)
++ * Overlay: overlays/gclk_u2122.yaml (sha1 167060307248)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/hmatrixb_i7638.h b/include/hw/mchp/gen/pic32cm1216mc00048/hmatrixb_i7638.h
+index a55664b..569b723 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/hmatrixb_i7638.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/hmatrixb_i7638.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/hmatrixb_i7638.yaml (sha1 9412038cf923)
++ * Overlay: overlays/hmatrixb_i7638.yaml (sha1 a4871b37e8aa)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/mclk_u2234.h b/include/hw/mchp/gen/pic32cm1216mc00048/mclk_u2234.h
+index 8e022ed..939e319 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/mclk_u2234.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/mclk_u2234.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/mclk_u2234.yaml (sha1 015beac9d741)
++ * Overlay: overlays/mclk_u2234.yaml (sha1 8273d87233d6)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/mtb_u2002.h b/include/hw/mchp/gen/pic32cm1216mc00048/mtb_u2002.h
+index 4da8754..f2fbc23 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/mtb_u2002.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/mtb_u2002.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/mtb_u2002.yaml (sha1 d4ffe9409e1b)
++ * Overlay: overlays/mtb_u2002.yaml (sha1 fde61c975aa1)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/nvmctrl_03929.h b/include/hw/mchp/gen/pic32cm1216mc00048/nvmctrl_03929.h
+index 84820c6..752b249 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/nvmctrl_03929.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/nvmctrl_03929.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/nvmctrl_03929.yaml (sha1 e5ada1261364)
++ * Overlay: overlays/nvmctrl_03929.yaml (sha1 0d8cc6f98d4c)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/osc32kctrl_u2246.h b/include/hw/mchp/gen/pic32cm1216mc00048/osc32kctrl_u2246.h
+index 5c1ebcf..5b8a557 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/osc32kctrl_u2246.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/osc32kctrl_u2246.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/osc32kctrl_u2246.yaml (sha1 2fe7ba73fddf)
++ * Overlay: overlays/osc32kctrl_u2246.yaml (sha1 bc3346024323)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/oscctrl_u2119.h b/include/hw/mchp/gen/pic32cm1216mc00048/oscctrl_u2119.h
+index 9481e93..02e2983 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/oscctrl_u2119.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/oscctrl_u2119.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/oscctrl_u2119.yaml (sha1 d96015c957e2)
++ * Overlay: overlays/oscctrl_u2119.yaml (sha1 994164312a9e)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/pac_u2120.h b/include/hw/mchp/gen/pic32cm1216mc00048/pac_u2120.h
+index c607a8c..5086cc4 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/pac_u2120.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/pac_u2120.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/pac_u2120.yaml (sha1 95071c417b7f)
++ * Overlay: overlays/pac_u2120.yaml (sha1 68320f4092c7)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/pm_u2240.h b/include/hw/mchp/gen/pic32cm1216mc00048/pm_u2240.h
+index 6772142..b73b724 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/pm_u2240.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/pm_u2240.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/pm_u2240.yaml (sha1 b3697d8dd83b)
++ * Overlay: overlays/pm_u2240.yaml (sha1 ce2adf5457d2)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h b/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h
+index 04f295f..857b7f7 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/port_u2210.yaml (sha1 94f472d4b7da)
++ * Overlay: overlays/port_u2210.yaml (sha1 596776cf4ad4)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/rstc_u2239.h b/include/hw/mchp/gen/pic32cm1216mc00048/rstc_u2239.h
+index 684ac26..4718a86 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/rstc_u2239.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/rstc_u2239.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/rstc_u2239.yaml (sha1 cb039ed18da8)
++ * Overlay: overlays/rstc_u2239.yaml (sha1 c94cccd315a8)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h b/include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h
+index 3f0cd38..95beff8 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/rtc_u2250.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/rtc_u2250.yaml (sha1 d8044a2c6034)
++ * Overlay: overlays/rtc_u2250.yaml (sha1 4e81b3a6c97c)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/sdadc_u2260.h b/include/hw/mchp/gen/pic32cm1216mc00048/sdadc_u2260.h
+index fc5b13c..0aec9e3 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/sdadc_u2260.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/sdadc_u2260.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/sdadc_u2260.yaml (sha1 eb888aa560f0)
++ * Overlay: overlays/sdadc_u2260.yaml (sha1 576e91eded46)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h b/include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h
+index bda2005..fa83cd9 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/sercom_u2201.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/sercom_u2201.yaml (sha1 60e97667c7f4)
++ * Overlay: overlays/sercom_u2201.yaml (sha1 2328f1940f23)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/supc_u2117.h b/include/hw/mchp/gen/pic32cm1216mc00048/supc_u2117.h
+index 87c6303..ccdbc45 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/supc_u2117.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/supc_u2117.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/supc_u2117.yaml (sha1 bc37581564f3)
++ * Overlay: overlays/supc_u2117.yaml (sha1 ecb10b73de26)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/tc_u2249.h b/include/hw/mchp/gen/pic32cm1216mc00048/tc_u2249.h
+index c74912a..0f04be0 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/tc_u2249.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/tc_u2249.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/tc_u2249.yaml (sha1 6272e30c8705)
++ * Overlay: overlays/tc_u2249.yaml (sha1 41f9f7b2548b)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h b/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
+index caee929..bfa1cfe 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/tcc_u2213.yaml (sha1 6bda44899531)
++ * Overlay: overlays/tcc_u2213.yaml (sha1 7f219d23569c)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/wdt_u2251.h b/include/hw/mchp/gen/pic32cm1216mc00048/wdt_u2251.h
+index 51b76f0..b0b7822 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/wdt_u2251.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/wdt_u2251.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/wdt_u2251.yaml (sha1 ef6f6b236f04)
++ * Overlay: overlays/wdt_u2251.yaml (sha1 fce913b2a1aa)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h b/include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h
+index a1d3843..0abb8af 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/adc_u2247.yaml (sha1 574aa9437c7e)
++ * Overlay: overlays/adc_u2247.yaml (sha1 ac169f8454b2)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h b/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h
+index ee3ee5b..4226a5c 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/dac_u2214.yaml (sha1 e9d330790b02)
++ * Overlay: overlays/dac_u2214.yaml (sha1 9e874c7da06b)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/divas_u2258.h b/include/hw/mchp/gen/pic32cm5164jh01100/divas_u2258.h
+index 825fd30..8a58e1d 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/divas_u2258.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/divas_u2258.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/divas_u2258.yaml (sha1 deaff46dbc59)
++ * Overlay: overlays/divas_u2258.yaml (sha1 f94a0fbb507d)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/dsu_u2209.h b/include/hw/mchp/gen/pic32cm5164jh01100/dsu_u2209.h
+index d07dbfe..f63ab10 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/dsu_u2209.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/dsu_u2209.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/dsu_u2209.yaml (sha1 f66d810cec81)
++ * Overlay: overlays/dsu_u2209.yaml (sha1 e59ee1e6af6e)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h b/include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h
+index 1d05466..a0d9ab1 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/eic_u2254.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/eic_u2254.yaml (sha1 2384c392b298)
++ * Overlay: overlays/eic_u2254.yaml (sha1 99522e3f5cb7)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h b/include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h
+index 91fb01c..d735baf 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/evsys_u2256.yaml (sha1 b3018b9c50f0)
++ * Overlay: overlays/evsys_u2256.yaml (sha1 b18fca80fc0d)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/gclk_u2122.h b/include/hw/mchp/gen/pic32cm5164jh01100/gclk_u2122.h
+index 91563b6..d7305b2 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/gclk_u2122.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/gclk_u2122.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/gclk_u2122.yaml (sha1 22a516c4e475)
++ * Overlay: overlays/gclk_u2122.yaml (sha1 167060307248)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/mclk_u2234.h b/include/hw/mchp/gen/pic32cm5164jh01100/mclk_u2234.h
+index 9d7615f..e3f4465 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/mclk_u2234.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/mclk_u2234.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/mclk_u2234.yaml (sha1 015beac9d741)
++ * Overlay: overlays/mclk_u2234.yaml (sha1 8273d87233d6)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/mtb_u2002.h b/include/hw/mchp/gen/pic32cm5164jh01100/mtb_u2002.h
+index 71af23f..344a37c 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/mtb_u2002.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/mtb_u2002.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/mtb_u2002.yaml (sha1 d4ffe9409e1b)
++ * Overlay: overlays/mtb_u2002.yaml (sha1 fde61c975aa1)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/nvmctrl_03929.h b/include/hw/mchp/gen/pic32cm5164jh01100/nvmctrl_03929.h
+index c745b0f..a8db915 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/nvmctrl_03929.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/nvmctrl_03929.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/nvmctrl_03929.yaml (sha1 e5ada1261364)
++ * Overlay: overlays/nvmctrl_03929.yaml (sha1 0d8cc6f98d4c)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/osc32kctrl_u2246.h b/include/hw/mchp/gen/pic32cm5164jh01100/osc32kctrl_u2246.h
+index cb04b73..401dd81 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/osc32kctrl_u2246.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/osc32kctrl_u2246.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/osc32kctrl_u2246.yaml (sha1 2fe7ba73fddf)
++ * Overlay: overlays/osc32kctrl_u2246.yaml (sha1 bc3346024323)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/oscctrl_u2119.h b/include/hw/mchp/gen/pic32cm5164jh01100/oscctrl_u2119.h
+index e245406..0126a7a 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/oscctrl_u2119.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/oscctrl_u2119.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/oscctrl_u2119.yaml (sha1 d96015c957e2)
++ * Overlay: overlays/oscctrl_u2119.yaml (sha1 994164312a9e)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/pac_u2120.h b/include/hw/mchp/gen/pic32cm5164jh01100/pac_u2120.h
+index fa92396..e0f166b 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/pac_u2120.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/pac_u2120.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/pac_u2120.yaml (sha1 95071c417b7f)
++ * Overlay: overlays/pac_u2120.yaml (sha1 68320f4092c7)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/pm_u2240.h b/include/hw/mchp/gen/pic32cm5164jh01100/pm_u2240.h
+index 31b0035..49f1b57 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/pm_u2240.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/pm_u2240.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/pm_u2240.yaml (sha1 b3697d8dd83b)
++ * Overlay: overlays/pm_u2240.yaml (sha1 ce2adf5457d2)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h b/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h
+index a253bac..a4958d8 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/port_u2210.yaml (sha1 94f472d4b7da)
++ * Overlay: overlays/port_u2210.yaml (sha1 596776cf4ad4)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/rstc_u2239.h b/include/hw/mchp/gen/pic32cm5164jh01100/rstc_u2239.h
+index cec6f06..2862038 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/rstc_u2239.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/rstc_u2239.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/rstc_u2239.yaml (sha1 cb039ed18da8)
++ * Overlay: overlays/rstc_u2239.yaml (sha1 c94cccd315a8)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h b/include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h
+index 89cec33..ffe45fb 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/sercom_u2201.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/sercom_u2201.yaml (sha1 60e97667c7f4)
++ * Overlay: overlays/sercom_u2201.yaml (sha1 2328f1940f23)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/supc_u2117.h b/include/hw/mchp/gen/pic32cm5164jh01100/supc_u2117.h
+index df2a4a6..4a657f5 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/supc_u2117.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/supc_u2117.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/supc_u2117.yaml (sha1 bc37581564f3)
++ * Overlay: overlays/supc_u2117.yaml (sha1 ecb10b73de26)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/tc_u2249.h b/include/hw/mchp/gen/pic32cm5164jh01100/tc_u2249.h
+index e697459..f87e3db 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/tc_u2249.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/tc_u2249.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/tc_u2249.yaml (sha1 6272e30c8705)
++ * Overlay: overlays/tc_u2249.yaml (sha1 41f9f7b2548b)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h b/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
+index 9697ad1..d74c860 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/tcc_u2213.yaml (sha1 6bda44899531)
++ * Overlay: overlays/tcc_u2213.yaml (sha1 7f219d23569c)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/wdt_u2251.h b/include/hw/mchp/gen/pic32cm5164jh01100/wdt_u2251.h
+index 4264a16..9b3d8d9 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/wdt_u2251.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/wdt_u2251.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/wdt_u2251.yaml (sha1 ef6f6b236f04)
++ * Overlay: overlays/wdt_u2251.yaml (sha1 fce913b2a1aa)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pm_u2240.h b/include/hw/mchp/gen/pm_u2240.h
+index 4875b6a..a924a9e 100644
+--- a/include/hw/mchp/gen/pm_u2240.h
++++ b/include/hw/mchp/gen/pm_u2240.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/pm_u2240.yaml (sha1 b3697d8dd83b)
++ * Overlay: overlays/pm_u2240.yaml (sha1 ce2adf5457d2)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/port_u2210.h b/include/hw/mchp/gen/port_u2210.h
+index 850c881..6f45044 100644
+--- a/include/hw/mchp/gen/port_u2210.h
++++ b/include/hw/mchp/gen/port_u2210.h
+@@ -10,7 +10,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * Overlay: overlays/port_u2210.yaml (sha1 94f472d4b7da)
++ * Overlay: overlays/port_u2210.yaml (sha1 596776cf4ad4)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/qspi_u2008.h b/include/hw/mchp/gen/qspi_u2008.h
+index 6f9400b..9870a42 100644
+--- a/include/hw/mchp/gen/qspi_u2008.h
++++ b/include/hw/mchp/gen/qspi_u2008.h
+@@ -8,7 +8,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: ATSAME51J20A
+- * Overlay: overlays/qspi_u2008.yaml (sha1 5d086328a69e)
++ * Overlay: overlays/qspi_u2008.yaml (sha1 6f8fc73ded1c)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/rstc_u2239.h b/include/hw/mchp/gen/rstc_u2239.h
+index f029739..b86b813 100644
+--- a/include/hw/mchp/gen/rstc_u2239.h
++++ b/include/hw/mchp/gen/rstc_u2239.h
+@@ -10,7 +10,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * Overlay: overlays/rstc_u2239.yaml (sha1 cb039ed18da8)
++ * Overlay: overlays/rstc_u2239.yaml (sha1 c94cccd315a8)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/rtc_u2250.h b/include/hw/mchp/gen/rtc_u2250.h
+index a990116..b55dab5 100644
+--- a/include/hw/mchp/gen/rtc_u2250.h
++++ b/include/hw/mchp/gen/rtc_u2250.h
+@@ -9,7 +9,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: PIC32CM1216MC00048, ATSAME51J20A
+- * Overlay: overlays/rtc_u2250.yaml (sha1 d8044a2c6034)
++ * Overlay: overlays/rtc_u2250.yaml (sha1 4e81b3a6c97c)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/sdadc_u2260.h b/include/hw/mchp/gen/sdadc_u2260.h
+index 684d5c3..a47578d 100644
+--- a/include/hw/mchp/gen/sdadc_u2260.h
++++ b/include/hw/mchp/gen/sdadc_u2260.h
+@@ -8,7 +8,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM1216MC00048
+- * Overlay: overlays/sdadc_u2260.yaml (sha1 eb888aa560f0)
++ * Overlay: overlays/sdadc_u2260.yaml (sha1 576e91eded46)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/sercom_u2201.h b/include/hw/mchp/gen/sercom_u2201.h
+index d591be4..7ff5065 100644
+--- a/include/hw/mchp/gen/sercom_u2201.h
++++ b/include/hw/mchp/gen/sercom_u2201.h
+@@ -10,7 +10,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * Overlay: overlays/sercom_u2201.yaml (sha1 60e97667c7f4)
++ * Overlay: overlays/sercom_u2201.yaml (sha1 2328f1940f23)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/spi_spi_8bit_v2.h b/include/hw/mchp/gen/spi_spi_8bit_v2.h
+index c0b8bf7..ec534d9 100644
+--- a/include/hw/mchp/gen/spi_spi_8bit_v2.h
++++ b/include/hw/mchp/gen/spi_spi_8bit_v2.h
+@@ -8,7 +8,7 @@
+  * AVR64EA48.atdf (AVR-Ex_DFP 2.8.189)
+  * Do not edit.
+  * Devices: AVR64EA48
+- * Overlay: overlays/spi_spi_8bit_v2.yaml (sha1 ccde426982ec)
++ * Overlay: overlays/spi_spi_8bit_v2.yaml (sha1 d4d1cc1635e1)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/supc_u2117.h b/include/hw/mchp/gen/supc_u2117.h
+index 28cdfeb..64a4ca0 100644
+--- a/include/hw/mchp/gen/supc_u2117.h
++++ b/include/hw/mchp/gen/supc_u2117.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/supc_u2117.yaml (sha1 bc37581564f3)
++ * Overlay: overlays/supc_u2117.yaml (sha1 ecb10b73de26)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/tc_u2249.h b/include/hw/mchp/gen/tc_u2249.h
+index 3791a15..4f79cb9 100644
+--- a/include/hw/mchp/gen/tc_u2249.h
++++ b/include/hw/mchp/gen/tc_u2249.h
+@@ -10,7 +10,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * Overlay: overlays/tc_u2249.yaml (sha1 6272e30c8705)
++ * Overlay: overlays/tc_u2249.yaml (sha1 41f9f7b2548b)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/tcb_tmr_16b_capture_v1.h b/include/hw/mchp/gen/tcb_tmr_16b_capture_v1.h
+index 5e0a1d4..fc9306a 100644
+--- a/include/hw/mchp/gen/tcb_tmr_16b_capture_v1.h
++++ b/include/hw/mchp/gen/tcb_tmr_16b_capture_v1.h
+@@ -8,7 +8,7 @@
+  * AVR64EA48.atdf (AVR-Ex_DFP 2.8.189)
+  * Do not edit.
+  * Devices: AVR64EA48
+- * Overlay: overlays/tcb_tmr_16b_capture_v1.yaml (sha1 e9cfe5df5342)
++ * Overlay: overlays/tcb_tmr_16b_capture_v1.yaml (sha1 adfae107e46f)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/tcc_u2213.h b/include/hw/mchp/gen/tcc_u2213.h
+index 4de7f97..c366549 100644
+--- a/include/hw/mchp/gen/tcc_u2213.h
++++ b/include/hw/mchp/gen/tcc_u2213.h
+@@ -11,7 +11,7 @@
+  * Do not edit.
+  * Timer Counter for Control Applications
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * Overlay: overlays/tcc_u2213.yaml (sha1 6bda44899531)
++ * Overlay: overlays/tcc_u2213.yaml (sha1 7f219d23569c)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/trng_u2242.h b/include/hw/mchp/gen/trng_u2242.h
+index 1ab97d1..75a0269 100644
+--- a/include/hw/mchp/gen/trng_u2242.h
++++ b/include/hw/mchp/gen/trng_u2242.h
+@@ -8,7 +8,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: ATSAME51J20A
+- * Overlay: overlays/trng_u2242.yaml (sha1 e8f6c30a4b5f)
++ * Overlay: overlays/trng_u2242.yaml (sha1 cc6b290b0389)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h b/include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h
+index 2764e5e..cdf14f0 100644
+--- a/include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h
++++ b/include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h
+@@ -8,7 +8,7 @@
+  * AVR64EA48.atdf (AVR-Ex_DFP 2.8.189)
+  * Do not edit.
+  * Devices: AVR64EA48
+- * Overlay: overlays/twi_i2c_8bit_avr_v3.yaml (sha1 fb823cddb035)
++ * Overlay: overlays/twi_i2c_8bit_avr_v3.yaml (sha1 b527ba06c281)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/usart_uart_autobd_v4.h b/include/hw/mchp/gen/usart_uart_autobd_v4.h
+index 7e6c061..25ab400 100644
+--- a/include/hw/mchp/gen/usart_uart_autobd_v4.h
++++ b/include/hw/mchp/gen/usart_uart_autobd_v4.h
+@@ -9,7 +9,7 @@
+  * Do not edit.
+  * Universal Synchronous and Asynchronous Receiver and Transmitter
+  * Devices: AVR64EA48
+- * Overlay: overlays/usart_uart_autobd_v4.yaml (sha1 d56dc114e61a)
++ * Overlay: overlays/usart_uart_autobd_v4.yaml (sha1 cba5bd26ee5d)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/usb_u2222.h b/include/hw/mchp/gen/usb_u2222.h
+index 71b7eb9..896ad4b 100644
+--- a/include/hw/mchp/gen/usb_u2222.h
++++ b/include/hw/mchp/gen/usb_u2222.h
+@@ -8,7 +8,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: ATSAME51J20A
+- * Overlay: overlays/usb_u2222.yaml (sha1 cbf60551a101)
++ * Overlay: overlays/usb_u2222.yaml (sha1 ecd7a17b603b)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/wdt_u2251.h b/include/hw/mchp/gen/wdt_u2251.h
+index 8c94d45..cdc5a1c 100644
+--- a/include/hw/mchp/gen/wdt_u2251.h
++++ b/include/hw/mchp/gen/wdt_u2251.h
+@@ -10,7 +10,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * Overlay: overlays/wdt_u2251.yaml (sha1 ef6f6b236f04)
++ * Overlay: overlays/wdt_u2251.yaml (sha1 fce913b2a1aa)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+-- 
+2.53.0.windows.2
+

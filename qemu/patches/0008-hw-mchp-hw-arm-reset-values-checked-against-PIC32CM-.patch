@@ -1,8 +1,8 @@
-From 873fb867451ed0b36adb9090de845f46e28b3837 Mon Sep 17 00:00:00 2001
+From 03ace3644ebfa031a9d4b4744c80b82658967fb2 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Tue, 13 Oct 2026 17:36:34 -0700
-Subject: [PATCH] hw/mchp, hw/arm: reset values checked against PIC32CM MC00
- silicon
+Subject: [PATCH 08/57] hw/mchp, hw/arm: reset values checked against PIC32CM
+ MC00 silicon
 
 Regenerated after a golden reset dump of a PIC32CM1216MC00048 rev A1
 (EV15N46A), every register read after reset-and-halt and compared with
@@ -49,7 +49,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  23 files changed, 99 insertions(+), 64 deletions(-)
 
 diff --git a/hw/arm/pic32cm1216mc00048_device.h b/hw/arm/pic32cm1216mc00048_device.h
-index eee46af..2cd1d78 100644
+index 3fc4986..a64b194 100644
 --- a/hw/arm/pic32cm1216mc00048_device.h
 +++ b/hw/arm/pic32cm1216mc00048_device.h
 @@ -6,7 +6,7 @@
@@ -62,7 +62,7 @@ index eee46af..2cd1d78 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/arm/pic32cm1216mc00048_gen.h b/include/hw/arm/pic32cm1216mc00048_gen.h
-index 7fdd597..818991b 100644
+index 40f1670..0a5a454 100644
 --- a/include/hw/arm/pic32cm1216mc00048_gen.h
 +++ b/include/hw/arm/pic32cm1216mc00048_gen.h
 @@ -375,6 +375,8 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
@@ -75,7 +75,7 @@ index 7fdd597..818991b 100644
      {
          .name = "EVSYS", .module = "EVSYS", .ip_id = "U2256",
 diff --git a/include/hw/mchp/gen/dsu_u2209.h b/include/hw/mchp/gen/dsu_u2209.h
-index ddf54d4..ad3f815 100644
+index f60bee0..0fbef9c 100644
 --- a/include/hw/mchp/gen/dsu_u2209.h
 +++ b/include/hw/mchp/gen/dsu_u2209.h
 @@ -9,7 +9,7 @@
@@ -88,7 +88,7 @@ index ddf54d4..ad3f815 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/evsys_u2256.h b/include/hw/mchp/gen/evsys_u2256.h
-index 86ea862..6161882 100644
+index 5797ebe..3c94e7c 100644
 --- a/include/hw/mchp/gen/evsys_u2256.h
 +++ b/include/hw/mchp/gen/evsys_u2256.h
 @@ -9,7 +9,7 @@
@@ -101,7 +101,7 @@ index 86ea862..6161882 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/hmatrixb_i7638.h b/include/hw/mchp/gen/hmatrixb_i7638.h
-index 655bcc1..0b40101 100644
+index cc7cd50..a9cb44b 100644
 --- a/include/hw/mchp/gen/hmatrixb_i7638.h
 +++ b/include/hw/mchp/gen/hmatrixb_i7638.h
 @@ -8,7 +8,7 @@
@@ -114,7 +114,7 @@ index 655bcc1..0b40101 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/mtb_u2002.h b/include/hw/mchp/gen/mtb_u2002.h
-index 9a5a64c..e21028b 100644
+index b78ec37..78b1c5e 100644
 --- a/include/hw/mchp/gen/mtb_u2002.h
 +++ b/include/hw/mchp/gen/mtb_u2002.h
 @@ -9,7 +9,7 @@
@@ -127,7 +127,7 @@ index 9a5a64c..e21028b 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/oscctrl_u2119.h b/include/hw/mchp/gen/oscctrl_u2119.h
-index 911f3d8..07d4419 100644
+index 73d5e1d..e62bb5c 100644
 --- a/include/hw/mchp/gen/oscctrl_u2119.h
 +++ b/include/hw/mchp/gen/oscctrl_u2119.h
 @@ -9,7 +9,7 @@
@@ -140,7 +140,7 @@ index 911f3d8..07d4419 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/dsu_u2209.h b/include/hw/mchp/gen/pic32cm1216mc00048/dsu_u2209.h
-index bf605c8..9a00370 100644
+index de1c627..652a33c 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/dsu_u2209.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/dsu_u2209.h
 @@ -6,7 +6,7 @@
@@ -186,7 +186,7 @@ index bf605c8..9a00370 100644
      },
      {
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h b/include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h
-index 6340170..53ec797 100644
+index 43bc229..da75ecb 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/evsys_u2256.h
 @@ -6,7 +6,7 @@
@@ -208,7 +208,7 @@ index 6340170..53ec797 100644
      },
      {
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/hmatrixb_i7638.h b/include/hw/mchp/gen/pic32cm1216mc00048/hmatrixb_i7638.h
-index f7d1d40..6a7372c 100644
+index 8d005c4..017b044 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/hmatrixb_i7638.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/hmatrixb_i7638.h
 @@ -6,7 +6,7 @@
@@ -293,7 +293,7 @@ index f7d1d40..6a7372c 100644
 +
  #endif /* HW_MCHP_GEN_PIC32CM1216MC00048_HMATRIXB_I7638_H */
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/mclk_u2234.h b/include/hw/mchp/gen/pic32cm1216mc00048/mclk_u2234.h
-index 0f4112b..2623cac 100644
+index 3cb0aee..8e022ed 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/mclk_u2234.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/mclk_u2234.h
 @@ -42,7 +42,7 @@ static const MchpRegInfo pic32cm1216mc00048_mclk_regs[] = {
@@ -306,7 +306,7 @@ index 0f4112b..2623cac 100644
      },
      {
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/mtb_u2002.h b/include/hw/mchp/gen/pic32cm1216mc00048/mtb_u2002.h
-index 572c4b0..5166937 100644
+index 5f57e8a..4da8754 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/mtb_u2002.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/mtb_u2002.h
 @@ -6,7 +6,7 @@
@@ -406,7 +406,7 @@ index 572c4b0..5166937 100644
      },
  };
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/osc32kctrl_u2246.h b/include/hw/mchp/gen/pic32cm1216mc00048/osc32kctrl_u2246.h
-index 834ac29..92afdbf 100644
+index c9b73fc..5c1ebcf 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/osc32kctrl_u2246.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/osc32kctrl_u2246.h
 @@ -67,7 +67,7 @@ static const MchpRegInfo pic32cm1216mc00048_osc32kctrl_regs[] = {
@@ -419,7 +419,7 @@ index 834ac29..92afdbf 100644
      },
  };
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/oscctrl_u2119.h b/include/hw/mchp/gen/pic32cm1216mc00048/oscctrl_u2119.h
-index f0cb034..4120471 100644
+index b07b369..9481e93 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/oscctrl_u2119.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/oscctrl_u2119.h
 @@ -6,7 +6,7 @@
@@ -450,7 +450,7 @@ index f0cb034..4120471 100644
      },
  };
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/pac_u2120.h b/include/hw/mchp/gen/pic32cm1216mc00048/pac_u2120.h
-index ce89aa9..79893a9 100644
+index f493568..a54a06f 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/pac_u2120.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/pac_u2120.h
 @@ -71,7 +71,7 @@ static const MchpRegInfo pic32cm1216mc00048_pac_regs[] = {
@@ -463,7 +463,7 @@ index ce89aa9..79893a9 100644
      },
  };
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h b/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h
-index 8317815..e01b025 100644
+index 186b0b0..db02b66 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/port_u2210.h
 @@ -6,7 +6,7 @@
@@ -486,7 +486,7 @@ index 8317815..e01b025 100644
  
  #endif /* HW_MCHP_GEN_PIC32CM1216MC00048_PORT_U2210_H */
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/dsu_u2209.h b/include/hw/mchp/gen/pic32cm5164jh01100/dsu_u2209.h
-index 4f113b4..c697459 100644
+index 98d1802..d07dbfe 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/dsu_u2209.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/dsu_u2209.h
 @@ -6,7 +6,7 @@
@@ -514,7 +514,7 @@ index 4f113b4..c697459 100644
      },
      {
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h b/include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h
-index 37fe94d..fb6aeb4 100644
+index b916e75..8a1e0c9 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/evsys_u2256.h
 @@ -6,7 +6,7 @@
@@ -536,7 +536,7 @@ index 37fe94d..fb6aeb4 100644
      },
      {
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/mtb_u2002.h b/include/hw/mchp/gen/pic32cm5164jh01100/mtb_u2002.h
-index 9f537b8..90c98e3 100644
+index d6713a5..71af23f 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/mtb_u2002.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/mtb_u2002.h
 @@ -6,7 +6,7 @@
@@ -636,7 +636,7 @@ index 9f537b8..90c98e3 100644
      },
  };
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/oscctrl_u2119.h b/include/hw/mchp/gen/pic32cm5164jh01100/oscctrl_u2119.h
-index e8bd5ac..e984c86 100644
+index db3eae7..e245406 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/oscctrl_u2119.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/oscctrl_u2119.h
 @@ -6,7 +6,7 @@
@@ -658,7 +658,7 @@ index e8bd5ac..e984c86 100644
      },
      {
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h b/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h
-index b7d915f..345002c 100644
+index 25e3280..cb66581 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/port_u2210.h
 @@ -6,7 +6,7 @@
@@ -681,7 +681,7 @@ index b7d915f..345002c 100644
  
  #endif /* HW_MCHP_GEN_PIC32CM5164JH01100_PORT_U2210_H */
 diff --git a/include/hw/mchp/gen/port_u2210.h b/include/hw/mchp/gen/port_u2210.h
-index 8013259..0b66c8d 100644
+index 7535668..ce1bc30 100644
 --- a/include/hw/mchp/gen/port_u2210.h
 +++ b/include/hw/mchp/gen/port_u2210.h
 @@ -9,7 +9,7 @@
@@ -694,7 +694,7 @@ index 8013259..0b66c8d 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/tests/qtest/pic32cm-mc00-test.c b/tests/qtest/pic32cm-mc00-test.c
-index 0916fa5..ebf94dd 100644
+index 8fc722e..5081c32 100644
 --- a/tests/qtest/pic32cm-mc00-test.c
 +++ b/tests/qtest/pic32cm-mc00-test.c
 @@ -89,9 +89,9 @@ static void test_reset_values(void)

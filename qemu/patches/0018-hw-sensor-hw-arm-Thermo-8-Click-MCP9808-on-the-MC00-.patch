@@ -1,8 +1,8 @@
-From 9fc6318ce745391cdd20d6f82a15c91fa0e1c9fd Mon Sep 17 00:00:00 2001
+From b42e2eb8f02a747e24fac01c966a987258538553 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 01:08:42 -0700
-Subject: [PATCH] hw/sensor, hw/arm: Thermo 8 Click (MCP9808) on the MC00 board
- headers
+Subject: [PATCH 18/57] hw/sensor, hw/arm: Thermo 8 Click (MCP9808) on the MC00
+ board headers
 
 The PIC32CM MC00 Curiosity Pro takes MikroElektronika Click boards on
 EXT1/EXT2. Machine options ext1=<click> and ext2=<click> plug one in:
@@ -43,7 +43,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 tests/qtest/pic32cm-click-test.c
 
 diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
-index 2e21703..8252bdc 100644
+index fed25d9..153ecb2 100644
 --- a/docs/system/arm/pic32cm-jh01-cpro.rst
 +++ b/docs/system/arm/pic32cm-jh01-cpro.rst
 @@ -71,8 +71,9 @@ Supported devices
@@ -59,7 +59,7 @@ index 2e21703..8252bdc 100644
    it (pins muxed to function A) and NMI, synchronous edges only with the
    EIC clock, event outputs.
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index 2c4e6ed..9fbe73d 100644
+index 12f8f83..e2fe7cb 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -41,6 +41,28 @@ shows it. User switch SW0 (PA25, to ground, no external pull-up) is the
@@ -104,7 +104,7 @@ index ebad213..4cf9306 100644
      select MCHP_REGFILE
      select MCHP_SERCOM
 diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
-index 86c4177..4fed807 100644
+index 6442278..b470db2 100644
 --- a/hw/arm/pic32cm_mc00_cpro.c
 +++ b/hw/arm/pic32cm_mc00_cpro.c
 @@ -8,11 +8,18 @@
@@ -283,7 +283,7 @@ index 86c4177..4fed807 100644
  
  static const TypeInfo pic32cm_mc00_cpro_types[] = {
 diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
-index 0aeb026..ad6b5fd 100644
+index 32d143b..c589e83 100644
 --- a/hw/gpio/mchp_port.c
 +++ b/hw/gpio/mchp_port.c
 @@ -517,6 +517,15 @@ static void mchp_port_get_out_mask(Object *obj, Visitor *v, const char *name,
@@ -321,7 +321,7 @@ index 0aeb026..ad6b5fd 100644
  }
 diff --git a/hw/sensor/mchp_mcp9808.c b/hw/sensor/mchp_mcp9808.c
 new file mode 100644
-index 0000000..1d8bd40
+index 0000000..ba360c8
 --- /dev/null
 +++ b/hw/sensor/mchp_mcp9808.c
 @@ -0,0 +1,356 @@
@@ -703,7 +703,7 @@ index a3fe54f..210488b 100644
 +mchp_mcp9808_write(unsigned reg, uint16_t val) "reg %u = 0x%04x"
 +mchp_mcp9808_temperature(int64_t mdeg) "%" PRId64 " mC"
 diff --git a/include/hw/gpio/mchp_port.h b/include/hw/gpio/mchp_port.h
-index efc8689..6ae18ef 100644
+index ae67ba0..df1a8e8 100644
 --- a/include/hw/gpio/mchp_port.h
 +++ b/include/hw/gpio/mchp_port.h
 @@ -37,6 +37,8 @@
@@ -717,7 +717,7 @@ index efc8689..6ae18ef 100644
   *                  and driven-low time in ns (duty = difference of totals)
 diff --git a/include/hw/sensor/mchp_mcp9808.h b/include/hw/sensor/mchp_mcp9808.h
 new file mode 100644
-index 0000000..07ad056
+index 0000000..ba88db6
 --- /dev/null
 +++ b/include/hw/sensor/mchp_mcp9808.h
 @@ -0,0 +1,21 @@
@@ -757,7 +757,7 @@ index 95a96ca..074bb52 100644
    (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
 diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
 new file mode 100644
-index 0000000..5c95e87
+index 0000000..a91294b
 --- /dev/null
 +++ b/tests/qtest/pic32cm-click-test.c
 @@ -0,0 +1,266 @@

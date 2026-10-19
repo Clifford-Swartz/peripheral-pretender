@@ -1,8 +1,8 @@
-From 8dbcd6185fb6ab4be5f15ac4365cf41f0cc44ae7 Mon Sep 17 00:00:00 2001
+From 909f06e37d9097c4f4d6d1c7f0ebc17992349272 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Thu, 15 Oct 2026 18:46:35 -0700
-Subject: [PATCH] hw/misc: the RN4871 Click; RNBD451 model follows the user's
- guide closer
+Subject: [PATCH 47/57] hw/misc: the RN4871 Click; RNBD451 model follows the
+ user's guide closer
 
 chardev-rn4871 is the RNBD451 model with the RN4871's version string,
 name and services. Both now count "$$$" only for '$' close together
@@ -21,7 +21,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  5 files changed, 142 insertions(+), 4 deletions(-)
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index ae546fc..017a462 100644
+index 2940334..1ebe33a 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -165,6 +165,16 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
@@ -54,7 +54,7 @@ index 1b25bdf..a069ba9 100644
  config MCHP_PFSOC_IOSCB
      bool
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index 745f738..a17209a 100644
+index 3b483fd..55f59e9 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -23,6 +23,7 @@
@@ -79,7 +79,7 @@ index 745f738..a17209a 100644
        "INT), ring of 16 green LEDs on two 74HC595 (LATCH on CS, MR# on RST)",
        TYPE_CLICK_ROTARY, CLICK_SPI, 0, 2,
 diff --git a/hw/misc/rnbd451.c b/hw/misc/rnbd451.c
-index 3b6ad42..badc298 100644
+index f367155..2e22db9 100644
 --- a/hw/misc/rnbd451.c
 +++ b/hw/misc/rnbd451.c
 @@ -22,8 +22,22 @@
@@ -290,7 +290,7 @@ index 3b6ad42..badc298 100644
  
  DEFINE_TYPES(rnbd_types)
 diff --git a/include/hw/misc/rnbd451.h b/include/hw/misc/rnbd451.h
-index 8fc2085..2a4d5a3 100644
+index 31f1739..1a20e92 100644
 --- a/include/hw/misc/rnbd451.h
 +++ b/include/hw/misc/rnbd451.h
 @@ -16,6 +16,7 @@

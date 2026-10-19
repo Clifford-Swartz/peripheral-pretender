@@ -1,8 +1,8 @@
-From e64832354652ba0e09eed73629e26a7ba655470b Mon Sep 17 00:00:00 2001
+From 7c0b31411c8691461cee2dee89c76e346fbb5670 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Thu, 15 Oct 2026 18:29:13 -0700
-Subject: [PATCH] hw/ssi: the Rotary G/R/B/Y Click; mikroBUS AN as a digital
- pin
+Subject: [PATCH 46/57] hw/ssi: the Rotary G/R/B/Y Click; mikroBUS AN as a
+ digital pin
 
 click-rotary is the Rotary Click's two 74HC595 (the LED ring) with its
 EC12D encoder and push switch: quadrature on PWM and AN, A = B at each
@@ -23,7 +23,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  8 files changed, 283 insertions(+), 1 deletion(-)
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index 4a544d6..ae546fc 100644
+index e656130..2940334 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -155,6 +155,16 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
@@ -44,7 +44,7 @@ index 4a544d6..ae546fc 100644
  own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
  
 diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
-index 8be098e..818bca3 100644
+index 9361f0f..658387e 100644
 --- a/hw/arm/pic32cm_mc00_cpro.c
 +++ b/hw/arm/pic32cm_mc00_cpro.c
 @@ -177,6 +177,7 @@ static void pic32cm_mc00_cpro_add_clicks(Pic32cmMc00CproState *s)
@@ -56,7 +56,7 @@ index 8be098e..818bca3 100644
          memcpy(sockets[n].pins, pic32cm_mc00_cpro_ext_pins[n],
                 sizeof(sockets[n].pins));
 diff --git a/hw/avr/avr64ea48_cnano.c b/hw/avr/avr64ea48_cnano.c
-index d45f483..ce7f054 100644
+index c72107a..3415afc 100644
 --- a/hw/avr/avr64ea48_cnano.c
 +++ b/hw/avr/avr64ea48_cnano.c
 @@ -157,6 +157,7 @@ static void avr64ea48_cnano_add_clicks(Avr64ea48CnanoState *s)
@@ -68,7 +68,7 @@ index d45f483..ce7f054 100644
          memcpy(sockets[n].pins, avr64ea48_cnano_mb_pins[n],
                 sizeof(sockets[n].pins));
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index 659e53f..745f738 100644
+index 7c8f202..3b483fd 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -59,7 +59,7 @@ typedef struct ClickInfo {
@@ -151,7 +151,7 @@ index 659e53f..745f738 100644
          error_report("%s: %s needs %s, which this board does not wire",
                       sock->name, c->name, names[role]);
 diff --git a/hw/ssi/ti_74hc595.c b/hw/ssi/ti_74hc595.c
-index d70c086..7c66984 100644
+index 046121e..fee765e 100644
 --- a/hw/ssi/ti_74hc595.c
 +++ b/hw/ssi/ti_74hc595.c
 @@ -16,6 +16,18 @@
@@ -355,7 +355,7 @@ index d70c086..7c66984 100644
  
  DEFINE_TYPES(hc595_types)
 diff --git a/include/hw/misc/mikrobus.h b/include/hw/misc/mikrobus.h
-index e67db14..de8ee05 100644
+index a72794e..db5ccd7 100644
 --- a/include/hw/misc/mikrobus.h
 +++ b/include/hw/misc/mikrobus.h
 @@ -30,6 +30,8 @@ enum { MIKROBUS_RST, MIKROBUS_PWM, MIKROBUS_INT, MIKROBUS_CS,
@@ -377,7 +377,7 @@ index e67db14..de8ee05 100644
  } MikrobusSocket;
  
 diff --git a/include/hw/ssi/ti_74hc595.h b/include/hw/ssi/ti_74hc595.h
-index 454856e..783e5e4 100644
+index cd998dd..62da891 100644
 --- a/include/hw/ssi/ti_74hc595.h
 +++ b/include/hw/ssi/ti_74hc595.h
 @@ -17,4 +17,10 @@
@@ -392,7 +392,7 @@ index 454856e..783e5e4 100644
 +
  #endif /* HW_SSI_TI_74HC595_H */
 diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
-index 81610de..0b0eb01 100644
+index 80490b8..ca83270 100644
 --- a/tests/qtest/pic32cm-click-test.c
 +++ b/tests/qtest/pic32cm-click-test.c
 @@ -957,6 +957,37 @@ static void test_8x8_variants(void)

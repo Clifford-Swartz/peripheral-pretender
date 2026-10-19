@@ -1,7 +1,7 @@
-From 655dae14cde960b97014c53636f2a58a4d53ad7d Mon Sep 17 00:00:00 2001
+From 44eb108709bb22cd9f9ec6732f3d0ac6575413fe Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Thu, 15 Oct 2026 22:45:18 -0700
-Subject: [PATCH] hw/misc: the DC Motor Click, DRV8833 behind a 74HC4053
+Subject: [PATCH 55/57] hw/misc: the DC Motor Click, DRV8833 behind a 74HC4053
 
 click-dcmotor watches PWM, SELECT1 (RST), SELECT2 (CS) and nSLEEP (AN as
 a digital pin): the PWM duty is timed on the virtual clock, the
@@ -23,7 +23,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/misc/click_dcmotor.h
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index 94ee56a..3074309 100644
+index c82952d..5848574 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -226,6 +226,17 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
@@ -46,7 +46,7 @@ index 94ee56a..3074309 100644
    (MI9639BO-W) on SPI (jumpers J1-J3 on SPI), CS# on CS, D/C# on PWM, RES#
 diff --git a/hw/misc/click_dcmotor.c b/hw/misc/click_dcmotor.c
 new file mode 100644
-index 0000000..a171c5b
+index 0000000..f32c479
 --- /dev/null
 +++ b/hw/misc/click_dcmotor.c
 @@ -0,0 +1,362 @@
@@ -425,7 +425,7 @@ index 2b57248..3a58ad4 100644
  system_ss.add(when: 'CONFIG_WS2812', if_true: files('ws2812.c'))
  system_ss.add(when: 'CONFIG_RNBD451', if_true: files('rnbd451.c'))
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index b4e1827..6c1685e 100644
+index 51c9f1c..a64b7e6 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -20,6 +20,7 @@
@@ -456,7 +456,7 @@ index b4e1827..6c1685e 100644
        TYPE_CHARDEV_QUECTEL_L86, CLICK_UART, 0, 0,
 diff --git a/include/hw/misc/click_dcmotor.h b/include/hw/misc/click_dcmotor.h
 new file mode 100644
-index 0000000..ee6bebf
+index 0000000..3fa41c1
 --- /dev/null
 +++ b/include/hw/misc/click_dcmotor.h
 @@ -0,0 +1,28 @@
@@ -489,7 +489,7 @@ index 0000000..ee6bebf
 +
 +#endif /* HW_MISC_CLICK_DCMOTOR_H */
 diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
-index 77f3624..ad3af0d 100644
+index 8d5af59..c053fc3 100644
 --- a/tests/qtest/pic32cm-click-test.c
 +++ b/tests/qtest/pic32cm-click-test.c
 @@ -1236,6 +1236,62 @@ static void test_fan(void)

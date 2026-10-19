@@ -1,8 +1,8 @@
-From 19d42d669cfd405072d65101ad8e6b70f2df2fb4 Mon Sep 17 00:00:00 2001
+From 166e84ff1f083021fa5200aba224f27ae7303c5e Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 04:04:22 -0700
-Subject: [PATCH] hw/arm, hw/ssi, hw/misc: Button G, 7seg and Relay Clicks on
- the MC00 board
+Subject: [PATCH 20/57] hw/arm, hw/ssi, hw/misc: Button G, 7seg and Relay
+ Clicks on the MC00 board
 
 The MC00 board's Click table now describes a Click by mikroBUS signal
 (RST, PWM, INT, CS on the header's pins 5/7/9/15 through a mikroBUS
@@ -37,7 +37,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/ssi/ti_74hc595.h
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index 512f1ce..8004e3b 100644
+index a6fa7ca..14d53bc 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -45,10 +45,13 @@ Click boards
@@ -84,7 +84,7 @@ index 512f1ce..8004e3b 100644
  
    $ qemu-system-arm -M pic32cm-mc00-cpro,ext1=thermo8 -kernel thermo.elf       -display none -serial stdio
 diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
-index 44cfebe..0192fea 100644
+index e9d8ff8..ea4ad8d 100644
 --- a/hw/arm/pic32cm_mc00_cpro.c
 +++ b/hw/arm/pic32cm_mc00_cpro.c
 @@ -9,10 +9,10 @@
@@ -359,7 +359,7 @@ index 44cfebe..0192fea 100644
  static const TypeInfo pic32cm_mc00_cpro_types[] = {
 diff --git a/hw/misc/click_button.c b/hw/misc/click_button.c
 new file mode 100644
-index 0000000..de69347
+index 0000000..0fc2146
 --- /dev/null
 +++ b/hw/misc/click_button.c
 @@ -0,0 +1,99 @@
@@ -485,7 +485,7 @@ index 6afb1ea..879cc93 100644
 +system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('ti_74hc595.c'))
 diff --git a/hw/ssi/ti_74hc595.c b/hw/ssi/ti_74hc595.c
 new file mode 100644
-index 0000000..d70c086
+index 0000000..046121e
 --- /dev/null
 +++ b/hw/ssi/ti_74hc595.c
 @@ -0,0 +1,165 @@
@@ -668,7 +668,7 @@ index b9d8648..7a78dfc 100644
 +ti_74hc595_latch(uint32_t outputs) "outputs 0x%08x"
 diff --git a/include/hw/misc/click_button.h b/include/hw/misc/click_button.h
 new file mode 100644
-index 0000000..99e36b3
+index 0000000..0b5ebef
 --- /dev/null
 +++ b/include/hw/misc/click_button.h
 @@ -0,0 +1,19 @@
@@ -693,7 +693,7 @@ index 0000000..99e36b3
 +#endif /* HW_MISC_CLICK_BUTTON_H */
 diff --git a/include/hw/ssi/ti_74hc595.h b/include/hw/ssi/ti_74hc595.h
 new file mode 100644
-index 0000000..454856e
+index 0000000..cd998dd
 --- /dev/null
 +++ b/include/hw/ssi/ti_74hc595.h
 @@ -0,0 +1,20 @@
@@ -718,7 +718,7 @@ index 0000000..454856e
 +
 +#endif /* HW_SSI_TI_74HC595_H */
 diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
-index 19526f0..6d722b9 100644
+index 58b1586..0e904fa 100644
 --- a/tests/qtest/pic32cm-click-test.c
 +++ b/tests/qtest/pic32cm-click-test.c
 @@ -263,9 +263,86 @@ static void test_shutdown_lock(void)

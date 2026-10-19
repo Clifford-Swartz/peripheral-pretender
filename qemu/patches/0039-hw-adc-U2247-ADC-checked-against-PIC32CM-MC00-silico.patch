@@ -1,7 +1,7 @@
-From 363d625c8bf4c4eb2fbd9129424cdf99bab51410 Mon Sep 17 00:00:00 2001
+From 886d5c87d797f0de445582ce3a9830a92a160439 Mon Sep 17 00:00:00 2001
 From: Clifford Swartz <cliffordswartz1@gmail.com>
 Date: Thu, 15 Oct 2026 06:31:43 -0700
-Subject: [PATCH 39/39] hw/adc: U2247 ADC checked against PIC32CM MC00 silicon
+Subject: [PATCH 39/57] hw/adc: U2247 ADC checked against PIC32CM MC00 silicon
 
 INTREF is the SUPC's VREF (VREF.SEL: 1.024 V at reset, 2.048, 4.096 V),
 and reaches the ADC input only with VREF.VREFOE set: without it a
@@ -22,7 +22,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  4 files changed, 66 insertions(+), 19 deletions(-)
 
 diff --git a/hw/adc/mchp_adc_u2247.c b/hw/adc/mchp_adc_u2247.c
-index 6928064..8df645d 100644
+index aa178b2..7e20437 100644
 --- a/hw/adc/mchp_adc_u2247.c
 +++ b/hw/adc/mchp_adc_u2247.c
 @@ -19,12 +19,19 @@
@@ -175,7 +175,7 @@ index 6928064..8df645d 100644
                 FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLC, 2), MCHP_ADC_CTRLC,
                            FREERUN)) {
 diff --git a/include/hw/mchp/gen/adc_u2247.h b/include/hw/mchp/gen/adc_u2247.h
-index c60eb87..9952b15 100644
+index d414ae6..c0cc213 100644
 --- a/include/hw/mchp/gen/adc_u2247.h
 +++ b/include/hw/mchp/gen/adc_u2247.h
 @@ -9,7 +9,7 @@
@@ -188,7 +188,7 @@ index c60eb87..9952b15 100644
   * SPDX-License-Identifier: GPL-2.0-or-later
   */
 diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h b/include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h
-index fde047f..048521a 100644
+index ba0de24..ee6cb8c 100644
 --- a/include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h
 +++ b/include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h
 @@ -6,7 +6,7 @@
@@ -211,7 +211,7 @@ index fde047f..048521a 100644
      {
          .name = "EVCTRL", .offset = 0x03, .size = 1, .count = 1, .stride = 1,
 diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h b/include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h
-index 96f97ba..9b87b6b 100644
+index 1fc4436..a1d3843 100644
 --- a/include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h
 +++ b/include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h
 @@ -6,7 +6,7 @@

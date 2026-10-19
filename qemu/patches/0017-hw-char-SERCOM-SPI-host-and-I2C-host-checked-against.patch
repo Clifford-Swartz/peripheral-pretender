@@ -1,7 +1,7 @@
-From 07e01a9dced709967ad70af289bb04b627a4e19b Mon Sep 17 00:00:00 2001
+From 1aec44898dc9c913ee9adb88d868f1ba9a9c8a58 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 00:50:29 -0700
-Subject: [PATCH] hw/char: SERCOM SPI host and I2C host, checked against
+Subject: [PATCH 17/57] hw/char: SERCOM SPI host and I2C host, checked against
  PIC32CM MC00
 
 SPI host (MODE 3): each DATA write shifts out on the SERCOM's SSI bus
@@ -37,7 +37,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/misc/mchp_edbg_dgi.h
 
 diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
-index 3b00c76..2e21703 100644
+index 6f07406..fed25d9 100644
 --- a/docs/system/arm/pic32cm-jh01-cpro.rst
 +++ b/docs/system/arm/pic32cm-jh01-cpro.rst
 @@ -57,8 +57,11 @@ Supported devices
@@ -69,7 +69,7 @@ index 3b00c76..2e21703 100644
    dead time, pattern generation, dithering, capture, circular buffers and
    the DSCRITICAL waveform.
 diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
-index c3bde49..86c4177 100644
+index bccd97c..6442278 100644
 --- a/hw/arm/pic32cm_mc00_cpro.c
 +++ b/hw/arm/pic32cm_mc00_cpro.c
 @@ -20,7 +20,9 @@
@@ -103,7 +103,7 @@ index c3bde49..86c4177 100644
  
      armv7m_load_kernel(s->soc.armv7m.cpu, machine->kernel_filename,
 diff --git a/hw/char/mchp_sercom.c b/hw/char/mchp_sercom.c
-index 32bc20c..d46ac94 100644
+index d83c945..c8b100d 100644
 --- a/hw/char/mchp_sercom.c
 +++ b/hw/char/mchp_sercom.c
 @@ -8,6 +8,24 @@
@@ -583,7 +583,7 @@ index 9cf0257..78c8295 100644
  mchp_sercom_rx(const char *name, uint8_t ch) "%s: rx 0x%02x"
 diff --git a/hw/misc/mchp_edbg_dgi.c b/hw/misc/mchp_edbg_dgi.c
 new file mode 100644
-index 0000000..cac8bf4
+index 0000000..484d64a
 --- /dev/null
 +++ b/hw/misc/mchp_edbg_dgi.c
 @@ -0,0 +1,63 @@
@@ -664,7 +664,7 @@ index 11f7b08..e26e45a 100644
    'mchp_sysctrl.c',
 diff --git a/include/hw/misc/mchp_edbg_dgi.h b/include/hw/misc/mchp_edbg_dgi.h
 new file mode 100644
-index 0000000..19fbdac
+index 0000000..377ad47
 --- /dev/null
 +++ b/include/hw/misc/mchp_edbg_dgi.h
 @@ -0,0 +1,17 @@
@@ -686,7 +686,7 @@ index 0000000..19fbdac
 +
 +#endif /* HW_MISC_MCHP_EDBG_DGI_H */
 diff --git a/tests/qtest/pic32cm-mc00-test.c b/tests/qtest/pic32cm-mc00-test.c
-index 02ef769..d2235ca 100644
+index 8c8d1af..263a196 100644
 --- a/tests/qtest/pic32cm-mc00-test.c
 +++ b/tests/qtest/pic32cm-mc00-test.c
 @@ -29,6 +29,8 @@

@@ -1,8 +1,8 @@
-From 32dc2cd8eab5e60df8d9fe272381347af3d943cd Mon Sep 17 00:00:00 2001
+From 92f2355eaa7a821334c8b304c9ec70afb4e6e061 Mon Sep 17 00:00:00 2001
 From: Peripheral Pretender setup <pp-setup@localhost>
 Date: Wed, 14 Oct 2026 15:51:38 -0700
-Subject: [PATCH] hw/i2c, hw/sensor: AVR8X TWI host; ADXL345 and the Accel
- Click
+Subject: [PATCH 29/57] hw/i2c, hw/sensor: AVR8X TWI host; ADXL345 and the
+ Accel Click
 
 - avr8x-twi: TWI host mode (DS40002324): bus state (IDLE forced by
   software), START/repeated START from MADDR, send/receive, ACKACT,
@@ -54,7 +54,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 include/hw/sensor/adxl345.h
 
 diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
-index a341b5b..fa2eda7 100644
+index aac8917..6204847 100644
 --- a/docs/system/arm/pic32cm-mc00-cpro.rst
 +++ b/docs/system/arm/pic32cm-mc00-cpro.rst
 @@ -107,6 +107,17 @@ resistors are modelled (from their schematics, v100).
@@ -76,7 +76,7 @@ index a341b5b..fa2eda7 100644
  own CS is low (or, for the 74HC595 and MAX7219, latches on its own CS).
  
 diff --git a/docs/system/avr/avr64ea48-cnano.rst b/docs/system/avr/avr64ea48-cnano.rst
-index 40e1d5b..c8e50f5 100644
+index dede418..5e5976a 100644
 --- a/docs/system/avr/avr64ea48-cnano.rst
 +++ b/docs/system/avr/avr64ea48-cnano.rst
 @@ -29,13 +29,12 @@ sw0-pressed=on``), the virtual COM port on USART1 (``-serial`` 0), USART2
@@ -112,7 +112,7 @@ index 6426067..3f91644 100644
      select MCHP_REGFILE
      select UNIMP
 diff --git a/hw/avr/avr64ea48_cnano.c b/hw/avr/avr64ea48_cnano.c
-index 118cd36..b37586c 100644
+index f788359..9693220 100644
 --- a/hw/avr/avr64ea48_cnano.c
 +++ b/hw/avr/avr64ea48_cnano.c
 @@ -19,8 +19,8 @@
@@ -145,7 +145,7 @@ index 118cd36..b37586c 100644
          memcpy(sockets[n].pins, avr64ea48_cnano_mb_pins[n],
                 sizeof(sockets[n].pins));
 diff --git a/hw/avr/avr8x_soc.c b/hw/avr/avr8x_soc.c
-index a627bb0..9d2fa8a 100644
+index f10f9db..7e93bb3 100644
 --- a/hw/avr/avr8x_soc.c
 +++ b/hw/avr/avr8x_soc.c
 @@ -30,6 +30,7 @@
@@ -197,7 +197,7 @@ index 0766130..71db51a 100644
 +    select MCHP_REGFILE
 diff --git a/hw/i2c/avr8x_twi.c b/hw/i2c/avr8x_twi.c
 new file mode 100644
-index 0000000..d154b17
+index 0000000..2e9651c
 --- /dev/null
 +++ b/hw/i2c/avr8x_twi.c
 @@ -0,0 +1,313 @@
@@ -524,7 +524,7 @@ index 88aea35..c95291a 100644
  system_ss.add_all(when: 'CONFIG_I2C', if_true: i2c_ss)
 +system_ss.add(when: 'CONFIG_AVR8X_TWI', if_true: files('avr8x_twi.c'))
 diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
-index ac92a91..5045faa 100644
+index f9d10a5..666e559 100644
 --- a/hw/misc/mikrobus.c
 +++ b/hw/misc/mikrobus.c
 @@ -22,6 +22,7 @@
@@ -550,7 +550,7 @@ index ac92a91..5045faa 100644
  const char *mikrobus_click_names(void)
 diff --git a/hw/sensor/adxl345.c b/hw/sensor/adxl345.c
 new file mode 100644
-index 0000000..9848dea
+index 0000000..d1dd366
 --- /dev/null
 +++ b/hw/sensor/adxl345.c
 @@ -0,0 +1,373 @@
@@ -939,7 +939,7 @@ index 78f1c6f..acf95be 100644
 +system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp9808.c', 'adxl345.c'))
 diff --git a/include/hw/i2c/avr8x_twi.h b/include/hw/i2c/avr8x_twi.h
 new file mode 100644
-index 0000000..09ebb4d
+index 0000000..93ca987
 --- /dev/null
 +++ b/include/hw/i2c/avr8x_twi.h
 @@ -0,0 +1,17 @@
@@ -961,7 +961,7 @@ index 0000000..09ebb4d
 +
 +#endif /* HW_I2C_AVR8X_TWI_H */
 diff --git a/include/hw/mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h b/include/hw/mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h
-index dd412f4..a9c97c0 100644
+index 95f4b34..d97d826 100644
 --- a/include/hw/mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h
 +++ b/include/hw/mchp/gen/avr64ea48/twi_i2c_8bit_avr_v3.h
 @@ -6,7 +6,7 @@
@@ -1012,7 +1012,7 @@ index dd412f4..a9c97c0 100644
      {
          .name = "SCTRLA", .offset = 0x09, .size = 1, .count = 1, .stride = 1,
 diff --git a/include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h b/include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h
-index 18c3459..f8097b9 100644
+index e495f3b..2764e5e 100644
 --- a/include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h
 +++ b/include/hw/mchp/gen/twi_i2c_8bit_avr_v3.h
 @@ -8,7 +8,7 @@
@@ -1026,7 +1026,7 @@ index 18c3459..f8097b9 100644
   */
 diff --git a/include/hw/sensor/adxl345.h b/include/hw/sensor/adxl345.h
 new file mode 100644
-index 0000000..f552af6
+index 0000000..7fcc756
 --- /dev/null
 +++ b/include/hw/sensor/adxl345.h
 @@ -0,0 +1,24 @@
@@ -1055,7 +1055,7 @@ index 0000000..f552af6
 +
 +#endif /* HW_SENSOR_ADXL345_H */
 diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
-index 0589139..bdcefb8 100644
+index 7a2f16b..70b0fea 100644
 --- a/tests/qtest/avr64ea48-cnano-test.c
 +++ b/tests/qtest/avr64ea48-cnano-test.c
 @@ -31,6 +31,15 @@
@@ -1170,7 +1170,7 @@ index 0589139..bdcefb8 100644
      unlink(fw);
      return ret;
 diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
-index fb09758..4eac4f0 100644
+index edd4c25..530753e 100644
 --- a/tests/qtest/pic32cm-click-test.c
 +++ b/tests/qtest/pic32cm-click-test.c
 @@ -34,9 +34,10 @@
