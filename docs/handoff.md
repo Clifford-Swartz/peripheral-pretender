@@ -520,7 +520,7 @@ chips, checking each on the boards that are plugged in first (today the MC00 Cur
 
 What is still register-only:
 
-- **MC00:** DMAC (U2223), CCL, PDEC, MTB, HMATRIXB.
+- **MC00:** CCL, PDEC, MTB, HMATRIXB.
 - **JH01:** DMAC, the RTC (03608), CAN, CCL, PDEC, FREQM, PTC, ICM, MTB, MCRAMC, SMBIST.
 - **SAM E51:** CAN, AC (U2501), CCL, PDEC, FREQM, AES, ICM, I2S, SDHC, PCC, CMCC, RAMECC, PM,
   SUPC, DSU and the trace blocks.
@@ -567,11 +567,18 @@ The owner sees no jumper (they are zero-ohm resistors). The twin keeps the produ
 `-M pic32cm-mc00-cpro,xosc32k=off` (patch 0062) matches the desk board. Off, XOSC32K never reads
 ready; silicon instead stalls a GCLK generator fed from it, which the twin does not.
 
+**DMAC (U2223): done** (patch 0063; it also serves the JH01). Answers in section 8 of
+`docs/research/peripherals/dmac-u2223.md`. Two lessons: memory a DMA writes must be read through
+`volatile` in test firmware (the compiler hoisted a load of the write-back copy above a DMAC
+register read and made a fetch look late), and a RESUME *event* only acted on silicon while the
+channel had a request pending from its peripheral trigger (five cases; a hypothesis, documented).
+TC and SERCOM triggers are wired; ADC, DAC, TCC, SDADC and TSENS DMA triggers are next.
+
 Next on the MC00, in order:
 
-1. **DMAC U2223** (the big one; the note has a 25-experiment probe plan).
-2. **PDEC and CCL** (after a generic pad-to-peripheral input path).
-3. **MTB** register fixes.
+1. **PDEC and CCL** (after a generic pad-to-peripheral input path).
+2. **MTB** register fixes.
+3. The remaining DMA triggers (ADC, DAC, TCC, SDADC, TSENS).
 
 The JH01, SAM E51 and AVR blocks wait for their boards to be plugged in, so they can be checked
 the same way.

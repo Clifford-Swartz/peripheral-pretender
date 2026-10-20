@@ -1,0 +1,38 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for DMAC U2223 (PIC32CM MC00 "2f0", JH01 "2.4.0": 12
+# channels behind the CHID window, one IRQ line, a CRC engine). The
+# mchp-dmac-u2223 model keeps the channel registers per channel and
+# answers the window itself; its enable rules (DMAENABLE, CRCENABLE, each
+# channel's ENABLE) and CTRL.SWRST (which keeps DBGCTRL) are its own.
+ip: DMAC
+id: U2223
+versions: ["2f0", "2.4.0"]
+references:
+  - "DS60001638E chapter 24 (DMAC); docs/research/peripherals/dmac-u2223.md"
+  - "PIC32CM MC00 silicon, firmware/hello APP=dmacprobe (2026-10-20)"
+registers:
+  CTRL: {pac_protected: true, self_clearing: [], hooks: [post_write]}  # SWRST: the model
+  CRCCTRL: {pac_protected: true, hooks: [post_write]}
+  CRCDATAIN: {pac_protected: true, hooks: [post_write]}
+  CRCCHKSUM: {pac_protected: true, hooks: [pre_read, post_write]}
+  CRCSTATUS: {pac_protected: true, dynamic: true, hooks: [post_write]}
+  DBGCTRL: {pac_protected: true}
+  QOSCTRL: {pac_protected: true}
+  SWTRIGCTRL: {pac_protected: true, dynamic: true, hooks: [post_write]}
+  PRICTRL: {pac_protected: true, optional: true, dynamic: true, hooks: [post_write]}
+  PRICTRL0: {pac_protected: true, optional: true, dynamic: true, hooks: [post_write]}
+  INTPEND: {dynamic: true, hooks: [post_write]}
+  INTSTATUS: {dynamic: true}
+  BUSYCH: {dynamic: true}
+  PENDCH: {dynamic: true}
+  ACTIVE: {dynamic: true}
+  BASEADDR: {pac_protected: true, enable_protected: all}   # by DMAENABLE
+  WRBADDR: {pac_protected: true, enable_protected: all}
+  CHID: {}
+  CHCTRLA: {pac_protected: true, dynamic: true, hooks: [post_write]}
+  CHCTRLB: {pac_protected: true, dynamic: true, hooks: [post_write]}
+  CHINTENCLR: {pac_protected: true, dynamic: true, hooks: [post_write]}
+  CHINTENSET: {pac_protected: true, dynamic: true, hooks: [post_write]}
+  CHINTFLAG: {dynamic: true, hooks: [post_write]}
+  CHSTATUS: {dynamic: true}

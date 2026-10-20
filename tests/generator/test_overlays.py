@@ -32,8 +32,8 @@ EXPECTED = {("SERCOM", "U2201"), ("PORT", "U2210"), ("OSCCTRL", "U2119"),
             # PIC32CM JH01 and MC00 ADC, DAC and AC, MC00 SDADC and TSENS
             ("ADC", "U2247"), ("DAC", "U2214"), ("SDADC", "U2260"),
             ("AC", "U2245"), ("TSENS", "U2261"),
-            # FREQM on all three ARM parts
-            ("FREQM", "U2257"),
+            # FREQM on all three ARM parts, the JH01/MC00 DMAC
+            ("FREQM", "U2257"), ("DMAC", "U2223"),
             # AVR64EA48 ADC
             ("ADC", "adc_12b_diff_ctrl_avr_v2")}
 

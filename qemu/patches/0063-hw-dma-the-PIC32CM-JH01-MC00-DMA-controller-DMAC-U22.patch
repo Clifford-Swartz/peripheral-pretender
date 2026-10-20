@@ -1,0 +1,1760 @@
+From e617fb451b3e0f596ba686331da83188c8e2c2e6 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Tue, 20 Oct 2026 14:56:04 -0700
+Subject: [PATCH] hw/dma: the PIC32CM JH01/MC00 DMA controller (DMAC U2223)
+
+mchp-dmac-u2223 models the twelve-channel DMAC of the PIC32CM JH01 and
+MC00 behind its CHID window, from two probe rounds on MC00 rev A1
+silicon (firmware/hello APP=dmacprobe, dmacprobe2): the first descriptor
+fetched at enable, one pending request per channel, BEAT/BLOCK/
+TRANSACTION actions, beat-level arbitration by level with static or
+round-robin priority, the write-back BTCNT updated only when a channel
+loses the arbiter, suspends, is disabled or errs, TCMPL at the end of
+every transaction, BLOCKACT SUSPEND on any block, RESUME and the skip,
+invalid descriptors (TERR + SUSP + FERR, channel left enabled), bus
+errors, the software trigger queue, BTCNT 0 as 65536 beats, the CRC-16
+and CRC-32 engine in I/O and channel modes with silicon's raw and final
+checksum forms, event inputs and outputs, INTPEND, ACTIVE, CHID 12-15
+reading channels 8-11, the enable protections and a SWRST that keeps
+DBGCTRL. mchp_dmac_set_trigger() serves both DMAC types, so the SoC
+wires SERCOM and TC triggers to either. qtest pic32cm-dmac-test.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst         |   11 +-
+ hw/arm/pic32cm_soc.c                          |    7 +-
+ hw/dma/mchp_dmac.c                            |    8 +-
+ hw/dma/mchp_dmac_u2223.c                      | 1114 +++++++++++++++++
+ hw/dma/meson.build                            |    3 +-
+ include/hw/dma/mchp_dmac.h                    |    7 +
+ include/hw/mchp/gen/dmac_u2223.h              |    2 +-
+ .../mchp/gen/pic32cm1216mc00048/dmac_u2223.h  |   57 +-
+ .../mchp/gen/pic32cm5164jh01100/dmac_u2223.h  |   57 +-
+ tests/qtest/meson.build                       |    2 +-
+ tests/qtest/pic32cm-dmac-test.c               |  133 ++
+ 11 files changed, 1348 insertions(+), 53 deletions(-)
+ create mode 100644 hw/dma/mchp_dmac_u2223.c
+ create mode 100644 tests/qtest/pic32cm-dmac-test.c
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index 24bf8eb..6864dae 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -113,6 +113,15 @@ Supported devices
+   the rules for START, disabling and stopped clocks measured on PIC32CM
+   MC00 silicon. GCLK generators divide their source's period exactly, so
+   ratios between clocks of one oscillator come out as on silicon.
++- DMAC (U2223): twelve channels behind the CHID window, descriptors
++  fetched at enable into the write-back memory, BEAT/BLOCK/TRANSACTION
++  trigger actions with one pending request per channel, linked
++  descriptors, block actions, suspend and resume, invalid descriptors
++  and bus errors, the software trigger, arbitration by level with
++  static or round-robin priority, the CRC-16/CRC-32 engine (I/O and
++  channel modes), event inputs and outputs, INTPEND and ACTIVE, as
++  measured on PIC32CM MC00 silicon. SERCOM and TC triggers are wired;
++  ADC, DAC, TCC, SDADC and TSENS triggers are not yet.
+ - LED0 (PC05, active low) is a QEMU LED device; its state changes show
+   in the ``led_set_intensity`` trace event. SW0 (PB19, to ground) is the
+   machine property ``sw0-pressed``.
+@@ -136,7 +145,7 @@ Missing devices
+   the DSCRITICAL waveform.
+ - Watchdog time-out, PAC write protection, flash programming through
+   NVMCTRL, DSU CRC32 and chip erase, sleep modes and every other
+-  peripheral behaviour (DMAC, CCL, PDEC, CAN, ...). ADC
++  peripheral behaviour (CCL, PDEC, CAN, ...). ADC
+   sequencing and event inputs, DAC START events.
+ 
+ Board and SoC properties
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index ba256d5..6c15e93 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -61,6 +61,7 @@ static const struct {
+     { "DAC", TYPE_MCHP_DAC_U2214, "U2214" },
+     { "DIVAS", TYPE_MCHP_DIVAS },
+     { "DMAC", TYPE_MCHP_DMAC, "U2503" },
++    { "DMAC", TYPE_MCHP_DMAC_U2223, "U2223" },
+     { "DSU", TYPE_MCHP_DSU, "U2209" },
+     { "EIC", TYPE_MCHP_EIC },
+     { "EVSYS", TYPE_MCHP_EVSYS, "U2256" },
+@@ -617,7 +618,8 @@ static void pic32cm_dmac_pulses(Pic32cmSocState *s)
+ {
+     DeviceState *dmac = pic32cm_soc_periph(s, "DMAC");
+ 
+-    if (!dmac || !object_dynamic_cast(OBJECT(dmac), TYPE_MCHP_DMAC)) {
++    if (!dmac || (!object_dynamic_cast(OBJECT(dmac), TYPE_MCHP_DMAC) &&
++                  !object_dynamic_cast(OBJECT(dmac), TYPE_MCHP_DMAC_U2223))) {
+         return;
+     }
+     for (unsigned i = 0; i < s->dev->ndmac_triggers; i++) {
+@@ -660,7 +662,8 @@ static bool pic32cm_realize_periph(Pic32cmSocState *s, uint8_t rev,
+             qdev_prop_set_uint8(dev, "revision", rev);
+         } else if (!strcmp(info->module, "SERCOM")) {
+             pic32cm_connect_sercom(s, dev, info);
+-        } else if (object_dynamic_cast(OBJECT(dev), TYPE_MCHP_DMAC)) {
++        } else if (object_dynamic_cast(OBJECT(dev), TYPE_MCHP_DMAC) ||
++                   object_dynamic_cast(OBJECT(dev), TYPE_MCHP_DMAC_U2223)) {
+             pic32cm_dmac_triggers(s, dev);
+         } else if (!strcmp(info->module, "USB") && s->usb_chr &&
+                    object_property_find(OBJECT(dev), "chardev")) {
+diff --git a/hw/dma/mchp_dmac.c b/hw/dma/mchp_dmac.c
+index adfcbee..bb1fe81 100644
+--- a/hw/dma/mchp_dmac.c
++++ b/hw/dma/mchp_dmac.c
+@@ -414,7 +414,13 @@ void mchp_dmac_kick(DeviceState *dev)
+ void mchp_dmac_set_trigger(DeviceState *dev, unsigned id, hwaddr flag_addr,
+                            uint8_t mask)
+ {
+-    MchpDmacState *s = MCHP_DMAC(dev);
++    MchpDmacState *s;
++
++    if (object_dynamic_cast(OBJECT(dev), TYPE_MCHP_DMAC_U2223)) {
++        mchp_dmac_u2223_set_trigger(dev, id, flag_addr, mask);
++        return;
++    }
++    s = MCHP_DMAC(dev);
+ 
+     assert(id < MCHP_DMAC_MAX_TRIGGERS);
+     s->trig[id].flag_addr = flag_addr;
+diff --git a/hw/dma/mchp_dmac_u2223.c b/hw/dma/mchp_dmac_u2223.c
+new file mode 100644
+index 0000000..50a2d9f
+--- /dev/null
++++ b/hw/dma/mchp_dmac_u2223.c
+@@ -0,0 +1,1114 @@
++/*
++ * Microchip PIC32CM JH01/MC00 DMA controller (DMAC U2223)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Twelve channels behind one register window (CHID selects the channel
++ * seen at 0x40-0x4F), one NVIC line, the descriptor format of the SAM D5x
++ * DMAC (mchp_dmac.c) and a CRC engine. What the PIC32CM MC00 (rev A1,
++ * firmware/hello APP=dmacprobe) showed, and the model does:
++ *
++ *   - Enabling a channel fetches its first descriptor (BASEADDR + 16 * n)
++ *     into the write-back memory (WRBADDR + 16 * n) at once (silicon: a
++ *     load right after the write sees it, all but the very next one). An
++ *     invalid one raises
++ *     TERR and SUSP, sets CHSTATUS.FERR and leaves the channel enabled and
++ *     suspended; the write-back memory is not written.
++ *   - A trigger (peripheral, software, event) makes one request pending;
++ *     more while one is pending are lost. A grant runs the trigger action:
++ *     one beat (BEAT), a block (BLOCK) or every block (TRANSACTION); BUSY
++ *     reads 1 meanwhile. The arbiter grants a beat at a time: the highest
++ *     enabled level (CTRL.LVLENx) wins, within a level the lowest channel
++ *     or, with PRICTRL.RRLVLENx, the next one after LVLPRIx, the channel
++ *     granted last (round robin, beat by beat); requests of disabled
++ *     levels stay pending.
++ *   - The write-back copy is updated at the end of a block (VALID cleared,
++ *     BTCNT 0), and with the remaining BTCNT when the channel loses the
++ *     arbiter, is suspended, disabled or hits a bus error; not every beat.
++ *   - At the end of a block BLOCKACT INT raises TCMPL; the end of the last
++ *     block (DESCADDR 0) raises TCMPL whatever BLOCKACT says and disables
++ *     the channel, unless BLOCKACT suspends: then the channel suspends
++ *     (BUSY stays 1 in a transaction) and a RESUME fetches DESCADDR 0, an
++ *     invalid descriptor. A RESUME of a channel not suspended skips its
++ *     next suspend. RESUME (command or event) does not clear SUSP; it
++ *     clears FERR and fetches the descriptor that failed again.
++ *   - SWTRIGx on a disabled channel stays set and fires when it is
++ *     enabled; on an enabled one it becomes the pending request and reads
++ *     0, or stays set as a second request while one is pending.
++ *   - BTCNT 0 is 65536 beats. A bus error raises TERR and disables the
++ *     channel, BTCNT not decremented.
++ *   - Clearing CTRL.DMAENABLE stops the channels; their ENABLE stays set.
++ *     CTRL.SWRST (only with DMAENABLE and CRCENABLE clear) resets all but
++ *     DBGCTRL. BASEADDR/WRBADDR ignore writes while DMAENABLE is set,
++ *     CRCCTRL/CRCCHKSUM while CRCENABLE is, CHCTRLB all but LVL and CMD
++ *     while the channel is enabled; CHCTRLA.SWRST is ignored while enabled.
++ *   - CHID 12-15 read channels 8-11 and ignore writes.
++ *   - INTPEND.ID is the lowest channel with an enabled flag set (0 and no
++ *     flags if none); writing its flags clears them in channel ID.
++ *     ACTIVE holds the last granted channel, its BTCNT, and ABUSY while
++ *     that channel is inside a block.
++ *   - CRC-16 is CCITT (0x1021, MSB first), CRC-32 the IEEE one (reflected,
++ *     read when idle reversed and complemented; while busy CRCCHKSUM reads
++ *     the register bit-reversed). Halfword and word beats go in LSB first.
++ *     I/O mode (CRCSRC 1): each CRCDATAIN write sets CRCBUSY, which
++ *     firmware clears by writing 1; CRCENABLE cannot be cleared meanwhile.
++ *     Channel mode (CRCSRC 0x20 + n): every beat of channel n goes in,
++ *     CRCBUSY reads 1 while the channel is enabled.
++ *   - Event outputs (EVOE, channels 0-3): BTCTRL.EVOSEL BLOCK pulses after
++ *     each block, BEAT after each beat. Event inputs (EVIE): TRIG, SUSPEND,
++ *     SSKIP, and RESUME, which silicon took only while the channel had a
++ *     request pending from its peripheral trigger (five cases fit this;
++ *     with no request or a software one it did nothing).
++ *
++ * Transfers run as in mchp_dmac.c: at the next read of a DMAC register
++ * or 20 us after the write that started them. Not modelled: beat timing,
++ * CTRIG and CBLOCK events, QOSCTRL, ACTIVE.LVLEX, standby.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/bitops.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/core/irq.h"
++#include "hw/dma/mchp_dmac.h"
++#include "hw/mchp/gen/dmac_u2223.h"
++#include "migration/vmstate.h"
++#include "system/address-spaces.h"
++#include "system/dma.h"
++
++#define NCH                 12
++#define NEV                 4           /* channels with events */
++#define START_NS            20000
++#define POLL_NS             100000
++#define BUDGET              (65536 * 2)
++
++#define CHCTRLA_MASK        0x43
++#define CHCTRLB_MASK        0x00C03F7Fu
++#define CHCTRLB_LVL         0x00000060u
++#define FLAG_TERR           0x01
++#define FLAG_TCMPL          0x02
++#define FLAG_SUSP           0x04
++#define ST_PEND             0x01
++#define ST_BUSY             0x02
++#define ST_FERR             0x04
++
++/* Descriptor BTCTRL */
++#define BT_VALID            BIT(0)
++#define BT_EVOSEL(v)        extract32(v, 1, 2)
++#define BT_BLOCKACT(v)      extract32(v, 3, 2)
++#define BT_BEATSIZE(v)      extract32(v, 8, 2)
++#define BT_SRCINC           BIT(10)
++#define BT_DSTINC           BIT(11)
++#define BT_STEPSRC          BIT(12)
++#define BT_STEPSIZE(v)      extract32(v, 13, 3)
++
++#define TRIGACT_BLOCK       0
++#define TRIGACT_BEAT        2
++#define TRIGACT_TRANSACTION 3
++
++#define CRCSRC_IO           1
++#define CRCSRC_CH0          0x20
++
++typedef struct DmacTrigger {
++    hwaddr flag_addr;
++    uint8_t mask;
++} DmacTrigger;
++
++typedef struct DmacDesc {
++    uint16_t btctrl;
++    uint16_t btcnt;
++    uint32_t srcaddr;
++    uint32_t dstaddr;
++    uint32_t descaddr;
++} DmacDesc;
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpDmacU2223State, MCHP_DMAC_U2223)
++
++struct MchpDmacU2223State {
++    MchpRegBlock parent_obj;
++
++    QEMUTimer *timer;
++    DmacTrigger trig[MCHP_DMAC_MAX_TRIGGERS];
++
++    uint8_t chctrla[NCH];
++    uint32_t chctrlb[NCH];
++    uint8_t inten[NCH];
++    uint8_t flag[NCH];
++    DmacDesc cur[NCH];          /* the descriptor a channel works on */
++    uint32_t total[NCH];        /* beats of its block */
++    uint32_t left[NCH];         /* beats still to move */
++    bool fetched[NCH];
++    bool pend[NCH];             /* a request is pending */
++    bool pend_hw[NCH];          /* ... from the peripheral trigger */
++    bool action[NCH];           /* a trigger action runs (BUSY) */
++    bool susp[NCH];
++    bool ferr[NCH];
++    bool refetch[NCH];          /* RESUME fetches refetch_addr */
++    uint32_t refetch_addr[NCH];
++    bool skip[NCH];             /* skip the next suspend */
++    bool inside[NCH];           /* beats moved in this block */
++    uint32_t swtrig;
++    int32_t last;               /* ACTIVE.ID; -1: none yet */
++    bool abusy;
++    uint16_t active_btcnt;      /* ACTIVE.BTCNT: after the last beat */
++    uint32_t crc;               /* CRC-32: reflected; CRC-16: plain */
++    bool crc_busy;              /* I/O mode */
++    bool crc_fed;               /* data went in since CRCENABLE */
++    bool ev_level[NEV];
++
++    uint8_t wanted[MCHP_DMAC_MAX_TRIGGERS];
++    qemu_irq trig_wanted[MCHP_DMAC_MAX_TRIGGERS];
++    qemu_irq ch_event[NEV];
++};
++
++static uint32_t reg(MchpDmacU2223State *s, hwaddr off, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, off, size);
++}
++
++static void set_reg(MchpDmacU2223State *s, hwaddr off, unsigned size,
++                    uint32_t v)
++{
++    mchp_regfile_poke(&MCHP_REGBLOCK(s)->rf, off, size, v);
++}
++
++static bool dma_on(MchpDmacU2223State *s)
++{
++    return reg(s, A_MCHP_DMAC_CTRL, 2) & R_MCHP_DMAC_CTRL_DMAENABLE_MASK;
++}
++
++static bool ch_on(MchpDmacU2223State *s, unsigned ch)
++{
++    return s->chctrla[ch] & R_MCHP_DMAC_CHCTRLA_ENABLE_MASK;
++}
++
++static unsigned ch_trigact(MchpDmacU2223State *s, unsigned ch)
++{
++    return FIELD_EX32(s->chctrlb[ch], MCHP_DMAC_CHCTRLB, TRIGACT);
++}
++
++static unsigned ch_trigsrc(MchpDmacU2223State *s, unsigned ch)
++{
++    return FIELD_EX32(s->chctrlb[ch], MCHP_DMAC_CHCTRLB, TRIGSRC);
++}
++
++static hwaddr wb_addr(MchpDmacU2223State *s, unsigned ch)
++{
++    return reg(s, A_MCHP_DMAC_WRBADDR, 4) + 16 * ch;
++}
++
++static void desc_load(hwaddr addr, DmacDesc *d)
++{
++    uint8_t b[16];
++
++    dma_memory_read(&address_space_memory, addr, b, sizeof(b),
++                    MEMTXATTRS_UNSPECIFIED);
++    d->btctrl = lduw_le_p(&b[0]);
++    d->btcnt = lduw_le_p(&b[2]);
++    d->srcaddr = ldl_le_p(&b[4]);
++    d->dstaddr = ldl_le_p(&b[8]);
++    d->descaddr = ldl_le_p(&b[12]);
++}
++
++static void desc_store(hwaddr addr, const DmacDesc *d)
++{
++    uint8_t b[16];
++
++    stw_le_p(&b[0], d->btctrl);
++    stw_le_p(&b[2], d->btcnt);
++    stl_le_p(&b[4], d->srcaddr);
++    stl_le_p(&b[8], d->dstaddr);
++    stl_le_p(&b[12], d->descaddr);
++    dma_memory_write(&address_space_memory, addr, b, sizeof(b),
++                     MEMTXATTRS_UNSPECIFIED);
++}
++
++/* The remaining BTCNT into the write-back copy */
++static void write_back(MchpDmacU2223State *s, unsigned ch)
++{
++    if (s->fetched[ch]) {
++        s->cur[ch].btcnt = s->left[ch];
++        desc_store(wb_addr(s, ch), &s->cur[ch]);
++    }
++}
++
++/* ---- CRC ---- */
++
++static bool crc32_poly(MchpDmacU2223State *s)
++{
++    return FIELD_EX32(reg(s, A_MCHP_DMAC_CRCCTRL, 2), MCHP_DMAC_CRCCTRL,
++                      CRCPOLY) == 1;
++}
++
++static unsigned crc_src(MchpDmacU2223State *s)
++{
++    return FIELD_EX32(reg(s, A_MCHP_DMAC_CRCCTRL, 2), MCHP_DMAC_CRCCTRL,
++                      CRCSRC);
++}
++
++static bool crc_on(MchpDmacU2223State *s)
++{
++    return reg(s, A_MCHP_DMAC_CTRL, 2) & R_MCHP_DMAC_CTRL_CRCENABLE_MASK;
++}
++
++static void crc_feed(MchpDmacU2223State *s, uint32_t data, unsigned bytes)
++{
++    s->crc_fed = true;
++    for (unsigned i = 0; i < bytes; i++) {
++        uint8_t b = data >> (8 * i);
++
++        if (crc32_poly(s)) {
++            s->crc ^= b;
++            for (unsigned k = 0; k < 8; k++) {
++                s->crc = (s->crc >> 1) ^ (s->crc & 1 ? 0xEDB88320u : 0);
++            }
++        } else {
++            s->crc ^= (uint32_t)b << 8;
++            for (unsigned k = 0; k < 8; k++) {
++                s->crc = (s->crc << 1) ^ (s->crc & 0x8000 ? 0x1021 : 0);
++            }
++            s->crc &= 0xFFFF;
++        }
++    }
++}
++
++static bool crc_busy(MchpDmacU2223State *s)
++{
++    unsigned src = crc_src(s);
++
++    if (!crc_on(s)) {
++        return false;
++    }
++    if (src >= CRCSRC_CH0 && src < CRCSRC_CH0 + NCH) {
++        return ch_on(s, src - CRCSRC_CH0);
++    }
++    return s->crc_busy;
++}
++
++/* CRCCHKSUM as firmware reads it */
++static uint32_t crc_read(MchpDmacU2223State *s)
++{
++    if (!crc32_poly(s)) {
++        return s->crc & 0xFFFF;
++    }
++    return crc_busy(s) ? revbit32(s->crc) : ~s->crc;
++}
++
++/* ---- channels ---- */
++
++static void ch_flag(MchpDmacU2223State *s, unsigned ch, uint8_t f)
++{
++    s->flag[ch] |= f;
++}
++
++/* Fetch the descriptor at @addr for @ch; false: invalid (FERR) */
++static bool fetch(MchpDmacU2223State *s, unsigned ch, uint32_t addr)
++{
++    DmacDesc d;
++
++    desc_load(addr, &d);
++    if (!(d.btctrl & BT_VALID)) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s: channel %u: invalid descriptor"
++                      " at 0x%" PRIx32 "\n", MCHP_REGBLOCK(s)->name, ch,
++                      addr);
++        ch_flag(s, ch, FLAG_TERR | FLAG_SUSP);
++        s->ferr[ch] = true;
++        s->susp[ch] = true;
++        s->refetch[ch] = true;
++        s->refetch_addr[ch] = addr;
++        s->fetched[ch] = false;
++        return false;
++    }
++    desc_store(wb_addr(s, ch), &d);
++    s->cur[ch] = d;
++    s->total[ch] = s->left[ch] = d.btcnt ? d.btcnt : 65536;
++    s->fetched[ch] = true;
++    s->inside[ch] = false;
++    return true;
++}
++
++static void ch_stop(MchpDmacU2223State *s, unsigned ch)
++{
++    s->chctrla[ch] &= ~R_MCHP_DMAC_CHCTRLA_ENABLE_MASK;
++    s->fetched[ch] = false;
++    s->pend[ch] = s->pend_hw[ch] = s->action[ch] = false;
++    s->susp[ch] = s->ferr[ch] = s->refetch[ch] = s->skip[ch] = false;
++}
++
++/* A queued software trigger becomes the pending request */
++static void ch_take_swtrig(MchpDmacU2223State *s, unsigned ch)
++{
++    if ((s->swtrig & BIT(ch)) && ch_on(s, ch) && !s->pend[ch]) {
++        s->swtrig &= ~BIT(ch);
++        s->pend[ch] = true;
++        s->pend_hw[ch] = false;
++    }
++}
++
++static void ch_request(MchpDmacU2223State *s, unsigned ch, bool hw)
++{
++    if (ch_on(s, ch) && !s->pend[ch]) {
++        s->pend[ch] = true;
++        s->pend_hw[ch] = hw;
++    }
++}
++
++static void ch_suspend(MchpDmacU2223State *s, unsigned ch)
++{
++    if (!ch_on(s, ch) || s->susp[ch]) {
++        return;
++    }
++    write_back(s, ch);
++    s->susp[ch] = true;
++    if (s->last == ch) {
++        s->abusy = false;
++    }
++    ch_flag(s, ch, FLAG_SUSP);
++}
++
++static void ch_resume(MchpDmacU2223State *s, unsigned ch)
++{
++    if (!ch_on(s, ch)) {
++        return;
++    }
++    if (!s->susp[ch]) {
++        s->skip[ch] = true;
++        return;
++    }
++    s->susp[ch] = false;
++    if (s->refetch[ch]) {
++        s->refetch[ch] = false;
++        s->ferr[ch] = false;
++        fetch(s, ch, s->refetch_addr[ch]);
++    } else if (s->fetched[ch]) {
++        /* An ongoing block continues from the write-back copy */
++        uint32_t left = s->left[ch];
++
++        desc_load(wb_addr(s, ch), &s->cur[ch]);
++        s->left[ch] = left;
++    }
++}
++
++static void event_pulse(MchpDmacU2223State *s, unsigned ch, unsigned sel)
++{
++    if (ch < NEV && (s->chctrlb[ch] & R_MCHP_DMAC_CHCTRLB_EVOE_MASK) &&
++        BT_EVOSEL(s->cur[ch].btctrl) == sel) {
++        qemu_irq_pulse(s->ch_event[ch]);
++    }
++}
++
++static void block_end(MchpDmacU2223State *s, unsigned ch)
++{
++    DmacDesc *d = &s->cur[ch];
++    unsigned act = BT_BLOCKACT(d->btctrl);
++    bool last = !d->descaddr;
++    bool block_ev = ch < NEV &&
++                    (s->chctrlb[ch] & R_MCHP_DMAC_CHCTRLB_EVOE_MASK) &&
++                    BT_EVOSEL(d->btctrl) == 1;
++    uint32_t next = d->descaddr;
++
++    d->btctrl &= ~BT_VALID;
++    d->btcnt = 0;
++    desc_store(wb_addr(s, ch), d);
++    s->inside[ch] = false;
++    if (s->last == ch) {
++        s->abusy = false;
++    }
++    if ((act & 2) && !s->skip[ch]) {
++        if (act & 1) {
++            ch_flag(s, ch, FLAG_TCMPL);
++        }
++        ch_flag(s, ch, FLAG_SUSP);
++        s->susp[ch] = true;
++        if (last) {
++            s->fetched[ch] = false;
++            s->refetch[ch] = true;      /* RESUME: DESCADDR 0, invalid */
++            s->refetch_addr[ch] = 0;
++        } else if (!fetch(s, ch, next)) {
++            /* FERR as well */
++        }
++        if (ch_trigact(s, ch) != TRIGACT_TRANSACTION) {
++            s->action[ch] = false;
++        }
++    } else {
++        if (act & 2) {
++            s->skip[ch] = false;
++        }
++        if (last) {
++            ch_flag(s, ch, FLAG_TCMPL);
++            ch_stop(s, ch);
++        } else {
++            if (act & 1) {
++                ch_flag(s, ch, FLAG_TCMPL);
++            }
++            fetch(s, ch, next);
++            if (ch_trigact(s, ch) != TRIGACT_TRANSACTION) {
++                s->action[ch] = false;
++            }
++        }
++    }
++    if (block_ev) {
++        qemu_irq_pulse(s->ch_event[ch]);
++    }
++}
++
++/* One beat of @ch */
++static void beat(MchpDmacU2223State *s, unsigned ch)
++{
++    DmacDesc *d = &s->cur[ch];
++    unsigned bs = BT_BEATSIZE(d->btctrl);
++    unsigned size = 1 << MIN(bs, 2);
++    unsigned step = 1 << BT_STEPSIZE(d->btctrl);
++    bool stepsrc = d->btctrl & BT_STEPSRC;
++    uint32_t k = s->total[ch] - s->left[ch];
++    uint32_t src = d->srcaddr, dst = d->dstaddr;
++    uint8_t buf[4] = { 0 };
++    MemTxResult r;
++
++    if (d->btctrl & BT_SRCINC) {
++        uint32_t inc = size * (stepsrc ? step : 1);
++
++        src = d->srcaddr - s->total[ch] * inc + k * inc;
++    }
++    if (d->btctrl & BT_DSTINC) {
++        uint32_t inc = size * (stepsrc ? 1 : step);
++
++        dst = d->dstaddr - s->total[ch] * inc + k * inc;
++    }
++    r = dma_memory_read(&address_space_memory, src, buf, size,
++                        MEMTXATTRS_UNSPECIFIED);
++    if (r == MEMTX_OK) {
++        r = dma_memory_write(&address_space_memory, dst, buf, size,
++                             MEMTXATTRS_UNSPECIFIED);
++    }
++    s->abusy = true;
++    if (r != MEMTX_OK) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s: channel %u: bus error at "
++                      "0x%" PRIx32 " -> 0x%" PRIx32 "\n",
++                      MCHP_REGBLOCK(s)->name, ch, src, dst);
++        s->active_btcnt = s->left[ch];
++        write_back(s, ch);              /* BTCNT not decremented */
++        ch_flag(s, ch, FLAG_TERR);
++        ch_stop(s, ch);
++        return;
++    }
++    if (crc_on(s) && crc_src(s) == CRCSRC_CH0 + ch) {
++        crc_feed(s, ldl_le_p(buf), size);
++    }
++    s->left[ch]--;
++    s->active_btcnt = s->left[ch];
++    s->inside[ch] = true;
++    event_pulse(s, ch, 3);
++    if (ch_trigact(s, ch) == TRIGACT_BEAT) {
++        s->action[ch] = false;
++    }
++    if (!s->left[ch]) {
++        block_end(s, ch);
++    }
++    if (!s->action[ch]) {
++        ch_take_swtrig(s, ch);
++    }
++}
++
++static bool trigger_ready(MchpDmacU2223State *s, unsigned ch)
++{
++    unsigned src = ch_trigsrc(s, ch);
++    uint8_t f = 0;
++
++    if (!src || src >= MCHP_DMAC_MAX_TRIGGERS || !s->trig[src].mask) {
++        return false;
++    }
++    dma_memory_read(&address_space_memory, s->trig[src].flag_addr, &f, 1,
++                    MEMTXATTRS_UNSPECIFIED);
++    return f & s->trig[src].mask;
++}
++
++static bool runnable(MchpDmacU2223State *s, unsigned ch)
++{
++    unsigned lvl = FIELD_EX32(s->chctrlb[ch], MCHP_DMAC_CHCTRLB, LVL);
++
++    return ch_on(s, ch) && s->fetched[ch] && !s->susp[ch] &&
++           (s->action[ch] || s->pend[ch]) &&
++           (reg(s, A_MCHP_DMAC_CTRL, 2) &
++            (R_MCHP_DMAC_CTRL_LVLEN0_MASK << lvl));
++}
++
++/* The channel the arbiter grants next, or -1 */
++static int arbitrate(MchpDmacU2223State *s)
++{
++    uint32_t pri = reg(s, A_MCHP_DMAC_PRICTRL, 4);
++
++    for (int lvl = 3; lvl >= 0; lvl--) {
++        bool rr = extract32(pri, 8 * lvl + 7, 1);
++        unsigned start = rr ? (extract32(pri, 8 * lvl, 4) + 1) % NCH : 0;
++
++        for (unsigned i = 0; i < NCH; i++) {
++            unsigned ch = (start + i) % NCH;
++
++            if (FIELD_EX32(s->chctrlb[ch], MCHP_DMAC_CHCTRLB, LVL) == lvl &&
++                runnable(s, ch)) {
++                if (rr) {
++                    set_reg(s, A_MCHP_DMAC_PRICTRL, 4,
++                            deposit32(pri, 8 * lvl, 4, ch));
++                }
++                return ch;
++            }
++        }
++    }
++    return -1;
++}
++
++static void update_wanted(MchpDmacU2223State *s)
++{
++    uint8_t want[MCHP_DMAC_MAX_TRIGGERS] = { 0 };
++
++    for (unsigned ch = 0; ch < NCH; ch++) {
++        if (ch_on(s, ch)) {
++            want[ch_trigsrc(s, ch)] = 1;
++        }
++    }
++    for (unsigned id = 1; id < MCHP_DMAC_MAX_TRIGGERS; id++) {
++        if (want[id] != s->wanted[id]) {
++            s->wanted[id] = want[id];
++            qemu_set_irq(s->trig_wanted[id], want[id]);
++        }
++    }
++}
++
++static void run(MchpDmacU2223State *s)
++{
++    unsigned budget = BUDGET;
++    bool waiting = false, more = false;
++
++    if (dma_on(s)) {
++        for (;;) {
++            int ch;
++
++            for (unsigned c = 0; c < NCH; c++) {
++                if (ch_on(s, c) && s->fetched[c] && !s->action[c] &&
++                    !s->pend[c] && trigger_ready(s, c)) {
++                    s->pend[c] = s->pend_hw[c] = true;
++                }
++            }
++            ch = arbitrate(s);
++            if (ch < 0) {
++                break;
++            }
++            if (!budget--) {
++                more = true;            /* the rest in the next run */
++                break;
++            }
++            if (s->last >= 0 && s->last != ch && s->inside[s->last]) {
++                write_back(s, s->last);         /* lost the arbiter */
++            }
++            s->last = ch;
++            if (!s->action[ch]) {
++                s->action[ch] = true;
++                s->pend[ch] = s->pend_hw[ch] = false;
++            }
++            beat(s, ch);
++        }
++        for (unsigned c = 0; c < NCH; c++) {
++            if (ch_on(s, c) && s->fetched[c] && !s->susp[c] &&
++                ch_trigsrc(s, c) && s->trig[ch_trigsrc(s, c)].mask) {
++                waiting = true;
++            }
++        }
++    }
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++    update_wanted(s);
++    if (waiting || more) {
++        timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                  (waiting ? POLL_NS : START_NS));
++    }
++}
++
++static void timer_cb(void *opaque)
++{
++    run(MCHP_DMAC_U2223(opaque));
++}
++
++static void schedule(MchpDmacU2223State *s)
++{
++    int64_t when = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + START_NS;
++
++    if (!timer_pending(s->timer) || timer_expire_time_ns(s->timer) > when) {
++        timer_mod(s->timer, when);
++    }
++}
++
++static void trigger_in(void *opaque, int id, int level)
++{
++    MchpDmacU2223State *s = opaque;
++    bool any = false;
++
++    if (level <= 0) {
++        return;
++    }
++    for (unsigned ch = 0; ch < NCH; ch++) {
++        if (ch_on(s, ch) && s->fetched[ch] && ch_trigsrc(s, ch) == id) {
++            ch_request(s, ch, true);
++            any = true;
++        }
++    }
++    if (any) {
++        run(s);
++    }
++}
++
++static void event_in(void *opaque, int ch, int level)
++{
++    MchpDmacU2223State *s = opaque;
++    bool rose = level > 0 && !s->ev_level[ch];
++
++    s->ev_level[ch] = level > 0;
++    if (!rose || !(s->chctrlb[ch] & R_MCHP_DMAC_CHCTRLB_EVIE_MASK)) {
++        return;
++    }
++    switch (FIELD_EX32(s->chctrlb[ch], MCHP_DMAC_CHCTRLB, EVACT)) {
++    case MCHP_DMAC_CHCTRLB_EVACT_TRIG:
++        ch_request(s, ch, false);
++        break;
++    case MCHP_DMAC_CHCTRLB_EVACT_SUSPEND:
++        ch_suspend(s, ch);
++        break;
++    case MCHP_DMAC_CHCTRLB_EVACT_RESUME:
++        if (s->pend_hw[ch]) {               /* silicon, see above */
++            ch_resume(s, ch);
++        }
++        break;
++    case MCHP_DMAC_CHCTRLB_EVACT_SSKIP:
++        s->skip[ch] = true;
++        break;
++    case MCHP_DMAC_CHCTRLB_EVACT_NOACT:
++        return;
++    default:
++        qemu_log_mask(LOG_UNIMP, "%s: channel %d: CTRIG/CBLOCK events "
++                      "not modelled\n", MCHP_REGBLOCK(s)->name, ch);
++        return;
++    }
++    run(s);
++}
++
++void mchp_dmac_u2223_set_trigger(DeviceState *dev, unsigned id,
++                                 hwaddr flag_addr, uint8_t mask)
++{
++    MchpDmacU2223State *s = MCHP_DMAC_U2223(dev);
++
++    assert(id < MCHP_DMAC_MAX_TRIGGERS);
++    s->trig[id].flag_addr = flag_addr;
++    s->trig[id].mask = mask;
++}
++
++/* ---- registers ---- */
++
++/* The channel CHID selects: 12-15 read 8-11; -1 for writes there */
++static int window_ch(MchpDmacU2223State *s, bool write)
++{
++    unsigned id = reg(s, A_MCHP_DMAC_CHID, 1) & 0xF;
++
++    if (id < NCH) {
++        return id;
++    }
++    return write ? -1 : (int)id - 4;
++}
++
++static uint8_t ch_status(MchpDmacU2223State *s, unsigned ch)
++{
++    return (s->pend[ch] ? ST_PEND : 0) |
++           (s->action[ch] && ch_on(s, ch) ? ST_BUSY : 0) |
++           (s->ferr[ch] ? ST_FERR : 0);
++}
++
++static uint8_t ch_pending_irq(MchpDmacU2223State *s, unsigned ch)
++{
++    return s->flag[ch] & s->inten[ch];
++}
++
++static uint32_t pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                         unsigned idx, uint32_t stored, bool side_effects)
++{
++    MchpDmacU2223State *s = MCHP_DMAC_U2223(rf->opaque);
++    uint32_t v = 0;
++    int ch;
++
++    if (side_effects && timer_pending(s->timer)) {
++        timer_del(s->timer);
++        run(s);
++    }
++    ch = window_ch(s, false);
++    switch (ri->offset) {
++    case A_MCHP_DMAC_CRCCHKSUM:
++        return crc_on(s) ? crc_read(s) : stored;
++    case A_MCHP_DMAC_CRCSTATUS:
++        return (crc_busy(s) ? R_MCHP_DMAC_CRCSTATUS_CRCBUSY_MASK : 0) |
++               (crc_on(s) && s->crc_fed && !crc_busy(s) && crc_read(s) == 0 ?
++                R_MCHP_DMAC_CRCSTATUS_CRCZERO_MASK : 0);
++    case A_MCHP_DMAC_SWTRIGCTRL:
++        return s->swtrig;
++    case A_MCHP_DMAC_INTPEND:
++        for (unsigned c = 0; c < NCH; c++) {
++            if (ch_pending_irq(s, c)) {
++                uint8_t st = ch_status(s, c);
++
++                return c | (uint32_t)s->flag[c] << 8 |
++                       (st & ST_FERR ? R_MCHP_DMAC_INTPEND_FERR_MASK : 0) |
++                       (st & ST_BUSY ? R_MCHP_DMAC_INTPEND_BUSY_MASK : 0) |
++                       (st & ST_PEND ? R_MCHP_DMAC_INTPEND_PEND_MASK : 0);
++            }
++        }
++        return 0;
++    case A_MCHP_DMAC_INTSTATUS:
++    case A_MCHP_DMAC_BUSYCH:
++    case A_MCHP_DMAC_PENDCH:
++        for (unsigned c = 0; c < NCH; c++) {
++            bool bit = ri->offset == A_MCHP_DMAC_INTSTATUS ?
++                       ch_pending_irq(s, c) != 0 :
++                       ri->offset == A_MCHP_DMAC_BUSYCH ?
++                       (ch_status(s, c) & ST_BUSY) != 0 : s->pend[c];
++
++            v |= bit ? BIT(c) : 0;
++        }
++        return v;
++    case A_MCHP_DMAC_ACTIVE:
++        if (s->last < 0) {
++            return 0;
++        }
++        return (uint32_t)s->last << R_MCHP_DMAC_ACTIVE_ID_SHIFT |
++               (s->abusy ? R_MCHP_DMAC_ACTIVE_ABUSY_MASK : 0) |
++               (uint32_t)s->active_btcnt << R_MCHP_DMAC_ACTIVE_BTCNT_SHIFT;
++    case A_MCHP_DMAC_CHCTRLA:
++        return s->chctrla[ch];
++    case A_MCHP_DMAC_CHCTRLB:
++        return s->chctrlb[ch];
++    case A_MCHP_DMAC_CHINTENCLR:
++    case A_MCHP_DMAC_CHINTENSET:
++        return s->inten[ch];
++    case A_MCHP_DMAC_CHINTFLAG:
++        return s->flag[ch];
++    case A_MCHP_DMAC_CHSTATUS:
++        return ch_status(s, ch);
++    default:
++        return mchp_regfile_peek(rf, ri->offset, ri->size);
++    }
++}
++
++static void ch_reset(MchpDmacU2223State *s, unsigned ch)
++{
++    ch_stop(s, ch);
++    s->chctrla[ch] = 0;
++    s->chctrlb[ch] = 0;
++    s->inten[ch] = s->flag[ch] = 0;
++    s->swtrig &= ~BIT(ch);
++    s->inside[ch] = false;
++}
++
++static void state_reset(MchpDmacU2223State *s)
++{
++    timer_del(s->timer);
++    for (unsigned ch = 0; ch < NCH; ch++) {
++        ch_reset(s, ch);
++        s->left[ch] = s->total[ch] = 0;
++    }
++    s->swtrig = 0;
++    s->last = -1;
++    s->abusy = false;
++    s->active_btcnt = 0;
++    s->crc_fed = false;
++    s->crc = 0;
++    s->crc_busy = false;
++}
++
++static void ctrl_write(MchpDmacU2223State *s, uint32_t old, uint32_t written,
++                       uint32_t we)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++
++    if (written & we & R_MCHP_DMAC_CTRL_SWRST_MASK) {
++        if (old & (R_MCHP_DMAC_CTRL_DMAENABLE_MASK |
++                   R_MCHP_DMAC_CTRL_CRCENABLE_MASK)) {
++            qemu_log_mask(LOG_GUEST_ERROR, "%s: CTRL.SWRST while enabled "
++                          "(ignored)\n", rb->name);
++            set_reg(s, A_MCHP_DMAC_CTRL, 2, old);
++        } else {
++            uint8_t dbg = reg(s, A_MCHP_DMAC_DBGCTRL, 1);
++
++            mchp_regfile_reset(&rb->rf);        /* all but DBGCTRL */
++            set_reg(s, A_MCHP_DMAC_DBGCTRL, 1, dbg);
++            state_reset(s);
++        }
++        return;
++    }
++    /* CRCENABLE stays set while the I/O mode CRC is busy */
++    if ((old & R_MCHP_DMAC_CTRL_CRCENABLE_MASK) && !crc_on(s) &&
++        s->crc_busy) {
++        set_reg(s, A_MCHP_DMAC_CTRL, 2, reg(s, A_MCHP_DMAC_CTRL, 2) |
++                R_MCHP_DMAC_CTRL_CRCENABLE_MASK);
++    } else if (crc_on(s) && !(old & R_MCHP_DMAC_CTRL_CRCENABLE_MASK)) {
++        /* CRCCHKSUM holds the seed, as the raw register */
++        uint32_t seed = reg(s, A_MCHP_DMAC_CRCCHKSUM, 4);
++
++        s->crc = crc32_poly(s) ? revbit32(seed) : seed & 0xFFFF;
++        s->crc_busy = false;
++        s->crc_fed = false;
++    } else if (!crc_on(s) && (old & R_MCHP_DMAC_CTRL_CRCENABLE_MASK)) {
++        set_reg(s, A_MCHP_DMAC_CRCCHKSUM, 4, crc_read(s));
++    }
++}
++
++static void chctrla_write(MchpDmacU2223State *s, unsigned ch, uint32_t val)
++{
++    bool was = ch_on(s, ch);
++
++    if ((val & R_MCHP_DMAC_CHCTRLA_SWRST_MASK) && !was) {
++        ch_reset(s, ch);
++        return;
++    }
++    s->chctrla[ch] = val & CHCTRLA_MASK & ~R_MCHP_DMAC_CHCTRLA_SWRST_MASK;
++    if (ch_on(s, ch) && !was) {
++        s->ferr[ch] = s->susp[ch] = s->refetch[ch] = s->skip[ch] = false;
++        s->pend[ch] = s->pend_hw[ch] = s->action[ch] = false;
++        fetch(s, ch, reg(s, A_MCHP_DMAC_BASEADDR, 4) + 16 * ch);
++        ch_take_swtrig(s, ch);
++    } else if (!ch_on(s, ch) && was) {
++        write_back(s, ch);
++        if (s->last == ch) {
++            s->abusy = false;
++        }
++        ch_stop(s, ch);
++    }
++}
++
++static void chctrlb_write(MchpDmacU2223State *s, unsigned ch, uint32_t val)
++{
++    if (ch_on(s, ch)) {
++        s->chctrlb[ch] = (s->chctrlb[ch] & ~CHCTRLB_LVL) |
++                         (val & CHCTRLB_LVL);
++    } else {
++        s->chctrlb[ch] = val & CHCTRLB_MASK;
++    }
++    switch (FIELD_EX32(val, MCHP_DMAC_CHCTRLB, CMD)) {
++    case 1:
++        ch_suspend(s, ch);
++        break;
++    case 2:
++        ch_resume(s, ch);
++        break;
++    default:
++        break;
++    }
++}
++
++static void post_write(MchpRegFile *rf, const MchpRegInfo *ri, unsigned idx,
++                       uint32_t old, uint32_t written, uint32_t we)
++{
++    MchpDmacU2223State *s = MCHP_DMAC_U2223(rf->opaque);
++    uint32_t val = written & we;
++    int ch = window_ch(s, true);
++
++    switch (ri->offset) {
++    case A_MCHP_DMAC_CTRL:
++        ctrl_write(s, old, written, we);
++        break;
++    case A_MCHP_DMAC_CRCCTRL:
++        if (crc_on(s)) {
++            set_reg(s, A_MCHP_DMAC_CRCCTRL, 2, old);    /* enable-protected */
++        }
++        break;
++    case A_MCHP_DMAC_CRCDATAIN:
++        if (crc_on(s) && crc_src(s) == CRCSRC_IO) {
++            crc_feed(s, val, 1 << MIN(FIELD_EX32(reg(s, A_MCHP_DMAC_CRCCTRL,
++                                                     2),
++                                                 MCHP_DMAC_CRCCTRL,
++                                                 CRCBEATSIZE), 2));
++            s->crc_busy = true;
++        }
++        break;
++    case A_MCHP_DMAC_CRCCHKSUM:
++        if (crc_on(s)) {
++            set_reg(s, A_MCHP_DMAC_CRCCHKSUM, 4, old);  /* enable-protected */
++        }
++        break;
++    case A_MCHP_DMAC_CRCSTATUS:
++        if (val & R_MCHP_DMAC_CRCSTATUS_CRCBUSY_MASK) {
++            s->crc_busy = false;
++        }
++        break;
++    case A_MCHP_DMAC_SWTRIGCTRL:
++        s->swtrig = val & MAKE_64BIT_MASK(0, NCH);
++        for (unsigned c = 0; c < NCH; c++) {
++            ch_take_swtrig(s, c);
++        }
++        break;
++    case A_MCHP_DMAC_INTPEND: {
++        unsigned id = FIELD_EX32(val, MCHP_DMAC_INTPEND, ID);
++
++        if (id < NCH) {
++            s->flag[id] &= ~(val >> 8 & 7);
++        }
++        break;
++    }
++    case A_MCHP_DMAC_CHCTRLA:
++        if (ch >= 0) {
++            chctrla_write(s, ch, val);
++        }
++        break;
++    case A_MCHP_DMAC_CHCTRLB:
++        if (ch >= 0) {
++            chctrlb_write(s, ch, val);
++        }
++        break;
++    case A_MCHP_DMAC_CHINTENCLR:
++        if (ch >= 0) {
++            s->inten[ch] &= ~(val & 7);
++        }
++        break;
++    case A_MCHP_DMAC_CHINTENSET:
++        if (ch >= 0) {
++            s->inten[ch] |= val & 7;
++        }
++        break;
++    case A_MCHP_DMAC_CHINTFLAG:
++        if (ch >= 0) {
++            s->flag[ch] &= ~(val & 7);
++        }
++        break;
++    default:
++        break;
++    }
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++    update_wanted(s);
++    schedule(s);
++}
++
++static uint32_t irq_lines(MchpRegBlock *rb)
++{
++    MchpDmacU2223State *s = MCHP_DMAC_U2223(rb);
++
++    for (unsigned ch = 0; ch < NCH; ch++) {
++        if (ch_pending_irq(s, ch)) {
++            return 1;
++        }
++    }
++    return 0;
++}
++
++static bool irq_pending(MchpRegBlock *rb)
++{
++    return irq_lines(rb) != 0;
++}
++
++static void reset_hold(MchpRegBlock *rb)
++{
++    state_reset(MCHP_DMAC_U2223(rb));
++}
++
++static void reset_exit(MchpRegBlock *rb)
++{
++    update_wanted(MCHP_DMAC_U2223(rb));
++}
++
++static void dmac_u2223_init(Object *obj)
++{
++    MchpDmacU2223State *s = MCHP_DMAC_U2223(obj);
++
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, timer_cb, s);
++    s->last = -1;
++    qdev_init_gpio_in_named(DEVICE(obj), trigger_in, MCHP_DMAC_TRIGGER,
++                            MCHP_DMAC_MAX_TRIGGERS);
++    qdev_init_gpio_out_named(DEVICE(obj), s->trig_wanted,
++                             MCHP_DMAC_TRIGGER_WANTED, MCHP_DMAC_MAX_TRIGGERS);
++    qdev_init_gpio_out_named(DEVICE(obj), s->ch_event, MCHP_DMAC_CH_EVENT,
++                             NEV);
++    qdev_init_gpio_in_named(DEVICE(obj), event_in, MCHP_DMAC_CH_EVENT_IN,
++                            NEV);
++}
++
++static void dmac_u2223_finalize(Object *obj)
++{
++    timer_free(MCHP_DMAC_U2223(obj)->timer);
++}
++
++static const VMStateDescription vmstate_desc = {
++    .name = "mchp-dmac-u2223-desc",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_UINT16(btctrl, DmacDesc),
++        VMSTATE_UINT16(btcnt, DmacDesc),
++        VMSTATE_UINT32(srcaddr, DmacDesc),
++        VMSTATE_UINT32(dstaddr, DmacDesc),
++        VMSTATE_UINT32(descaddr, DmacDesc),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static const VMStateDescription vmstate_mchp_dmac_u2223 = {
++    .name = TYPE_MCHP_DMAC_U2223,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpDmacU2223State, 1,
++                       vmstate_mchp_regblock, MchpRegBlock),
++        VMSTATE_TIMER_PTR(timer, MchpDmacU2223State),
++        VMSTATE_UINT8_ARRAY(chctrla, MchpDmacU2223State, NCH),
++        VMSTATE_UINT32_ARRAY(chctrlb, MchpDmacU2223State, NCH),
++        VMSTATE_UINT8_ARRAY(inten, MchpDmacU2223State, NCH),
++        VMSTATE_UINT8_ARRAY(flag, MchpDmacU2223State, NCH),
++        VMSTATE_STRUCT_ARRAY(cur, MchpDmacU2223State, NCH, 1, vmstate_desc,
++                             DmacDesc),
++        VMSTATE_UINT32_ARRAY(total, MchpDmacU2223State, NCH),
++        VMSTATE_UINT32_ARRAY(left, MchpDmacU2223State, NCH),
++        VMSTATE_BOOL_ARRAY(fetched, MchpDmacU2223State, NCH),
++        VMSTATE_BOOL_ARRAY(pend, MchpDmacU2223State, NCH),
++        VMSTATE_BOOL_ARRAY(action, MchpDmacU2223State, NCH),
++        VMSTATE_BOOL_ARRAY(susp, MchpDmacU2223State, NCH),
++        VMSTATE_BOOL_ARRAY(ferr, MchpDmacU2223State, NCH),
++        VMSTATE_BOOL_ARRAY(refetch, MchpDmacU2223State, NCH),
++        VMSTATE_UINT32_ARRAY(refetch_addr, MchpDmacU2223State, NCH),
++        VMSTATE_BOOL_ARRAY(skip, MchpDmacU2223State, NCH),
++        VMSTATE_BOOL_ARRAY(inside, MchpDmacU2223State, NCH),
++        VMSTATE_UINT32(swtrig, MchpDmacU2223State),
++        VMSTATE_INT32(last, MchpDmacU2223State),
++        VMSTATE_BOOL(abusy, MchpDmacU2223State),
++        VMSTATE_UINT16(active_btcnt, MchpDmacU2223State),
++        VMSTATE_BOOL(crc_fed, MchpDmacU2223State),
++        VMSTATE_UINT32(crc, MchpDmacU2223State),
++        VMSTATE_BOOL(crc_busy, MchpDmacU2223State),
++        VMSTATE_BOOL_ARRAY(ev_level, MchpDmacU2223State, NEV),
++        VMSTATE_BOOL_ARRAY(pend_hw, MchpDmacU2223State, NCH),
++        VMSTATE_UINT8_ARRAY(wanted, MchpDmacU2223State,
++                            MCHP_DMAC_MAX_TRIGGERS),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void dmac_u2223_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_dmac_u2223;
++    c->pre_read = pre_read;
++    c->post_write = post_write;
++    c->reset_hold = reset_hold;
++    c->reset_exit = reset_exit;
++    c->irq_pending = irq_pending;
++    c->irq_lines = irq_lines;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_dmac_u2223_types[] = {
++    {
++        .name = TYPE_MCHP_DMAC_U2223,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpDmacU2223State),
++        .instance_init = dmac_u2223_init,
++        .instance_finalize = dmac_u2223_finalize,
++        .class_init = dmac_u2223_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_dmac_u2223_types)
+diff --git a/hw/dma/meson.build b/hw/dma/meson.build
+index 642f46e..911b5e2 100644
+--- a/hw/dma/meson.build
++++ b/hw/dma/meson.build
+@@ -12,4 +12,5 @@ system_ss.add(when: 'CONFIG_OMAP', if_true: files('omap_dma.c', 'soc_dma.c'))
+ system_ss.add(when: 'CONFIG_RASPI', if_true: files('bcm2835_dma.c'))
+ system_ss.add(when: 'CONFIG_SIFIVE_PDMA', if_true: files('sifive_pdma.c'))
+ system_ss.add(when: 'CONFIG_XLNX_CSU_DMA', if_true: files('xlnx_csu_dma.c'))
+-system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_dmac.c'))
++system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_dmac.c',
++                                                         'mchp_dmac_u2223.c'))
+diff --git a/include/hw/dma/mchp_dmac.h b/include/hw/dma/mchp_dmac.h
+index 038ae56..6d7708f 100644
+--- a/include/hw/dma/mchp_dmac.h
++++ b/include/hw/dma/mchp_dmac.h
+@@ -19,6 +19,8 @@
+ #include "hw/misc/mchp_regblock.h"
+ 
+ #define TYPE_MCHP_DMAC "mchp-dmac"
++/* The PIC32CM JH01/MC00 DMAC (U2223, mchp_dmac_u2223.c): the same GPIOs */
++#define TYPE_MCHP_DMAC_U2223 "mchp-dmac-u2223"
+ 
+ #define MCHP_DMAC_MAX_TRIGGERS  128
+ 
+@@ -38,6 +40,11 @@ void mchp_dmac_set_trigger(DeviceState *dmac, unsigned id, hwaddr flag_addr,
+ #define MCHP_DMAC_TRIGGER "trigger"
+ #define MCHP_DMAC_TRIGGER_WANTED "trigger-wanted"
+ #define MCHP_DMAC_CH_EVENT "ch-event"
++/* U2223: input "ch-event-in"[n], EVSYS user CH_n (CHCTRLB.EVIE, EVACT) */
++#define MCHP_DMAC_CH_EVENT_IN "ch-event-in"
++
++void mchp_dmac_u2223_set_trigger(DeviceState *dmac, unsigned id,
++                                 hwaddr flag_addr, uint8_t mask);
+ 
+ /* Look again at the triggers (a peripheral's flags may have changed). */
+ void mchp_dmac_kick(DeviceState *dmac);
+diff --git a/include/hw/mchp/gen/dmac_u2223.h b/include/hw/mchp/gen/dmac_u2223.h
+index 30371f5..c6f4903 100644
+--- a/include/hw/mchp/gen/dmac_u2223.h
++++ b/include/hw/mchp/gen/dmac_u2223.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/dmac_u2223.yaml (sha1 3b028c44d440)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/dmac_u2223.h b/include/hw/mchp/gen/pic32cm1216mc00048/dmac_u2223.h
+index ba1091f..b286893 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/dmac_u2223.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/dmac_u2223.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/dmac_u2223.yaml (sha1 3b028c44d440)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,79 +23,85 @@ static const MchpRegInfo pic32cm1216mc00048_dmac_regs[] = {
+     {
+         .name = "CTRL", .offset = 0x00, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x0F07, .wmask = 0x0F07,
+-        .rdz = 0x0001, .flags = 0,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CRCCTRL", .offset = 0x02, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x3F0F, .wmask = 0x3F0F,
+-        .flags = 0,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CRCDATAIN", .offset = 0x04, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CRCCHKSUM", .offset = 0x08, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CRCSTATUS", .offset = 0x0C, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_PAC | MCHP_F_DYNAMIC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x0D, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "QOSCTRL", .offset = 0x0E, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x2A, .impl = 0x3F, .wmask = 0x3F, .flags = 0,
++        .alias_of = -1, .reset = 0x2A, .impl = 0x3F, .wmask = 0x3F,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "SWTRIGCTRL", .offset = 0x10, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x00000FFF,
+-        .wmask = 0x00000FFF, .flags = 0,
++        .wmask = 0x00000FFF,
++        .flags = MCHP_F_PAC | MCHP_F_DYNAMIC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "PRICTRL", .offset = 0x14, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x8F8F8F8F,
+-        .wmask = 0x8F8F8F8F, .flags = 0,
++        .wmask = 0x8F8F8F8F,
++        .flags = MCHP_F_PAC | MCHP_F_DYNAMIC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "INTPEND", .offset = 0x20, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xE70F, .wmask = 0xE70F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "INTSTATUS", .offset = 0x24, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00000FFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "BUSYCH", .offset = 0x28, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00000FFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "PENDCH", .offset = 0x2C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00000FFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "ACTIVE", .offset = 0x30, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFF9F0F,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "BASEADDR", .offset = 0x34, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .enprot = 0xFFFFFFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "WRBADDR", .offset = 0x38, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .enprot = 0xFFFFFFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "CHID", .offset = 0x3F, .size = 1, .count = 1, .stride = 1,
+@@ -104,32 +110,37 @@ static const MchpRegInfo pic32cm1216mc00048_dmac_regs[] = {
+     {
+         .name = "CHCTRLA", .offset = 0x40, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x43, .wmask = 0x43, .rdz = 0x01,
+-        .flags = 0,
++        .flags = MCHP_F_PAC | MCHP_F_DYNAMIC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHCTRLB", .offset = 0x44, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x03C03F7F,
+-        .wmask = 0x03C03F7F, .flags = 0,
++        .wmask = 0x03C03F7F,
++        .flags = MCHP_F_PAC | MCHP_F_DYNAMIC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHINTENCLR", .offset = 0x4C, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 20 /* CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR | MCHP_F_DYNAMIC |
++            MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHINTENSET", .offset = 0x4D, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 20 /* CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET | MCHP_F_DYNAMIC |
++            MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHINTFLAG", .offset = 0x4E, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00, .w1c = 0x07,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHSTATUS", .offset = 0x4F, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+ };
+ #define PIC32CM1216MC00048_DMAC_NREGS 23
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/dmac_u2223.h b/include/hw/mchp/gen/pic32cm5164jh01100/dmac_u2223.h
+index 3646107..a4fd740 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/dmac_u2223.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/dmac_u2223.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/dmac_u2223.yaml (sha1 3b028c44d440)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,79 +23,85 @@ static const MchpRegInfo pic32cm5164jh01100_dmac_regs[] = {
+     {
+         .name = "CTRL", .offset = 0x00, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x0F07, .wmask = 0x0F07,
+-        .rdz = 0x0001, .flags = 0,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CRCCTRL", .offset = 0x02, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x3F0F, .wmask = 0x3F0F,
+-        .flags = 0,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CRCDATAIN", .offset = 0x04, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CRCCHKSUM", .offset = 0x08, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CRCSTATUS", .offset = 0x0C, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
++        .flags = MCHP_F_PAC | MCHP_F_DYNAMIC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x0D, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "QOSCTRL", .offset = 0x0E, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x2A, .impl = 0x3F, .wmask = 0x3F, .flags = 0,
++        .alias_of = -1, .reset = 0x2A, .impl = 0x3F, .wmask = 0x3F,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "SWTRIGCTRL", .offset = 0x10, .size = 4, .count = 1,
+         .stride = 4, .alias_of = -1, .reset = 0x00000000, .impl = 0x00000FFF,
+-        .wmask = 0x00000FFF, .flags = 0,
++        .wmask = 0x00000FFF,
++        .flags = MCHP_F_PAC | MCHP_F_DYNAMIC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "PRICTRL0", .offset = 0x14, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x8F8F8F8F,
+-        .wmask = 0x8F8F8F8F, .flags = 0,
++        .wmask = 0x8F8F8F8F,
++        .flags = MCHP_F_PAC | MCHP_F_DYNAMIC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "INTPEND", .offset = 0x20, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xE70F, .wmask = 0xE70F,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "INTSTATUS", .offset = 0x24, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00000FFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "BUSYCH", .offset = 0x28, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00000FFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "PENDCH", .offset = 0x2C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00000FFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "ACTIVE", .offset = 0x30, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFF9F0F,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "BASEADDR", .offset = 0x34, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .enprot = 0xFFFFFFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "WRBADDR", .offset = 0x38, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFFFFFFFF,
+-        .wmask = 0xFFFFFFFF, .flags = 0,
++        .wmask = 0xFFFFFFFF, .enprot = 0xFFFFFFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "CHID", .offset = 0x3F, .size = 1, .count = 1, .stride = 1,
+@@ -104,32 +110,37 @@ static const MchpRegInfo pic32cm5164jh01100_dmac_regs[] = {
+     {
+         .name = "CHCTRLA", .offset = 0x40, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x43, .wmask = 0x43, .rdz = 0x01,
+-        .flags = 0,
++        .flags = MCHP_F_PAC | MCHP_F_DYNAMIC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHCTRLB", .offset = 0x44, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x03C03F7F,
+-        .wmask = 0x03C03F7F, .flags = 0,
++        .wmask = 0x03C03F7F,
++        .flags = MCHP_F_PAC | MCHP_F_DYNAMIC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHINTENCLR", .offset = 0x4C, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 20 /* CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_CLEAR,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR | MCHP_F_DYNAMIC |
++            MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHINTENSET", .offset = 0x4D, .size = 1, .count = 1,
+         .stride = 1, .alias_of = 20 /* CHINTENSET */, .reset = 0x00,
+-        .impl = 0x07, .wmask = 0x07, .flags = MCHP_F_ALIAS_SET,
++        .impl = 0x07, .wmask = 0x07,
++        .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET | MCHP_F_DYNAMIC |
++            MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHINTFLAG", .offset = 0x4E, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00, .w1c = 0x07,
+-        .flags = 0,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CHSTATUS", .offset = 0x4F, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+ };
+ #define PIC32CM5164JH01100_DMAC_NREGS 23
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index fd195af..f4659ac 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -253,7 +253,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-click-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-dmac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-click-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-dmac-test.c b/tests/qtest/pic32cm-dmac-test.c
+new file mode 100644
+index 0000000..6c0630e
+--- /dev/null
++++ b/tests/qtest/pic32cm-dmac-test.c
+@@ -0,0 +1,133 @@
++/*
++ * QTest for the DMA controller of the PIC32CM MC00 (pic32cm-mc00-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The U2223 model through its CHID window: a copy, the write-back copy,
++ * the CRC engine, CHID 12-15. firmware/hello APP=dmac checks the rest
++ * against silicon.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++#include "qemu/bswap.h"
++
++#define MACHINE         "-M pic32cm-mc00-cpro"
++
++#define DMAC            0x41006000
++#define R_CTRL          0x00
++#define R_CRCCTRL       0x02
++#define R_CRCDATAIN     0x04
++#define R_CRCCHKSUM     0x08
++#define R_CRCSTATUS     0x0C
++#define R_SWTRIGCTRL    0x10
++#define R_BASEADDR      0x34
++#define R_WRBADDR       0x38
++#define R_CHID          0x3F
++#define R_CHCTRLA       0x40
++#define R_CHCTRLB       0x44
++#define R_CHINTFLAG     0x4E
++#define R_CHSTATUS      0x4F
++
++#define DESC            0x20001000      /* 16-byte aligned sections */
++#define WB              0x20001100
++#define SRC             0x20001200
++#define DST             0x20001300
++
++#define DMAENABLE       0x0002
++#define CRCENABLE       0x0004
++#define LVLEN_ALL       0x0F00
++
++static QTestState *dmac_init(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, DMAC + R_BASEADDR, DESC);
++    qtest_writel(qts, DMAC + R_WRBADDR, WB);
++    qtest_writew(qts, DMAC + R_CTRL, DMAENABLE | LVLEN_ALL);
++    return qts;
++}
++
++/* A block of @n byte beats from SRC to DST (end addresses) */
++static void put_desc(QTestState *qts, unsigned ch, uint16_t n)
++{
++    uint8_t d[16];
++
++    stw_le_p(&d[0], 0x0C01);            /* VALID, SRCINC, DSTINC, bytes */
++    stw_le_p(&d[2], n);
++    stl_le_p(&d[4], SRC + n);
++    stl_le_p(&d[8], DST + n);
++    stl_le_p(&d[12], 0);
++    qtest_memwrite(qts, DESC + 16 * ch, d, sizeof(d));
++}
++
++static void test_copy(void)
++{
++    QTestState *qts = dmac_init();
++    uint8_t src[32], dst[32];
++
++    for (unsigned i = 0; i < sizeof(src); i++) {
++        src[i] = i * 3;
++    }
++    qtest_memwrite(qts, SRC, src, sizeof(src));
++    put_desc(qts, 3, sizeof(src));
++    qtest_writeb(qts, DMAC + R_CHID, 3);
++    qtest_writeb(qts, DMAC + R_CHCTRLA, 0x02);
++    /* the descriptor is in the write-back copy at once */
++    g_assert_cmphex(qtest_readw(qts, WB + 16 * 3), ==, 0x0C01);
++    qtest_writel(qts, DMAC + R_SWTRIGCTRL, BIT(3));
++    /* a status read lets the transfer run */
++    g_assert_cmphex(qtest_readb(qts, DMAC + R_CHINTFLAG), ==, 0x02);
++    g_assert_cmphex(qtest_readb(qts, DMAC + R_CHCTRLA), ==, 0);
++    qtest_memread(qts, DST, dst, sizeof(dst));
++    g_assert_cmpmem(src, sizeof(src), dst, sizeof(dst));
++    /* the write-back copy: VALID cleared, BTCNT 0 */
++    g_assert_cmphex(qtest_readw(qts, WB + 16 * 3), ==, 0x0C00);
++    g_assert_cmphex(qtest_readw(qts, WB + 16 * 3 + 2), ==, 0);
++    qtest_quit(qts);
++}
++
++static void test_crc(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++    static const char s9[] = "123456789";
++
++    qtest_writel(qts, DMAC + R_CRCCHKSUM, 0xFFFFFFFF);
++    qtest_writew(qts, DMAC + R_CRCCTRL, (1 << 2) | (1 << 8));  /* CRC-32, IO */
++    qtest_writew(qts, DMAC + R_CTRL, CRCENABLE);
++    for (unsigned i = 0; i < 9; i++) {
++        qtest_writel(qts, DMAC + R_CRCDATAIN, (uint8_t)s9[i]);
++        g_assert_cmphex(qtest_readb(qts, DMAC + R_CRCSTATUS) & 1, ==, 1);
++        qtest_writeb(qts, DMAC + R_CRCSTATUS, 1);
++    }
++    g_assert_cmphex(qtest_readl(qts, DMAC + R_CRCCHKSUM), ==, 0xCBF43926);
++    qtest_quit(qts);
++}
++
++/* CHID 12-15 read channels 8-11 and ignore writes */
++static void test_chid_alias(void)
++{
++    QTestState *qts = dmac_init();
++
++    qtest_writeb(qts, DMAC + R_CHID, 9);
++    qtest_writel(qts, DMAC + R_CHCTRLB, 0x0900);
++    qtest_writeb(qts, DMAC + R_CHID, 13);
++    g_assert_cmphex(qtest_readl(qts, DMAC + R_CHCTRLB), ==, 0x0900);
++    qtest_writel(qts, DMAC + R_CHCTRLB, 0x0D00);
++    qtest_writeb(qts, DMAC + R_CHID, 9);
++    g_assert_cmphex(qtest_readl(qts, DMAC + R_CHCTRLB), ==, 0x0900);
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++    qtest_add_func("pic32cm-dmac/copy", test_copy);
++    qtest_add_func("pic32cm-dmac/crc", test_crc);
++    qtest_add_func("pic32cm-dmac/chid-alias", test_chid_alias);
++    return g_test_run();
++}
+-- 
+2.53.0.windows.2
+

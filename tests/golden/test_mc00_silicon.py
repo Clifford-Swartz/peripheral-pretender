@@ -162,7 +162,8 @@ def test_transcript_matches_silicon(mc00, app):
     assert result.uart == silicon.replace("\r\n", "\n")
 
 
-@pytest.mark.parametrize("app", ["ac", "adc", "dac", "freqm", "sdadc", "tsens"])
+@pytest.mark.parametrize("app", ["ac", "adc", "dac", "dmac", "freqm", "sdadc",
+                                 "tsens"])
 def test_analog_checks_pass(mc00, app):
     """The analog applications check themselves against what silicon did
     (<app>-silicon.txt in GOLDEN: codes follow the supply and the open
@@ -174,7 +175,7 @@ def test_analog_checks_pass(mc00, app):
     assert (GOLDEN / f"{app}-silicon.txt").is_file()
     # ac, freqm and tsens time what they check with SysTick:
     # deterministic time
-    timed = app in ("ac", "freqm", "tsens")
+    timed = app in ("ac", "dmac", "freqm", "tsens")
     result = run(RunOptions(elf, machine=MACHINE, timeout_s=60,
                             icount_shift=5 if timed else None))
     assert result.firmware_exit == 0, result.uart

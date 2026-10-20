@@ -590,3 +590,58 @@ points at a specific model decision in the last column.
   the twin must pace level triggers.
 - **O17** Do the dmac.h `TRIGSRC_*_Val` macros (SAM C21 numbering) really select different peripherals
   on silicon, as Table 24-2 implies (E15)?
+
+## 8. Answers from silicon (2026-10-20)
+
+The desk EV15N46A ran `firmware/hello/tests/dmacprobe.c` (E0-E25) and `dmacprobe2.c`; the model
+(`hw/dma/mchp_dmac_u2223.c`) follows these answers and `firmware/hello/tests/dmac.c` checks them on
+both (`golden/pic32cm1216mc00048-a1/dmac-silicon.txt`). Open questions of section 7:
+
+- **O1** TCMPL is set at the end of a transaction whatever BLOCKACT says (NOACT included, interrupt
+  enabled or not); a middle block sets it only with BLOCKACT INT. CircuitPython was right.
+- **O2** The write-back BTCNT is updated when the channel loses the arbiter, is suspended, disabled
+  or hits a bus error, and at the end of a block; not per beat (three beats in, it still read 8).
+  ACTIVE.BTCNT has the live count.
+- **O3** BTCNT = 0 is 65536 beats (6.8 ms for byte beats at 48 MHz).
+- **O4** SWTRIGx on a disabled channel stays set and fires when the channel is enabled. On an enabled
+  one it becomes the pending request and reads 0; written while a request is pending it stays set
+  (queued); a third write is lost. A software request on a suspended channel stays pending and runs
+  after a RESUME command.
+- **O5** INTPEND.ID is the lowest channel with an *enabled* flag set (flags whose interrupt is off do
+  not count); it reads 0 when none; writing flag bits clears them in channel ID.
+- **O6** The low four bits of BASEADDR and WRBADDR are kept and used (a section at 8 mod 16 works).
+- **O8** CHID 12-15 read channels 8-11 and ignore writes.
+- **O9** CTRL.SWRST resets everything but DBGCTRL. With the DMAC enabled: not tried.
+- **O11** CRC-16 is CCITT MSB first (seed 0: 0x31C3, seed 0xFFFF: 0x29B1 for "123456789"); CRC-32 is
+  the IEEE reflected one (0xCBF43926). Halfword and word beats go in LSB first. While CRCBUSY is set
+  CRCCHKSUM reads the CRC-32 register bit-reversed (0x1208C43E after "1"); idle, reversed and
+  complemented. I/O mode: each CRCDATAIN write sets CRCBUSY, firmware clears it by writing 1; clearing
+  CRCENABLE meanwhile is ignored (not deferred). Channel mode: CRCBUSY reads 1 while the channel is
+  enabled. CRCZERO: not seen set.
+- **O12** An invalid descriptor raises TERR *and* SUSP, sets FERR and leaves the channel enabled and
+  suspended; at enable for the first descriptor (the write-back copy is not written), at the block end
+  for a linked one. A RESUME command clears FERR and fetches the failing descriptor again.
+- **O13** The last block with BLOCKACT SUSPEND suspends the channel (no TCMPL, BUSY stays 1 in a
+  transaction); a RESUME then fetches DESCADDR 0: TERR + SUSP + FERR.
+- **O14** CHSTATUS.BUSY is 1 while a trigger action runs (between BEAT or BLOCK triggers it is 0; a
+  transaction suspended between blocks keeps it); ACTIVE.ABUSY stays 1 while the last granted channel
+  is inside a block, and after a bus error.
+- **O15** Arbitration is per beat: round robin alternates single beats, starting after LVLPRI (0 at
+  reset: channel 1 first) and leaving LVLPRI at the last granted channel; static priority runs the
+  lower channel to the end first; a higher level preempts; a disabled level's request stays pending.
+- **O16** A SERCOM TX trigger with TRIGACT BLOCK sends the whole block back to back and the USART
+  drops all but the first characters (the twin's USART, without TX pacing, drops none).
+- **O17** TRIGSRC 0x1B (dmac.h's "TC0_OVF", SAM C21 numbering) moves nothing with TC0 running; TC0's
+  overflow is 0x15 (Table 24-2). TC overflow requests do not clear TC INTFLAG.OVF.
+- Others: the first descriptor is fetched at ENABLE (a load right after the write, all but the very
+  next, sees it). Disabling a channel mid-transfer writes BTCNT back; ENABLE reads 1 for a moment
+  (not modelled). Clearing CTRL.DMAENABLE leaves every channel's ENABLE set. A RESUME issued before a
+  suspending block skips that suspend. A RESUME *event* resumed a suspended channel only while it had
+  a request pending from its peripheral trigger (with none, or a software one, it did nothing): a
+  hypothesis that fits five cases. RESUME (command or event) does not clear SUSP. A bus error raises
+  TERR, disables the channel and writes back BTCNT undecremented. Event outputs: EVOSEL BLOCK pulses
+  per block, BEAT per beat. One NVIC line, lowest INTPEND.ID first.
+- Unexplained: with BASEADDR = WRBADDR the first run did not clear VALID and a second enable left the
+  channel with FERR and no flags (not modelled; no firmware does this).
+- Test firmware lesson: read memory a DMA writes through `volatile`; the compiler hoisted a load of
+  the write-back copy above a DMAC register read and made the fetch look late.

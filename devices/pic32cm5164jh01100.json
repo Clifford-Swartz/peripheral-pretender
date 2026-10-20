@@ -12606,7 +12606,15 @@
    "version": "2.4.0",
    "caption": "Direct Memory Access Controller",
    "core": false,
-   "overlay": null,
+   "overlay": {
+    "file": "overlays/dmac_u2223.yaml",
+    "sha1": "3b028c44d4401b93c4047a9541d3b3bf6daec2cf",
+    "status": "applied",
+    "versions": [
+     "2f0",
+     "2.4.0"
+    ]
+   },
    "size": 80,
    "selector": null,
    "default_view": "",
@@ -12630,12 +12638,15 @@
        "wmask": 3847,
        "w1c": 0,
        "ro": 0,
-       "rdz": 1,
+       "rdz": 0,
        "enprot": 0,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control",
@@ -12701,8 +12712,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing "
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -12724,7 +12740,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "CRC Control",
@@ -12853,7 +12872,13 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CRCDATAIN",
@@ -12873,7 +12898,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "CRC Data Input",
@@ -12888,7 +12916,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CRCCHKSUM",
@@ -12908,9 +12942,13 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "CRC Checksum",
        "note": "",
        "fields": [
@@ -12923,7 +12961,18 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CRCSTATUS",
@@ -12943,7 +12992,11 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "DYNAMIC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "CRC Status",
@@ -12966,7 +13019,18 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "DBGCTRL",
@@ -12986,7 +13050,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Debug Control",
@@ -13021,7 +13087,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "QOS Control",
@@ -13135,7 +13203,11 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "DYNAMIC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Software Trigger Control",
@@ -13238,7 +13310,18 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "PRICTRL0",
@@ -13258,7 +13341,11 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "DYNAMIC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Priority Control",
@@ -13373,7 +13460,18 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "INTPEND",
@@ -13393,7 +13491,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Interrupt Pending",
@@ -13456,7 +13557,18 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "INTSTATUS",
@@ -13477,6 +13589,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -13586,6 +13699,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -13608,6 +13726,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -13717,6 +13836,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -13739,6 +13863,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -13848,6 +13973,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -13870,6 +14000,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -13939,6 +14070,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -13956,11 +14092,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 4294967295,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Descriptor Memory Section Base Address",
@@ -13975,7 +14113,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0xFFFFFFFF"
+        ]
+       ]
       },
       {
        "name": "WRBADDR",
@@ -13991,11 +14135,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 4294967295,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Write-Back Memory Section Base Address",
@@ -14010,7 +14156,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0xFFFFFFFF"
+        ]
+       ]
       },
       {
        "name": "CHID",
@@ -14065,7 +14217,11 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "DYNAMIC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel Control A",
@@ -14101,6 +14257,16 @@
          "rdz",
          "heuristic",
          "SWRST self-clearing"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -14122,7 +14288,11 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "DYNAMIC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel Control B",
@@ -14575,7 +14745,18 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "CHINTENCLR",
@@ -14596,7 +14777,10 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_CLEAR"
+        "PAC",
+        "ALIAS_CLEAR",
+        "DYNAMIC",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHINTENSET",
        "read_side_effect": false,
@@ -14633,6 +14817,16 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -14655,7 +14849,10 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "ALIAS_SET"
+        "PAC",
+        "ALIAS_SET",
+        "DYNAMIC",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": "CHINTENSET",
        "read_side_effect": false,
@@ -14692,6 +14889,16 @@
          "alias",
          "heuristic",
          "CHINTENSET/CHINTENCLR pair: shared storage CHINTENSET"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -14713,7 +14920,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Channel Interrupt Flag Status and Clear",
@@ -14749,6 +14959,16 @@
          "w1c",
          "heuristic",
          "ATDF atomic-op=clear:CHINTFLAG: all fields W1C (0x7)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -14771,6 +14991,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -14808,6 +15029,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       }
