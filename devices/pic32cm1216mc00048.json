@@ -46075,7 +46075,14 @@
    "version": "1.0.1",
    "caption": "Temperature Sensor",
    "core": false,
-   "overlay": null,
+   "overlay": {
+    "file": "overlays/tsens_u2261.yaml",
+    "sha1": "3d8e73e2a91ab7b3ddf05367d628a8b1db7a3173",
+    "status": "applied",
+    "versions": [
+     "1.0.1"
+    ]
+   },
    "size": 40,
    "selector": null,
    "default_view": "",
@@ -46087,7 +46094,7 @@
      "irq": {
       "flag": "INTFLAG",
       "enable": "INTENSET",
-      "source": "heuristic"
+      "source": "overlay"
      },
      "registers": [
       {
@@ -46104,11 +46111,14 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 1,
-       "enprot": 0,
+       "enprot": 64,
        "syncbusy": 3,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control A Register",
@@ -46142,8 +46152,18 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
+         "enprot",
+         "overlay",
+         "RUNSTDBY = 0x40"
         ],
         [
          "sync",
@@ -46171,6 +46191,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
+        "HOOK_POST_WRITE",
         "WRITE_ONLY"
        ],
        "alias_of": null,
@@ -46192,6 +46214,16 @@
          "access",
          "atdf",
          "WRITE_ONLY, reads 0 (ATDF rw=W)"
+        ],
+        [
+         "rdz",
+         "overlay",
+         "strobe START"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -46209,11 +46241,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 23,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control C Register",
@@ -46272,7 +46306,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0x17"
+        ]
+       ]
       },
       {
        "name": "EVCTRL",
@@ -46288,11 +46328,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 7,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Event Control Register",
@@ -46323,7 +46365,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0x7"
+        ]
+       ]
       },
       {
        "name": "INTENCLR",
@@ -46344,6 +46392,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_CLEAR"
        ],
        "alias_of": "INTENSET",
@@ -46387,8 +46436,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "clear -> INTENSET"
         ]
        ]
       },
@@ -46411,6 +46460,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_SET"
        ],
        "alias_of": "INTENSET",
@@ -46454,8 +46504,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "set -> INTENSET"
         ]
        ]
       },
@@ -46519,8 +46569,8 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:INTFLAG: all fields W1C (0xF)"
+         "overlay",
+         "all = 0xF"
         ]
        ]
       },
@@ -46619,8 +46669,8 @@
         ],
         [
          "dynamic",
-         "heuristic",
-         "register named *SYNCBUSY: dynamic, reads 0"
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -46643,10 +46693,11 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "HOOK_PRE_READ",
         "READ_ONLY"
        ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Value Register",
        "note": "",
        "fields": [
@@ -46664,6 +46715,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
         ]
        ]
       },
@@ -46681,11 +46737,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 16777215,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Window Monitor Lower Threshold Register",
@@ -46700,7 +46758,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0xFFFFFF"
+        ]
+       ]
       },
       {
        "name": "WINUT",
@@ -46716,11 +46780,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 16777215,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Window Monitor Upper Threshold Register",
@@ -46735,7 +46801,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0xFFFFFF"
+        ]
+       ]
       },
       {
        "name": "GAIN",
@@ -46751,11 +46823,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 16777215,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Gain Register",
@@ -46770,7 +46844,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0xFFFFFF"
+        ]
+       ]
       },
       {
        "name": "OFFSET",
@@ -46786,11 +46866,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 16777215,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Offset Register",
@@ -46805,7 +46887,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0xFFFFFF"
+        ]
+       ]
       },
       {
        "name": "CAL",
@@ -46821,11 +46909,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 16191,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Calibration Register",
@@ -46848,7 +46938,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0x3F3F"
+        ]
+       ]
       },
       {
        "name": "DBGCTRL",
@@ -46868,7 +46964,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Debug Control Register",

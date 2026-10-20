@@ -520,7 +520,7 @@ chips, checking each on the boards that are plugged in first (today the MC00 Cur
 
 What is still register-only:
 
-- **MC00:** DMAC (U2223), CCL, PDEC, FREQM, TSENS, MTB, HMATRIXB.
+- **MC00:** DMAC (U2223), CCL, PDEC, FREQM, MTB, HMATRIXB.
 - **JH01:** DMAC, the RTC (03608), CAN, CCL, PDEC, FREQM, PTC, ICM, MTB, MCRAMC, SMBIST.
 - **SAM E51:** CAN, AC (U2501), CCL, PDEC, FREQM, AES, ICM, I2S, SDHC, PCC, CMCC, RAMECC, PM,
   SUPC, DSU and the trace blocks.
@@ -552,13 +552,18 @@ pulled in along the way:
 - The MC00 board takes `vcc=<mV>` (VCC_SEL). The desk board at 5 V is `vcc=4890`.
 - The generator learned `extra_fields`, for bits silicon has and the ATDF lacks.
 
+**TSENS (U2261): done** (patch 0060), the same way (`tsensprobe`, `tsensprobe2`, `APP=tsens`, qtest
+`pic32cm-tsens-test`). The answers are in section 9 of `docs/research/peripherals/tsens-u2261.md`.
+The twin reads 25.00 C unless `qom-set /machine/soc/tsens temperature <mC>`; the desk chip reads
+about 30 C. A first reading of the probe was wrong twice (START while busy, START while disabled):
+running the checked app on silicon caught it, so keep that step.
+
 Next on the MC00, in order:
 
-1. **TSENS** (small).
-2. **FREQM** (needs the second GCLK).
-3. **DMAC U2223** (the big one; the note has a 25-experiment probe plan).
-4. **PDEC and CCL** (after a generic pad-to-peripheral input path).
-5. **MTB** register fixes.
+1. **FREQM** (needs the second GCLK).
+2. **DMAC U2223** (the big one; the note has a 25-experiment probe plan).
+3. **PDEC and CCL** (after a generic pad-to-peripheral input path).
+4. **MTB** register fixes.
 
 The JH01, SAM E51 and AVR blocks wait for their boards to be plugged in, so they can be checked
 the same way.

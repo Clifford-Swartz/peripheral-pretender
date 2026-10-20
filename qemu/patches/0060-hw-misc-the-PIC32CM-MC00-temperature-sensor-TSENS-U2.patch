@@ -1,0 +1,804 @@
+From ec37e51d0627e776c3f9e6d0a8fbba197f2d5ca5 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Tue, 20 Oct 2026 06:03:07 -0700
+Subject: [PATCH] hw/misc: the PIC32CM MC00 temperature sensor (TSENS U2261)
+
+mchp-tsens-u2261 converts as two probe rounds on MC00 rev A1 silicon
+showed (firmware/hello APP=tsensprobe, tsensprobe2): (2 GAIN + 2000)
+GCLK_TSENS periods per conversion, GAIN = 0 counting as 2^24, and
+VALUE = OFFSET + GAIN * D(T) / f_GCLK with D(T) from the part's factory
+calibration, so firmware loading it reads the "temperature" property in
+hundredths of a degree. START and the START event are ignored while
+converting or disabled; a conversion waits for its GCLK; disabling
+aborts, but one that FREERUN started runs again at the next enable.
+OVERRUN on an unread result, OVF beyond 24 bits, the signed window
+monitor with a WINMON event pulse per match, SWRST keeping GAIN, OFFSET,
+CAL and DBGCTRL. qtest pic32cm-tsens-test.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst         |   2 +-
+ docs/system/arm/pic32cm-mc00-cpro.rst         |  14 +-
+ hw/arm/pic32cm_soc.c                          |   2 +
+ hw/misc/mchp_tsens_u2261.c                    | 415 ++++++++++++++++++
+ hw/misc/meson.build                           |   1 +
+ .../mchp/gen/pic32cm1216mc00048/tsens_u2261.h |  32 +-
+ include/hw/mchp/gen/tsens_u2261.h             |   2 +-
+ include/hw/misc/mchp_tsens.h                  |  24 +
+ tests/qtest/meson.build                       |   2 +-
+ tests/qtest/pic32cm-tsens-test.c              | 116 +++++
+ 10 files changed, 590 insertions(+), 20 deletions(-)
+ create mode 100644 hw/misc/mchp_tsens_u2261.c
+ create mode 100644 include/hw/misc/mchp_tsens.h
+ create mode 100644 tests/qtest/pic32cm-tsens-test.c
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index 091fd65..153cb46 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -130,7 +130,7 @@ Missing devices
+   the DSCRITICAL waveform.
+ - Watchdog time-out, PAC write protection, flash programming through
+   NVMCTRL, DSU CRC32 and chip erase, sleep modes and every other
+-  peripheral behaviour (DMAC, CCL, PDEC, FREQM, TSENS, CAN, ...). ADC
++  peripheral behaviour (DMAC, CCL, PDEC, FREQM, CAN, ...). ADC
+   sequencing and event inputs, DAC START events.
+ 
+ Board and SoC properties
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 2a8d7a8..0f65641 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -21,9 +21,17 @@ instance (``/machine/soc/sercom0``, ``/machine/soc/port``, ...).
+ Differences from the PIC32CM JH01
+ """""""""""""""""""""""""""""""""
+ 
+-- SERCOM0 to SERCOM3 only; no CAN, ICM, SMBIST, PTC. The MC00 adds SDADC
+-  (modelled), TSENS (a generic register block) and a second RTC version
+-  (U2250, modelled). Its AC has two comparators.
++- SERCOM0 to SERCOM3 only; no CAN, ICM, SMBIST, PTC. The MC00 adds SDADC,
++  TSENS and a second RTC version (U2250), all modelled. Its AC has two
++  comparators.
++- TSENS (U2261): conversions of (2 GAIN + 2000) GCLK_TSENS periods giving
++  OFFSET + GAIN * D(T) / f_GCLK, with D(T) taken from the part's factory
++  calibration so that firmware loading it reads hundredths of a degree;
++  the temperature is the TSENS property ``temperature`` (millidegrees C,
++  default 25000), also at run time: ``qom-set /machine/soc/tsens
++  temperature 31500``. FREERUN, the START event, the window monitor and
++  its event, OVERRUN and overflow behave as on silicon. Not modelled:
++  CAL, the DMA trigger, sleep.
+ - PORT has groups A and B (QOM properties ``pa-*`` and ``pb-*``). GCLK has
+   35 peripheral channels.
+ - NVMCTRL has no ECC (no FLASHERR, FLTCAP, SERR or DERR flags).
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index b198053..85f646a 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -35,6 +35,7 @@
+ #include "hw/misc/mchp_sysctrl.h"
+ #include "hw/adc/mchp_adc.h"
+ #include "hw/misc/mchp_ac.h"
++#include "hw/misc/mchp_tsens.h"
+ #include "hw/dma/mchp_dmac.h"
+ #include "hw/misc/mchp_usb.h"
+ #include "hw/misc/unimp.h"
+@@ -84,6 +85,7 @@ static const struct {
+     { "TC", TYPE_MCHP_TC },
+     { "TCC", TYPE_MCHP_TCC },
+     { "TRNG", TYPE_MCHP_SAME5X_TRNG, "U2242" },
++    { "TSENS", TYPE_MCHP_TSENS_U2261, "U2261" },
+     { "USB", TYPE_MCHP_USB, "U2222" },
+     { "WDT", TYPE_MCHP_WDT },
+ };
+diff --git a/hw/misc/mchp_tsens_u2261.c b/hw/misc/mchp_tsens_u2261.c
+new file mode 100644
+index 0000000..6f7ea47
+--- /dev/null
++++ b/hw/misc/mchp_tsens_u2261.c
+@@ -0,0 +1,415 @@
++/*
++ * Microchip PIC32CM MC00 temperature sensor (TSENS U2261)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * A conversion measures the sensor's oscillator in two phases of GAIN
++ * GCLK_TSENS periods each and gives VALUE = OFFSET + GAIN * D(T) / f_GCLK
++ * (DS60001638E 40.5.1), 24-bit two's complement. D(T) follows from the
++ * part's factory calibration (the NVM temperature log at 0x00806030) so
++ * that firmware loading it reads hundredths of a degree: 2500 at 25 C.
++ * The temperature is the property "temperature" (millidegrees C, default
++ * 25000), settable at run time.
++ *
++ * What the PIC32CM MC00 (rev A1, firmware/hello APP=tsensprobe and
++ * tsensprobe2) showed, and the model does:
++ *
++ *   - A conversion takes (2 * GAIN + 2000) GCLK_TSENS periods (3.50 ms
++ *     with the factory GAIN at 48 MHz); GAIN = 0 counts as 2^24, in time
++ *     and in the result. VALUE - OFFSET scales with GAIN / f_GCLK; OFFSET
++ *     adds. FREERUN converts back to back at that period.
++ *   - START (CTRLB, or a rising edge of the START event, falling with
++ *     STARTINV, with STARTEI) is ignored while converting and while
++ *     disabled; with no GCLK_TSENS a conversion waits for the clock and
++ *     then takes the full time. Disabling aborts a conversion; one that
++ *     FREERUN started runs again from the start at the next enable, even
++ *     with FREERUN cleared meanwhile.
++ *   - A result sets RESRDY, and OVERRUN if the previous VALUE was not
++ *     read; reading VALUE clears RESRDY and WINMON. A result outside 24
++ *     bits sets OVF and STATUS.OVF (no RESRDY) and stores its low 24
++ *     bits; disabling or the next good result clears STATUS.OVF.
++ *   - The window monitor compares signed values, ABOVE: VALUE > WINLT,
++ *     BELOW: VALUE < WINUT, INSIDE, OUTSIDE (VALUE < WINLT or > WINUT, as
++ *     the ATDF says), HYST_ABOVE/BELOW from WINUT/WINLT; WINMON sets and
++ *     the WINMON event pulses on every matching result. The hysteresis
++ *     state restarts at enable.
++ *   - SWRST keeps GAIN, OFFSET, CAL and DBGCTRL.
++ *
++ * Not modelled: CAL (silicon: CAL = 0 shifts the reading by about -9 C;
++ * FCAL and TCAL trim it), the DMA trigger, sleep, DBGRUN, the reading's
++ * noise (silicon: about +-0.2 C).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include <math.h>
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "qemu/timer.h"
++#include "hw/core/clock.h"
++#include "hw/core/irq.h"
++#include "hw/misc/mchp_tsens.h"
++#include "hw/mchp/gen/tsens_u2261.h"
++#include "migration/vmstate.h"
++#include "system/dma.h"
++
++#define TEMP_LOG_ADDR       0x00806030
++#define CAL_HZ              48000000.0  /* factory calibration clock */
++/* The desk part's factory GAIN and OFFSET, for an erased log */
++#define NOMINAL_GAIN        82977
++#define NOMINAL_OFFSET      9282
++#define FIXED_CYCLES        2000
++
++#define VALUE_MAX           0x7FFFFF
++#define VALUE_MIN           (-0x800000)
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpTsensState, MCHP_TSENS_U2261)
++
++struct MchpTsensState {
++    MchpRegBlock parent_obj;
++
++    int32_t temperature;        /* millidegrees C */
++    bool busy;                  /* a conversion is running */
++    bool waiting;               /* started, waiting for GCLK_TSENS */
++    bool by_freerun;            /* the running conversion FREERUN began */
++    bool resume;                /* run one at enable (FREERUN, disabled) */
++    bool unread;                /* VALUE not read since the last result */
++    bool hyst;                  /* HYST_ABOVE/BELOW: inside since a match */
++    bool ev_level;              /* the START event input */
++    bool swrst;                 /* the next reset is a SWRST */
++    uint32_t keep[4];           /* GAIN, OFFSET, CAL, DBGCTRL across it */
++
++    QEMUTimer *timer;
++    qemu_irq winmon_event;
++};
++
++static uint32_t ts_reg(MchpTsensState *s, hwaddr off, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, off, size);
++}
++
++static void ts_set_reg(MchpTsensState *s, hwaddr off, unsigned size,
++                       uint32_t v)
++{
++    mchp_regfile_poke(&MCHP_REGBLOCK(s)->rf, off, size, v);
++}
++
++static bool ts_on(MchpTsensState *s)
++{
++    return ts_reg(s, A_MCHP_TSENS_CTRLA, 1) & R_MCHP_TSENS_CTRLA_ENABLE_MASK;
++}
++
++static void ts_flag(MchpTsensState *s, uint8_t bits)
++{
++    ts_set_reg(s, A_MCHP_TSENS_INTFLAG, 1,
++               ts_reg(s, A_MCHP_TSENS_INTFLAG, 1) | bits);
++}
++
++static int32_t sext24(uint32_t v)
++{
++    return sextract32(v, 0, 24);
++}
++
++/* GAIN in effect: 0 counts as 2^24 (silicon) */
++static uint64_t ts_gain(MchpTsensState *s)
++{
++    uint32_t g = ts_reg(s, A_MCHP_TSENS_GAIN, 4) & 0xFFFFFF;
++
++    return g ? g : 1u << 24;
++}
++
++/*
++ * The result at the current temperature: D(T) is the oscillators'
++ * frequency difference that the factory calibration maps to T / 10
++ */
++static int64_t ts_result(MchpTsensState *s, uint64_t hz)
++{
++    uint32_t log[2];
++    double gain_nvm, offset_nvm, d;
++
++    dma_memory_read(&address_space_memory, TEMP_LOG_ADDR, log, sizeof(log),
++                    MEMTXATTRS_UNSPECIFIED);
++    gain_nvm = ((le32_to_cpu(log[1]) & 0xF) << 20) |
++               (le32_to_cpu(log[0]) >> 12);
++    offset_nvm = sext24(le32_to_cpu(log[1]) >> 4);
++    if (gain_nvm == 0 || gain_nvm == 0xFFFFFF) {
++        gain_nvm = NOMINAL_GAIN;
++        offset_nvm = NOMINAL_OFFSET;
++    }
++    d = (s->temperature / 10.0 - offset_nvm) * CAL_HZ / gain_nvm;
++    return sext24(ts_reg(s, A_MCHP_TSENS_OFFSET, 4)) +
++           llround(ts_gain(s) * d / hz);
++}
++
++/* The window monitor on a result */
++static bool ts_window(MchpTsensState *s, int32_t v)
++{
++    int32_t lt = sext24(ts_reg(s, A_MCHP_TSENS_WINLT, 4));
++    int32_t ut = sext24(ts_reg(s, A_MCHP_TSENS_WINUT, 4));
++
++    switch (FIELD_EX32(ts_reg(s, A_MCHP_TSENS_CTRLC, 1), MCHP_TSENS_CTRLC,
++                       WINMODE)) {
++    case 1:
++        return v > lt;
++    case 2:
++        return v < ut;
++    case 3:
++        return v > lt && v < ut;
++    case 4:
++        return v < lt || v > ut;
++    case 5:
++        s->hyst = s->hyst ? v > lt : v > ut;
++        return s->hyst;
++    case 6:
++        s->hyst = s->hyst ? v < ut : v < lt;
++        return s->hyst;
++    default:
++        return false;
++    }
++}
++
++static void ts_begin(MchpTsensState *s);
++
++static void ts_done(void *opaque)
++{
++    MchpTsensState *s = opaque;
++    uint64_t hz = clock_get_hz(MCHP_REGBLOCK(s)->gclk);
++    int64_t v = ts_result(s, hz ? hz : 1);
++
++    s->busy = false;
++    ts_set_reg(s, A_MCHP_TSENS_VALUE, 4, v & 0xFFFFFF);
++    if (v < VALUE_MIN || v > VALUE_MAX) {
++        ts_flag(s, R_MCHP_TSENS_INTFLAG_OVF_MASK);
++        ts_set_reg(s, A_MCHP_TSENS_STATUS, 1, R_MCHP_TSENS_STATUS_OVF_MASK);
++    } else {
++        ts_set_reg(s, A_MCHP_TSENS_STATUS, 1, 0);
++        ts_flag(s, R_MCHP_TSENS_INTFLAG_RESRDY_MASK |
++                   (s->unread ? R_MCHP_TSENS_INTFLAG_OVERRUN_MASK : 0));
++        s->unread = true;
++        if (ts_window(s, v)) {
++            ts_flag(s, R_MCHP_TSENS_INTFLAG_WINMON_MASK);
++            if (ts_reg(s, A_MCHP_TSENS_EVCTRL, 1) &
++                R_MCHP_TSENS_EVCTRL_WINEO_MASK) {
++                qemu_irq_pulse(s->winmon_event);
++            }
++        }
++    }
++    if (FIELD_EX32(ts_reg(s, A_MCHP_TSENS_CTRLC, 1), MCHP_TSENS_CTRLC,
++                   FREERUN) && ts_on(s)) {
++        ts_begin(s);
++    }
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++/* A conversion starts now, or when GCLK_TSENS runs */
++static void ts_begin(MchpTsensState *s)
++{
++    uint64_t hz = clock_get_hz(MCHP_REGBLOCK(s)->gclk);
++    uint64_t cycles = 2 * ts_gain(s) + FIXED_CYCLES;
++
++    s->busy = true;
++    s->by_freerun = FIELD_EX32(ts_reg(s, A_MCHP_TSENS_CTRLC, 1),
++                               MCHP_TSENS_CTRLC, FREERUN);
++    s->waiting = !hz;
++    if (hz) {
++        timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                  muldiv64(cycles, NANOSECONDS_PER_SECOND, hz));
++    }
++}
++
++static void ts_start(MchpTsensState *s)
++{
++    if (ts_on(s) && !s->busy) {
++        ts_begin(s);
++    }
++}
++
++static void ts_stop(MchpTsensState *s)
++{
++    timer_del(s->timer);
++    s->busy = false;
++    s->waiting = false;
++}
++
++static void ts_start_event(void *opaque, int n, int level)
++{
++    MchpTsensState *s = opaque;
++    uint8_t ev = ts_reg(s, A_MCHP_TSENS_EVCTRL, 1);
++    bool inv = ev & R_MCHP_TSENS_EVCTRL_STARTINV_MASK;
++    bool was = s->ev_level ^ inv;
++
++    s->ev_level = level > 0;
++    if ((ev & R_MCHP_TSENS_EVCTRL_STARTEI_MASK) && !was &&
++        (s->ev_level ^ inv)) {
++        ts_start(s);
++    }
++}
++
++static uint32_t ts_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                            unsigned idx, uint32_t stored, bool side_effects)
++{
++    MchpTsensState *s = MCHP_TSENS_U2261(rf->opaque);
++
++    if (ri->offset == A_MCHP_TSENS_VALUE && side_effects) {
++        s->unread = false;
++        ts_set_reg(s, A_MCHP_TSENS_INTFLAG, 1,
++                   ts_reg(s, A_MCHP_TSENS_INTFLAG, 1) &
++                   ~(R_MCHP_TSENS_INTFLAG_RESRDY_MASK |
++                     R_MCHP_TSENS_INTFLAG_WINMON_MASK));
++        mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++    }
++    return stored;
++}
++
++static void ts_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                          unsigned idx, uint32_t old, uint32_t written,
++                          uint32_t we)
++{
++    MchpTsensState *s = MCHP_TSENS_U2261(rf->opaque);
++
++    switch (ri->offset) {
++    case A_MCHP_TSENS_CTRLA:
++        if (written & we & R_MCHP_TSENS_CTRLA_SWRST_MASK) {
++            /* mchp_regblock_soft_reset() follows: keep these through it */
++            s->swrst = true;
++            s->keep[0] = ts_reg(s, A_MCHP_TSENS_GAIN, 4);
++            s->keep[1] = ts_reg(s, A_MCHP_TSENS_OFFSET, 4);
++            s->keep[2] = ts_reg(s, A_MCHP_TSENS_CAL, 4);
++            s->keep[3] = ts_reg(s, A_MCHP_TSENS_DBGCTRL, 1);
++        } else if (ts_on(s) && !(old & R_MCHP_TSENS_CTRLA_ENABLE_MASK)) {
++            s->hyst = false;
++            if (s->resume ||
++                FIELD_EX32(ts_reg(s, A_MCHP_TSENS_CTRLC, 1),
++                           MCHP_TSENS_CTRLC, FREERUN)) {
++                s->resume = false;
++                ts_begin(s);
++            }
++        } else if (!ts_on(s) && (old & R_MCHP_TSENS_CTRLA_ENABLE_MASK)) {
++            s->resume = s->busy && s->by_freerun;
++            ts_stop(s);
++            ts_set_reg(s, A_MCHP_TSENS_STATUS, 1, 0);
++        }
++        break;
++    case A_MCHP_TSENS_CTRLB:
++        if (written & we & R_MCHP_TSENS_CTRLB_START_MASK) {
++            ts_start(s);
++        }
++        break;
++    default:
++        break;
++    }
++}
++
++static void ts_gclk_update(MchpRegBlock *rb, ClockEvent event)
++{
++    MchpTsensState *s = MCHP_TSENS_U2261(rb);
++
++    if (event == ClockUpdate && s->waiting &&
++        clock_get_hz(rb->gclk)) {
++        ts_begin(s);            /* the whole conversion from now */
++    }
++}
++
++static void ts_reset_hold(MchpRegBlock *rb)
++{
++    MchpTsensState *s = MCHP_TSENS_U2261(rb);
++
++    ts_stop(s);
++    s->resume = false;
++    s->unread = false;
++    s->hyst = false;
++    if (s->swrst) {
++        s->swrst = false;
++        ts_set_reg(s, A_MCHP_TSENS_GAIN, 4, s->keep[0]);
++        ts_set_reg(s, A_MCHP_TSENS_OFFSET, 4, s->keep[1]);
++        ts_set_reg(s, A_MCHP_TSENS_CAL, 4, s->keep[2]);
++        ts_set_reg(s, A_MCHP_TSENS_DBGCTRL, 1, s->keep[3]);
++    }
++}
++
++static void ts_get_temp(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, &MCHP_TSENS_U2261(obj)->temperature, errp);
++}
++
++static void ts_set_temp(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    int32_t t;
++
++    if (!visit_type_int32(v, name, &t, errp)) {
++        return;
++    }
++    if (t < -40000 || t > 150000) {
++        error_setg(errp, "temperature: %d mC is outside -40000..150000", t);
++        return;
++    }
++    MCHP_TSENS_U2261(obj)->temperature = t;
++}
++
++static void ts_init(Object *obj)
++{
++    MchpTsensState *s = MCHP_TSENS_U2261(obj);
++
++    s->temperature = 25000;
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ts_done, s);
++    qdev_init_gpio_out_named(DEVICE(obj), &s->winmon_event,
++                             MCHP_TSENS_WINMON_EVENT, 1);
++    qdev_init_gpio_in_named(DEVICE(obj), ts_start_event,
++                            MCHP_TSENS_START_EVENT_IN, 1);
++    object_property_add(obj, "temperature", "int32", ts_get_temp,
++                        ts_set_temp, NULL, NULL);
++}
++
++static void ts_finalize(Object *obj)
++{
++    timer_free(MCHP_TSENS_U2261(obj)->timer);
++}
++
++static const VMStateDescription vmstate_mchp_tsens = {
++    .name = TYPE_MCHP_TSENS_U2261,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpTsensState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_INT32(temperature, MchpTsensState),
++        VMSTATE_BOOL(busy, MchpTsensState),
++        VMSTATE_BOOL(waiting, MchpTsensState),
++        VMSTATE_BOOL(by_freerun, MchpTsensState),
++        VMSTATE_BOOL(resume, MchpTsensState),
++        VMSTATE_BOOL(unread, MchpTsensState),
++        VMSTATE_BOOL(hyst, MchpTsensState),
++        VMSTATE_BOOL(ev_level, MchpTsensState),
++        VMSTATE_TIMER_PTR(timer, MchpTsensState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void ts_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_tsens;
++    c->pre_read = ts_pre_read;
++    c->post_write = ts_post_write;
++    c->reset_hold = ts_reset_hold;
++    c->gclk_update = ts_gclk_update;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_tsens_types[] = {
++    {
++        .name = TYPE_MCHP_TSENS_U2261,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpTsensState),
++        .instance_init = ts_init,
++        .instance_finalize = ts_finalize,
++        .class_init = ts_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_tsens_types)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index b877b1f..d6e0371 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -46,6 +46,7 @@ system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files(
+   'mchp_same5x.c',
+   'mchp_usb.c',
+   'mchp_sysctrl.c',
++  'mchp_tsens_u2261.c',
+ ))
+ 
+ # Mac devices
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/tsens_u2261.h b/include/hw/mchp/gen/pic32cm1216mc00048/tsens_u2261.h
+index 47c27c8..e915cf6 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/tsens_u2261.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/tsens_u2261.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/tsens_u2261.yaml (sha1 3d8e73e2a91a)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,30 +23,33 @@ static const MchpRegInfo pic32cm1216mc00048_tsens_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x43, .wmask = 0x43, .rdz = 0x01,
+-        .syncbusy = 0x00000003 /* SYNCBUSY */, .flags = 0,
++        .enprot = 0x40, .syncbusy = 0x00000003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLB", .offset = 0x01, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01, .rdz = 0x01,
+-        .flags = MCHP_F_WRITE_ONLY,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE | MCHP_F_WRITE_ONLY,
+     },
+     {
+         .name = "CTRLC", .offset = 0x02, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x17, .wmask = 0x17, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x17, .wmask = 0x17,
++        .enprot = 0x17, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x03, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x07, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x07,
++        .enprot = 0x07, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 5 /* INTENSET */, .reset = 0x00, .impl = 0x0F,
+-        .wmask = 0x0F, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x0F, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x05, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 5 /* INTENSET */, .reset = 0x00, .impl = 0x0F,
+-        .wmask = 0x0F, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x0F, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x06, .size = 1, .count = 1, .stride = 1,
+@@ -66,36 +69,37 @@ static const MchpRegInfo pic32cm1216mc00048_tsens_regs[] = {
+     {
+         .name = "VALUE", .offset = 0x0C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00FFFFFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "WINLT", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00FFFFFF,
+-        .wmask = 0x00FFFFFF, .flags = 0,
++        .wmask = 0x00FFFFFF, .enprot = 0x00FFFFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "WINUT", .offset = 0x14, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00FFFFFF,
+-        .wmask = 0x00FFFFFF, .flags = 0,
++        .wmask = 0x00FFFFFF, .enprot = 0x00FFFFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "GAIN", .offset = 0x18, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00FFFFFF,
+-        .wmask = 0x00FFFFFF, .flags = 0,
++        .wmask = 0x00FFFFFF, .enprot = 0x00FFFFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "OFFSET", .offset = 0x1C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00FFFFFF,
+-        .wmask = 0x00FFFFFF, .flags = 0,
++        .wmask = 0x00FFFFFF, .enprot = 0x00FFFFFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "CAL", .offset = 0x20, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00003F3F,
+-        .wmask = 0x00003F3F, .flags = 0,
++        .wmask = 0x00003F3F, .enprot = 0x00003F3F, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x24, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01,
++        .flags = MCHP_F_PAC,
+     },
+ };
+ #define PIC32CM1216MC00048_TSENS_NREGS 16
+diff --git a/include/hw/mchp/gen/tsens_u2261.h b/include/hw/mchp/gen/tsens_u2261.h
+index 97aee7e..996e1cb 100644
+--- a/include/hw/mchp/gen/tsens_u2261.h
++++ b/include/hw/mchp/gen/tsens_u2261.h
+@@ -8,7 +8,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM1216MC00048
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/tsens_u2261.yaml (sha1 3d8e73e2a91a)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/misc/mchp_tsens.h b/include/hw/misc/mchp_tsens.h
+new file mode 100644
+index 0000000..25ada5a
+--- /dev/null
++++ b/include/hw/misc/mchp_tsens.h
+@@ -0,0 +1,24 @@
++/*
++ * Microchip PIC32CM MC00 temperature sensor (TSENS U2261)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * An mchp-regblock (see mchp_tsens_u2261.c). GPIO output "winmon-event"[0]
++ * (EVSYS generator WINMON), input "start-event-in"[0] (EVSYS user START).
++ * Property "temperature": millidegrees C (25000).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_MCHP_TSENS_H
++#define HW_MISC_MCHP_TSENS_H
++
++#include "hw/misc/mchp_regblock.h"
++
++#define TYPE_MCHP_TSENS_U2261 "mchp-tsens-u2261"
++
++#define MCHP_TSENS_WINMON_EVENT "winmon-event"
++#define MCHP_TSENS_START_EVENT_IN "start-event-in"
++
++#endif /* HW_MISC_MCHP_TSENS_H */
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index daae265..354db29 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -253,7 +253,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-ac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-click-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-click-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-tsens-test.c b/tests/qtest/pic32cm-tsens-test.c
+new file mode 100644
+index 0000000..d813895
+--- /dev/null
++++ b/tests/qtest/pic32cm-tsens-test.c
+@@ -0,0 +1,116 @@
++/*
++ * QTest for the temperature sensor of the PIC32CM MC00 (pic32cm-mc00-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The board side of the TSENS model: the "temperature" property through
++ * the factory calibration, the conversion time on stepped virtual time
++ * and its GCLK dependence. firmware/hello APP=tsens checks the rest
++ * against silicon.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++
++#define MACHINE         "-M pic32cm-mc00-cpro"
++#define TSENS_PATH      "/machine/soc/tsens"
++
++#define OSCCTRL         0x40001000
++#define GCLK            0x40001C00
++#define TSENS           0x40003000
++#define TEMP_LOG        0x00806030
++#define TSENS_GCLK      5
++
++#define R_CTRLA         0x00
++#define R_CTRLB         0x01
++#define R_INTFLAG       0x06
++#define R_VALUE         0x0C
++#define R_GAIN          0x18
++#define R_OFFSET        0x1C
++#define R_CAL           0x20
++
++#define ENABLE          0x02
++#define RESRDY          0x01
++
++/* GCLK_TSENS from generator 0 (4 MHz, or 48 MHz with OSC48MDIV = 0) */
++static QTestState *tsens_init(bool mhz48)
++{
++    QTestState *qts = qtest_init(MACHINE);
++    uint32_t lo = qtest_readl(qts, TEMP_LOG);
++    uint32_t hi = qtest_readl(qts, TEMP_LOG + 4);
++
++    if (mhz48) {
++        qtest_writeb(qts, OSCCTRL + 0x15, 0);
++    }
++    qtest_writel(qts, GCLK + 0x80 + 4 * TSENS_GCLK, 0x40);  /* GEN0, CHEN */
++    qtest_writel(qts, TSENS + R_CAL, (lo & 0x3F) << 8 | ((lo >> 6) & 0x3F));
++    qtest_writel(qts, TSENS + R_GAIN, ((hi & 0xF) << 20) | (lo >> 12));
++    qtest_writel(qts, TSENS + R_OFFSET, hi >> 4);
++    qtest_writeb(qts, TSENS + R_CTRLA, ENABLE);
++    return qts;
++}
++
++static int32_t convert(QTestState *qts, int64_t step_ns)
++{
++    qtest_writeb(qts, TSENS + R_CTRLB, 1);
++    qtest_clock_step(qts, step_ns);
++    g_assert_cmphex(qtest_readb(qts, TSENS + R_INTFLAG) & RESRDY, ==, RESRDY);
++    return sextract32(qtest_readl(qts, TSENS + R_VALUE), 0, 24);
++}
++
++static void set_temp(QTestState *qts, int mdeg)
++{
++    qtest_qmp_assert_success(qts,
++        "{ 'execute': 'qom-set', 'arguments': { 'path': '" TSENS_PATH "',"
++        " 'property': 'temperature', 'value': %d } }", mdeg);
++}
++
++/* With the factory calibration at 48 MHz: hundredths of a degree */
++static void test_temperature(void)
++{
++    QTestState *qts = tsens_init(true);
++
++    g_assert_cmpint(convert(qts, 4000000), ==, 2500);
++    set_temp(qts, 31500);
++    g_assert_cmpint(convert(qts, 4000000), ==, 3150);
++    set_temp(qts, -10000);
++    g_assert_cmpint(convert(qts, 4000000), ==, -1000);
++    qtest_quit(qts);
++}
++
++/* (2 GAIN + 2000) clocks: 3.499 ms at 48 MHz with this part's GAIN */
++static void test_conversion_time(void)
++{
++    QTestState *qts = tsens_init(true);
++
++    qtest_writeb(qts, TSENS + R_CTRLB, 1);
++    qtest_clock_step(qts, 3490000);
++    g_assert_cmphex(qtest_readb(qts, TSENS + R_INTFLAG), ==, 0);
++    qtest_clock_step(qts, 20000);
++    g_assert_cmphex(qtest_readb(qts, TSENS + R_INTFLAG), ==, RESRDY);
++    qtest_quit(qts);
++}
++
++/* At 4 MHz (reset clocks) VALUE - OFFSET is 12 times as large */
++static void test_slow_clock(void)
++{
++    QTestState *qts = tsens_init(false);
++    int32_t offset = sextract32(qtest_readl(qts, TSENS + R_OFFSET), 0, 24);
++
++    g_assert_cmpint(convert(qts, 43000000), ==,
++                    offset + 12 * (2500 - offset));
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++    qtest_add_func("pic32cm-tsens/temperature", test_temperature);
++    qtest_add_func("pic32cm-tsens/conversion-time", test_conversion_time);
++    qtest_add_func("pic32cm-tsens/slow-clock", test_slow_clock);
++    return g_test_run();
++}
+-- 
+2.53.0.windows.2
+

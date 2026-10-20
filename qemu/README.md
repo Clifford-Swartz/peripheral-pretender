@@ -66,6 +66,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0057 | AVR64EA48 Curiosity Nano on the Nano Base: AN on PD4/PD5/PD7 (ADC0 AIN4/5/7) and socket 2's UART on USART1, shared with the virtual COM port through `chardev-mikrobus-share` (`mikrobus_uart_share()`) |
 | 0058 | Regenerated tables: new input hashes after the copyright header rewrite |
 | 0059 | PIC32CM JH01/MC00 AC (U2245, `mchp-ac-u2245`), from two silicon probe rounds: AIN pads (`ain`, or VDDANA/GND while the PORT drives the pad), VSCALE, INTREF, the DAC (needs IOEN); COMPCTRL locked by its own ENABLE, start-up and single-shot times, 60 mV hysteresis, INTSEL flags with the first-comparison rule, window pairs, COMP/WIN events, SOC start events, CMP pads. The DAC notifies its listeners; the ADC also reads PORT-driven pads (`ain-pads`, set by the SoC from the device's signals); SoC `vddana` for every analog model and the MC00 board's `vcc` option (VCC_SEL); qtest |
+| 0060 | PIC32CM MC00 TSENS (U2261, `mchp-tsens-u2261`), from two silicon probe rounds: conversions of (2 GAIN + 2000) GCLK periods (GAIN 0 = 2^24) giving OFFSET + GAIN * D(T) / f_GCLK with D(T) from the factory calibration, so the `temperature` property reads back in hundredths of a degree; FREERUN, START and the START event (ignored while busy or disabled), the FREERUN restart after a disable, OVERRUN, 24-bit overflow, the signed window monitor and its event, SWRST keeping the calibration; qtest |
 
 ## Setting it up
 

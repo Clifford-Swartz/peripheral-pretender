@@ -380,3 +380,37 @@ reading; T6, T9, T10, T11, T16 define behaviour the model then adopts.
 - The DS principle text says a counter clocked by GCLK_TSENS measures a pulse width, while the
   formula and the GAIN description make GAIN a count of GCLK_TSENS periods with TOSC cycles
   counted; the twin follows the formula.
+
+## 9. Answers from silicon (2026-10-20)
+
+The desk EV15N46A ran `firmware/hello/tests/tsensprobe.c` and `tsensprobe2.c`; the model
+(`hw/misc/mchp_tsens_u2261.c`) follows these answers, and `firmware/hello/tests/tsens.c` checks them
+on both (`golden/pic32cm1216mc00048-a1/tsens-silicon.txt`). Numbers by question in section 7:
+
+1. Conversion time: (2 GAIN + 2000) GCLK_TSENS periods, 3.499 ms with this part's GAIN at 48 MHz;
+   doubling GAIN or halving the clock doubles it. GAIN = 0 counts as 2^24 (0.699 s), in time and
+   in the result. FREERUN runs back to back at the same period.
+2. The formula holds: VALUE - OFFSET scales with GAIN / f_GCLK (GAIN / 2: half; OSC48M / 2 and / 4:
+   twice and four times); OFFSET adds. The chip read 29.7-30.3 C at rest. CAL matters: CAL = 0
+   reads about 870 counts (8.7 C) lower, FCAL + 4 about 44 higher, TCAL + 4 about 16 lower (not
+   modelled; firmware is expected to load the factory CAL).
+3. Overflow is at 24 bits (a result of 1,042,287 is fine): OVF and STATUS.OVF set, RESRDY does not,
+   VALUE keeps the low 24 bits. STATUS.OVF reads 0 after a disable and enable.
+4. Window comparisons are signed (ABOVE with WINLT = -100 matches); OUTSIDE is "VALUE < WINLT or
+   VALUE > WINUT" as the ATDF says; WINMON sets on every matching result, and the WINMON event is a
+   pulse per matching result (a PORT toggle action toggles once per result). The hysteresis state
+   could not be probed (the thresholds are enable-protected and re-enabling restarts it).
+5. START while converting is ignored, with no flag; START while disabled is dropped; disabling
+   aborts a conversion. With no GCLK_TSENS a START waits for the clock, then takes the full time. A
+   conversion FREERUN started that is aborted by disabling runs once at the next enable, even with
+   FREERUN cleared meanwhile.
+6. SWRST keeps GAIN, OFFSET, CAL and DBGCTRL and clears the rest.
+7. OFFSET reads back 24 bits (0x002442 after Harmony writes 0x0F002442). CAL is 0x3F3F wide.
+8. A START event pulse starts one conversion, with or without STARTINV; without STARTEI nothing.
+   (USRRDY not settled: CHSTATUS bits read the same in every state.)
+9. 29.7-30.3 C, noise about +-0.2 C over 16 conversions.
+10. Not answered here.
+
+OVERRUN: set when a result arrives while the previous one is unread (reading VALUE, not clearing
+RESRDY, counts as reading); it stays until written. One trap for test firmware: `delay_ms(5)` from
+`util.c` can last only 3.4 ms (a SysTick wrap already pending), less than one conversion.

@@ -29,9 +29,9 @@ EXPECTED = {("SERCOM", "U2201"), ("PORT", "U2210"), ("OSCCTRL", "U2119"),
             ("NVMCTRL", "U2409"), ("QSPI", "U2008"), ("TRNG", "U2242"),
             ("USB", "U2222"), ("DMAC", "U2503"),
             ("ADC", "U2500"), ("DAC", "U2502"), ("EVSYS", "U2504"),
-            # PIC32CM JH01 and MC00 ADC, DAC and AC, MC00 SDADC
+            # PIC32CM JH01 and MC00 ADC, DAC and AC, MC00 SDADC and TSENS
             ("ADC", "U2247"), ("DAC", "U2214"), ("SDADC", "U2260"),
-            ("AC", "U2245"),
+            ("AC", "U2245"), ("TSENS", "U2261"),
             # AVR64EA48 ADC
             ("ADC", "adc_12b_diff_ctrl_avr_v2")}
 

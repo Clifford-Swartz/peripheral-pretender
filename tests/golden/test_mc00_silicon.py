@@ -162,7 +162,7 @@ def test_transcript_matches_silicon(mc00, app):
     assert result.uart == silicon.replace("\r\n", "\n")
 
 
-@pytest.mark.parametrize("app", ["ac", "adc", "dac", "sdadc"])
+@pytest.mark.parametrize("app", ["ac", "adc", "dac", "sdadc", "tsens"])
 def test_analog_checks_pass(mc00, app):
     """The analog applications check themselves against what silicon did
     (<app>-silicon.txt in GOLDEN: codes follow the supply and the open
@@ -172,8 +172,9 @@ def test_analog_checks_pass(mc00, app):
         pytest.skip(f"{elf.relative_to(ROOT)} not built (make -C firmware/hello "
                     f"BOARD=pic32cm_mc00_cpro APP={app})")
     assert (GOLDEN / f"{app}-silicon.txt").is_file()
-    # ac times the comparators' start-up with SysTick: deterministic time
+    # ac and tsens time start-ups and conversions with SysTick:
+    # deterministic time
     result = run(RunOptions(elf, machine=MACHINE, timeout_s=60,
-                            icount_shift=5 if app == "ac" else None))
+                            icount_shift=5 if app in ("ac", "tsens") else None))
     assert result.firmware_exit == 0, result.uart
     assert "FAIL" not in result.uart, result.uart

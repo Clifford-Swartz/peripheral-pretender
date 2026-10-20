@@ -1,0 +1,36 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for TSENS U2261 (PIC32CM MC00 temperature sensor). The
+# mchp-tsens-u2261 model converts; GAIN, OFFSET, CAL and DBGCTRL survive
+# SWRST in the model (the vocabulary has no key for that).
+ip: TSENS
+id: U2261
+versions: ["1.0.1"]
+references:
+  - "DS60001638E chapter 40 (TSENS); docs/research/peripherals/tsens-u2261.md"
+  - "PIC32CM MC00 silicon, firmware/hello APP=tsensprobe (2026-10-20)"
+registers:
+  CTRLA:
+    pac_protected: true
+    self_clearing: [SWRST]
+    enable_protected: [RUNSTDBY]    # silicon: ignored while enabled
+    hooks: [post_write]
+  CTRLB:
+    pac_protected: true
+    strobe: [START]
+    hooks: [post_write]
+  CTRLC: {pac_protected: true, enable_protected: all}
+  EVCTRL: {pac_protected: true, enable_protected: all}
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: all
+    irq_source: {enable: INTENSET}
+  SYNCBUSY: {dynamic: true}         # instant synchronization
+  VALUE: {hooks: [pre_read]}        # reading clears RESRDY and WINMON
+  WINLT: {pac_protected: true, enable_protected: all}
+  WINUT: {pac_protected: true, enable_protected: all}
+  GAIN: {pac_protected: true, enable_protected: all}
+  OFFSET: {pac_protected: true, enable_protected: all}
+  CAL: {pac_protected: true, enable_protected: all}
+  DBGCTRL: {pac_protected: true}
