@@ -563,7 +563,9 @@ section 8 of `docs/research/peripherals/freqm-u2257.md`. It found a twin clock-t
 generators divided integer Hz; now they multiply the source's period) and a board question:
 **the desk MC00's XOSC32K gives no clock**, although the user guide lists a mounted 32.768 kHz
 oscillator (zero-ohm jumpers next to it), while the 12 MHz XOSC the guide calls a footprint runs.
-The twin's board still provides 32,768 Hz on XIN32; ask the owner before changing it.
+The owner sees no jumper (they are zero-ohm resistors). The twin keeps the product's oscillator;
+`-M pic32cm-mc00-cpro,xosc32k=off` (patch 0062) matches the desk board. Off, XOSC32K never reads
+ready; silicon instead stalls a GCLK generator fed from it, which the twin does not.
 
 Next on the MC00, in order:
 

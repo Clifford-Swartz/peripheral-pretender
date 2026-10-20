@@ -409,7 +409,8 @@ both (`golden/pic32cm1216mc00048-a1/freqm-silicon.txt`). By question in section 
    board**, in external-clock mode or in crystal mode with the longest start-up: a GCLK generator
    fed from it never finishes synchronizing, though XOSC32KRDY may read 1 (the register survives
    every reset but power-on). The user guide lists a mounted 32.768 kHz oscillator with zero-ohm
-   jumpers; the twin's board still provides 32,768 Hz. Open with the owner.
+   jumpers; the owner found no jumper. The twin keeps the oscillator; the board option
+   `xosc32k=off` (patch 0062) matches the desk board.
 9. Against OSC48M / 1024: OSCULP32K 31,985-32,169 Hz, OSC32K 35,294 Hz with CALIB 0x3F (reset) and
    31,433 Hz with the OTP value 0x4F, the FDPLL96M (1 MHz GCLK reference, LDR 95) 96.000 MHz. The
    twin runs all 32 kHz sources at 32,768 Hz and ignores CALIB.

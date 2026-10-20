@@ -1,0 +1,110 @@
+From a5d3005fca5579a0e39f1a5ff419f8e31ca8990d Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Tue, 20 Oct 2026 14:25:34 -0700
+Subject: [PATCH] hw/arm: pic32cm-mc00-cpro: xosc32k=off, as on the desk board
+
+The desk EV15N46A's XOSC32K gives no clock, in external-clock or crystal
+mode (firmware/hello APP=freqmprobe), though the user guide lists a
+mounted 32.768 kHz oscillator. The machine option xosc32k=off leaves
+XIN32 without it; the default keeps the product's oscillator. The
+board's clocks are renamed xosc-clock and xosc32k-clock so the option
+can take the plain name.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  4 +++-
+ hw/arm/pic32cm_mc00_cpro.c            | 32 +++++++++++++++++++++++----
+ 2 files changed, 31 insertions(+), 5 deletions(-)
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 0f65641..a32e655 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -47,7 +47,9 @@ TX / PA07 RX) and SERCOM3 (EXT1/EXT2 USART, PA22/PA23), in that order.
+ The machine option ``vcc`` (millivolts, default 3300) is the VCC_SEL
+ jumper: the target's supply, and VDDANA for the analog models. At 5 V
+ from USB, a real board measures about 4.89 V: ``-M
+-pic32cm-mc00-cpro,vcc=4890``.
++pic32cm-mc00-cpro,vcc=4890``. The option ``xosc32k=off`` leaves XIN32
++without its 32.768 kHz oscillator (XOSC32K never becomes ready), as on a
++board whose oscillator is not connected.
+ 
+ LED0 (PA24, active low) is a QEMU LED device; ``-trace led_set_intensity``
+ shows it. User switch SW0 (PA25, to ground, no external pull-up) is the
+diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
+index 1a693bb..1cdb076 100644
+--- a/hw/arm/pic32cm_mc00_cpro.c
++++ b/hw/arm/pic32cm_mc00_cpro.c
+@@ -8,6 +8,9 @@
+  * 32.768 kHz MEMS oscillator on XIN32 (PA00), both external clocks (board
+  * user guide DS70005440A). VDD defaults to 3.3 V; machine option vcc=<mV>
+  * sets it as the VCC_SEL jumper does (the desk board at 5 V: vcc=4890).
++ * xosc32k=off removes the 32.768 kHz oscillator: on the desk board XOSC32K
++ * gives no clock in either mode (firmware/hello APP=freqmprobe), though
++ * the user guide lists it as mounted.
+  *
+  * Machine options ext1=<click> and ext2=<click> plug a MikroElektronika
+  * Click board into EXT1/EXT2 through a mikroBUS Xplained Pro adapter
+@@ -106,6 +109,7 @@ struct Pic32cmMc00CproState {
+     Chardev *ext_uart[CPRO_EXT_NUM];    /* a UART Click's module */
+     char *dgi;                  /* chardev id of the EDBG data gateway */
+     uint32_t vcc_mv;            /* VCC_SEL: the target's VDD */
++    bool xosc32k_fitted;        /* the 32.768 kHz oscillator on XIN32 */
+ };
+ 
+ /* A pressed SW0 pulls PA25 low; a released one leaves the pad undriven. */
+@@ -281,9 +285,23 @@ static void pic32cm_mc00_cpro_set_vcc(Object *obj, Visitor *v,
+     s->vcc_mv = mv;
+ }
+ 
++static bool pic32cm_mc00_cpro_get_xosc32k(Object *obj, Error **errp)
++{
++    return PIC32CM_MC00_CPRO_MACHINE(obj)->xosc32k_fitted;
++}
++
++static void pic32cm_mc00_cpro_set_xosc32k(Object *obj, bool value,
++                                          Error **errp)
++{
++    PIC32CM_MC00_CPRO_MACHINE(obj)->xosc32k_fitted = value;
++}
++
+ static void pic32cm_mc00_cpro_instance_init(Object *obj)
+ {
+-    PIC32CM_MC00_CPRO_MACHINE(obj)->vcc_mv = 3300;
++    Pic32cmMc00CproState *s = PIC32CM_MC00_CPRO_MACHINE(obj);
++
++    s->vcc_mv = 3300;
++    s->xosc32k_fitted = true;
+ }
+ 
+ static void pic32cm_mc00_cpro_init(MachineState *machine)
+@@ -291,10 +309,10 @@ static void pic32cm_mc00_cpro_init(MachineState *machine)
+     Pic32cmMc00CproState *s = PIC32CM_MC00_CPRO_MACHINE(machine);
+     DeviceState *soc, *port;
+ 
+-    s->xosc = clock_new(OBJECT(machine), "xosc");
++    s->xosc = clock_new(OBJECT(machine), "xosc-clock");
+     clock_set_hz(s->xosc, CPRO_XOSC_HZ);
+-    s->xosc32k = clock_new(OBJECT(machine), "xosc32k");
+-    clock_set_hz(s->xosc32k, CPRO_XOSC32K_HZ);
++    s->xosc32k = clock_new(OBJECT(machine), "xosc32k-clock");
++    clock_set_hz(s->xosc32k, s->xosc32k_fitted ? CPRO_XOSC32K_HZ : 0);
+ 
+     object_initialize_child(OBJECT(machine), "soc", &s->soc,
+                             TYPE_PIC32CM1216MC00048_SOC);
+@@ -367,6 +385,12 @@ static void pic32cm_mc00_cpro_class_init(ObjectClass *oc, const void *data)
+     object_class_property_set_description(oc, "vcc",
+         "Target VDD in mV, as the VCC_SEL jumper sets it (3300; at 5 V, "
+         "about 4890 from USB)");
++    object_class_property_add_bool(oc, "xosc32k",
++                                   pic32cm_mc00_cpro_get_xosc32k,
++                                   pic32cm_mc00_cpro_set_xosc32k);
++    object_class_property_set_description(oc, "xosc32k",
++        "The 32.768 kHz oscillator on XIN32 is fitted (on; off as on the "
++        "desk board, where it gives no clock)");
+     object_class_property_add_str(oc, "dgi", pic32cm_mc00_cpro_get_dgi,
+                                   pic32cm_mc00_cpro_set_dgi);
+     object_class_property_set_description(oc, "dgi",
+-- 
+2.53.0.windows.2
+
