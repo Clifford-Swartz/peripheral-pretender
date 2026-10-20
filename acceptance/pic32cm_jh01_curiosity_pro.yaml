@@ -119,7 +119,7 @@ examples:
     should: measures 48 MHz
     steps: wait 3
     verdict: gap
-    note: FREQM not modelled; hangs
+    note: FREQM modelled since patch 0061 (checked on MC00 silicon); not re-run here yet
   adc__adc_sample:
     should: ADC readings
     steps: wait 3

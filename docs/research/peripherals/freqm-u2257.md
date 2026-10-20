@@ -382,3 +382,41 @@ mchp_clock.c, not a FREQM bug.
   0x4F), so OSC32K runs uncalibrated in Harmony projects (S4 vs S5 quantifies it).
 - golden/pic32cm1216mc00048-a1/reset.json: OSCCTRL.OSC48MDIV = 0x0B at reset (OSC48M at 4 MHz),
   OSCCTRL.CAL48M = 0x210320.
+
+## 8. Answers from silicon (2026-10-20)
+
+The desk EV15N46A ran `firmware/hello/tests/freqmprobe.c` (three rounds); the model
+(`hw/misc/mchp_freqm.c`) follows these answers and `firmware/hello/tests/freqm.c` checks them on
+both (`golden/pic32cm1216mc00048-a1/freqm-silicon.txt`). By question in section 6:
+
+1. No bias: VALUE = REFNUM * f_MSR / f_REF exactly for clocks from one oscillator (48 MHz against
+   OSC48M / 1024, REFNUM 255: 261,120; every GCLK divider and DIVSEL row exact, twice). MSR and REF
+   on the same generator read REFNUM - 1 (254); the FDPLL96M against OSC48M showed +-1 between runs.
+2. Overflow keeps the low 24 bits (33,423,360 reads 0xFE0000) and sets OVF; disabling clears OVF
+   (read right after the disable).
+3. A missing reference clock: BUSY stays; when it returns, a whole window follows with the exact
+   count. A missing measured clock: VALUE 0, DONE at the usual time. Disabling mid-window: BUSY 0,
+   VALUE 0, no DONE; re-enabling starts nothing. SWRST mid-window clears everything. START while
+   busy is ignored (the count runs on); START while disabled is ignored.
+4. DONE sets whatever INTENSET says; the NVIC line only with INTENSET.DONE.
+5. A measurement lasts REFNUM + 2 to 3 reference periods (the phase of START against the
+   reference); VALUE reads the live count during it. SYNCBUSY lasts about 3 reference periods after
+   ENABLE, 2 after SWRST (not modelled).
+6. CFGA bits 15:8 do not exist (0xFFFF reads 0x00FF); CFGA ignores writes while enabled.
+7. Not probed (a PAC-protected CTRLB read may fault).
+8. The 12 MHz XOSC is fitted and runs (11.93 MHz against OSC48M, so OSC48M runs about 0.55 % fast
+   on this part), although the user guide calls it a footprint. **XOSC32K gives no clock on the desk
+   board**, in external-clock mode or in crystal mode with the longest start-up: a GCLK generator
+   fed from it never finishes synchronizing, though XOSC32KRDY may read 1 (the register survives
+   every reset but power-on). The user guide lists a mounted 32.768 kHz oscillator with zero-ohm
+   jumpers; the twin's board still provides 32,768 Hz. Open with the owner.
+9. Against OSC48M / 1024: OSCULP32K 31,985-32,169 Hz, OSC32K 35,294 Hz with CALIB 0x3F (reset) and
+   31,433 Hz with the OTP value 0x4F, the FDPLL96M (1 MHz GCLK reference, LDR 95) 96.000 MHz. The
+   twin runs all 32 kHz sources at 32,768 Hz and ignores CALIB.
+10. REFNUM = 0 counts as 512 (a 515 ms window at 1 kHz, 24,576,000 wrapped to 0x770000 with OVF).
+    A reference faster than the measured clock still measures correctly (REF at 93,750 Hz).
+
+Side finding: generators 2-8 have 8-bit DIV fields, so DIV = 1024 or 512 written there reads as
+0 (undivided); the twin already masks them. The twin's GCLK used to divide integer Hz (48 MHz /
+2^17 became 366 Hz, so FREQM counted 0xFE4B3E instead of 0xFE0000); generators now multiply the
+source's period.

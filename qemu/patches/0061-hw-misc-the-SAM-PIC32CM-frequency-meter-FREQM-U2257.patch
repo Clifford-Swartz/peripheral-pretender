@@ -1,0 +1,895 @@
+From d6c0707508f03ad74578b514ac01cba020335af4 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Tue, 20 Oct 2026 06:36:44 -0700
+Subject: [PATCH] hw/misc: the SAM/PIC32CM frequency meter (FREQM U2257)
+
+mchp-freqm counts GCLK_FREQM_MSR (its "gclk") over REFNUM periods of
+GCLK_FREQM_REF (a new clock input, "gclk-ref"), both wired from the
+device's GCLK_ID_MSR/GCLK_ID_REF channels, as three probe rounds on
+PIC32CM MC00 rev A1 silicon showed (firmware/hello APP=freqmprobe):
+VALUE = REFNUM * f_MSR / f_REF with no bias, REFNUM 0 counting as 512,
+a window of REFNUM + 2.5 reference periods with the live count in VALUE,
+a 24-bit wrap with OVF (cleared by disabling), DONE whatever INTENSET
+says, START ignored while busy or disabled, an abort on disable, a wait
+for a missing reference clock. One model for the JH01, MC00 and SAM E51.
+
+The GCLK generators now multiply their source's period instead of
+dividing integer Hz, so every divider is exact (48 MHz / 2^17 was 366
+Hz, and FREQM read 0xFE4B3E where silicon reads 0xFE0000).
+mchp_regblock_set_clock_period() sets a clock by period. qtest
+pic32cm-freqm-test.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst         |   8 +-
+ hw/arm/pic32cm_soc.c                          |  13 +
+ hw/misc/mchp_clock.c                          |  39 ++-
+ hw/misc/mchp_freqm.c                          | 275 ++++++++++++++++++
+ hw/misc/mchp_regblock.c                       |  11 +
+ hw/misc/meson.build                           |   1 +
+ .../hw/mchp/gen/atsame51j20a/freqm_u2257.h    |  17 +-
+ include/hw/mchp/gen/freqm_u2257.h             |   2 +-
+ .../mchp/gen/pic32cm1216mc00048/freqm_u2257.h |  18 +-
+ .../mchp/gen/pic32cm5164jh01100/freqm_u2257.h |  18 +-
+ include/hw/misc/mchp_freqm.h                  |  22 ++
+ include/hw/misc/mchp_regblock.h               |   3 +
+ tests/qtest/meson.build                       |   2 +-
+ tests/qtest/pic32cm-freqm-test.c              | 111 +++++++
+ 14 files changed, 498 insertions(+), 42 deletions(-)
+ create mode 100644 hw/misc/mchp_freqm.c
+ create mode 100644 include/hw/misc/mchp_freqm.h
+ create mode 100644 tests/qtest/pic32cm-freqm-test.c
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index 153cb46..24bf8eb 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -107,6 +107,12 @@ Supported devices
+   outputs, start events and the CMP pad outputs measured on PIC32CM MC00
+   silicon. Not modelled: the offset error, the digital filter, standby.
+   The analog models take VDDANA from the SoC property ``vddana``.
++- FREQM: REFNUM * f_MSR / f_REF counts of GCLK_FREQM_MSR over REFNUM
++  periods of GCLK_FREQM_REF (REFNUM 0 counts as 512), the window of
++  REFNUM + 2.5 reference periods, the live count in VALUE, OVF, DONE, and
++  the rules for START, disabling and stopped clocks measured on PIC32CM
++  MC00 silicon. GCLK generators divide their source's period exactly, so
++  ratios between clocks of one oscillator come out as on silicon.
+ - LED0 (PC05, active low) is a QEMU LED device; its state changes show
+   in the ``led_set_intensity`` trace event. SW0 (PB19, to ground) is the
+   machine property ``sw0-pressed``.
+@@ -130,7 +136,7 @@ Missing devices
+   the DSCRITICAL waveform.
+ - Watchdog time-out, PAC write protection, flash programming through
+   NVMCTRL, DSU CRC32 and chip erase, sleep modes and every other
+-  peripheral behaviour (DMAC, CCL, PDEC, FREQM, CAN, ...). ADC
++  peripheral behaviour (DMAC, CCL, PDEC, CAN, ...). ADC
+   sequencing and event inputs, DAC START events.
+ 
+ Board and SoC properties
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index 85f646a..ba256d5 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -36,6 +36,7 @@
+ #include "hw/adc/mchp_adc.h"
+ #include "hw/misc/mchp_ac.h"
+ #include "hw/misc/mchp_tsens.h"
++#include "hw/misc/mchp_freqm.h"
+ #include "hw/dma/mchp_dmac.h"
+ #include "hw/misc/mchp_usb.h"
+ #include "hw/misc/unimp.h"
+@@ -64,6 +65,7 @@ static const struct {
+     { "EIC", TYPE_MCHP_EIC },
+     { "EVSYS", TYPE_MCHP_EVSYS, "U2256" },
+     { "EVSYS", TYPE_MCHP_EVSYS_U2504, "U2504" },
++    { "FREQM", TYPE_MCHP_FREQM, "U2257" },
+     { "GCLK", TYPE_MCHP_GCLK },
+     { "MCLK", TYPE_MCHP_MCLK, "U2234" },
+     { "MCLK", TYPE_MCHP_SAME5X_MCLK, "U2408" },
+@@ -444,6 +446,17 @@ static void pic32cm_connect_clocks(Pic32cmSocState *s)
+         }
+     }
+ 
++    /* FREQM: GCLK_FREQM_MSR is its "gclk", GCLK_FREQM_REF its "gclk-ref" */
++    if (pic32cm_soc_periph(s, "FREQM") &&
++        object_dynamic_cast(OBJECT(pic32cm_soc_periph(s, "FREQM")),
++                            TYPE_MCHP_FREQM)) {
++        qdev_connect_clock_in(pic32cm_soc_periph(s, "FREQM"), "gclk",
++                              pic32cm_gclk_channel(s, "FREQM", "GCLK_ID_MSR"));
++        qdev_connect_clock_in(pic32cm_soc_periph(s, "FREQM"),
++                              MCHP_FREQM_REF_CLOCK,
++                              pic32cm_gclk_channel(s, "FREQM", "GCLK_ID_REF"));
++    }
++
+     for (unsigned i = 0; i < s->dev->ninstances; i++) {
+         const MchpInstanceInfo *info = &s->dev->instances[i];
+         g_autofree char *pch = NULL;
+diff --git a/hw/misc/mchp_clock.c b/hw/misc/mchp_clock.c
+index 7854171..de71b58 100644
+--- a/hw/misc/mchp_clock.c
++++ b/hw/misc/mchp_clock.c
+@@ -559,61 +559,70 @@ struct MchpGclkState {
+     MchpClkSettle settle;
+ };
+ 
+-static uint64_t mchp_gclk_src_hz(MchpGclkState *s, int idx)
++static uint64_t mchp_gclk_src_period(MchpGclkState *s, int idx)
+ {
+     if (idx < 0 || idx >= MCHP_GCLK_NSRC) {
+         return 0;
+     }
+-    return clock_get_hz(s->src[idx]);
++    return clock_get(s->src[idx]);
+ }
+ 
+-static uint64_t mchp_gclk_gen_hz(MchpGclkState *s, unsigned n,
+-                                 uint64_t gen1_hz)
++/*
++ * Generator @n's period (Clock units, 0: stopped): the source's period
++ * times the divider, so that every division stays exact (FREQM measures
++ * 48 MHz / 2^17 as silicon does)
++ */
++static uint64_t mchp_gclk_gen_period(MchpGclkState *s, unsigned n,
++                                     uint64_t gen1)
+ {
+     uint32_t ctrl = mchp_clk_reg(MCHP_REGBLOCK(s),
+                                  A_MCHP_GCLK_GENCTRL + 4 * n, 4);
+     uint32_t src = FIELD_EX32(ctrl, MCHP_GCLK_GENCTRL, SRC);
+     uint32_t div = FIELD_EX32(ctrl, MCHP_GCLK_GENCTRL, DIV);
+     int idx = s->src_map[src & (MCHP_GCLK_MAX_SRC - 1)];
+-    uint64_t hz;
++    uint64_t period, hi, lo;
+ 
+     if (!FIELD_EX32(ctrl, MCHP_GCLK_GENCTRL, GENEN)) {
+         return 0;
+     }
+     if (idx == MCHP_GCLK_SRC_GEN1) {
+-        hz = n == MCHP_GCLK_GEN1 ? 0 : gen1_hz;
++        period = n == MCHP_GCLK_GEN1 ? 0 : gen1;
+     } else {
+-        hz = mchp_gclk_src_hz(s, idx);
++        period = mchp_gclk_src_period(s, idx);
+     }
+     if (FIELD_EX32(ctrl, MCHP_GCLK_GENCTRL, DIVSEL)) {
+-        return div + 1 < 64 ? hz >> (div + 1) : 0;
++        if (div + 1 >= 64 || period >> (63 - div)) {
++            return 0;                       /* far below 1 Hz */
++        }
++        return period << (div + 1);
+     }
+-    return div > 1 ? hz / div : hz;
++    mulu64(&lo, &hi, period, div > 1 ? div : 1);
++    return hi ? 0 : lo;
+ }
+ 
+ static void mchp_gclk_compute(MchpRegBlock *rb)
+ {
+     MchpGclkState *s = MCHP_GCLK(rb);
+-    uint64_t hz[MCHP_GCLK_GENCTRL_COUNT];
++    uint64_t period[MCHP_GCLK_GENCTRL_COUNT];
+ 
+-    memset(hz, 0, sizeof(hz));
++    memset(period, 0, sizeof(period));
+     if (s->ngen > MCHP_GCLK_GEN1) {         /* 0 until realized */
+-        hz[MCHP_GCLK_GEN1] = mchp_gclk_gen_hz(s, MCHP_GCLK_GEN1, 0);
++        period[MCHP_GCLK_GEN1] = mchp_gclk_gen_period(s, MCHP_GCLK_GEN1, 0);
+     }
+     for (unsigned n = 0; n < s->ngen; n++) {
+         if (n != MCHP_GCLK_GEN1) {
+-            hz[n] = mchp_gclk_gen_hz(s, n, hz[MCHP_GCLK_GEN1]);
++            period[n] = mchp_gclk_gen_period(s, n, period[MCHP_GCLK_GEN1]);
+         }
+     }
+     for (unsigned n = 0; n < MCHP_GCLK_GENCTRL_COUNT; n++) {
+-        mchp_regblock_set_clock(rb, s->gen[n], hz[n]);
++        mchp_regblock_set_clock_period(rb, s->gen[n], period[n]);
+     }
+     for (unsigned m = 0; m < s->npch; m++) {
+         uint32_t ctrl = mchp_clk_reg(rb, A_MCHP_GCLK_PCHCTRL + 4 * m, 4);
+         uint32_t gen = FIELD_EX32(ctrl, MCHP_GCLK_PCHCTRL, GEN);
+         bool on = FIELD_EX32(ctrl, MCHP_GCLK_PCHCTRL, CHEN) && gen < s->ngen;
+ 
+-        mchp_regblock_set_clock(rb, s->pch[m], on ? hz[gen] : 0);
++        mchp_regblock_set_clock_period(rb, s->pch[m], on ? period[gen] : 0);
+     }
+ }
+ 
+diff --git a/hw/misc/mchp_freqm.c b/hw/misc/mchp_freqm.c
+new file mode 100644
+index 0000000..bd91db1
+--- /dev/null
++++ b/hw/misc/mchp_freqm.c
+@@ -0,0 +1,275 @@
++/*
++ * Microchip SAM/PIC32CM frequency meter (FREQM U2257)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Counts periods of GCLK_FREQM_MSR (the regblock's "gclk") during REFNUM
++ * periods of GCLK_FREQM_REF ("gclk-ref"); the SoC wires both from the
++ * device's GCLK_ID_MSR/GCLK_ID_REF channels. One model for the PIC32CM
++ * JH01/MC00 (1.0.1) and SAM E51 (1.1.0).
++ *
++ * What the PIC32CM MC00 (rev A1, firmware/hello APP=freqmprobe) showed,
++ * and the model does:
++ *
++ *   - VALUE = REFNUM * f_MSR / f_REF, rounded down (48 MHz against
++ *     46,875 Hz, REFNUM 255: 261,120 exactly); REFNUM = 0 counts as 512.
++ *     A count beyond 24 bits keeps its low 24 bits and sets STATUS.OVF,
++ *     which disabling clears.
++ *   - A measurement lasts REFNUM + 2.5 reference periods from START;
++ *     BUSY reads 1 meanwhile and VALUE the count so far; at the end DONE
++ *     sets, whatever INTENSET says.
++ *   - START while busy or disabled is ignored. Disabling aborts: BUSY and
++ *     VALUE read 0, no DONE. Without a reference clock the measurement
++ *     waits for it and then takes the whole window; without a measured
++ *     clock VALUE is 0.
++ *   - CFGA bits 15:8 (DIVREF on later FREQMs) do not exist.
++ *
++ * Not modelled: the synchronizer's error of a count or two (silicon: MSR
++ * and REF from one generator read REFNUM - 1), SYNCBUSY (silicon: about 3
++ * reference periods), a CTRLB read's PAC error, clock changes during a
++ * window (the end uses the rates of that moment).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/host-utils.h"
++#include "qemu/timer.h"
++#include "hw/core/clock.h"
++#include "hw/core/qdev-clock.h"
++#include "hw/misc/mchp_freqm.h"
++#include "hw/mchp/gen/freqm_u2257.h"
++#include "migration/vmstate.h"
++
++#define VALUE_MASK          0xFFFFFF
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpFreqmState, MCHP_FREQM)
++
++struct MchpFreqmState {
++    MchpRegBlock parent_obj;
++
++    bool busy;
++    bool waiting;               /* started, no reference clock yet */
++    int64_t window_ns;          /* virtual time the counting began */
++    QEMUTimer *timer;
++    Clock *ref;
++};
++
++static uint32_t fm_reg(MchpFreqmState *s, hwaddr off, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, off, size);
++}
++
++static void fm_set_reg(MchpFreqmState *s, hwaddr off, unsigned size,
++                       uint32_t v)
++{
++    mchp_regfile_poke(&MCHP_REGBLOCK(s)->rf, off, size, v);
++}
++
++static bool fm_on(MchpFreqmState *s)
++{
++    return fm_reg(s, A_MCHP_FREQM_CTRLA, 1) & R_MCHP_FREQM_CTRLA_ENABLE_MASK;
++}
++
++static uint64_t fm_refnum(MchpFreqmState *s)
++{
++    uint32_t n = FIELD_EX32(fm_reg(s, A_MCHP_FREQM_CFGA, 2), MCHP_FREQM_CFGA,
++                            REFNUM);
++
++    return n ? n : 512;                 /* silicon */
++}
++
++static void fm_set_busy(MchpFreqmState *s, bool busy)
++{
++    uint8_t st = fm_reg(s, A_MCHP_FREQM_STATUS, 1);
++
++    s->busy = busy;
++    fm_set_reg(s, A_MCHP_FREQM_STATUS, 1,
++               busy ? st | R_MCHP_FREQM_STATUS_BUSY_MASK :
++                      st & ~R_MCHP_FREQM_STATUS_BUSY_MASK);
++}
++
++/*
++ * Periods of the measured clock in @len of the reference clock's periods
++ * (2^-32 ns units, so that dividers such as 2^17 stay exact)
++ */
++static uint64_t fm_count(MchpFreqmState *s, uint64_t len)
++{
++    uint64_t msr = clock_get(MCHP_REGBLOCK(s)->gclk);
++    uint64_t lo, hi;
++
++    if (!msr) {
++        return 0;
++    }
++    /* to nearest: whole ratios on silicon stay whole after period rounding */
++    mulu64(&lo, &hi, len, clock_get(s->ref));
++    hi += uadd64_overflow(lo, msr / 2, &lo);
++    divu128(&lo, &hi, msr);
++    return lo;
++}
++
++/* The window from now: counting after 2.5 reference periods, REFNUM long */
++static void fm_arm(MchpFreqmState *s)
++{
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    s->waiting = !clock_get(s->ref);
++    if (s->waiting) {
++        return;
++    }
++    s->window_ns = now + clock_ticks_to_ns(s->ref, 5) / 2;
++    timer_mod(s->timer, s->window_ns +
++              clock_ticks_to_ns(s->ref, fm_refnum(s)));
++}
++
++static void fm_done(void *opaque)
++{
++    MchpFreqmState *s = opaque;
++    uint64_t count = fm_count(s, fm_refnum(s));
++
++    if (count > VALUE_MASK) {
++        fm_set_reg(s, A_MCHP_FREQM_STATUS, 1,
++                   fm_reg(s, A_MCHP_FREQM_STATUS, 1) |
++                   R_MCHP_FREQM_STATUS_OVF_MASK);
++    }
++    fm_set_reg(s, A_MCHP_FREQM_VALUE, 4, count & VALUE_MASK);
++    fm_set_busy(s, false);
++    fm_set_reg(s, A_MCHP_FREQM_INTFLAG, 1,
++               fm_reg(s, A_MCHP_FREQM_INTFLAG, 1) |
++               R_MCHP_FREQM_INTFLAG_DONE_MASK);
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++static void fm_abort(MchpFreqmState *s)
++{
++    timer_del(s->timer);
++    s->waiting = false;
++    fm_set_busy(s, false);
++}
++
++static uint32_t fm_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                            unsigned idx, uint32_t stored, bool side_effects)
++{
++    MchpFreqmState *s = MCHP_FREQM(rf->opaque);
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    /* VALUE: the count so far while measuring */
++    if (s->busy) {
++        uint64_t msr = clock_get(MCHP_REGBLOCK(s)->gclk);
++        uint64_t lo, hi;
++
++        if (s->waiting || now < s->window_ns || !msr) {
++            return 0;
++        }
++        mulu64(&lo, &hi, now - s->window_ns, 1ULL << 32);
++        divu128(&lo, &hi, msr);
++        return lo & VALUE_MASK;
++    }
++    return stored;
++}
++
++static void fm_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                          unsigned idx, uint32_t old, uint32_t written,
++                          uint32_t we)
++{
++    MchpFreqmState *s = MCHP_FREQM(rf->opaque);
++
++    switch (ri->offset) {
++    case A_MCHP_FREQM_CTRLA:
++        if (!fm_on(s) && (old & R_MCHP_FREQM_CTRLA_ENABLE_MASK)) {
++            /* Silicon: no DONE, VALUE and OVF cleared */
++            fm_abort(s);
++            fm_set_reg(s, A_MCHP_FREQM_VALUE, 4, 0);
++            fm_set_reg(s, A_MCHP_FREQM_STATUS, 1, 0);
++        }
++        break;
++    case A_MCHP_FREQM_CTRLB:
++        if ((written & we & R_MCHP_FREQM_CTRLB_START_MASK) && fm_on(s) &&
++            !s->busy) {
++            fm_set_busy(s, true);
++            fm_arm(s);
++        }
++        break;
++    default:
++        break;
++    }
++}
++
++static void fm_ref_update(void *opaque, ClockEvent event)
++{
++    MchpFreqmState *s = opaque;
++
++    if (!s->busy) {
++        return;
++    }
++    if (!clock_get(s->ref)) {
++        timer_del(s->timer);            /* stalls until it runs again */
++        s->waiting = true;
++    } else if (s->waiting) {
++        fm_arm(s);                      /* the whole window from now */
++    }
++}
++
++static void fm_reset_hold(MchpRegBlock *rb)
++{
++    MchpFreqmState *s = MCHP_FREQM(rb);
++
++    timer_del(s->timer);
++    s->busy = false;
++    s->waiting = false;
++}
++
++static void fm_init(Object *obj)
++{
++    MchpFreqmState *s = MCHP_FREQM(obj);
++
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, fm_done, s);
++    s->ref = qdev_init_clock_in(DEVICE(obj), MCHP_FREQM_REF_CLOCK,
++                                fm_ref_update, s, ClockUpdate);
++}
++
++static void fm_finalize(Object *obj)
++{
++    timer_free(MCHP_FREQM(obj)->timer);
++}
++
++static const VMStateDescription vmstate_mchp_freqm = {
++    .name = TYPE_MCHP_FREQM,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpFreqmState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_BOOL(busy, MchpFreqmState),
++        VMSTATE_BOOL(waiting, MchpFreqmState),
++        VMSTATE_INT64(window_ns, MchpFreqmState),
++        VMSTATE_TIMER_PTR(timer, MchpFreqmState),
++        VMSTATE_CLOCK(ref, MchpFreqmState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void fm_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_freqm;
++    c->pre_read = fm_pre_read;
++    c->post_write = fm_post_write;
++    c->reset_hold = fm_reset_hold;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_freqm_types[] = {
++    {
++        .name = TYPE_MCHP_FREQM,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpFreqmState),
++        .instance_init = fm_init,
++        .instance_finalize = fm_finalize,
++        .class_init = fm_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_freqm_types)
+diff --git a/hw/misc/mchp_regblock.c b/hw/misc/mchp_regblock.c
+index c747ac2..e0a7724 100644
+--- a/hw/misc/mchp_regblock.c
++++ b/hw/misc/mchp_regblock.c
+@@ -50,6 +50,17 @@ void mchp_regblock_set_clock(MchpRegBlock *s, Clock *out, uint64_t hz)
+     }
+ }
+ 
++void mchp_regblock_set_clock_period(MchpRegBlock *s, Clock *out,
++                                    uint64_t period)
++{
++    if (clock_set(out, period)) {
++        trace_mchp_clk_update(s->name,
++                              object_get_canonical_path_component(OBJECT(out)),
++                              clock_get_hz(out));
++        clock_propagate(out);
++    }
++}
++
+ /* The register holding the value of @ri: its alias target or itself. */
+ static const MchpRegInfo *mchp_regblock_storage(MchpRegBlock *s,
+                                                 const MchpRegInfo *ri)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index d6e0371..48dcfce 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -43,6 +43,7 @@ system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files(
+   'mchp_dac_u2214.c',
+   'mchp_evsys.c',
+   'mchp_evsys5x.c',
++  'mchp_freqm.c',
+   'mchp_same5x.c',
+   'mchp_usb.c',
+   'mchp_sysctrl.c',
+diff --git a/include/hw/mchp/gen/atsame51j20a/freqm_u2257.h b/include/hw/mchp/gen/atsame51j20a/freqm_u2257.h
+index 4b054b7..01f52cc 100644
+--- a/include/hw/mchp/gen/atsame51j20a/freqm_u2257.h
++++ b/include/hw/mchp/gen/atsame51j20a/freqm_u2257.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/freqm_u2257.yaml (sha1 69a51fae9892)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,27 +23,27 @@ static const MchpRegInfo atsame51j20a_freqm_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03, .rdz = 0x01,
+-        .flags = 0,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLB", .offset = 0x01, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01, .rdz = 0x01,
+-        .flags = MCHP_F_WRITE_ONLY,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE | MCHP_F_WRITE_ONLY,
+     },
+     {
+         .name = "CFGA", .offset = 0x02, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x00FF, .wmask = 0x00FF,
+-        .flags = 0,
++        .enprot = 0x00FF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x08, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 4 /* INTENSET */, .reset = 0x00, .impl = 0x01,
+-        .wmask = 0x01, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x01, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x09, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 4 /* INTENSET */, .reset = 0x00, .impl = 0x01,
+-        .wmask = 0x01, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x01, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x0A, .size = 1, .count = 1, .stride = 1,
+@@ -52,7 +52,8 @@ static const MchpRegInfo atsame51j20a_freqm_regs[] = {
+     },
+     {
+         .name = "STATUS", .offset = 0x0B, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00, .w1c = 0x02,
++        .flags = 0,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x0C, .size = 4, .count = 1, .stride = 4,
+@@ -62,7 +63,7 @@ static const MchpRegInfo atsame51j20a_freqm_regs[] = {
+     {
+         .name = "VALUE", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00FFFFFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_READ_ONLY,
+     },
+ };
+ #define ATSAME51J20A_FREQM_NREGS 9
+diff --git a/include/hw/mchp/gen/freqm_u2257.h b/include/hw/mchp/gen/freqm_u2257.h
+index b04d354..27f8e19 100644
+--- a/include/hw/mchp/gen/freqm_u2257.h
++++ b/include/hw/mchp/gen/freqm_u2257.h
+@@ -10,7 +10,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/freqm_u2257.yaml (sha1 69a51fae9892)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/freqm_u2257.h b/include/hw/mchp/gen/pic32cm1216mc00048/freqm_u2257.h
+index 2a8092a..2e9627c 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/freqm_u2257.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/freqm_u2257.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/freqm_u2257.yaml (sha1 69a51fae9892)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,27 +23,28 @@ static const MchpRegInfo pic32cm1216mc00048_freqm_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03, .rdz = 0x01,
+-        .syncbusy = 0x00000003 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLB", .offset = 0x01, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01, .rdz = 0x01,
+-        .flags = MCHP_F_WRITE_ONLY,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE | MCHP_F_WRITE_ONLY,
+     },
+     {
+         .name = "CFGA", .offset = 0x02, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x00FF, .wmask = 0x00FF,
+-        .flags = 0,
++        .enprot = 0x00FF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x08, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 4 /* INTENSET */, .reset = 0x00, .impl = 0x01,
+-        .wmask = 0x01, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x01, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x09, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 4 /* INTENSET */, .reset = 0x00, .impl = 0x01,
+-        .wmask = 0x01, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x01, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x0A, .size = 1, .count = 1, .stride = 1,
+@@ -52,7 +53,8 @@ static const MchpRegInfo pic32cm1216mc00048_freqm_regs[] = {
+     },
+     {
+         .name = "STATUS", .offset = 0x0B, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00, .w1c = 0x02,
++        .flags = 0,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x0C, .size = 4, .count = 1, .stride = 4,
+@@ -62,7 +64,7 @@ static const MchpRegInfo pic32cm1216mc00048_freqm_regs[] = {
+     {
+         .name = "VALUE", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00FFFFFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_READ_ONLY,
+     },
+ };
+ #define PIC32CM1216MC00048_FREQM_NREGS 9
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/freqm_u2257.h b/include/hw/mchp/gen/pic32cm5164jh01100/freqm_u2257.h
+index eb6f09d..65e6228 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/freqm_u2257.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/freqm_u2257.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/freqm_u2257.yaml (sha1 69a51fae9892)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,27 +23,28 @@ static const MchpRegInfo pic32cm5164jh01100_freqm_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03, .rdz = 0x01,
+-        .syncbusy = 0x00000003 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLB", .offset = 0x01, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01, .rdz = 0x01,
+-        .flags = MCHP_F_WRITE_ONLY,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE | MCHP_F_WRITE_ONLY,
+     },
+     {
+         .name = "CFGA", .offset = 0x02, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x00FF, .wmask = 0x00FF,
+-        .flags = 0,
++        .enprot = 0x00FF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x08, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 4 /* INTENSET */, .reset = 0x00, .impl = 0x01,
+-        .wmask = 0x01, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x01, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x09, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 4 /* INTENSET */, .reset = 0x00, .impl = 0x01,
+-        .wmask = 0x01, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x01, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x0A, .size = 1, .count = 1, .stride = 1,
+@@ -52,7 +53,8 @@ static const MchpRegInfo pic32cm5164jh01100_freqm_regs[] = {
+     },
+     {
+         .name = "STATUS", .offset = 0x0B, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00, .w1c = 0x02,
++        .flags = 0,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x0C, .size = 4, .count = 1, .stride = 4,
+@@ -62,7 +64,7 @@ static const MchpRegInfo pic32cm5164jh01100_freqm_regs[] = {
+     {
+         .name = "VALUE", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x00FFFFFF,
+-        .wmask = 0x00000000, .flags = MCHP_F_READ_ONLY,
++        .wmask = 0x00000000, .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_READ_ONLY,
+     },
+ };
+ #define PIC32CM5164JH01100_FREQM_NREGS 9
+diff --git a/include/hw/misc/mchp_freqm.h b/include/hw/misc/mchp_freqm.h
+new file mode 100644
+index 0000000..b63df21
+--- /dev/null
++++ b/include/hw/misc/mchp_freqm.h
+@@ -0,0 +1,22 @@
++/*
++ * Microchip SAM/PIC32CM frequency meter (FREQM U2257)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * An mchp-regblock (see mchp_freqm.c): clock inputs "gclk"
++ * (GCLK_FREQM_MSR, the clock measured) and "gclk-ref" (GCLK_FREQM_REF).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_MCHP_FREQM_H
++#define HW_MISC_MCHP_FREQM_H
++
++#include "hw/misc/mchp_regblock.h"
++
++#define TYPE_MCHP_FREQM "mchp-freqm"
++
++#define MCHP_FREQM_REF_CLOCK "gclk-ref"
++
++#endif /* HW_MISC_MCHP_FREQM_H */
+diff --git a/include/hw/misc/mchp_regblock.h b/include/hw/misc/mchp_regblock.h
+index 6f0002f..9ea3e2c 100644
+--- a/include/hw/misc/mchp_regblock.h
++++ b/include/hw/misc/mchp_regblock.h
+@@ -121,5 +121,8 @@ void mchp_event_time_set(int64_t ns);   /* < 0: back to the clock */
+ 
+ /* Set output clock @out of @s to @hz; a change is traced and propagated. */
+ void mchp_regblock_set_clock(MchpRegBlock *s, Clock *out, uint64_t hz);
++/* The same with a period in Clock units (2^-32 ns; 0: stopped), exact */
++void mchp_regblock_set_clock_period(MchpRegBlock *s, Clock *out,
++                                    uint64_t period);
+ 
+ #endif /* HW_MISC_MCHP_REGBLOCK_H */
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index 354db29..fd195af 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -253,7 +253,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-click-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-click-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-freqm-test.c b/tests/qtest/pic32cm-freqm-test.c
+new file mode 100644
+index 0000000..ed8968d
+--- /dev/null
++++ b/tests/qtest/pic32cm-freqm-test.c
+@@ -0,0 +1,111 @@
++/*
++ * QTest for the frequency meter of the PIC32CM MC00 (pic32cm-mc00-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The FREQM model on stepped virtual time: the count, the window, a
++ * missing reference clock, and the exact generator periods it relies on.
++ * firmware/hello APP=freqm checks the rest against silicon.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++
++#define MACHINE         "-M pic32cm-mc00-cpro"
++
++#define OSCCTRL         0x40001000
++#define GCLK            0x40001C00
++#define FREQM           0x40002C00
++#define PCH_MSR         3
++#define PCH_REF         4
++
++#define R_CTRLA         0x00
++#define R_CTRLB         0x01
++#define R_CFGA          0x02
++#define R_INTFLAG       0x0A
++#define R_STATUS        0x0B
++#define R_VALUE         0x10
++
++#define GEN_OSC48M      (6 | BIT(8))    /* SRC OSC48M, GENEN */
++#define DIVSEL          BIT(12)
++#define DIV(n)          ((uint32_t)(n) << 16)
++#define CHEN            BIT(6)
++#define BUSY            0x01
++#define OVF             0x02
++
++/* 48 MHz on GCLK2 (MSR), @ref_genctrl on GCLK1 (REF), REFNUM @refnum */
++static QTestState *freqm_init(uint32_t ref_genctrl, uint8_t refnum)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writeb(qts, OSCCTRL + 0x15, 0);                   /* 48 MHz */
++    qtest_writel(qts, GCLK + 0x20 + 4 * 1, ref_genctrl);
++    qtest_writel(qts, GCLK + 0x20 + 4 * 2, GEN_OSC48M);
++    qtest_writel(qts, GCLK + 0x80 + 4 * PCH_MSR, CHEN | 2);
++    qtest_writel(qts, GCLK + 0x80 + 4 * PCH_REF, CHEN | 1);
++    qtest_writew(qts, FREQM + R_CFGA, refnum);
++    qtest_writeb(qts, FREQM + R_CTRLA, 0x02);
++    return qts;
++}
++
++/* REFNUM * f_MSR / f_REF after REFNUM + 2.5 reference periods */
++static void test_measure(void)
++{
++    QTestState *qts = freqm_init(GEN_OSC48M | DIV(1024), 255);
++
++    qtest_writeb(qts, FREQM + R_CTRLB, 1);
++    g_assert_cmphex(qtest_readb(qts, FREQM + R_STATUS), ==, BUSY);
++    qtest_clock_step(qts, 5480000);             /* 257.5 / 46875 Hz: 5.493 ms */
++    g_assert_cmphex(qtest_readb(qts, FREQM + R_STATUS), ==, BUSY);
++    g_assert_cmpuint(qtest_readl(qts, FREQM + R_VALUE), >, 250000);
++    qtest_clock_step(qts, 20000);
++    g_assert_cmphex(qtest_readb(qts, FREQM + R_STATUS), ==, 0);
++    g_assert_cmphex(qtest_readb(qts, FREQM + R_INTFLAG), ==, 1);
++    g_assert_cmpuint(qtest_readl(qts, FREQM + R_VALUE), ==, 261120);
++    qtest_quit(qts);
++}
++
++/* 48 MHz / 2^17 stays exact through the generator: 0xFE0000 and OVF */
++static void test_overflow(void)
++{
++    QTestState *qts = freqm_init(GEN_OSC48M | DIVSEL | DIV(16), 255);
++
++    qtest_writeb(qts, FREQM + R_CTRLB, 1);
++    qtest_clock_step(qts, 800000000);
++    g_assert_cmphex(qtest_readl(qts, FREQM + R_VALUE), ==, 0xFE0000);
++    g_assert_cmphex(qtest_readb(qts, FREQM + R_STATUS), ==, OVF);
++    qtest_writeb(qts, FREQM + R_CTRLA, 0);       /* disabling clears OVF */
++    g_assert_cmphex(qtest_readb(qts, FREQM + R_STATUS), ==, 0);
++    qtest_quit(qts);
++}
++
++/* Without a reference clock it waits, then measures a whole window */
++static void test_no_reference(void)
++{
++    QTestState *qts = freqm_init(GEN_OSC48M | DIV(1024), 16);
++
++    qtest_writel(qts, GCLK + 0x80 + 4 * PCH_REF, 1);         /* CHEN off */
++    qtest_writeb(qts, FREQM + R_CTRLB, 1);
++    qtest_clock_step(qts, 100000000);
++    g_assert_cmphex(qtest_readb(qts, FREQM + R_STATUS), ==, BUSY);
++    qtest_writel(qts, GCLK + 0x80 + 4 * PCH_REF, CHEN | 1);
++    qtest_clock_step(qts, 390000);              /* 18.5 periods: 394.7 us */
++    g_assert_cmphex(qtest_readb(qts, FREQM + R_STATUS), ==, BUSY);
++    qtest_clock_step(qts, 10000);
++    g_assert_cmphex(qtest_readb(qts, FREQM + R_STATUS), ==, 0);
++    g_assert_cmpuint(qtest_readl(qts, FREQM + R_VALUE), ==, 16 * 1024);
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++    qtest_add_func("pic32cm-freqm/measure", test_measure);
++    qtest_add_func("pic32cm-freqm/overflow", test_overflow);
++    qtest_add_func("pic32cm-freqm/no-reference", test_no_reference);
++    return g_test_run();
++}
+-- 
+2.53.0.windows.2
+

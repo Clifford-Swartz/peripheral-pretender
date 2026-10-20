@@ -520,7 +520,7 @@ chips, checking each on the boards that are plugged in first (today the MC00 Cur
 
 What is still register-only:
 
-- **MC00:** DMAC (U2223), CCL, PDEC, FREQM, MTB, HMATRIXB.
+- **MC00:** DMAC (U2223), CCL, PDEC, MTB, HMATRIXB.
 - **JH01:** DMAC, the RTC (03608), CAN, CCL, PDEC, FREQM, PTC, ICM, MTB, MCRAMC, SMBIST.
 - **SAM E51:** CAN, AC (U2501), CCL, PDEC, FREQM, AES, ICM, I2S, SDHC, PCC, CMCC, RAMECC, PM,
   SUPC, DSU and the trace blocks.
@@ -558,12 +558,18 @@ The twin reads 25.00 C unless `qom-set /machine/soc/tsens temperature <mC>`; the
 about 30 C. A first reading of the probe was wrong twice (START while busy, START while disabled):
 running the checked app on silicon caught it, so keep that step.
 
+**FREQM (U2257): done** (patch 0061; the same model serves the JH01 and SAM E51). Answers in
+section 8 of `docs/research/peripherals/freqm-u2257.md`. It found a twin clock-tree bug (GCLK
+generators divided integer Hz; now they multiply the source's period) and a board question:
+**the desk MC00's XOSC32K gives no clock**, although the user guide lists a mounted 32.768 kHz
+oscillator (zero-ohm jumpers next to it), while the 12 MHz XOSC the guide calls a footprint runs.
+The twin's board still provides 32,768 Hz on XIN32; ask the owner before changing it.
+
 Next on the MC00, in order:
 
-1. **FREQM** (needs the second GCLK).
-2. **DMAC U2223** (the big one; the note has a 25-experiment probe plan).
-3. **PDEC and CCL** (after a generic pad-to-peripheral input path).
-4. **MTB** register fixes.
+1. **DMAC U2223** (the big one; the note has a 25-experiment probe plan).
+2. **PDEC and CCL** (after a generic pad-to-peripheral input path).
+3. **MTB** register fixes.
 
 The JH01, SAM E51 and AVR blocks wait for their boards to be plugged in, so they can be checked
 the same way.

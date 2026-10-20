@@ -58734,7 +58734,15 @@
    "version": "1.1.0",
    "caption": "Frequency Meter",
    "core": false,
-   "overlay": null,
+   "overlay": {
+    "file": "overlays/freqm_u2257.yaml",
+    "sha1": "69a51fae9892d8ff63cb11d4b472a7ed90e321f3",
+    "status": "applied",
+    "versions": [
+     "1.0.1",
+     "1.1.0"
+    ]
+   },
    "size": 20,
    "selector": null,
    "default_view": "",
@@ -58746,7 +58754,7 @@
      "irq": {
       "flag": "INTFLAG",
       "enable": "INTENSET",
-      "source": "heuristic"
+      "source": "overlay"
      },
      "registers": [
       {
@@ -58767,7 +58775,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control A Register",
@@ -58793,8 +58804,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -58817,6 +58833,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
+        "HOOK_POST_WRITE",
         "WRITE_ONLY"
        ],
        "alias_of": null,
@@ -58838,6 +58856,16 @@
          "access",
          "atdf",
          "WRITE_ONLY, reads 0 (ATDF rw=W)"
+        ],
+        [
+         "rdz",
+         "overlay",
+         "strobe START"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ]
        ]
       },
@@ -58855,11 +58883,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 255,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Config A register",
@@ -58874,7 +58904,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0xFF"
+        ]
+       ]
       },
       {
        "name": "INTENCLR",
@@ -58895,6 +58931,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_CLEAR"
        ],
        "alias_of": "INTENSET",
@@ -58914,8 +58951,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "clear -> INTENSET"
         ]
        ]
       },
@@ -58938,6 +58975,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_SET"
        ],
        "alias_of": "INTENSET",
@@ -58957,8 +58995,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "set -> INTENSET"
         ]
        ]
       },
@@ -58998,8 +59036,8 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:INTFLAG: all fields W1C (0x1)"
+         "overlay",
+         "all = 0x1"
         ]
        ]
       },
@@ -59013,9 +59051,9 @@
        "access": "RW",
        "access_size": null,
        "impl": 3,
-       "wmask": 3,
-       "w1c": 0,
-       "ro": 0,
+       "wmask": 0,
+       "w1c": 2,
+       "ro": 1,
        "rdz": 0,
        "enprot": 0,
        "syncbusy": 0,
@@ -59044,7 +59082,18 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "w1c",
+         "overlay",
+         "OVF = 0x2 (no ATDF atomic-op)"
+        ],
+        [
+         "ro",
+         "overlay",
+         "read-only BUSY = 0x1"
+        ]
+       ]
       },
       {
        "name": "SYNCBUSY",
@@ -59098,8 +59147,8 @@
         ],
         [
          "dynamic",
-         "heuristic",
-         "register named *SYNCBUSY: dynamic, reads 0"
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -59122,10 +59171,11 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "HOOK_PRE_READ",
         "READ_ONLY"
        ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Count Value Register",
        "note": "",
        "fields": [
@@ -59143,6 +59193,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
         ]
        ]
       }

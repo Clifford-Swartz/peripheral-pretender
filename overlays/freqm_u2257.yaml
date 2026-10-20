@@ -1,0 +1,28 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for FREQM U2257 (PIC32CM JH01/MC00 1.0.1, SAM E51
+# 1.1.0). The mchp-freqm model measures; BUSY and VALUE are its own.
+ip: FREQM
+id: U2257
+versions: ["1.0.1", "1.1.0"]
+references:
+  - "DS60001638E chapter 41 (FREQM); docs/research/peripherals/freqm-u2257.md"
+  - "PIC32CM MC00 silicon, firmware/hello APP=freqmprobe (2026-10-20)"
+registers:
+  CTRLA:
+    pac_protected: true
+    self_clearing: [SWRST]
+    hooks: [post_write]
+  CTRLB:
+    pac_protected: true
+    strobe: [START]
+    hooks: [post_write]
+  CFGA: {pac_protected: true, enable_protected: all}   # silicon: ignored
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: all
+    irq_source: {enable: INTENSET}
+  STATUS: {ro: [BUSY], w1c: [OVF]}
+  SYNCBUSY: {dynamic: true}       # instant synchronization
+  VALUE: {hooks: [pre_read]}      # the live count while measuring
