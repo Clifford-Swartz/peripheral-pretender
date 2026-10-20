@@ -366,6 +366,12 @@ class _RegBuilder:
         self.rules = rules
         self.names = scope_names
         self.fields = _field_union(slot.reg)
+        self.extra = {}
+        for name, (lsb, width) in (rules.extra_fields if rules else {}).items():
+            if name in self.fields:
+                ctx.error(f"{slot.name}.{name}: extra_fields names an ATDF field")
+            self.extra[name] = ((1 << width) - 1) << lsb
+        self.fields.update(self.extra)
 
     def fmask(self, names, what: str) -> int:
         mask = 0
@@ -385,6 +391,9 @@ class _RegBuilder:
         impl = 0
         for m in self.fields.values():
             impl |= m
+        for name, m in self.extra.items():
+            prov.append(Provenance("impl", "overlay",
+                                   f"{name} = 0x{m:X}: on silicon, not in the ATDF"))
         if not self.fields:
             impl = r.size_mask
             prov.append(Provenance("impl", "heuristic",

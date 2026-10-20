@@ -13,7 +13,8 @@ registers:
     pac_protected: true
     enable_protected: {all_except: [SWRST, ENABLE]}
     self_clearing: [SWRST]
-  CTRLB: {pac_protected: true, enable_protected: all}
+    hooks: [post_write]         # the output changes: tells the AC
+  CTRLB: {pac_protected: true, enable_protected: all, hooks: [post_write]}
   EVCTRL: {pac_protected: true, enable_protected: all}
   INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
   INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}

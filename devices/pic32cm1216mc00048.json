@@ -1930,7 +1930,14 @@
    "version": "1.1.1",
    "caption": "Analog Comparators",
    "core": false,
-   "overlay": null,
+   "overlay": {
+    "file": "overlays/ac_u2245.yaml",
+    "sha1": "0d16d47bd37800e68305f437dcd40c0afebbef14",
+    "status": "applied",
+    "versions": [
+     "1.1.1"
+    ]
+   },
    "size": 36,
    "selector": null,
    "default_view": "",
@@ -1942,7 +1949,7 @@
      "irq": {
       "flag": "INTFLAG",
       "enable": "INTENSET",
-      "source": "heuristic"
+      "source": "overlay"
      },
      "registers": [
       {
@@ -1963,7 +1970,10 @@
        "syncbusy": 3,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control A",
@@ -1989,8 +1999,13 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ],
         [
          "sync",
@@ -2012,12 +2027,14 @@
        "wmask": 3,
        "w1c": 0,
        "ro": 0,
-       "rdz": 0,
+       "rdz": 3,
        "enprot": 0,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control B",
@@ -2040,7 +2057,18 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "rdz",
+         "overlay",
+         "strobe START0, START1, START2, START3"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "EVCTRL",
@@ -2056,11 +2084,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 13075,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Event Control",
@@ -2123,7 +2153,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0x3313"
+        ]
+       ]
       },
       {
        "name": "INTENCLR",
@@ -2144,6 +2180,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_CLEAR"
        ],
        "alias_of": "INTENSET",
@@ -2179,8 +2216,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "clear -> INTENSET"
         ]
        ]
       },
@@ -2203,6 +2240,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "PAC",
         "ALIAS_SET"
        ],
        "alias_of": "INTENSET",
@@ -2238,8 +2276,8 @@
        "provenance": [
         [
          "alias",
-         "heuristic",
-         "INTENSET/INTENCLR pair: shared storage INTENSET"
+         "overlay",
+         "set -> INTENSET"
         ]
        ]
       },
@@ -2261,9 +2299,11 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "HOOK_PRE_READ"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Interrupt Flag Status and Clear",
        "note": "",
        "fields": [
@@ -2295,8 +2335,13 @@
        "provenance": [
         [
          "w1c",
-         "heuristic",
-         "ATDF atomic-op=clear:INTFLAG: all fields W1C (0x13)"
+         "overlay",
+         "all = 0x13"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
         ]
        ]
       },
@@ -2319,6 +2364,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -2372,6 +2418,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -2394,6 +2445,7 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
+        "DYNAMIC",
         "READ_ONLY"
        ],
        "alias_of": null,
@@ -2423,6 +2475,11 @@
          "access",
          "atdf",
          "READ_ONLY (ATDF rw=R)"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -2444,7 +2501,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Debug Control",
@@ -2479,7 +2538,10 @@
        "syncbusy": 4,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Window Control",
@@ -2525,6 +2587,11 @@
        ],
        "provenance": [
         [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
          "sync",
          "heuristic",
          "access=WSYNC; SYNCBUSY bits matched by name: 0x4"
@@ -2549,7 +2616,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Scaler n",
@@ -2564,7 +2634,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "COMPCTRL",
@@ -2575,8 +2651,8 @@
        "reset": 0,
        "access": "RW",
        "access_size": null,
-       "impl": 923531102,
-       "wmask": 923531102,
+       "impl": 926676830,
+       "wmask": 926676830,
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
@@ -2584,9 +2660,13 @@
        "syncbusy": 2,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Comparator Control n",
        "note": "",
        "fields": [
@@ -2812,6 +2892,21 @@
        ],
        "provenance": [
         [
+         "impl",
+         "overlay",
+         "HYST = 0x300000: on silicon, not in the ATDF"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
          "sync",
          "heuristic",
          "access=WSYNC; SYNCBUSY bits matched by name: 0x2"
@@ -2894,8 +2989,8 @@
         ],
         [
          "dynamic",
-         "heuristic",
-         "register named *SYNCBUSY: dynamic, reads 0"
+         "overlay",
+         "dynamic"
         ]
        ]
       }
@@ -4994,7 +5089,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/dac_u2214.yaml",
-    "sha1": "9e874c7da06bdfdcebd968c504da4c51dd169e57",
+    "sha1": "53870fd5ebdd24af01a11350f27ce9ced4c5fd62",
     "status": "applied",
     "versions": [
      "2.0.1",
@@ -5034,7 +5129,8 @@
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
        "flags": [
-        "PAC"
+        "PAC",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": null,
        "read_side_effect": false,
@@ -5073,6 +5169,11 @@
          "self_clearing SWRST"
         ],
         [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
          "enprot",
          "overlay",
          "all except SWRST, ENABLE = 0x40"
@@ -5103,7 +5204,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "PAC"
+        "PAC",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": null,
        "read_side_effect": false,
@@ -5176,6 +5278,11 @@
         }
        ],
        "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
         [
          "enprot",
          "overlay",

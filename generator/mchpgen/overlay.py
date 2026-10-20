@@ -23,7 +23,7 @@ REGISTER_KEYS = {
     "pac_protected", "enable_protected", "sync", "write_while_syncbusy",
     "strobe", "self_clearing", "w1c", "ro", "alias", "hooks", "dynamic",
     "write_only", "read_only", "irq_source", "note", "optional",
-    "optional_fields",
+    "optional_fields", "extra_fields",
 }
 TOP_KEYS = {"ip", "id", "versions", "references", "notes", "registers",
             "modes", "reset_overrides", "reset_from"}
@@ -56,6 +56,8 @@ class RegisterRules:
     note: str = ""
     optional: bool = False              # absent on some device variants
     optional_fields: list[str] = field(default_factory=list)
+    # Fields silicon has and the ATDF lacks: {NAME: (lsb, width)}
+    extra_fields: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -112,6 +114,14 @@ def _parse_rules(where: str, raw) -> RegisterRules:
     r = RegisterRules()
     r.pac_protected = bool(raw.get("pac_protected", False))
     r.optional = bool(raw.get("optional", False))
+    if "extra_fields" in raw:
+        ef = raw["extra_fields"]
+        if not isinstance(ef, dict) or not all(
+                isinstance(k, str) and isinstance(v, list) and len(v) == 2 and
+                all(isinstance(x, int) and x >= 0 for x in v) and v[1] > 0
+                for k, v in ef.items()):
+            _fail(where, f"extra_fields must map NAME: [lsb, width], got {ef!r}")
+        r.extra_fields = {k: (v[0], v[1]) for k, v in ef.items()}
     if "optional_fields" in raw:
         r.optional_fields = _name_list(where + ".optional_fields",
                                        raw["optional_fields"])

@@ -29,8 +29,9 @@ EXPECTED = {("SERCOM", "U2201"), ("PORT", "U2210"), ("OSCCTRL", "U2119"),
             ("NVMCTRL", "U2409"), ("QSPI", "U2008"), ("TRNG", "U2242"),
             ("USB", "U2222"), ("DMAC", "U2503"),
             ("ADC", "U2500"), ("DAC", "U2502"), ("EVSYS", "U2504"),
-            # PIC32CM JH01 and MC00 ADC and DAC, MC00 SDADC
+            # PIC32CM JH01 and MC00 ADC, DAC and AC, MC00 SDADC
             ("ADC", "U2247"), ("DAC", "U2214"), ("SDADC", "U2260"),
+            ("AC", "U2245"),
             # AVR64EA48 ADC
             ("ADC", "adc_12b_diff_ctrl_avr_v2")}
 
@@ -118,6 +119,22 @@ def test_modes_must_match_atdf(dev, tmp_path):
         d["registers"] = d.pop("modes")["USART_INT"]["registers"]
     ov = edited(tmp_path, "sercom_u2201.yaml", change)
     with pytest.raises(OverlayError, match="modes"):
+        build(dev, ov)
+
+
+def test_extra_fields_are_implemented(dev, overlays):
+    """extra_fields: bits silicon has and the ATDF lacks (AC COMPCTRL 21:20)
+    are implemented and writable"""
+    compctrl = build(dev, overlays[("AC", "U2245")]).view("").reg("COMPCTRL")
+    assert compctrl.impl & (3 << 20) == 3 << 20
+    assert compctrl.wmask & (3 << 20) == 3 << 20
+
+
+def test_extra_field_may_not_shadow_an_atdf_field(dev, tmp_path):
+    ov = edited(tmp_path, "ac_u2245.yaml",
+                lambda d: d["registers"]["COMPCTRL"].update(
+                    extra_fields={"SPEED": [16, 2]}))
+    with pytest.raises(OverlayError, match="SPEED"):
         build(dev, ov)
 
 

@@ -512,3 +512,53 @@ The first CircuitPython kit and the first Cortex-M4F: the Curiosity CircuitPytho
   it); BME680/APDS-9999 plug-ins; SD card (`ssi-sd`); CAN; capacitive touch; the TEMP_LOG
   calibration row from silicon; USB mass storage (a drive the host OS could mount); the BNO085
   is not on the schematics (the owner is asking).
+
+## Every peripheral, one at a time (2026-10-20)
+
+Goal from the owner: model every peripheral that is still a generic register block, on all four
+chips, checking each on the boards that are plugged in first (today the MC00 Curiosity Pro).
+
+What is still register-only:
+
+- **MC00:** DMAC (U2223), CCL, PDEC, FREQM, TSENS, MTB, HMATRIXB.
+- **JH01:** DMAC, the RTC (03608), CAN, CCL, PDEC, FREQM, PTC, ICM, MTB, MCRAMC, SMBIST.
+- **SAM E51:** CAN, AC (U2501), CCL, PDEC, FREQM, AES, ICM, I2S, SDHC, PCC, CMCC, RAMECC, PM,
+  SUPC, DSU and the trace blocks.
+- **AVR64EA48:** TCA, RTC, WDT, EVSYS, PORTMUX, AC, DAC, CCL, SLPCTRL, RSTCTRL, BOD, VREF, CRCSCAN.
+
+Research notes for the MC00 blocks, each with a register map, the behaviour, a silicon test plan
+and open questions, are in `docs/research/peripherals/`. The notes record what is known about
+each block. For the DMAC that includes the ATDF trigger-number trap and that U2223 can reuse the
+U2503 engine's design behind a CHID-banked front end in its own file. For PDEC and CCL it includes
+the need for a pad-input path, and for FREQM a second GCLK input. PAC write protection is not
+modelled anywhere.
+
+**AC (U2245): done** (patch 0059). The way each block is done:
+
+1. Write a probe app (`acprobe`, `acprobe2`) that prints raw behaviour on silicon.
+2. Write the model to match it.
+3. Diff the probes on the twin until they agree, apart from analog noise.
+4. Write a checked app (`APP=ac`) that passes on both. Its silicon transcript is
+   `golden/.../ac-silicon.txt`, and `test_analog_checks_pass` runs it with icount.
+5. Add a qtest for the board side.
+
+The silicon answers are in section 7 of `docs/research/peripherals/ac-u2245.md`. Changes the AC
+pulled in along the way:
+
+- The DAC notifies listeners when its output changes.
+- The ADC reads PORT-driven pads. The new `ain-pads` property is filled by the SoC from the
+  device's signals, for any model with a `<group>-pads` property.
+- The SoC has a `vddana` property, pushed to every analog model's `vdd`.
+- The MC00 board takes `vcc=<mV>` (VCC_SEL). The desk board at 5 V is `vcc=4890`.
+- The generator learned `extra_fields`, for bits silicon has and the ATDF lacks.
+
+Next on the MC00, in order:
+
+1. **TSENS** (small).
+2. **FREQM** (needs the second GCLK).
+3. **DMAC U2223** (the big one; the note has a 25-experiment probe plan).
+4. **PDEC and CCL** (after a generic pad-to-peripheral input path).
+5. **MTB** register fixes.
+
+The JH01, SAM E51 and AVR blocks wait for their boards to be plugged in, so they can be checked
+the same way.

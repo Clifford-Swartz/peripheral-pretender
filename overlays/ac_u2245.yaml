@@ -1,0 +1,40 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for AC U2245 (PIC32CM MC00: two comparators; JH01:
+# four). The mchp-ac-u2245 model compares and keeps COMPCTRL itself: its
+# fields are locked by the comparator's own ENABLE, not by CTRLA (silicon),
+# so COMPCTRL is not enable_protected here.
+ip: AC
+id: U2245
+versions: ["1.1.1"]
+references:
+  - "DS60001638E chapter 38 (AC); docs/research/peripherals/ac-u2245.md"
+  - "PIC32CM MC00 silicon, firmware/hello APP=acprobe, acprobe2 (2026-10-20)"
+registers:
+  CTRLA:
+    pac_protected: true
+    self_clearing: [SWRST]
+    hooks: [post_write]
+  CTRLB:                        # START: reads 0
+    strobe: [START0, START1, START2, START3]
+    optional_fields: [START2, START3]   # JH01 only
+    hooks: [post_write]
+  EVCTRL: {pac_protected: true, enable_protected: all}  # silicon: ignored
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: all
+    irq_source: {enable: INTENSET}
+    hooks: [pre_read]           # brings the comparison up to date
+  STATUSA: {dynamic: true}
+  STATUSB: {dynamic: true}
+  DBGCTRL: {pac_protected: true}
+  WINCTRL: {pac_protected: true, hooks: [post_write]}  # writable while on
+  SCALER: {pac_protected: true, hooks: [post_write]}   # live (silicon)
+  COMPCTRL:
+    pac_protected: true
+    hooks: [pre_read, post_write]
+    # Silicon: bits 21:20 are writable (they read back) but change no
+    # hysteresis; the MC00 data sheet and ATDF have no field there
+    extra_fields: {HYST: [20, 2]}
+  SYNCBUSY: {dynamic: true}     # instant synchronization

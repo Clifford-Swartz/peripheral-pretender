@@ -64,6 +64,8 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0055 | DC Motor Click (`click-dcmotor`): the 74HC4053 routing and the DRV8833 truth table from PWM (duty timed on the virtual clock), SELECT1 (RST), SELECT2 (CS), nSLEEP (AN as a digital pin), nFAULT on INT (`fault`); a motor with lag (`max-rpm`, `tau-ms`; `rpm`, `drive`, `state`, `angle`); qtest |
 | 0056 | Servo Click (`click-servo`): PCA9685 at 0x40 (All Call, sub-addresses, general-call SWRST, auto-increment, RESTART, PRE_SCALE only asleep, full on/off, INVRT, ALL_LED, EXTCLK only from sleep), OE# on CS; minimal LTC2497 at 0x14 reading each servo's shunt; `period-us`, `pulses`, `angles` (servo law `min-us`/`max-us`, MikroElektronika's by default), `load-ma`; qtest |
 | 0057 | AVR64EA48 Curiosity Nano on the Nano Base: AN on PD4/PD5/PD7 (ADC0 AIN4/5/7) and socket 2's UART on USART1, shared with the virtual COM port through `chardev-mikrobus-share` (`mikrobus_uart_share()`) |
+| 0058 | Regenerated tables: new input hashes after the copyright header rewrite |
+| 0059 | PIC32CM JH01/MC00 AC (U2245, `mchp-ac-u2245`), from two silicon probe rounds: AIN pads (`ain`, or VDDANA/GND while the PORT drives the pad), VSCALE, INTREF, the DAC (needs IOEN); COMPCTRL locked by its own ENABLE, start-up and single-shot times, 60 mV hysteresis, INTSEL flags with the first-comparison rule, window pairs, COMP/WIN events, SOC start events, CMP pads. The DAC notifies its listeners; the ADC also reads PORT-driven pads (`ain-pads`, set by the SoC from the device's signals); SoC `vddana` for every analog model and the MC00 board's `vcc` option (VCC_SEL); qtest |
 
 ## Setting it up
 

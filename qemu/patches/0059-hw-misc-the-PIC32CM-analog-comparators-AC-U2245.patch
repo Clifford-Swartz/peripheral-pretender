@@ -1,0 +1,1887 @@
+From 9145e2b2ade8de3d7b710e2e0a09cd4339492cd3 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Tue, 20 Oct 2026 05:31:46 -0700
+Subject: [PATCH] hw/misc: the PIC32CM analog comparators (AC U2245)
+
+mchp-ac-u2245 models the AC of the PIC32CM JH01 (four comparators) and
+MC00 (two), from two probe rounds on MC00 rev A1 silicon (firmware/hello
+APP=acprobe, acprobe2): AIN pads (the board's "ain", or VDDANA/GND while
+the PORT drives the pad), VSCALE, INTREF and the DAC (only with IOEN);
+COMPCTRL locked by its own ENABLE; start-up and single-shot times; 60 mV
+hysteresis; INTSEL flags with no edge flag on the first comparison;
+window pairs, WIN flags on entering the WINTSEL region; COMP and WIN
+event outputs, SOC start events and the CMP pads. Continuous comparators
+compare on every access and when an input changes: the DAC U2214 now
+notifies listeners, and the AIN pads are watched. A start-up that is due
+completes on the next access, so polling firmware sees silicon's timing
+without icount.
+
+The ADC U2247 also reads PORT-driven pads. The SoC fills a model's
+"<group>-pads" property from the device's signals, and pushes its new
+"vddana" property to every analog model's "vdd". The MC00 board takes
+vcc=<mV>, its VCC_SEL jumper. qtest pic32cm-ac-test.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst         |  23 +-
+ docs/system/arm/pic32cm-mc00-cpro.rst         |   9 +-
+ hw/adc/mchp_adc_u2247.c                       |  55 +-
+ hw/arm/pic32cm_mc00_cpro.c                    |  44 +-
+ hw/arm/pic32cm_soc.c                          |  65 ++
+ hw/gpio/mchp_port.c                           |  18 +
+ hw/misc/mchp_ac_u2245.c                       | 754 ++++++++++++++++++
+ hw/misc/mchp_dac_u2214.c                      |  20 +-
+ hw/misc/meson.build                           |   1 +
+ include/hw/arm/pic32cm_soc.h                  |   1 +
+ include/hw/gpio/mchp_port.h                   |   8 +
+ include/hw/mchp/gen/ac_u2245.h                |   2 +-
+ include/hw/mchp/gen/dac_u2214.h               |   2 +-
+ .../hw/mchp/gen/pic32cm1216mc00048/ac_u2245.h |  34 +-
+ .../mchp/gen/pic32cm1216mc00048/dac_u2214.h   |   6 +-
+ .../hw/mchp/gen/pic32cm5164jh01100/ac_u2245.h |  34 +-
+ .../mchp/gen/pic32cm5164jh01100/dac_u2214.h   |   6 +-
+ include/hw/misc/mchp_ac.h                     |  32 +
+ include/hw/misc/mchp_dac.h                    |   3 +
+ tests/qtest/meson.build                       |   2 +-
+ tests/qtest/pic32cm-ac-test.c                 | 209 +++++
+ 21 files changed, 1279 insertions(+), 49 deletions(-)
+ create mode 100644 hw/misc/mchp_ac_u2245.c
+ create mode 100644 include/hw/misc/mchp_ac.h
+ create mode 100644 tests/qtest/pic32cm-ac-test.c
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index 153ecb2..091fd65 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -93,6 +93,20 @@ Supported devices
+ - EVSYS: channels on the three paths, software events, the users that
+   select them, CHSTATUS and the OVR/EVD flags as on silicon. Generators
+   and users are wired from the device's event table.
++- ADC (U2247): conversions completed at once against the selected
++  reference, with resolution, averaging, offset and gain correction, the
++  window monitor and the RESRDY/OVERRUN/WINMON flags. Pad voltages come
++  from the ADC's ``ain`` property (``"channel=millivolts,..."``), or are
++  VDDANA or 0 while the PORT drives the pad; INTREF, the scaled supplies
++  and the DAC are internal inputs. DAC (U2214): the 10-bit output on VOUT
++  (PA02, which ADC0 reads back) and to the ADC and AC. SDADC (U2260,
++  PIC32CM MC00 only): conversions of its differential inputs.
++- AC (U2245): two (MC00) or four (JH01) comparators of AIN pads (``ain``,
++  as the ADC), VSCALE, INTREF and the DAC, with the start-up times,
++  hysteresis, single-shot mode, window pairs, flags, COMP and WIN event
++  outputs, start events and the CMP pad outputs measured on PIC32CM MC00
++  silicon. Not modelled: the offset error, the digital filter, standby.
++  The analog models take VDDANA from the SoC property ``vddana``.
+ - LED0 (PC05, active low) is a QEMU LED device; its state changes show
+   in the ``led_set_intensity`` trace event. SW0 (PB19, to ground) is the
+   machine property ``sw0-pressed``.
+@@ -116,7 +130,8 @@ Missing devices
+   the DSCRITICAL waveform.
+ - Watchdog time-out, PAC write protection, flash programming through
+   NVMCTRL, DSU CRC32 and chip erase, sleep modes and every other
+-  peripheral behaviour (DMAC, ADC, DAC, AC, CAN, ...).
++  peripheral behaviour (DMAC, CCL, PDEC, FREQM, TSENS, CAN, ...). ADC
++  sequencing and event inputs, DAC START events.
+ 
+ Board and SoC properties
+ """"""""""""""""""""""""
+@@ -130,7 +145,7 @@ that order.
+   which pulls PB19 to ground; it can also be changed at run time with
+   ``qom-set /machine sw0-pressed true``.
+ 
+-The SoC takes two properties, which can be given with ``-global``:
++The SoC takes these properties, which can be given with ``-global``:
+ 
+ ``silicon-rev``
+   ``B0`` (default) or ``C0``, shown in DSU.DID.REVISION.
+@@ -140,6 +155,10 @@ The SoC takes two properties, which can be given with ``-global``:
+   0x0080A048, in that order. The default is
+   ``50500000000000010000000200000003``.
+ 
++``vddana``
++  VDDANA in millivolts (default 3300), given to every analog model (ADC,
++  DAC, SDADC, AC) as its ``vdd``.
++
+ .. code-block:: bash
+ 
+   $ qemu-system-arm -M pic32cm-jh01-cpro -kernel app.elf \
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 4a9f6f8..2a8d7a8 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -22,8 +22,8 @@ Differences from the PIC32CM JH01
+ """""""""""""""""""""""""""""""""
+ 
+ - SERCOM0 to SERCOM3 only; no CAN, ICM, SMBIST, PTC. The MC00 adds SDADC
+-  and TSENS, which are generic register blocks, and a second RTC version
+-  (U2250), which is modelled.
++  (modelled), TSENS (a generic register block) and a second RTC version
++  (U2250, modelled). Its AC has two comparators.
+ - PORT has groups A and B (QOM properties ``pa-*`` and ``pb-*``). GCLK has
+   35 peripheral channels.
+ - NVMCTRL has no ECC (no FLASHERR, FLTCAP, SERR or DERR flags).
+@@ -36,6 +36,11 @@ Board
+ ``-serial`` options are connected to SERCOM0 (EDBG virtual COM port, PA06
+ TX / PA07 RX) and SERCOM3 (EXT1/EXT2 USART, PA22/PA23), in that order.
+ 
++The machine option ``vcc`` (millivolts, default 3300) is the VCC_SEL
++jumper: the target's supply, and VDDANA for the analog models. At 5 V
++from USB, a real board measures about 4.89 V: ``-M
++pic32cm-mc00-cpro,vcc=4890``.
++
+ LED0 (PA24, active low) is a QEMU LED device; ``-trace led_set_intensity``
+ shows it. User switch SW0 (PA25, to ground, no external pull-up) is the
+ machine property ``sw0-pressed``, also settable at run time with
+diff --git a/hw/adc/mchp_adc_u2247.c b/hw/adc/mchp_adc_u2247.c
+index c98da14..5b99364 100644
+--- a/hw/adc/mchp_adc_u2247.c
++++ b/hw/adc/mchp_adc_u2247.c
+@@ -16,9 +16,11 @@
+  * (cleared by reading RESULT; OVERRUN when a result replaces an unread
+  * one). Inputs:
+  *
+- * - AIN0..AIN11: the "ain" property ("channel=millivolts,..."; the board
+- *   sets the pins' voltages; unset inputs read "ain-default", 0 mV); in
+- *   differential mode MUXNEG is an AIN or GND;
++ * - AIN0..AIN11: VDDANA or 0 while the PORT drives the pad (a GPIO output;
++ *   silicon, APP=acprobe: 0xFFA), else the "ain" property
++ *   ("channel=millivolts,..."; the board sets the pins' voltages; unset
++ *   inputs read "ain-default", 0 mV); in differential mode MUXNEG is an
++ *   AIN or GND. "ain-pads" (set by the SoC) names each AIN's PORT pin;
+  * - INTREF: the SUPC's VREF (VREF.SEL: 1.024, 2.048 or 4.096 V); it only
+  *   reaches the input with VREF.VREFOE set, and without it a conversion
+  *   of INTREF never completes (SWTRIG.START stays set, no RESRDY);
+@@ -42,8 +44,10 @@
+ #include "qemu/osdep.h"
+ #include "qapi/error.h"
+ #include "qapi/visitor.h"
++#include "qemu/cutils.h"
+ #include "qemu/log.h"
+ #include "hw/adc/mchp_adc.h"
++#include "hw/gpio/mchp_port.h"
+ #include "hw/misc/mchp_sysctrl.h"
+ #include "hw/misc/mchp_dac.h"
+ #include "hw/mchp/gen/adc_u2247.h"
+@@ -64,6 +68,8 @@ struct MchpAdcU2247State {
+ 
+     int32_t ain_mv[ADC_NAIN];   /* < 0: unset */
+     int32_t ain_default;
++    int32_t ain_pad[ADC_NAIN];  /* PORT pin of AINx, -1: none */
++    DeviceState *port;          /* found on first use */
+     int32_t vdd_mv;
+     int32_t vrefa_mv;           /* < 0: VDDANA */
+     bool unread;                /* a result not read yet */
+@@ -155,6 +161,18 @@ static int32_t adc_input_mv(MchpAdcU2247State *s, unsigned mux)
+         return s->vdd_mv / 4;
+     default:
+         if (mux < ADC_NAIN) {
++            bool level;
++
++            if (!s->port) {
++                Object *o = object_resolve_path_type("", TYPE_MCHP_PORT,
++                                                     NULL);
++
++                s->port = o ? DEVICE(o) : NULL;
++            }
++            if (s->port && s->ain_pad[mux] >= 0 &&
++                mchp_port_pad_driven(s->port, s->ain_pad[mux], &level)) {
++                return level ? s->vdd_mv : 0;
++            }
+             return s->ain_mv[mux] >= 0 ? s->ain_mv[mux] : s->ain_default;
+         }
+         return 0;               /* GND, unused codes */
+@@ -389,16 +407,47 @@ static void adc_set_i32(Object *obj, Visitor *v, const char *name,
+     visit_type_int32(v, name, opaque, errp);
+ }
+ 
++/* "ain-pads": the PORT pins of AIN0.., -1: none (set by the SoC) */
++static char *adc_get_pads(Object *obj, Error **errp)
++{
++    MchpAdcU2247State *s = MCHP_ADC_U2247(obj);
++    GString *g = g_string_new(NULL);
++
++    for (unsigned i = 0; i < ADC_NAIN; i++) {
++        g_string_append_printf(g, "%s%d", i ? "," : "", s->ain_pad[i]);
++    }
++    return g_string_free(g, false);
++}
++
++static void adc_set_pads(Object *obj, const char *value, Error **errp)
++{
++    MchpAdcU2247State *s = MCHP_ADC_U2247(obj);
++    g_auto(GStrv) items = g_strsplit(value, ",", -1);
++    unsigned n = g_strv_length(items);
++
++    for (unsigned i = 0; i < ADC_NAIN; i++) {
++        int pin = -1;
++
++        if (i < n && *items[i] && qemu_strtoi(items[i], NULL, 0, &pin)) {
++            error_setg(errp, "ain-pads: comma-separated pin numbers");
++            return;
++        }
++        s->ain_pad[i] = pin;
++    }
++}
++
+ static void adc_init(Object *obj)
+ {
+     MchpAdcU2247State *s = MCHP_ADC_U2247(obj);
+ 
+     for (unsigned i = 0; i < ADC_NAIN; i++) {
+         s->ain_mv[i] = -1;
++        s->ain_pad[i] = -1;
+     }
+     s->vdd_mv = 3300;
+     s->vrefa_mv = -1;
+     object_property_add_str(obj, "ain", adc_get_ain, adc_set_ain);
++    object_property_add_str(obj, "ain-pads", adc_get_pads, adc_set_pads);
+     object_property_add(obj, "ain-default", "int32", adc_get_i32,
+                         adc_set_i32, NULL, &s->ain_default);
+     object_property_add(obj, "vdd", "int32", adc_get_i32, adc_set_i32, NULL,
+diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
+index 658387e..1a693bb 100644
+--- a/hw/arm/pic32cm_mc00_cpro.c
++++ b/hw/arm/pic32cm_mc00_cpro.c
+@@ -6,7 +6,8 @@
+  *
+  * PIC32CM1216MC00048 with a 12 MHz MEMS oscillator on XIN (PA14) and a
+  * 32.768 kHz MEMS oscillator on XIN32 (PA00), both external clocks (board
+- * user guide DS70005440A). VDD defaults to 3.3 V.
++ * user guide DS70005440A). VDD defaults to 3.3 V; machine option vcc=<mV>
++ * sets it as the VCC_SEL jumper does (the desk board at 5 V: vcc=4890).
+  *
+  * Machine options ext1=<click> and ext2=<click> plug a MikroElektronika
+  * Click board into EXT1/EXT2 through a mikroBUS Xplained Pro adapter
+@@ -23,6 +24,7 @@
+ 
+ #include "qemu/osdep.h"
+ #include "qapi/error.h"
++#include "qapi/visitor.h"
+ #include "qemu/error-report.h"
+ #include "hw/arm/boot.h"
+ #include "hw/arm/machines-qom.h"
+@@ -103,6 +105,7 @@ struct Pic32cmMc00CproState {
+     char *ext[CPRO_EXT_NUM];
+     Chardev *ext_uart[CPRO_EXT_NUM];    /* a UART Click's module */
+     char *dgi;                  /* chardev id of the EDBG data gateway */
++    uint32_t vcc_mv;            /* VCC_SEL: the target's VDD */
+ };
+ 
+ /* A pressed SW0 pulls PA25 low; a released one leaves the pad undriven. */
+@@ -252,6 +255,37 @@ static void pic32cm_mc00_cpro_set_dgi(Object *obj, const char *value,
+     s->dgi = g_strdup(value);
+ }
+ 
++static void pic32cm_mc00_cpro_get_vcc(Object *obj, Visitor *v,
++                                      const char *name, void *opaque,
++                                      Error **errp)
++{
++    visit_type_uint32(v, name, &PIC32CM_MC00_CPRO_MACHINE(obj)->vcc_mv,
++                      errp);
++}
++
++static void pic32cm_mc00_cpro_set_vcc(Object *obj, Visitor *v,
++                                      const char *name, void *opaque,
++                                      Error **errp)
++{
++    Pic32cmMc00CproState *s = PIC32CM_MC00_CPRO_MACHINE(obj);
++    uint32_t mv;
++
++    if (!visit_type_uint32(v, name, &mv, errp)) {
++        return;
++    }
++    if (mv < 1620 || mv > 5500) {
++        error_setg(errp, "vcc: %u mV is outside the PIC32CM MC00's "
++                   "1620-5500 mV", mv);
++        return;
++    }
++    s->vcc_mv = mv;
++}
++
++static void pic32cm_mc00_cpro_instance_init(Object *obj)
++{
++    PIC32CM_MC00_CPRO_MACHINE(obj)->vcc_mv = 3300;
++}
++
+ static void pic32cm_mc00_cpro_init(MachineState *machine)
+ {
+     Pic32cmMc00CproState *s = PIC32CM_MC00_CPRO_MACHINE(machine);
+@@ -267,6 +301,7 @@ static void pic32cm_mc00_cpro_init(MachineState *machine)
+     soc = DEVICE(&s->soc);
+     qdev_connect_clock_in(soc, "xosc", s->xosc);
+     qdev_connect_clock_in(soc, "xosc32k", s->xosc32k);
++    qdev_prop_set_int32(soc, "vddana", s->vcc_mv);
+     /* A UART Click takes the headers' shared UART (SERCOM3) */
+     for (unsigned n = 0; n < CPRO_EXT_NUM; n++) {
+         s->ext_uart[n] = mikrobus_uart_chardev(n ? "ext2" : "ext1",
+@@ -326,6 +361,12 @@ static void pic32cm_mc00_cpro_class_init(ObjectClass *oc, const void *data)
+                                    pic32cm_mc00_cpro_set_sw0);
+     object_class_property_set_description(oc, "sw0-pressed",
+                                           "Hold user switch SW0 (PA25) down");
++    object_class_property_add(oc, "vcc", "uint32",
++                              pic32cm_mc00_cpro_get_vcc,
++                              pic32cm_mc00_cpro_set_vcc, NULL, NULL);
++    object_class_property_set_description(oc, "vcc",
++        "Target VDD in mV, as the VCC_SEL jumper sets it (3300; at 5 V, "
++        "about 4890 from USB)");
+     object_class_property_add_str(oc, "dgi", pic32cm_mc00_cpro_get_dgi,
+                                   pic32cm_mc00_cpro_set_dgi);
+     object_class_property_set_description(oc, "dgi",
+@@ -350,6 +391,7 @@ static const TypeInfo pic32cm_mc00_cpro_types[] = {
+         .name = TYPE_PIC32CM_MC00_CPRO_MACHINE,
+         .parent = TYPE_MACHINE,
+         .instance_size = sizeof(Pic32cmMc00CproState),
++        .instance_init = pic32cm_mc00_cpro_instance_init,
+         .class_init = pic32cm_mc00_cpro_class_init,
+         .interfaces = arm_machine_interfaces,
+     },
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index fd8c765..b198053 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -34,6 +34,7 @@
+ #include "hw/mchp/gen/rstc_u2239.h"
+ #include "hw/misc/mchp_sysctrl.h"
+ #include "hw/adc/mchp_adc.h"
++#include "hw/misc/mchp_ac.h"
+ #include "hw/dma/mchp_dmac.h"
+ #include "hw/misc/mchp_usb.h"
+ #include "hw/misc/unimp.h"
+@@ -51,6 +52,7 @@ static const struct {
+     const char *type;
+     const char *ip_id;          /* NULL: any */
+ } pic32cm_models[] = {
++    { "AC", TYPE_MCHP_AC_U2245, "U2245" },
+     { "ADC", TYPE_MCHP_ADC, "U2500" },
+     { "ADC", TYPE_MCHP_ADC_U2247, "U2247" },
+     { "DAC", TYPE_MCHP_DAC, "U2502" },
+@@ -798,6 +800,59 @@ static void pic32cm_connect_events(Pic32cmSocState *s)
+     }
+ }
+ 
++/*
++ * Analog inputs on the pads: a model with a string property "group-pads"
++ * (lower case, for example the AC's "ain-pads") gets the PORT pin of each
++ * of its signals GROUP[0], GROUP[1], ... as "pin,pin,...", -1 where the
++ * device has none. It reads the pad's level when the PORT drives it.
++ */
++static void pic32cm_analog_pads(Pic32cmSocState *s)
++{
++    for (unsigned i = 0; i < s->dev->ninstances; i++) {
++        DeviceState *dev = s->periph[i];
++        const char *inst = s->dev->instances[i].name;
++        g_autoptr(GHashTable) done = g_hash_table_new_full(g_str_hash,
++                                                           g_str_equal,
++                                                           g_free, NULL);
++
++        for (unsigned j = 0; dev && j < s->dev->nsignals; j++) {
++            const MchpSignalInfo *sig = &s->dev->signals[j];
++            g_autofree char *grp = g_ascii_strdown(sig->group, -1);
++            g_autofree char *prop = g_strdup_printf("%s-pads", grp);
++            g_autoptr(GString) val = NULL;
++            int pins[32];
++            int max = -1;
++
++            if (strcmp(sig->instance, inst) ||
++                g_hash_table_contains(done, prop) ||
++                !object_property_find(OBJECT(dev), prop)) {
++                continue;
++            }
++            for (unsigned k = 0; k < ARRAY_SIZE(pins); k++) {
++                pins[k] = -1;
++            }
++            for (unsigned k = j; k < s->dev->nsignals; k++) {
++                const MchpSignalInfo *o = &s->dev->signals[k];
++
++                if (!strcmp(o->instance, inst) &&
++                    !strcmp(o->group, sig->group) && o->index >= 0 &&
++                    o->index < ARRAY_SIZE(pins) && o->pin >= 0 &&
++                    pins[o->index] < 0) {
++                    pins[o->index] = o->pin;
++                    max = MAX(max, o->index);
++                }
++            }
++            val = g_string_new(NULL);
++            for (int k = 0; k <= max; k++) {
++                g_string_append_printf(val, "%s%d", k ? "," : "", pins[k]);
++            }
++            object_property_set_str(OBJECT(dev), prop, val->str,
++                                    &error_abort);
++            g_hash_table_add(done, g_steal_pointer(&prop));
++        }
++    }
++}
++
+ /* A child gate device (TYPE_OR_IRQ or TYPE_SPLIT_IRQ) of @n lines */
+ static DeviceState *pic32cm_gate(Pic32cmSocState *s, const char *type,
+                                  const char *name, unsigned n)
+@@ -932,11 +987,21 @@ static void pic32cm_soc_realize(DeviceState *dev, Error **errp)
+     pic32cm_connect_events(s);
+     pic32cm_dmac_pulses(s);
+     pic32cm_connect_pads(s);
++    pic32cm_analog_pads(s);
++    for (unsigned i = 0; i < s->dev->ninstances; i++) {
++        if (s->periph[i] && object_property_find(OBJECT(s->periph[i]),
++                                                 "vdd")) {
++            object_property_set_int(OBJECT(s->periph[i]), "vdd",
++                                    s->vddana_mv, &error_abort);
++        }
++    }
+ }
+ 
+ static const Property pic32cm_soc_properties[] = {
+     DEFINE_PROP_STRING("silicon-rev", Pic32cmSocState, silicon_rev),
+     DEFINE_PROP_STRING("serial-number", Pic32cmSocState, serial_number),
++    /* VDDANA in mV, for every model with a "vdd" (ADC, DAC, SDADC, AC) */
++    DEFINE_PROP_INT32("vddana", Pic32cmSocState, vddana_mv, 3300),
+ };
+ 
+ static void pic32cm_soc_class_init(ObjectClass *klass, const void *data)
+diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
+index 46e2545..e703902 100644
+--- a/hw/gpio/mchp_port.c
++++ b/hw/gpio/mchp_port.c
+@@ -636,6 +636,24 @@ void mchp_port_watch(DeviceState *port, unsigned pin, MchpPadWatchFn *fn,
+     }
+ }
+ 
++bool mchp_port_pad_driven(DeviceState *port, unsigned pin, bool *level)
++{
++    MchpPortState *s = MCHP_PORT(port);
++    unsigned g = pin / MCHP_PORT_GROUP_PINS, bit = pin % MCHP_PORT_GROUP_PINS;
++    uint32_t plevel, driven;
++
++    *level = false;
++    if (g >= s->ngroups) {
++        return false;
++    }
++    driven = mchp_port_drive_mask(s, g) | mchp_port_periph(s, g, &plevel);
++    if (!extract32(driven, bit, 1)) {
++        return false;
++    }
++    *level = extract32(mchp_port_pads(s, g), bit, 1);
++    return true;
++}
++
+ /* After a reset every pin is an input again: release the pads. */
+ /*
+  * "pa-stats": "<ns> <high0> <low0> ... <high31> <low31>", the virtual time
+diff --git a/hw/misc/mchp_ac_u2245.c b/hw/misc/mchp_ac_u2245.c
+new file mode 100644
+index 0000000..7c15e0c
+--- /dev/null
++++ b/hw/misc/mchp_ac_u2245.c
+@@ -0,0 +1,754 @@
++/*
++ * Microchip PIC32CM JH/MC analog comparators (AC U2245)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Two comparators on the MC00, four on the JH01 (one window pair per two;
++ * the count comes from COMPCTRL's element count). Comparator n compares
++ * MUXPOS (AIN0-3 of its pair, VSCALE) with MUXNEG (AIN0-3, GND, VSCALE,
++ * INTREF, DAC); STATE is 1 while the positive input is the higher. SWAP
++ * swaps the inputs and inverts the output, so the logical result stays.
++ * The inputs:
++ *
++ *   AINx    the pad's voltage: VDDANA or 0 while the PORT drives it (a GPIO
++ *           output reaches the AC whatever its PMUX, silicon), else the
++ *           board's ("ain", channel=mV, as the ADC models; unset inputs
++ *           read "ain-default")
++ *   VSCALE  VDDANA * (SCALERn + 1) / 64, per comparator, live
++ *   INTREF  the SUPC's VREF.SEL level (1.024, 2.048, 4.096 V; silicon: no
++ *           VREFOE needed, and no sign of erratum 1.4.1 on the desk A1)
++ *   DAC     the DAC output while the DAC has CTRLB.IOEN; without IOEN the
++ *           input reads high (silicon), modelled as VDDANA
++ *
++ * What the PIC32CM MC00 (rev A1, firmware/hello APP=acprobe, acprobe2)
++ * showed, and the model does:
++ *
++ *   - COMPCTRL is locked by its own ENABLE: while it is set, a write
++ *     changes ENABLE only (a disable with new fields keeps the old ones);
++ *     a write with ENABLE while disabled takes the new fields. Bits 21:20
++ *     are writable and do nothing. EVCTRL ignores writes while CTRLA is
++ *     enabled; SCALER and WINCTRL are live.
++ *   - READY sets after the start-up time, 7.5 us at SPEED 0 and 2.8 us at
++ *     SPEED 3; a single shot (CTRLB.STARTn or the SOC event with COMPEIn)
++ *     clears READY and completes after 7 / 2.6 us. Disabling clears READY
++ *     and keeps STATE.
++ *   - The first comparison after enable raises no TOGGLE/RISING/FALLING
++ *     flag; INTSEL EOC flags it once in continuous mode, and every shot in
++ *     single-shot mode. Later changes flag per INTSEL; a shot compares with
++ *     the previous result.
++ *   - Hysteresis (HYSTEN, continuous mode): about 60 mV either side of the
++ *     threshold at both speeds.
++ *   - Window (WINCTRL.WENx): STATE pair 11 = ABOVE, 00 = BELOW, mixed =
++ *     INSIDE; WINx sets when the window enters the WINTSEL region (OUTSIDE:
++ *     ABOVE or BELOW), not while it stays there, and not at all while one
++ *     comparator of the pair is single-shot and the other continuous.
++ *   - The COMP event is a copy of STATE (COMPEOn); the CMP pad (OUT ASYNC
++ *     or SYNC) follows STATE and reads 0 with OUT OFF. An inverted SOC
++ *     event still starts one shot per pulse.
++ *
++ * Continuous comparators compare again on every AC access and whenever
++ * the DAC output or an AIN pad's level changes (not when the SUPC's VREF
++ * changes, until the next access). VDDANA is "vdd" (the SoC's "vddana"; the
++ * desk board's VCC_SEL at 5 V gave 4.89 V). Not modelled: offset and
++ * scaler error (silicon: within 2 DAC codes), the filter (FLEN), SPEED
++ * beyond the start-up time, standby, SYNCBUSY (silicon: about 1 us per
++ * write), the window's WIN event as a pulse (it is the INSIDE level).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "qemu/cutils.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/core/irq.h"
++#include "hw/gpio/mchp_port.h"
++#include "hw/misc/mchp_ac.h"
++#include "hw/misc/mchp_dac.h"
++#include "hw/misc/mchp_sysctrl.h"
++#include "hw/mchp/gen/ac_u2245.h"
++#include "migration/vmstate.h"
++
++#define AC_MAX              4
++#define AC_NAIN             8
++#define AC_MUX_PINS         4           /* AIN codes per pair */
++#define COMPCTRL_MASK       0x373BF75Eu /* silicon: incl. bits 21:20 */
++#define HYST_MV             60
++
++/* SUPC VREF (hw/mchp/gen/supc_u2117.h): SEL bits 16-19 */
++#define SUPC_VREF_OFFSET    0x1C
++#define SUPC_VREF_SEL(v)    extract32(v, 16, 4)
++/* DAC U2214 CTRLB.IOEN */
++#define DAC_CTRLB_OFFSET    0x01
++#define DAC_CTRLB_IOEN      BIT(1)
++
++enum { WS_ABOVE, WS_INSIDE, WS_BELOW };
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpAcU2245State, MCHP_AC_U2245)
++
++struct MchpAcU2245State {
++    MchpRegBlock parent_obj;
++
++    unsigned ncmp;
++    uint32_t compctrl[AC_MAX];
++    bool state[AC_MAX];
++    bool ready[AC_MAX];
++    bool evaluated[AC_MAX];     /* a comparison has run since enable */
++    bool shot[AC_MAX];          /* a single shot is under way */
++    uint8_t wstate[AC_MAX / 2];
++    bool wvalid[AC_MAX / 2];
++    bool soc_level[AC_MAX];
++    int32_t ain_mv[AC_NAIN];    /* < 0: unset */
++    int32_t ain_default;
++    int32_t vdd_mv;
++    int32_t ain_pad[AC_NAIN];   /* pad of AINx, -1: none ("ain-pads") */
++
++    QEMUTimer *start_timer[AC_MAX];
++    qemu_irq comp_event[AC_MAX];
++    qemu_irq win_event[AC_MAX / 2];
++    qemu_irq pad_cmp[AC_MAX];
++    DeviceState *port;
++    MchpRegBlock *supc;
++    MchpRegBlock *dac;
++    Notifier dac_changed;
++    bool listening;             /* to the DAC */
++    bool watching;              /* the AIN pads */
++};
++
++static uint32_t ac_reg(MchpAcU2245State *s, hwaddr off, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, off, size);
++}
++
++static void ac_set_reg(MchpAcU2245State *s, hwaddr off, unsigned size,
++                       uint32_t v)
++{
++    mchp_regfile_poke(&MCHP_REGBLOCK(s)->rf, off, size, v);
++}
++
++static void ac_update(MchpAcU2245State *s);
++static void ac_listen(MchpAcU2245State *s);
++
++static bool ac_on(MchpAcU2245State *s)
++{
++    return ac_reg(s, A_MCHP_AC_CTRLA, 1) & R_MCHP_AC_CTRLA_ENABLE_MASK;
++}
++
++static bool ac_cmp_on(MchpAcU2245State *s, unsigned n)
++{
++    return ac_on(s) && (s->compctrl[n] & R_MCHP_AC_COMPCTRL_ENABLE_MASK);
++}
++
++static unsigned ac_field(MchpAcU2245State *s, unsigned n, unsigned shift,
++                         unsigned len)
++{
++    return extract32(s->compctrl[n], shift, len);
++}
++
++#define CMP(s, n, f) ac_field(s, n, R_MCHP_AC_COMPCTRL_##f##_SHIFT, \
++                              R_MCHP_AC_COMPCTRL_##f##_LENGTH)
++
++static bool ac_single(MchpAcU2245State *s, unsigned n)
++{
++    return CMP(s, n, SINGLE);
++}
++
++/* The voltage on AIN code @code of comparator @n's pair */
++static int32_t ac_ain_mv(MchpAcU2245State *s, unsigned n, unsigned code)
++{
++    unsigned ain = (n / 2) * AC_MUX_PINS + code;
++    bool level;
++
++    if (ain >= AC_NAIN) {
++        return 0;
++    }
++    if (s->port && s->ain_pad[ain] >= 0 &&
++        mchp_port_pad_driven(s->port, s->ain_pad[ain], &level)) {
++        return level ? s->vdd_mv : 0;
++    }
++    return s->ain_mv[ain] >= 0 ? s->ain_mv[ain] : s->ain_default;
++}
++
++static int32_t ac_vscale_mv(MchpAcU2245State *s, unsigned n)
++{
++    uint32_t v = ac_reg(s, A_MCHP_AC_SCALER + n, 1) & 0x3F;
++
++    return (int64_t)s->vdd_mv * (v + 1) / 64;
++}
++
++static int32_t ac_intref_mv(MchpAcU2245State *s)
++{
++    uint32_t vref = s->supc ? mchp_regfile_peek(&s->supc->rf,
++                                                SUPC_VREF_OFFSET, 4) : 0;
++
++    return SUPC_VREF_SEL(vref) == 2 ? 2048 :
++           SUPC_VREF_SEL(vref) == 3 ? 4096 : 1024;
++}
++
++static int32_t ac_dac_mv(MchpAcU2245State *s)
++{
++    if (!s->dac || !(mchp_regfile_peek(&s->dac->rf, DAC_CTRLB_OFFSET, 1) &
++                     DAC_CTRLB_IOEN)) {
++        return s->vdd_mv;           /* silicon: reads high without IOEN */
++    }
++    return mchp_dac_u2214_internal_mv(DEVICE(s->dac));
++}
++
++static int32_t ac_pos_mv(MchpAcU2245State *s, unsigned n)
++{
++    unsigned m = CMP(s, n, MUXPOS);
++
++    return m < AC_MUX_PINS ? ac_ain_mv(s, n, m) :
++           m == 4 ? ac_vscale_mv(s, n) : 0;
++}
++
++static int32_t ac_neg_mv(MchpAcU2245State *s, unsigned n)
++{
++    unsigned m = CMP(s, n, MUXNEG);
++
++    switch (m) {
++    case 4:
++        return 0;
++    case 5:
++        return ac_vscale_mv(s, n);
++    case 6:
++        return ac_intref_mv(s);
++    case 7:
++        return ac_dac_mv(s);
++    default:
++        return ac_ain_mv(s, n, m);
++    }
++}
++
++/* The comparator's output now; hysteresis around the previous state */
++static bool ac_compare(MchpAcU2245State *s, unsigned n, bool hyst)
++{
++    int32_t pos = ac_pos_mv(s, n), neg = ac_neg_mv(s, n);
++
++    if (hyst && s->evaluated[n] && CMP(s, n, HYSTEN)) {
++        return s->state[n] ? pos >= neg - HYST_MV : pos > neg + HYST_MV;
++    }
++    return pos > neg;
++}
++
++static void ac_flag(MchpAcU2245State *s, uint8_t bits)
++{
++    ac_set_reg(s, A_MCHP_AC_INTFLAG, 1,
++               ac_reg(s, A_MCHP_AC_INTFLAG, 1) | bits);
++}
++
++static void ac_outputs(MchpAcU2245State *s, unsigned n)
++{
++    uint16_t ev = ac_reg(s, A_MCHP_AC_EVCTRL, 2);
++    bool on = ac_cmp_on(s, n);
++
++    qemu_set_irq(s->comp_event[n], (ev & BIT(n)) && s->state[n]);
++    qemu_set_irq(s->pad_cmp[n], on && CMP(s, n, OUT) && s->state[n]);
++}
++
++/* Window pair @w: the state, the flag on entering the WINTSEL region */
++static void ac_window(MchpAcU2245State *s, unsigned w)
++{
++    uint8_t winctrl = ac_reg(s, A_MCHP_AC_WINCTRL, 1);
++    bool wen = extract32(winctrl, w * 4, 1);
++    unsigned sel = extract32(winctrl, w * 4 + 1, 2);
++    uint16_t ev = ac_reg(s, A_MCHP_AC_EVCTRL, 2);
++    unsigned a = 2 * w, b = 2 * w + 1;
++    uint8_t ws;
++
++    if (!wen || !s->ready[a] || !s->ready[b]) {
++        s->wvalid[w] = false;
++        qemu_set_irq(s->win_event[w], 0);
++        return;
++    }
++    ws = s->state[a] && s->state[b] ? WS_ABOVE :
++         !s->state[a] && !s->state[b] ? WS_BELOW : WS_INSIDE;
++    /* Silicon: no flag while one is single-shot and the other is not */
++    if (s->wvalid[w] && ws != s->wstate[w] &&
++        ac_single(s, a) == ac_single(s, b)) {
++        bool hit = sel == 3 ? ws != WS_INSIDE : ws == sel;
++
++        if (hit) {
++            ac_flag(s, BIT(4 + w));
++        }
++    }
++    s->wstate[w] = ws;
++    s->wvalid[w] = true;
++    qemu_set_irq(s->win_event[w], (ev & BIT(4 + w)) && ws == WS_INSIDE);
++}
++
++/* A comparison of @n with result @st: flags, outputs */
++static void ac_result(MchpAcU2245State *s, unsigned n, bool st)
++{
++    unsigned intsel = CMP(s, n, INTSEL);
++    bool first = !s->evaluated[n];
++    bool changed = st != s->state[n];
++
++    if (intsel == 3) {
++        if (first || ac_single(s, n)) {
++            ac_flag(s, BIT(n));                     /* EOC */
++        }
++    } else if (!first && changed) {
++        if (intsel == 0 || (intsel == 1 && st) || (intsel == 2 && !st)) {
++            ac_flag(s, BIT(n));
++        }
++    }
++    s->state[n] = st;
++    s->evaluated[n] = true;
++    ac_outputs(s, n);
++    ac_window(s, n / 2);
++}
++
++static int64_t ac_startup_ns(MchpAcU2245State *s, unsigned n, bool shot)
++{
++    bool fast = CMP(s, n, SPEED) == 3;
++
++    return shot ? (fast ? 2600 : 7000) : (fast ? 2800 : 7500);
++}
++
++/* Start-up over (continuous: ready) or a single shot done */
++static void ac_started(void *opaque, unsigned n)
++{
++    MchpAcU2245State *s = opaque;
++
++    if (!ac_cmp_on(s, n)) {
++        return;
++    }
++    s->ready[n] = true;
++    if (s->shot[n] || !ac_single(s, n)) {
++        s->shot[n] = false;
++        ac_result(s, n, ac_compare(s, n, !ac_single(s, n)));
++    }
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++static void ac_start_timer0(void *o) { ac_started(o, 0); }
++static void ac_start_timer1(void *o) { ac_started(o, 1); }
++static void ac_start_timer2(void *o) { ac_started(o, 2); }
++static void ac_start_timer3(void *o) { ac_started(o, 3); }
++
++/*
++ * Bring the comparators up to now: a start-up or shot whose time has come
++ * completes (the guest may poll faster than the host's timers fire), and
++ * the continuous ones compare again
++ */
++static void ac_update(MchpAcU2245State *s)
++{
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    ac_listen(s);
++    for (unsigned n = 0; n < s->ncmp; n++) {
++        if (timer_expired(s->start_timer[n], now)) {
++            timer_del(s->start_timer[n]);
++            ac_started(s, n);
++        }
++        if (ac_cmp_on(s, n) && s->ready[n] && !ac_single(s, n)) {
++            ac_result(s, n, ac_compare(s, n, true));
++        }
++    }
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++static void ac_dac_changed(Notifier *n, void *data)
++{
++    ac_update(container_of(n, MchpAcU2245State, dac_changed));
++}
++
++static void ac_pad_changed(void *opaque, unsigned line, bool level)
++{
++    ac_update(opaque);
++}
++
++/* The DAC's output changes without an AC access: hear of it (once) */
++static void ac_listen(MchpAcU2245State *s)
++{
++    Object *o;
++
++    if (s->listening) {
++        return;
++    }
++    s->listening = true;
++    o = object_resolve_path_type("", TYPE_MCHP_PORT, NULL);
++    s->port = o ? DEVICE(o) : NULL;
++    o = object_resolve_path_type("", TYPE_MCHP_SUPC, NULL);
++    s->supc = o ? MCHP_REGBLOCK(o) : NULL;
++    o = object_resolve_path_type("", TYPE_MCHP_DAC_U2214, NULL);
++    s->dac = o ? MCHP_REGBLOCK(o) : NULL;
++    if (s->dac) {
++        s->dac_changed.notify = ac_dac_changed;
++        mchp_dac_u2214_add_notifier(DEVICE(s->dac), &s->dac_changed);
++    }
++}
++
++/* @n was enabled (with CTRLA): power up, READY after the start-up */
++static void ac_power_up(MchpAcU2245State *s, unsigned n)
++{
++    s->ready[n] = false;
++    s->evaluated[n] = false;
++    s->shot[n] = false;
++    timer_mod(s->start_timer[n], qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++              ac_startup_ns(s, n, false));
++}
++
++static void ac_power_down(MchpAcU2245State *s, unsigned n)
++{
++    s->ready[n] = false;
++    s->shot[n] = false;
++    timer_del(s->start_timer[n]);
++    ac_outputs(s, n);
++    ac_window(s, n / 2);
++}
++
++/* A single-shot start of @n (and its window partner) */
++static void ac_shoot(MchpAcU2245State *s, unsigned n)
++{
++    if (!ac_cmp_on(s, n) || !ac_single(s, n)) {
++        return;
++    }
++    s->ready[n] = false;
++    s->shot[n] = true;
++    timer_mod(s->start_timer[n], qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++              ac_startup_ns(s, n, true));
++}
++
++static void ac_start(MchpAcU2245State *s, unsigned n)
++{
++    unsigned w = n / 2;
++
++    ac_shoot(s, n);
++    if (extract32(ac_reg(s, A_MCHP_AC_WINCTRL, 1), w * 4, 1)) {
++        ac_shoot(s, n ^ 1);                 /* a window starts both */
++    }
++}
++
++static void ac_soc_event(void *opaque, int n, int level)
++{
++    MchpAcU2245State *s = opaque;
++    uint16_t ev = ac_reg(s, A_MCHP_AC_EVCTRL, 2);
++    bool lvl = (level > 0) ^ extract32(ev, 12 + n, 1);
++    bool rose = lvl && !s->soc_level[n];
++
++    s->soc_level[n] = lvl;
++    if (extract32(ev, 8 + n, 1) && (rose || level > 1)) {
++        ac_start(s, n);
++    }
++}
++
++static uint32_t ac_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                            unsigned idx, uint32_t stored, bool side_effects)
++{
++    MchpAcU2245State *s = MCHP_AC_U2245(rf->opaque);
++    uint32_t v = 0;
++
++    if (side_effects) {
++        ac_update(s);
++    }
++    switch (ri->offset) {
++    case A_MCHP_AC_STATUSA:
++        for (unsigned n = 0; n < s->ncmp; n++) {
++            v |= s->state[n] ? BIT(n) : 0;
++        }
++        for (unsigned w = 0; w < s->ncmp / 2; w++) {
++            if (s->wvalid[w]) {
++                v |= (uint32_t)s->wstate[w] << (4 + 2 * w);
++            }
++        }
++        return v;
++    case A_MCHP_AC_STATUSB:
++        for (unsigned n = 0; n < s->ncmp; n++) {
++            v |= s->ready[n] ? BIT(n) : 0;
++        }
++        return v;
++    case A_MCHP_AC_SYNCBUSY:
++        return 0;
++    case A_MCHP_AC_COMPCTRL:
++        return idx < s->ncmp ? s->compctrl[idx] : 0;
++    default:
++        /* INTFLAG: as the update above left it */
++        return mchp_regfile_peek(rf, mchp_regfile_elem_offset(ri, idx),
++                                 ri->size);
++    }
++}
++
++static void ac_compctrl_write(MchpAcU2245State *s, unsigned n,
++                              uint32_t written, uint32_t we)
++{
++    uint32_t old = s->compctrl[n], val;
++    bool was_on = ac_cmp_on(s, n);
++
++    if (old & R_MCHP_AC_COMPCTRL_ENABLE_MASK) {
++        /* Locked: only ENABLE changes */
++        val = (old & ~R_MCHP_AC_COMPCTRL_ENABLE_MASK) |
++              (((old & ~we) | (written & we)) &
++               R_MCHP_AC_COMPCTRL_ENABLE_MASK);
++    } else {
++        val = ((old & ~we) | (written & we)) & COMPCTRL_MASK;
++    }
++    s->compctrl[n] = val;
++    ac_set_reg(s, A_MCHP_AC_COMPCTRL + 4 * n, 4, val);
++    if (ac_cmp_on(s, n) && !was_on) {
++        ac_power_up(s, n);
++    } else if (!ac_cmp_on(s, n) && was_on) {
++        ac_power_down(s, n);
++    }
++}
++
++static void ac_reset_state(MchpAcU2245State *s)
++{
++    for (unsigned n = 0; n < AC_MAX; n++) {
++        s->compctrl[n] = 0;
++        s->state[n] = false;
++        s->ready[n] = false;
++        s->evaluated[n] = false;
++        s->shot[n] = false;
++        s->soc_level[n] = false;
++        timer_del(s->start_timer[n]);
++        qemu_set_irq(s->comp_event[n], 0);
++        qemu_set_irq(s->pad_cmp[n], 0);
++    }
++    for (unsigned w = 0; w < AC_MAX / 2; w++) {
++        s->wvalid[w] = false;
++        s->wstate[w] = 0;
++        qemu_set_irq(s->win_event[w], 0);
++    }
++}
++
++static void ac_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                          unsigned idx, uint32_t old, uint32_t written,
++                          uint32_t we)
++{
++    MchpAcU2245State *s = MCHP_AC_U2245(rf->opaque);
++
++    switch (ri->offset) {
++    case A_MCHP_AC_CTRLA:
++        if (written & we & R_MCHP_AC_CTRLA_ENABLE_MASK &&
++            !(old & R_MCHP_AC_CTRLA_ENABLE_MASK)) {
++            for (unsigned n = 0; n < s->ncmp; n++) {
++                if (ac_cmp_on(s, n)) {
++                    ac_power_up(s, n);
++                }
++            }
++        } else if (!ac_on(s) && (old & R_MCHP_AC_CTRLA_ENABLE_MASK)) {
++            for (unsigned n = 0; n < s->ncmp; n++) {
++                ac_power_down(s, n);
++            }
++        }
++        break;
++    case A_MCHP_AC_CTRLB:
++        for (unsigned n = 0; n < s->ncmp; n++) {
++            if (written & we & BIT(n)) {
++                ac_start(s, n);
++            }
++        }
++        break;
++    case A_MCHP_AC_COMPCTRL:
++        if (idx < s->ncmp) {
++            ac_compctrl_write(s, idx, written, we);
++        }
++        break;
++    default:
++        break;                      /* SCALER, WINCTRL: live */
++    }
++    ac_update(s);
++    for (unsigned n = 0; n < s->ncmp; n++) {
++        ac_outputs(s, n);
++    }
++}
++
++static void ac_reset_hold(MchpRegBlock *rb)
++{
++    ac_reset_state(MCHP_AC_U2245(rb));
++}
++
++static bool ac_realize(MchpRegBlock *rb, Error **errp)
++{
++    MchpAcU2245State *s = MCHP_AC_U2245(rb);
++
++    for (unsigned i = 0; i < rb->rf.nregs; i++) {
++        if (rb->rf.regs[i].offset == A_MCHP_AC_COMPCTRL) {
++            s->ncmp = MIN(rb->rf.regs[i].count, AC_MAX);
++        }
++    }
++    if (!s->ncmp) {
++        error_setg(errp, "%s: no COMPCTRL", rb->name);
++        return false;
++    }
++    return true;
++}
++
++/* "ain": "channel=mV,..." (channel=-1 unsets), as the ADC models */
++static char *ac_get_ain(Object *obj, Error **errp)
++{
++    MchpAcU2245State *s = MCHP_AC_U2245(obj);
++    GString *g = g_string_new(NULL);
++
++    for (unsigned i = 0; i < AC_NAIN; i++) {
++        if (s->ain_mv[i] >= 0) {
++            g_string_append_printf(g, "%s%u=%d", g->len ? "," : "", i,
++                                   s->ain_mv[i]);
++        }
++    }
++    return g_string_free(g, false);
++}
++
++static void ac_set_ain(Object *obj, const char *value, Error **errp)
++{
++    MchpAcU2245State *s = MCHP_AC_U2245(obj);
++    g_auto(GStrv) items = g_strsplit(value, ",", -1);
++
++    for (unsigned i = 0; items[i]; i++) {
++        unsigned ch;
++        int mv;
++
++        if (!*items[i]) {
++            continue;
++        }
++        if (sscanf(items[i], "%u=%d", &ch, &mv) != 2 || ch >= AC_NAIN) {
++            error_setg(errp, "ain items must be channel=millivolts, "
++                       "channel 0-%d", AC_NAIN - 1);
++            return;
++        }
++        s->ain_mv[ch] = mv < 0 ? -1 : mv;
++    }
++    ac_update(s);
++}
++
++/* "ain-pads": the pads of AIN0.. as PORT pin numbers, -1: none */
++static char *ac_get_pads(Object *obj, Error **errp)
++{
++    MchpAcU2245State *s = MCHP_AC_U2245(obj);
++    GString *g = g_string_new(NULL);
++
++    for (unsigned i = 0; i < AC_NAIN; i++) {
++        g_string_append_printf(g, "%s%d", i ? "," : "", s->ain_pad[i]);
++    }
++    return g_string_free(g, false);
++}
++
++static void ac_set_pads(Object *obj, const char *value, Error **errp)
++{
++    MchpAcU2245State *s = MCHP_AC_U2245(obj);
++    Object *o;
++    g_auto(GStrv) items = g_strsplit(value, ",", -1);
++    unsigned n = g_strv_length(items);
++
++    for (unsigned i = 0; i < AC_NAIN; i++) {
++        int pin = -1;
++
++        if (i < n && *items[i] && qemu_strtoi(items[i], NULL, 0, &pin)) {
++            error_setg(errp, "ain-pads: comma-separated pin numbers");
++            return;
++        }
++        s->ain_pad[i] = pin;
++    }
++    /* The pads' levels change without an AC access: hear of them */
++    o = s->watching ? NULL : object_resolve_path_type("", TYPE_MCHP_PORT,
++                                                      NULL);
++    for (unsigned i = 0; o && i < AC_NAIN; i++) {
++        s->watching = true;
++        if (s->ain_pad[i] >= 0) {
++            mchp_port_watch(DEVICE(o), s->ain_pad[i], ac_pad_changed, s, i);
++        }
++    }
++}
++
++static void ac_get_i32(Object *obj, Visitor *v, const char *name,
++                       void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, opaque, errp);
++}
++
++static void ac_set_i32(Object *obj, Visitor *v, const char *name,
++                       void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, opaque, errp);
++}
++
++static void ac_init(Object *obj)
++{
++    MchpAcU2245State *s = MCHP_AC_U2245(obj);
++    static QEMUTimerCB *const cbs[AC_MAX] = {
++        ac_start_timer0, ac_start_timer1, ac_start_timer2, ac_start_timer3,
++    };
++
++    for (unsigned n = 0; n < AC_MAX; n++) {
++        s->start_timer[n] = timer_new_ns(QEMU_CLOCK_VIRTUAL, cbs[n], s);
++    }
++    for (unsigned i = 0; i < AC_NAIN; i++) {
++        s->ain_mv[i] = -1;
++        s->ain_pad[i] = -1;
++    }
++    s->vdd_mv = 3300;
++    qdev_init_gpio_out_named(DEVICE(obj), s->comp_event, MCHP_AC_COMP_EVENT,
++                             AC_MAX);
++    qdev_init_gpio_out_named(DEVICE(obj), s->win_event, MCHP_AC_WIN_EVENT,
++                             AC_MAX / 2);
++    qdev_init_gpio_out_named(DEVICE(obj), s->pad_cmp, MCHP_AC_PAD_CMP,
++                             AC_MAX);
++    qdev_init_gpio_in_named(DEVICE(obj), ac_soc_event, MCHP_AC_SOC_EVENT_IN,
++                            AC_MAX);
++    object_property_add_str(obj, "ain", ac_get_ain, ac_set_ain);
++    object_property_add_str(obj, "ain-pads", ac_get_pads, ac_set_pads);
++    object_property_add(obj, "ain-default", "int32", ac_get_i32, ac_set_i32,
++                        NULL, &s->ain_default);
++    object_property_add(obj, "vdd", "int32", ac_get_i32, ac_set_i32, NULL,
++                        &s->vdd_mv);
++}
++
++static void ac_finalize(Object *obj)
++{
++    MchpAcU2245State *s = MCHP_AC_U2245(obj);
++
++    for (unsigned n = 0; n < AC_MAX; n++) {
++        timer_free(s->start_timer[n]);
++    }
++}
++
++static const VMStateDescription vmstate_mchp_ac_u2245 = {
++    .name = TYPE_MCHP_AC_U2245,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpAcU2245State, 1,
++                       vmstate_mchp_regblock, MchpRegBlock),
++        VMSTATE_UINT32_ARRAY(compctrl, MchpAcU2245State, AC_MAX),
++        VMSTATE_BOOL_ARRAY(state, MchpAcU2245State, AC_MAX),
++        VMSTATE_BOOL_ARRAY(ready, MchpAcU2245State, AC_MAX),
++        VMSTATE_BOOL_ARRAY(evaluated, MchpAcU2245State, AC_MAX),
++        VMSTATE_BOOL_ARRAY(shot, MchpAcU2245State, AC_MAX),
++        VMSTATE_UINT8_ARRAY(wstate, MchpAcU2245State, AC_MAX / 2),
++        VMSTATE_BOOL_ARRAY(wvalid, MchpAcU2245State, AC_MAX / 2),
++        VMSTATE_BOOL_ARRAY(soc_level, MchpAcU2245State, AC_MAX),
++        VMSTATE_INT32_ARRAY(ain_mv, MchpAcU2245State, AC_NAIN),
++        VMSTATE_TIMER_PTR_ARRAY(start_timer, MchpAcU2245State, AC_MAX),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void ac_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_ac_u2245;
++    c->realize = ac_realize;
++    c->pre_read = ac_pre_read;
++    c->post_write = ac_post_write;
++    c->reset_hold = ac_reset_hold;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_ac_u2245_types[] = {
++    {
++        .name = TYPE_MCHP_AC_U2245,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpAcU2245State),
++        .instance_init = ac_init,
++        .instance_finalize = ac_finalize,
++        .class_init = ac_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_ac_u2245_types)
+diff --git a/hw/misc/mchp_dac_u2214.c b/hw/misc/mchp_dac_u2214.c
+index 0e92774..4d382b3 100644
+--- a/hw/misc/mchp_dac_u2214.c
++++ b/hw/misc/mchp_dac_u2214.c
+@@ -10,9 +10,10 @@
+  * V at reset), VDDANA ("vdd") or VREFA ("vrefa"; VDDANA unless the board
+  * sets it). With CTRLB.EOEN it drives VOUT (PA02, ADC0 AIN0 on these
+  * parts: the ADC reads it back there, see mchp_dac_u2214_vout_mv()); with
+- * IOEN it feeds the ADC as its DAC reference. STATUS.READY reads 1 while
+- * enabled, and SYNCBUSY never shows busy. "vout" (read-only) is the VOUT
+- * pin's voltage in mV, -1 while the DAC does not drive it.
++ * IOEN it feeds the ADC as its DAC reference and the AC as its DAC input
++ * (mchp_dac_u2214_add_notifier() hears of changes). STATUS.READY reads 1
++ * while enabled, and SYNCBUSY never shows busy. "vout" (read-only) is the
++ * VOUT pin's voltage in mV, -1 while the DAC does not drive it.
+  *
+  * Checked on PIC32CM MC00 silicon (firmware/hello APP=dac, read back by
+  * ADC0 on PA02): linear from 0 to 1023 against VDDANA, INTREF full scale
+@@ -46,6 +47,7 @@ struct MchpDacU2214State {
+     int32_t vdd_mv;
+     int32_t vrefa_mv;           /* < 0: VDDANA */
+     MchpRegBlock *supc;         /* the SUPC, for VREF (found on first use) */
++    NotifierList changed;       /* the AC, which compares with the output */
+ };
+ 
+ static uint32_t dac_reg(MchpDacU2214State *s, hwaddr off, unsigned size)
+@@ -106,6 +108,11 @@ int32_t mchp_dac_u2214_internal_mv(DeviceState *dev)
+     return dac_enabled(s) ? dac_out_mv(s) : 0;
+ }
+ 
++void mchp_dac_u2214_add_notifier(DeviceState *dev, Notifier *n)
++{
++    notifier_list_add(&MCHP_DAC_U2214(dev)->changed, n);
++}
++
+ static uint32_t dac_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
+                              unsigned idx, uint32_t stored, bool side_effects)
+ {
+@@ -131,11 +138,15 @@ static void dac_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+         qemu_log_mask(LOG_UNIMP, "%s: DATABUF (START events) not "
+                       "modelled\n", MCHP_REGBLOCK(s)->name);
+     }
++    notifier_list_notify(&s->changed, NULL);    /* DATA, CTRLA, CTRLB */
+ }
+ 
+ static void dac_reset_hold(MchpRegBlock *rb)
+ {
+-    MCHP_DAC_U2214(rb)->code = 0;
++    MchpDacU2214State *s = MCHP_DAC_U2214(rb);
++
++    s->code = 0;
++    notifier_list_notify(&s->changed, NULL);
+ }
+ 
+ static void dac_get_vout(Object *obj, Visitor *v, const char *name,
+@@ -164,6 +175,7 @@ static void dac_init(Object *obj)
+ 
+     s->vdd_mv = 3300;
+     s->vrefa_mv = -1;
++    notifier_list_init(&s->changed);
+     object_property_add(obj, "vout", "int32", dac_get_vout, NULL, NULL,
+                         NULL);
+     object_property_add(obj, "vdd", "int32", dac_get_i32, dac_set_i32, NULL,
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index ab3ba46..b877b1f 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -35,6 +35,7 @@ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files(
+ system_ss.add(when: 'CONFIG_WS2812', if_true: files('ws2812.c'))
+ system_ss.add(when: 'CONFIG_RNBD451', if_true: files('rnbd451.c'))
+ system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files(
++  'mchp_ac_u2245.c',
+   'mchp_clock.c',
+   'mchp_edbg_dgi.c',
+   'mchp_eic.c',
+diff --git a/include/hw/arm/pic32cm_soc.h b/include/hw/arm/pic32cm_soc.h
+index 561a410..f079697 100644
+--- a/include/hw/arm/pic32cm_soc.h
++++ b/include/hw/arm/pic32cm_soc.h
+@@ -77,6 +77,7 @@ struct Pic32cmSocState {
+ 
+     char *silicon_rev;
+     char *serial_number;
++    int32_t vddana_mv;              /* the analog models' "vdd" */
+ };
+ 
+ /*
+diff --git a/include/hw/gpio/mchp_port.h b/include/hw/gpio/mchp_port.h
+index 280b0b0..5f30a8e 100644
+--- a/include/hw/gpio/mchp_port.h
++++ b/include/hw/gpio/mchp_port.h
+@@ -79,4 +79,12 @@ typedef void MchpPadWatchFn(void *opaque, unsigned line, bool level);
+ void mchp_port_watch(DeviceState *port, unsigned pin, MchpPadWatchFn *fn,
+                      void *opaque, unsigned line);
+ 
++/*
++ * Whether pad @pin is driven to a digital level now (a GPIO output, or a
++ * peripheral output it is muxed to), and that level. An analog input (the
++ * AC, ADC) sees VDDANA or GND on such a pad (silicon: a GPIO-driven pad
++ * reaches the AC whatever its PMUX); otherwise its voltage is the board's.
++ */
++bool mchp_port_pad_driven(DeviceState *port, unsigned pin, bool *level);
++
+ #endif /* HW_GPIO_MCHP_PORT_H */
+diff --git a/include/hw/mchp/gen/ac_u2245.h b/include/hw/mchp/gen/ac_u2245.h
+index 4023345..24af76f 100644
+--- a/include/hw/mchp/gen/ac_u2245.h
++++ b/include/hw/mchp/gen/ac_u2245.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/ac_u2245.yaml (sha1 0d16d47bd378)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/dac_u2214.h b/include/hw/mchp/gen/dac_u2214.h
+index c9d473e..037c273 100644
+--- a/include/hw/mchp/gen/dac_u2214.h
++++ b/include/hw/mchp/gen/dac_u2214.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/dac_u2214.yaml (sha1 9e874c7da06b)
++ * Overlay: overlays/dac_u2214.yaml (sha1 53870fd5ebdd)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/ac_u2245.h b/include/hw/mchp/gen/pic32cm1216mc00048/ac_u2245.h
+index 80d7764..8769ac8 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/ac_u2245.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/ac_u2245.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/ac_u2245.yaml (sha1 0d16d47bd378)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,59 +23,65 @@ static const MchpRegInfo pic32cm1216mc00048_ac_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03, .rdz = 0x01,
+-        .syncbusy = 0x00000003 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLB", .offset = 0x01, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03, .rdz = 0x03,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x02, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x3313, .wmask = 0x3313,
+-        .flags = 0,
++        .enprot = 0x3313, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 4 /* INTENSET */, .reset = 0x00, .impl = 0x13,
+-        .wmask = 0x13, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x13, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x05, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 4 /* INTENSET */, .reset = 0x00, .impl = 0x13,
+-        .wmask = 0x13, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x13, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x06, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x13, .wmask = 0x00, .w1c = 0x13,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_PRE_READ,
+     },
+     {
+         .name = "STATUSA", .offset = 0x07, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x33, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "STATUSB", .offset = 0x08, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x09, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "WINCTRL", .offset = 0x0A, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x07, .wmask = 0x07,
+-        .syncbusy = 0x00000004 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000004 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "SCALER", .offset = 0x0C, .size = 1, .count = 2, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x3F, .wmask = 0x3F, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x3F, .wmask = 0x3F,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "COMPCTRL", .offset = 0x10, .size = 4, .count = 2, .stride = 4,
+-        .alias_of = -1, .reset = 0x00000000, .impl = 0x370BF75E,
+-        .wmask = 0x370BF75E, .syncbusy = 0x00000002 /* SYNCBUSY */, .flags = 0,
++        .alias_of = -1, .reset = 0x00000000, .impl = 0x373BF75E,
++        .wmask = 0x373BF75E, .syncbusy = 0x00000002 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x20, .size = 4, .count = 1, .stride = 4,
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h b/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h
+index b363533..d6e806b 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/dac_u2214.yaml (sha1 9e874c7da06b)
++ * Overlay: overlays/dac_u2214.yaml (sha1 53870fd5ebdd)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -24,12 +24,12 @@ static const MchpRegInfo pic32cm1216mc00048_dac_regs[] = {
+         .name = "CTRLA", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x43, .wmask = 0x43, .rdz = 0x01,
+         .enprot = 0x40, .syncbusy = 0x00000003 /* SYNCBUSY */,
+-        .flags = MCHP_F_PAC,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLB", .offset = 0x01, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0xEF, .wmask = 0xEF,
+-        .enprot = 0xEF, .flags = MCHP_F_PAC,
++        .enprot = 0xEF, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x02, .size = 1, .count = 1, .stride = 1,
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/ac_u2245.h b/include/hw/mchp/gen/pic32cm5164jh01100/ac_u2245.h
+index 243817b..ab5c9ad 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/ac_u2245.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/ac_u2245.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/ac_u2245.yaml (sha1 0d16d47bd378)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,59 +23,65 @@ static const MchpRegInfo pic32cm5164jh01100_ac_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03, .rdz = 0x01,
+-        .syncbusy = 0x00000003 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLB", .offset = 0x01, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F, .rdz = 0x0F,
++        .flags = MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x02, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0xFF3F, .wmask = 0xFF3F,
+-        .flags = 0,
++        .enprot = 0xFF3F, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 4 /* INTENSET */, .reset = 0x00, .impl = 0x3F,
+-        .wmask = 0x3F, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x3F, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x05, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 4 /* INTENSET */, .reset = 0x00, .impl = 0x3F,
+-        .wmask = 0x3F, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x3F, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x06, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x3F, .wmask = 0x00, .w1c = 0x3F,
+-        .flags = 0,
++        .flags = MCHP_F_HOOK_PRE_READ,
+     },
+     {
+         .name = "STATUSA", .offset = 0x07, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "STATUSB", .offset = 0x08, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x00,
+-        .flags = MCHP_F_READ_ONLY,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x09, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "WINCTRL", .offset = 0x0A, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x77, .wmask = 0x77,
+-        .syncbusy = 0x00000004 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000004 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "SCALER", .offset = 0x0C, .size = 1, .count = 4, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x3F, .wmask = 0x3F, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x3F, .wmask = 0x3F,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "COMPCTRL", .offset = 0x10, .size = 4, .count = 4, .stride = 4,
+-        .alias_of = -1, .reset = 0x00000000, .impl = 0x370BF75E,
+-        .wmask = 0x370BF75E, .syncbusy = 0x00000002 /* SYNCBUSY */, .flags = 0,
++        .alias_of = -1, .reset = 0x00000000, .impl = 0x373BF75E,
++        .wmask = 0x373BF75E, .syncbusy = 0x00000002 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x20, .size = 4, .count = 1, .stride = 4,
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h b/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h
+index 4226a5c..d604989 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/dac_u2214.yaml (sha1 9e874c7da06b)
++ * Overlay: overlays/dac_u2214.yaml (sha1 53870fd5ebdd)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -24,12 +24,12 @@ static const MchpRegInfo pic32cm5164jh01100_dac_regs[] = {
+         .name = "CTRLA", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x43, .wmask = 0x43, .rdz = 0x01,
+         .enprot = 0x40, .syncbusy = 0x00000003 /* SYNCBUSY */,
+-        .flags = MCHP_F_PAC,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLB", .offset = 0x01, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0xEF, .wmask = 0xEF,
+-        .enprot = 0xEF, .flags = MCHP_F_PAC,
++        .enprot = 0xEF, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x02, .size = 1, .count = 1, .stride = 1,
+diff --git a/include/hw/misc/mchp_ac.h b/include/hw/misc/mchp_ac.h
+new file mode 100644
+index 0000000..c2c35f1
+--- /dev/null
++++ b/include/hw/misc/mchp_ac.h
+@@ -0,0 +1,32 @@
++/*
++ * Microchip PIC32CM JH/MC analog comparators (AC U2245)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * An mchp-regblock (see mchp_ac_u2245.c). GPIO outputs "comp-event"[n]
++ * and "win-event"[w] (EVSYS generators COMP_n, WIN_w), "pad-cmp"[n] (the
++ * CMPn pads); inputs "soc-event-in"[n] (EVSYS users SOC_n). Properties:
++ *   "ain"          str: "channel=mV,...", the board's voltage on AINx (as
++ *                  the ADC models; -1 unsets)
++ *   "ain-default"  int32: the voltage of AIN inputs "ain" leaves unset
++ *   "ain-pads"     str: the PORT pin of AIN0, AIN1, ... (-1: none); the SoC
++ *                  sets it from the device's signals
++ *   "vdd"          int32: VDDANA in mV (3300)
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_MCHP_AC_H
++#define HW_MISC_MCHP_AC_H
++
++#include "hw/misc/mchp_regblock.h"
++
++#define TYPE_MCHP_AC_U2245 "mchp-ac-u2245"
++
++#define MCHP_AC_COMP_EVENT "comp-event"
++#define MCHP_AC_WIN_EVENT "win-event"
++#define MCHP_AC_SOC_EVENT_IN "soc-event-in"
++#define MCHP_AC_PAD_CMP "pad-cmp"
++
++#endif /* HW_MISC_MCHP_AC_H */
+diff --git a/include/hw/misc/mchp_dac.h b/include/hw/misc/mchp_dac.h
+index ac59b3e..460a986 100644
+--- a/include/hw/misc/mchp_dac.h
++++ b/include/hw/misc/mchp_dac.h
+@@ -16,6 +16,7 @@
+ #define HW_MISC_MCHP_DAC_H
+ 
+ #include "hw/misc/mchp_regblock.h"
++#include "qemu/notify.h"
+ 
+ #define TYPE_MCHP_DAC "mchp-dac"
+ /* The PIC32CM JH/MC DAC (U2214): one 10-bit channel, "vout" */
+@@ -25,6 +26,8 @@
+ int32_t mchp_dac_u2214_vout_mv(DeviceState *dev);
+ /* The U2214 DAC's output for the ADC's DAC reference, in mV (0 when off) */
+ int32_t mchp_dac_u2214_internal_mv(DeviceState *dev);
++/* @n runs (data NULL) whenever the U2214 DAC's output or CTRLB changes */
++void mchp_dac_u2214_add_notifier(DeviceState *dev, Notifier *n);
+ #define MCHP_DAC_START_EVENT_IN "start-event-in"
+ 
+ #endif /* HW_MISC_MCHP_DAC_H */
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index 5c9eea4..daae265 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -253,7 +253,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-click-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-ac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-click-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-ac-test.c b/tests/qtest/pic32cm-ac-test.c
+new file mode 100644
+index 0000000..1bb255b
+--- /dev/null
++++ b/tests/qtest/pic32cm-ac-test.c
+@@ -0,0 +1,209 @@
++/*
++ * QTest for the analog comparators of the PIC32CM MC00 (pic32cm-mc00-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The board side of the AC model: pad voltages from the "ain" property,
++ * the machine's vcc option, a GPIO-driven pad, start-up times on stepped
++ * virtual time and the interrupt. firmware/hello APP=ac checks the rest
++ * against silicon.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++#include "qobject/qdict.h"
++
++#define MACHINE         "-M pic32cm-mc00-cpro"
++#define AC_PATH         "/machine/soc/ac"
++
++#define AC              0x42005000
++#define PA              0x41000000
++#define NVIC_ISPR       0xE000E200
++#define AC_IRQ          23
++
++#define R_CTRLA         0x00
++#define R_INTENSET      0x05
++#define R_INTFLAG       0x06
++#define R_STATUSA       0x07
++#define R_STATUSB       0x08
++#define R_SCALER0       0x0C
++#define R_COMPCTRL0     0x10
++
++#define P_DIRSET        0x08
++#define P_OUTCLR        0x14
++#define P_OUTSET        0x18
++
++#define CTRLA_ENABLE    BIT(1)
++#define EN              BIT(1)
++#define INTSEL(x)       ((x) << 3)
++#define NEG(x)          ((x) << 8)
++#define POS(x)          ((x) << 12)
++#define HIGH            (3 << 16)
++#define HYSTEN          BIT(19)
++#define AIN0            0
++#define AIN1            1
++#define VSCALE_POS      4
++#define VSCALE_NEG      5
++
++static void set_ain(QTestState *qts, const char *value)
++{
++    qtest_qmp_assert_success(qts,
++        "{ 'execute': 'qom-set', 'arguments': { 'path': '" AC_PATH "',"
++        " 'property': 'ain', 'value': %s } }", value);
++}
++
++static int64_t qom_int(QTestState *qts, const char *path, const char *prop)
++{
++    QDict *rsp = qtest_qmp(qts, "{ 'execute': 'qom-get', 'arguments': {"
++                           " 'path': %s, 'property': %s } }", path, prop);
++    int64_t v = qdict_get_int(rsp, "return");
++
++    qobject_unref(rsp);
++    return v;
++}
++
++/* COMP0 on with @compctrl, the AC enabled; past the start-up */
++static void comp0_on(QTestState *qts, uint32_t compctrl)
++{
++    qtest_writel(qts, AC + R_COMPCTRL0, compctrl);
++    qtest_writel(qts, AC + R_COMPCTRL0, compctrl | EN);
++    qtest_writeb(qts, AC + R_CTRLA, CTRLA_ENABLE);
++    qtest_clock_step(qts, 10000);
++    g_assert_cmphex(qtest_readb(qts, AC + R_STATUSB) & 1, ==, 1);
++}
++
++static unsigned state0(QTestState *qts)
++{
++    return qtest_readb(qts, AC + R_STATUSA) & 1;
++}
++
++/* AIN0 against AIN1, both from "ain"; unset inputs read "ain-default" */
++static void test_board_inputs(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    set_ain(qts, "0=2000,1=1000");
++    comp0_on(qts, POS(AIN0) | NEG(AIN1) | HIGH);
++    g_assert_cmpuint(state0(qts), ==, 1);
++    set_ain(qts, "0=500");
++    g_assert_cmpuint(state0(qts), ==, 0);
++    set_ain(qts, "0=-1");
++    qtest_qmp_assert_success(qts,
++        "{ 'execute': 'qom-set', 'arguments': { 'path': '" AC_PATH "',"
++        " 'property': 'ain-default', 'value': 1500 } }");
++    g_assert_cmpuint(state0(qts), ==, 1);
++    qtest_quit(qts);
++}
++
++/* VSCALE follows VDDANA, which the machine's vcc sets for every model */
++static void test_vcc(void)
++{
++    QTestState *qts = qtest_init(MACHINE ",vcc=5000");
++
++    g_assert_cmpint(qom_int(qts, AC_PATH, "vdd"), ==, 5000);
++    g_assert_cmpint(qom_int(qts, "/machine/soc/adc0", "vdd"), ==, 5000);
++    g_assert_cmpint(qom_int(qts, "/machine/soc/dac", "vdd"), ==, 5000);
++    /* SCALER 31: VDDANA / 2 = 2500 mV */
++    qtest_writeb(qts, AC + R_SCALER0, 31);
++    set_ain(qts, "0=2400");
++    comp0_on(qts, POS(VSCALE_POS) | NEG(AIN0) | HIGH);
++    g_assert_cmpuint(state0(qts), ==, 1);
++    set_ain(qts, "0=2600");
++    g_assert_cmpuint(state0(qts), ==, 0);
++    qtest_quit(qts);
++
++    qts = qtest_init(MACHINE);
++    g_assert_cmpint(qom_int(qts, AC_PATH, "vdd"), ==, 3300);
++    qtest_quit(qts);
++}
++
++/* Hysteresis: 60 mV either side of the threshold */
++static void test_hysteresis(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    set_ain(qts, "0=1600,1=1500");
++    comp0_on(qts, POS(AIN0) | NEG(AIN1) | HIGH | HYSTEN);
++    g_assert_cmpuint(state0(qts), ==, 1);
++    set_ain(qts, "0=1460");                 /* inside the band: stays */
++    g_assert_cmpuint(state0(qts), ==, 1);
++    set_ain(qts, "0=1430");
++    g_assert_cmpuint(state0(qts), ==, 0);
++    set_ain(qts, "0=1550");
++    g_assert_cmpuint(state0(qts), ==, 0);
++    set_ain(qts, "0=1570");
++    g_assert_cmpuint(state0(qts), ==, 1);
++    qtest_quit(qts);
++}
++
++/* A GPIO output on PA04 (AIN0) puts VDDANA or GND there, whatever "ain" */
++static void test_gpio_pad(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    set_ain(qts, "0=1000,1=1650");
++    comp0_on(qts, POS(AIN0) | NEG(AIN1) | HIGH);
++    g_assert_cmpuint(state0(qts), ==, 0);
++    qtest_writel(qts, PA + P_OUTSET, BIT(4));
++    qtest_writel(qts, PA + P_DIRSET, BIT(4));
++    g_assert_cmpuint(state0(qts), ==, 1);
++    qtest_writel(qts, PA + P_OUTCLR, BIT(4));
++    g_assert_cmpuint(state0(qts), ==, 0);
++    qtest_quit(qts);
++}
++
++/* READY after 7.5 us at SPEED 0 and 2.8 us at SPEED 3 (silicon) */
++static void test_startup(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writeb(qts, AC + R_CTRLA, CTRLA_ENABLE);
++    qtest_writel(qts, AC + R_COMPCTRL0, POS(VSCALE_POS) | NEG(4) | EN);
++    qtest_clock_step(qts, 7000);
++    g_assert_cmphex(qtest_readb(qts, AC + R_STATUSB), ==, 0);
++    qtest_clock_step(qts, 600);
++    g_assert_cmphex(qtest_readb(qts, AC + R_STATUSB), ==, 1);
++    qtest_writel(qts, AC + R_COMPCTRL0, 0);
++    g_assert_cmphex(qtest_readb(qts, AC + R_STATUSB), ==, 0);
++    qtest_writel(qts, AC + R_COMPCTRL0, POS(VSCALE_POS) | NEG(4) | HIGH);
++    qtest_writel(qts, AC + R_COMPCTRL0, POS(VSCALE_POS) | NEG(4) | HIGH | EN);
++    qtest_clock_step(qts, 2500);
++    g_assert_cmphex(qtest_readb(qts, AC + R_STATUSB), ==, 0);
++    qtest_clock_step(qts, 400);
++    g_assert_cmphex(qtest_readb(qts, AC + R_STATUSB), ==, 1);
++    qtest_quit(qts);
++}
++
++/* A board voltage change raises the interrupt with no AC access */
++static void test_interrupt(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    set_ain(qts, "0=2000,1=1000");
++    comp0_on(qts, POS(AIN0) | NEG(AIN1) | HIGH | INTSEL(2));  /* falling */
++    qtest_writeb(qts, AC + R_INTENSET, 1);
++    g_assert_false(qtest_readl(qts, NVIC_ISPR) & BIT(AC_IRQ));
++    set_ain(qts, "0=500");
++    g_assert_true(qtest_readl(qts, NVIC_ISPR) & BIT(AC_IRQ));
++    g_assert_cmphex(qtest_readb(qts, AC + R_INTFLAG), ==, 1);
++    qtest_writeb(qts, AC + R_INTFLAG, 1);
++    set_ain(qts, "0=2000");                 /* rising: no flag */
++    g_assert_cmphex(qtest_readb(qts, AC + R_INTFLAG), ==, 0);
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++    qtest_add_func("pic32cm-ac/board-inputs", test_board_inputs);
++    qtest_add_func("pic32cm-ac/vcc", test_vcc);
++    qtest_add_func("pic32cm-ac/hysteresis", test_hysteresis);
++    qtest_add_func("pic32cm-ac/gpio-pad", test_gpio_pad);
++    qtest_add_func("pic32cm-ac/startup", test_startup);
++    qtest_add_func("pic32cm-ac/interrupt", test_interrupt);
++    return g_test_run();
++}
+-- 
+2.53.0.windows.2
+

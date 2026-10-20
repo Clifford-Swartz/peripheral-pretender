@@ -145,6 +145,18 @@ I examined PIC32CM-JH DFP 1.3.221 (about 91 MB, 24 parts). For each part it ship
    - ev: C:/Users/C19257/Desktop/Code/DTS Test/dts-530/Simulator.emu:3005-3012 lists PIC32CM1216JH00032/048/064/100 and PIC32CM1216JH01064/01100
    - ev: DFP 1.3.221 JH00 atdf has no 1216 parts; JH01 has only PIC32CM1216JH01032/048
 
+20. (high) [PIC32CM MC00 ATDF errors found later (DFP 1.4.67)] Two more places where the ATDF is wrong
+   or incomplete for the PIC32CM1216MC00048. Silicon or the data sheet outranks it in both.
+   - AC U2245 COMPCTRL bits 21:20: in neither the ATDF nor DS60001638E, but writable and read back on
+     rev A1 silicon (they change nothing measurable). The overlay declares them with
+     `extra_fields: {HYST: [20, 2]}` so the generated impl/wmask (0x373BF75E) match silicon
+     (`docs/research/peripherals/ac-u2245.md` section 7).
+   - DMAC U2223 trigger numbers: the value-group `DMAC_CHCTRLB__TRIGSRC` (and the dmac.h
+     `DMAC_CHCTRLB_TRIGSRC_*_Val` macros made from it) carries SAM C21 numbers from 0x0A up
+     (TCC0_OVF = 0x10, TC0_OVF = 0x1B). DS Table 24-2, the per-instance `DMAC_ID_*` parameters,
+     `devices/*.json dmac_triggers` and Harmony agree on 0x00-0x27 without gaps (TCC0_OVF = 0x0A).
+     Use the instance parameters (`docs/research/peripherals/dmac-u2223.md`).
+
 ## Table: DFP inventory
 | folder / file | contents | approx size | contribution to a QEMU twin |
 | Microchip.PIC32CM-JH_DFP.pdsc (+ package.content, .sha1) | CMSIS-Pack index of 24 devices (JH00: 14, JH01: 10): memories IROM1 0x0/0x80000, IROM2 0x400000/0x2000, IRAM1 0x20000000/0x10000; flash algorithms; Microchip extension pointing at atdf/edc/xc32/hwtools | 332 KB (+336 KB, 80 KB) | Device list and file index for the generator front-end; memory cross-check |
