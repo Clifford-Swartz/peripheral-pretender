@@ -1,0 +1,12 @@
+PP ccl: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+registers ctrl=0x00 seq_mask=0x0F lut_mask=0xFF7FFFB2 swrst=0x00 ccl_on=0x11000002 seq_on=0x00 runstdby_on=0x02 lut_was_on=0x11000000 off_to_on=0x44000002 seq_off=0x02 ok
+masked truth0=0x0A lut_off=0x00 ccl_off=0x00 ok
+truth one_hot_bad=0x00 gpio_pad=0x00 ok
+link lut0_1=0x01 lut0_0=0x00 lut3_1=0x01 lut3_0=0x00 feedback=0x00 ok
+sequencer dff=0xCE latch=0xCE jk=0x26 rs=0x66 out1_raw=0x01 even_off_clears=0x00 ok
+event_out lutout_1=0x01 lutout_0=0x00 no_luteo=0x00 ok
+tcc_taps lut0=0x00 lut1=0x00 lut2=0x00 lut3=0x00 ok
+tc_taps bad=0x00 ok
+timing none_us=1 synch_min=1280 synch_max=1972 filter_min=3268 filter_max=3966 pulse_us=998 on_fall=0x00 ok
+counted jk_2ms=1000 event_strobes=10 sercom_idle=0x01 ok
+PP:EXIT 0

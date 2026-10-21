@@ -15,6 +15,10 @@ OUT), else 0 (floating reads 0).
 - `pmux-in[pin*16+func]` (peripheral → pad): 0/1, -1 undriven, -2 = Hi-Z with the pull off
   (`MCHP_PORT_PAD_HIZ`).
 - Outputs `pad[n]` (any driver's level or -1) and `pmux-active[...]` (which function owns a pin).
+- `func-in[pin*16+func]` (pad → peripheral): the pad's level while the pin is muxed to that
+  function, else 0. The SoC wires it to every model input named `pad-<group>-in`
+  (`pic32cm_connect_pad_inputs()`, an OR gate when several pads carry a signal): the CCL's IN
+  pads use it, and so can any model that reads a pin. (`func-a` is the older EIC-only form.)
 - QOM `pX-stats`: driven-high/low nanoseconds per pad, for duty cycle. `pX-levels`: every pad's
   level including external drivers and pulls (for showing open-drain signals).
 

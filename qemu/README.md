@@ -80,6 +80,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0071 | The remaining DMA triggers but the DAC's, from `dmaprobe`: TCC OVF at each update and MCx at each compare match or capture (the DMA's CCx read clears MCx), SDADC and TSENS RESRDY as level triggers that kick the DMAC (`mchp_dmac_kick_machine()`); the DMAC serves a level request already set when a channel is enabled at once; qtest |
 | 0072 | DAC (U2214) data buffer from `dacprobe`..`dacprobe3`: DATABUF moved by the START event (INVEI), EMPTY at every enable and per START, UNDERRUN, SYNCBUSY.DATA/DATABUF held until a START (writes meanwhile dropped), dithering (EMPTY every 16th START), the EMPTY event and DMA trigger; qtest |
 | 0073 | Standby from `sleepprobe`/`sleepprobe2`: a WFI with PM.SLEEPCFG = STANDBY gates every GCLK channel no enabled RUNSTDBY peripheral asks for (sources and generators run on demand) and stops the CPU clock; `ARMCPU.sleep_hook` in target/arm, `MchpInstanceInfo.standby_*` from the ATDF, SysTick holds its count at 0 Hz, TC/TCC resume where their clock stopped; qtest |
+| 0074 | PORT "func-in" and `pic32cm_connect_pad_inputs()`: a pad muxed to a function reaches the model input "pad-<group>-in"; CCL (U2225) from `cclprobe`/`cclprobe2`: LUTs on every INSEL source (TC/TCC/AC tapped without pads), SYNCH/FILTER edges, EDGESEL, DFF/JK/LATCH/RS sequencers, OUT pads and LUTOUT events, silicon's LUTCTRL protection; qtest |
 
 ## Setting it up
 

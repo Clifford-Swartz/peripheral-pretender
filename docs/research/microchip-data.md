@@ -192,6 +192,11 @@ I examined PIC32CM-JH DFP 1.3.221 (about 91 MB, 24 parts). For each part it ship
      0, where Table 16-2 says such a source stops; a channel (not a peripheral) is gated, so a
      TC without RUNSTDBY counts when another peripheral on its channel asks for it
      (`pm-u2240.md` section 3).
+   - CCL: LUTCTRLn's bits other than ENABLE take a write only while CTRL.ENABLE is 0 and the LUT
+     was disabled before the write, where 35.6.2.1 says they can be written together with
+     LUTCTRLn.ENABLE = 1 (true only with the CCL off); FEEDBACK reads 0 without a sequencer; the
+     SERCOM input reads 1 even with the SERCOM off; TCC1/TCC2 feed CC0's output to IN2
+     (`ccl-u2225.md` section 8).
 
 ## Table: DFP inventory
 | folder / file | contents | approx size | contribution to a QEMU twin |

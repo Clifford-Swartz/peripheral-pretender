@@ -1,0 +1,1374 @@
+From b00154cc52754deadc83c374414fd66d530f1959 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 21 Oct 2026 13:51:54 -0700
+Subject: [PATCH] hw/misc: CCL (U2225) and a generic pad-to-peripheral input
+ path
+
+Pads as peripheral inputs: PORT gains "func-in"[pin * 16 + f], the pad's
+level while the pin is muxed to function f (else 0), and the SoC wires
+it to every model input named "pad-<group>-in"[n] from the device's
+signal table, OR-ing the pads that carry one signal
+(pic32cm_connect_pad_inputs()). The EIC keeps its own function-A path.
+
+The CCL as PIC32CM MC00 silicon showed it (firmware/hello APP=cclprobe
+and cclprobe2, checked by ccl):
+
+- OUTn = TRUTH[IN2 IN1 IN0] with IN0 = IN[3n]; INSEL MASK, FEEDBACK
+  (the pair's sequencer, 0 without one), LINK (LUT n + 1, LUT3 wraps to
+  LUT0), EVENT (a strobe three GCLK_CCL edges after the input's edge),
+  IO (the pads), AC (comparator n % count), TC/ALTTC (WO[0] of TCn,
+  TCn+1), TCC (WO[x] of TCC(n % count); TCC1/TCC2 repeat CC0's output
+  on WO[2]) and SERCOM (reads 1: idle).
+- SYNCH passes a change at the second GCLK_CCL edge, FILTER at the
+  fourth if it held; EDGESEL gives a one-cycle pulse on rising edges.
+- DFF and JK sequencers change at clock edges (J = K = 1 toggles at half
+  the clock), LATCH and RS at once; a disabled even LUT clears the
+  sequencer; OUT2N is the sequencer, OUT2N+1 the odd LUT's own output.
+- A disabled LUT or CCL drives its pad to 0; "lutout-event" is OUTn's
+  level while LUTEO.
+- LUTCTRLn's bits but ENABLE take a write only while CTRL.ENABLE is 0
+  and the LUT was disabled before the write (stricter than the data
+  sheet); SEQCTRL and RUNSTDBY only while the CCL is off (overlay).
+
+The SoC taps TC WO[0], TCC WO[0..2] and AC CMPn for the CCL without
+pads: pic32cm_connect_pads() adds the CCL as an extra sink of those
+signals and ORs its "tap-*-active" lines into the sources'
+"pad-wo-active", so they stop coasting while a LUT reads them.
+
+qtest pic32cm-ccl-test: truth table, protection, LINK, filter edges,
+DFF.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst         |  11 +-
+ hw/arm/pic32cm_soc.c                          | 160 ++++-
+ hw/gpio/mchp_port.c                           |  17 +
+ hw/misc/mchp_ccl.c                            | 599 ++++++++++++++++++
+ hw/misc/meson.build                           |   1 +
+ include/hw/gpio/mchp_port.h                   |   4 +
+ include/hw/mchp/gen/atsame51j20a/ccl_u2225.h  |   9 +-
+ include/hw/mchp/gen/ccl_u2225.h               |   2 +-
+ .../mchp/gen/pic32cm1216mc00048/ccl_u2225.h   |   9 +-
+ .../mchp/gen/pic32cm5164jh01100/ccl_u2225.h   |   9 +-
+ include/hw/misc/mchp_ccl.h                    |  41 ++
+ tests/qtest/meson.build                       |   2 +-
+ tests/qtest/pic32cm-ccl-test.c                | 171 +++++
+ 13 files changed, 1014 insertions(+), 21 deletions(-)
+ create mode 100644 hw/misc/mchp_ccl.c
+ create mode 100644 include/hw/misc/mchp_ccl.h
+ create mode 100644 tests/qtest/pic32cm-ccl-test.c
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index 9f828cd..1a49ab1 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -90,6 +90,15 @@ Supported devices
+   GPIO output ``pad[n]`` gives every driven pad, ``pa-stats`` each
+   pad's total driven-high and driven-low time (duty cycles), and
+   ``pa-levels`` every pad's level, external drivers and pulls included.
++  A peripheral reads a pad muxed to it through ``func-in[n * 16 + f]``
++  (the CCL's IN pads).
++- CCL (U2225): the four LUTs on every INSEL source (pads, LINK,
++  FEEDBACK, events, the TC and TCC waveform outputs and the AC
++  comparators without pads, SERCOM reading idle), the synchronizer and
++  filter (second and fourth GCLK_CCL edge), edge detectors, the DFF, JK,
++  latch and RS sequencers, OUT pads and LUTOUT events, and the LUTCTRL
++  protection a PIC32CM MC00 applies (only ENABLE takes while the CCL or
++  the LUT is on).
+ - EIC: edge and level detection on the EXTINT inputs that PORT routes to
+   it (pins muxed to function A) and NMI, synchronous edges only with the
+   EIC clock, event outputs.
+@@ -186,7 +195,7 @@ Missing devices
+   RAMP2CS, CTRLBSET.IDXCMD, the outputs' start latency and the STATUS
+   read lag.
+ - PAC write protection, DSU CRC32 and chip erase, SLEEPONEXIT and
+-  STDBYCFG, and every other peripheral behaviour (CCL, PDEC, CAN, ...).
++  STDBYCFG, and every other peripheral behaviour (PDEC, CAN, ...).
+ 
+ Board and SoC properties
+ """"""""""""""""""""""""
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index e501d6e..cb880da 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -25,6 +25,7 @@
+ #include "hw/core/qdev-properties-system.h"
+ #include "hw/core/split-irq.h"
+ #include "hw/gpio/mchp_port.h"
++#include "hw/misc/mchp_ccl.h"
+ #include "hw/misc/mchp_dac.h"
+ #include "hw/misc/mchp_eic.h"
+ #include "hw/misc/mchp_evsys.h"
+@@ -60,6 +61,7 @@ static const struct {
+     { "ADC", TYPE_MCHP_ADC_U2247, "U2247" },
+     { "DAC", TYPE_MCHP_DAC, "U2502" },
+     { "DAC", TYPE_MCHP_DAC_U2214, "U2214" },
++    { "CCL", TYPE_MCHP_CCL, "U2225" },
+     { "DIVAS", TYPE_MCHP_DIVAS },
+     { "DMAC", TYPE_MCHP_DMAC, "U2503" },
+     { "DMAC", TYPE_MCHP_DMAC_U2223, "U2223" },
+@@ -741,6 +743,26 @@ static void pic32cm_dmac_pulses(Pic32cmSocState *s)
+     }
+ }
+ 
++/* The CCL's sources: how many TCCs and AC comparator outputs there are */
++static void pic32cm_ccl_counts(Pic32cmSocState *s, DeviceState *ccl)
++{
++    uint32_t ntcc = 0, ncmp = 0;
++
++    for (unsigned i = 0; i < s->dev->ninstances; i++) {
++        ntcc += !strcmp(s->dev->instances[i].module, "TCC");
++    }
++    for (unsigned i = 0; i < s->dev->nsignals; i++) {
++        const MchpSignalInfo *sig = &s->dev->signals[i];
++
++        if (!strcmp(sig->instance, "AC") && !strcmp(sig->group, "CMP") &&
++            sig->index >= 0) {
++            ncmp = MAX(ncmp, (uint32_t)sig->index + 1);
++        }
++    }
++    qdev_prop_set_uint32(ccl, "tcc-count", ntcc);
++    qdev_prop_set_uint32(ccl, "ac-count", ncmp);
++}
++
+ static bool pic32cm_realize_periph(Pic32cmSocState *s, uint8_t rev,
+                                    Error **errp)
+ {
+@@ -768,6 +790,8 @@ static bool pic32cm_realize_periph(Pic32cmSocState *s, uint8_t rev,
+         } else if (object_dynamic_cast(OBJECT(dev), TYPE_MCHP_DMAC) ||
+                    object_dynamic_cast(OBJECT(dev), TYPE_MCHP_DMAC_U2223)) {
+             pic32cm_dmac_triggers(s, dev);
++        } else if (object_dynamic_cast(OBJECT(dev), TYPE_MCHP_CCL)) {
++            pic32cm_ccl_counts(s, dev);
+         } else if (!strcmp(info->module, "USB") && s->usb_chr &&
+                    object_property_find(OBJECT(dev), "chardev")) {
+             qdev_prop_set_chr(dev, "chardev", s->usb_chr);
+@@ -995,6 +1019,59 @@ static DeviceState *pic32cm_gate(Pic32cmSocState *s, const char *type,
+  * follows PORT "pmux-active". A signal on several pads fans out through a
+  * split-irq, and their "active" lines are OR-ed.
+  */
++/* A CCL input that copies a signal, and its "...-active" line (or NULL) */
++typedef struct Pic32cmTap {
++    qemu_irq in;
++    DeviceState *ccl;
++    const char *active;
++    int line;
++} Pic32cmTap;
++
++/*
++ * The CCL inputs that tap signal @sig of @dev: TCCm WO[0..2] (an instance
++ * with fewer outputs repeats them: TCC2's WO[2] is its WO[0], silicon),
++ * TCm WO[0], the AC's CMPm. The CCL reads them without a pad (silicon:
++ * cclprobe2).
++ */
++static unsigned pic32cm_ccl_taps(Pic32cmSocState *s, const MchpSignalInfo *sig,
++                                 DeviceState *dev, Pic32cmTap *tap)
++{
++    DeviceState *ccl = pic32cm_periph(s, "CCL");
++    unsigned m, n = 0;
++
++    if (!ccl || !object_dynamic_cast(OBJECT(ccl), TYPE_MCHP_CCL) ||
++        !object_dynamic_cast(OBJECT(dev), TYPE_MCHP_REGBLOCK)) {
++        return 0;
++    }
++    if (!strcmp(sig->group, "WO") && sscanf(sig->instance, "TCC%u", &m) == 1 &&
++        m < MCHP_CCL_TAP_TCC / 3) {
++        unsigned nout = MCHP_REGBLOCK(dev)->info->outputs ?: 8;
++
++        for (unsigned x = 0; x < 3; x++) {
++            if (x % nout == sig->index) {
++                tap[n++] = (Pic32cmTap) {
++                    qdev_get_gpio_in_named(ccl, MCHP_CCL_TAP_TCC_IN,
++                                           3 * m + x),
++                    ccl, MCHP_CCL_TAP_TCC_ACTIVE, 3 * m + x,
++                };
++            }
++        }
++    } else if (!strcmp(sig->group, "WO") && sig->index == 0 &&
++               sscanf(sig->instance, "TC%u", &m) == 1 &&
++               m < MCHP_CCL_TAP_TC) {
++        tap[n++] = (Pic32cmTap) {
++            qdev_get_gpio_in_named(ccl, MCHP_CCL_TAP_TC_IN, m),
++            ccl, MCHP_CCL_TAP_TC_ACTIVE, m,
++        };
++    } else if (!strcmp(sig->group, "CMP") && !strcmp(sig->instance, "AC") &&
++               sig->index < MCHP_CCL_TAP_AC) {
++        tap[n++] = (Pic32cmTap) {
++            qdev_get_gpio_in_named(ccl, MCHP_CCL_TAP_AC_IN, sig->index),
++        };
++    }
++    return n;
++}
++
+ static void pic32cm_connect_pads(Pic32cmSocState *s)
+ {
+     DeviceState *port = pic32cm_periph(s, "PORT");
+@@ -1009,8 +1086,10 @@ static void pic32cm_connect_pads(Pic32cmSocState *s)
+         g_autofree char *out = g_strdup_printf("pad-%s", grp);
+         g_autofree char *act = g_strdup_printf("pad-%s-active", grp);
+         g_autofree char *key = NULL;
+-        unsigned pins[16], n = 0;
++        unsigned pins[16], n = 0, ntap;
++        Pic32cmTap tap[3];
+         DeviceState *split = NULL, *or = NULL;
++        bool has_act;
+ 
+         if (!dev || sig->pmux < 0 || sig->pin < 0 || sig->index < 0 ||
+             !pic32cm_has_gpio(dev, out, false, sig->index)) {
+@@ -1031,21 +1110,31 @@ static void pic32cm_connect_pads(Pic32cmSocState *s)
+                 pins[n++] = o->pin * MCHP_PORT_FUNCS + o->pmux;
+             }
+         }
+-        if (n > 1) {
++        ntap = pic32cm_ccl_taps(s, sig, dev, tap);
++        has_act = pic32cm_has_gpio(dev, act, true, sig->index);
++        if (n + ntap > 1) {
+             g_autofree char *sname = g_strdup_printf("%s-split", key);
+ 
+-            split = pic32cm_gate(s, TYPE_SPLIT_IRQ, sname, n);
++            split = pic32cm_gate(s, TYPE_SPLIT_IRQ, sname, n + ntap);
+             qdev_connect_gpio_out_named(dev, out, sig->index,
+                                         qdev_get_gpio_in(split, 0));
+         }
+-        if (n > 1 && pic32cm_has_gpio(dev, act, true, sig->index)) {
++        if (n + ntap > 1 && has_act) {
+             g_autofree char *oname = g_strdup_printf("%s-active-or", key);
+ 
+-            or = pic32cm_gate(s, TYPE_OR_IRQ, oname, n);
++            or = pic32cm_gate(s, TYPE_OR_IRQ, oname, n + ntap);
+             qdev_connect_gpio_out(or, 0,
+                                   qdev_get_gpio_in_named(dev, act,
+                                                          sig->index));
+         }
++        for (unsigned k = 0; k < ntap; k++) {
++            qdev_connect_gpio_out(split, n + k, tap[k].in);
++            if (or && tap[k].ccl) {
++                qdev_connect_gpio_out_named(tap[k].ccl, tap[k].active,
++                                            tap[k].line,
++                                            qdev_get_gpio_in(or, n + k));
++            }
++        }
+         for (unsigned k = 0; k < n; k++) {
+             qemu_irq in = qdev_get_gpio_in_named(port, MCHP_PORT_PMUX_IN,
+                                                  pins[k]);
+@@ -1059,7 +1148,7 @@ static void pic32cm_connect_pads(Pic32cmSocState *s)
+                 qdev_connect_gpio_out_named(port, MCHP_PORT_PMUX_ACTIVE,
+                                             pins[k],
+                                             qdev_get_gpio_in(or, k));
+-            } else if (pic32cm_has_gpio(dev, act, true, sig->index)) {
++            } else if (has_act) {
+                 qdev_connect_gpio_out_named(port, MCHP_PORT_PMUX_ACTIVE,
+                                             pins[k],
+                                             qdev_get_gpio_in_named(dev, act,
+@@ -1070,6 +1159,64 @@ static void pic32cm_connect_pads(Pic32cmSocState *s)
+     }
+ }
+ 
++/*
++ * Pads to peripheral inputs: signal GROUP[n] of an instance whose model
++ * has the GPIO input "pad-<group>-in"[n] (lower case) takes PORT
++ * "func-in" of every pad and function that carry it: the pad's level
++ * while the pin is muxed to that function (an OR gate when several do).
++ * The EIC has its own path (pic32cm_connect_eic()).
++ */
++static void pic32cm_connect_pad_inputs(Pic32cmSocState *s)
++{
++    DeviceState *port = pic32cm_periph(s, "PORT");
++    g_autoptr(GHashTable) seen = g_hash_table_new_full(g_str_hash,
++                                                       g_str_equal, g_free,
++                                                       NULL);
++
++    for (unsigned i = 0; i < s->dev->nsignals && port; i++) {
++        const MchpSignalInfo *sig = &s->dev->signals[i];
++        DeviceState *dev = pic32cm_soc_periph(s, sig->instance);
++        g_autofree char *grp = g_ascii_strdown(sig->group, -1);
++        g_autofree char *name = g_strdup_printf("pad-%s-in", grp);
++        g_autofree char *key = NULL;
++        unsigned lines[16], n = 0;
++        qemu_irq in;
++
++        if (!dev || sig->pmux < 0 || sig->pin < 0 || sig->index < 0 ||
++            !pic32cm_has_gpio(dev, name, true, sig->index)) {
++            continue;
++        }
++        key = g_strdup_printf("%s.%s[%d]", sig->instance, grp, sig->index);
++        if (g_hash_table_contains(seen, key)) {
++            continue;
++        }
++        for (unsigned j = i; j < s->dev->nsignals && n < ARRAY_SIZE(lines);
++             j++) {
++            const MchpSignalInfo *o = &s->dev->signals[j];
++
++            if (!strcmp(o->instance, sig->instance) &&
++                !strcmp(o->group, sig->group) && o->index == sig->index &&
++                o->pmux >= 0 && o->pin >= 0) {
++                lines[n++] = o->pin * MCHP_PORT_FUNCS + o->pmux;
++            }
++        }
++        in = qdev_get_gpio_in_named(dev, name, sig->index);
++        if (n > 1) {
++            g_autofree char *oname = g_strdup_printf("%s-in-or", key);
++            DeviceState *or = pic32cm_gate(s, TYPE_OR_IRQ, oname, n);
++
++            qdev_connect_gpio_out(or, 0, in);
++            for (unsigned k = 0; k < n; k++) {
++                qdev_connect_gpio_out_named(port, MCHP_PORT_FUNC_IN, lines[k],
++                                            qdev_get_gpio_in(or, k));
++            }
++        } else {
++            qdev_connect_gpio_out_named(port, MCHP_PORT_FUNC_IN, lines[0], in);
++        }
++        g_hash_table_add(seen, g_steal_pointer(&key));
++    }
++}
++
+ /* Reset sources that RSTC records in RCAUSE */
+ static void pic32cm_connect_resets(Pic32cmSocState *s)
+ {
+@@ -1201,6 +1348,7 @@ static void pic32cm_soc_realize(DeviceState *dev, Error **errp)
+     pic32cm_connect_events(s);
+     pic32cm_dmac_pulses(s);
+     pic32cm_connect_pads(s);
++    pic32cm_connect_pad_inputs(s);
+     pic32cm_analog_pads(s);
+     s->armv7m.cpu->sleep_hook = pic32cm_sleep;
+     s->armv7m.cpu->sleep_opaque = s;
+diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
+index e703902..16fee7c 100644
+--- a/hw/gpio/mchp_port.c
++++ b/hw/gpio/mchp_port.c
+@@ -53,6 +53,8 @@ struct MchpPortState {
+ 
+     qemu_irq out[MCHP_PORT_NUM_PINS];
+     qemu_irq func_a[MCHP_PORT_NUM_PINS];
++    qemu_irq func_in[MCHP_PORT_NUM_PINS * MCHP_PORT_FUNCS];
++    uint8_t fin_sel[MCHP_PORT_NUM_PINS];    /* "func-in" line high: f + 1 */
+     /* External drivers, per group: the pads they drive and the levels */
+     uint32_t ext_mask[MCHP_PORT_GROUP_COUNT];
+     uint32_t ext_level[MCHP_PORT_GROUP_COUNT];
+@@ -289,9 +291,22 @@ static void mchp_port_update_func(MchpPortState *s, unsigned g)
+         unsigned n = g * MCHP_PORT_GROUP_PINS + pin;
+         int f = mchp_port_sel(s, g, pin);
+ 
++        int fin = f >= 0 && extract32(pads, pin, 1) ? f + 1 : 0;
++
+         if (extract32(changed, pin, 1)) {
+             qemu_set_irq(s->func_a[n], extract32(level, pin, 1));
+         }
++        if (fin != s->fin_sel[n]) {
++            /* "func-in": the pad's level on the line of its function */
++            if (s->fin_sel[n]) {
++                qemu_set_irq(s->func_in[n * MCHP_PORT_FUNCS +
++                                        s->fin_sel[n] - 1], 0);
++            }
++            s->fin_sel[n] = fin;
++            if (fin) {
++                qemu_set_irq(s->func_in[n * MCHP_PORT_FUNCS + fin - 1], 1);
++            }
++        }
+         if (f + 1 != s->sel[n]) {
+             /* Record first: the peripheral may drive the pad right away */
+             int old = s->sel[n] - 1;
+@@ -695,6 +710,8 @@ static void mchp_port_init(Object *obj)
+                              MCHP_PORT_NUM_PINS);
+     qdev_init_gpio_in_named(DEVICE(obj), mchp_port_set_input, MCHP_PORT_IN,
+                             MCHP_PORT_NUM_PINS);
++    qdev_init_gpio_out_named(DEVICE(obj), s->func_in, MCHP_PORT_FUNC_IN,
++                             MCHP_PORT_NUM_PINS * MCHP_PORT_FUNCS);
+     qdev_init_gpio_out_named(DEVICE(obj), s->func_a, MCHP_PORT_FUNC_A,
+                              MCHP_PORT_NUM_PINS);
+     qdev_init_gpio_in_named(DEVICE(obj), mchp_port_set_event,
+diff --git a/hw/misc/mchp_ccl.c b/hw/misc/mchp_ccl.c
+new file mode 100644
+index 0000000..3f4f0a5
+--- /dev/null
++++ b/hw/misc/mchp_ccl.c
+@@ -0,0 +1,599 @@
++/*
++ * Microchip configurable custom logic (CCL U2225)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Four LUTs and two sequencers, as PIC32CM MC00 silicon showed them
++ * (firmware/hello APP=cclprobe and cclprobe2, checked by ccl;
++ * docs/research/peripherals/ccl-u2225.md):
++ *
++ *   - OUTn = TRUTH[IN2 << 2 | IN1 << 1 | IN0], each input selected by
++ *     LUTCTRLn.INSELx: MASK 0; FEEDBACK the pair's sequencer output (0
++ *     without one); LINK the output of LUT n + 1 (LUT3: LUT0); EVENT a
++ *     strobe three GCLK_CCL edges after a rising edge of LUTn's event
++ *     input (falling with INVEI; LUTEI on); IO the pad of IN[3n + x]
++ *     while muxed to the CCL; AC comparator n % "ac-count"; TC the WO[0]
++ *     of TCn, ALTTC of TC(n + 1); TCC WO[x] of TCC(n % "tcc-count");
++ *     SERCOM reads 1 (idle, also while the SERCOM is off: the TX bit
++ *     stream is not modelled). The tapped waveform outputs need no pads.
++ *   - FILTSEL SYNCH passes a change at the second GCLK_CCL edge after it,
++ *     FILTER at the fourth if it held until then; EDGESEL turns a rising
++ *     edge into a one-cycle pulse.
++ *   - Sequencer N (SEQCTRLN) takes LUT 2N (D, J, S) and LUT 2N + 1 (G, K,
++ *     R): DFF and JK change at GCLK_CCL edges (J = K = 1 toggles at half
++ *     the clock), LATCH and RS at once (S = R = 1 sets); a disabled even
++ *     LUT clears it. OUT2N is then the sequencer's output, OUT2N+1 stays
++ *     the odd LUT's own.
++ *   - A disabled LUT or CCL outputs 0 and drives its pad to 0.
++ *     "lutout-event"[n] carries OUTn's level while LUTEO; the CCL tells
++ *     the TC and TCC when a LUT reads their outputs ("tap-*-active"), so
++ *     that they stop coasting over output changes.
++ *   - Registers: SEQCTRLx and CTRL.RUNSTDBY take writes only while
++ *     CTRL.ENABLE is 0 (overlay); LUTCTRLn's bits but ENABLE only while
++ *     CTRL.ENABLE is 0 and the LUT was disabled before the write, so a
++ *     write that enables a LUT can configure it and one that disables it
++ *     cannot.
++ *
++ * Not modelled: the SERCOM TX bit stream, ALT2TC and ASYNCEVENT (JH01
++ * INSEL 0xA, 0xB), standby (clocked LUTs forced to 0), SYNCH passing a
++ * pulse shorter than two edges, the sub-cycle width of an EVENT strobe
++ * (silicon: very short; here zero-width).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-clock.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/misc/mchp_ccl.h"
++#include "hw/mchp/gen/ccl_u2225.h"
++#include "migration/vmstate.h"
++
++#define CCL_NIN             12
++#define CCL_PASSES          8       /* LINK chains settle within this */
++#define CCL_SYNCH_EDGES     2
++#define CCL_FILTER_EDGES    4
++#define CCL_EVENT_EDGES     3
++
++enum {
++    INSEL_MASK, INSEL_FEEDBACK, INSEL_LINK, INSEL_EVENT, INSEL_IO, INSEL_AC,
++    INSEL_TC, INSEL_ALTTC, INSEL_TCC, INSEL_SERCOM,
++};
++
++enum { SEQ_DISABLE, SEQ_DFF, SEQ_JK, SEQ_LATCH, SEQ_RS };
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpCclState, MCHP_CCL)
++
++struct MchpCclState {
++    MchpRegBlock parent_obj;
++
++    qemu_irq pad_out[MCHP_CCL_LUTS];
++    qemu_irq event_out[MCHP_CCL_LUTS];
++    qemu_irq tc_active[MCHP_CCL_TAP_TC];
++    qemu_irq tcc_active[MCHP_CCL_TAP_TCC];
++    uint32_t tcc_count;
++    uint32_t ac_count;
++    QEMUTimer *timer;
++    bool busy, dirty;           /* re-entry through our own outputs */
++
++    /* Input lines */
++    uint16_t io;                /* IN0-11 pads */
++    uint8_t ev;                 /* event inputs */
++    uint8_t tc;                 /* TCm WO[0] */
++    uint16_t tcc;               /* TCCm WO[x] at 3m + x */
++    uint8_t ac;                 /* comparator outputs */
++    uint8_t strobe;             /* EVENT inputs reading 1 at this instant */
++    int64_t ev_at[MCHP_CCL_LUTS];       /* a strobe due, INT64_MAX: none */
++
++    /* Per-LUT pipeline */
++    uint8_t comb;               /* truth-table outputs */
++    uint8_t filt;               /* after FILTSEL */
++    int64_t filt_at[MCHP_CCL_LUTS];     /* filt takes comb then */
++    uint8_t pulse;              /* EDGESEL pulses */
++    int64_t pulse_end[MCHP_CCL_LUTS];
++    uint8_t seq;                /* sequencer outputs, bit N */
++    int64_t seq_at[2];          /* the next clocked sequencer update */
++    uint8_t out;                /* OUTn */
++
++    /* As last signalled */
++    uint8_t out_sig;
++    uint8_t evo_sig;
++    uint8_t tc_sig;
++    uint16_t tcc_sig;
++};
++
++static uint32_t ccl_reg(MchpCclState *s, hwaddr off, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, off, size);
++}
++
++static uint32_t ccl_lut(MchpCclState *s, unsigned n)
++{
++    return ccl_reg(s, A_MCHP_CCL_LUTCTRL + 4 * n, 4);
++}
++
++static unsigned ccl_seqsel(MchpCclState *s, unsigned pair)
++{
++    return FIELD_EX32(ccl_reg(s, A_MCHP_CCL_SEQCTRL + pair, 1),
++                      MCHP_CCL_SEQCTRL, SEQSEL);
++}
++
++static bool ccl_on(MchpCclState *s)
++{
++    return FIELD_EX32(ccl_reg(s, A_MCHP_CCL_CTRL, 1), MCHP_CCL_CTRL, ENABLE);
++}
++
++static bool ccl_lut_on(MchpCclState *s, unsigned n)
++{
++    return ccl_on(s) && FIELD_EX32(ccl_lut(s, n), MCHP_CCL_LUTCTRL, ENABLE);
++}
++
++/* The @k-th GCLK_CCL edge after @t; INT64_MAX while the clock stops */
++static int64_t ccl_edge(MchpCclState *s, int64_t t, unsigned k)
++{
++    Clock *clk = MCHP_REGBLOCK(s)->gclk;
++    int64_t p;
++
++    if (!clock_is_enabled(clk)) {
++        return INT64_MAX;
++    }
++    p = MAX(clock_ticks_to_ns(clk, 1), 1);
++    return (t / p + k) * p;
++}
++
++static bool ccl_input(MchpCclState *s, unsigned n, unsigned x)
++{
++    uint32_t ctrl = ccl_lut(s, n);
++
++    switch (extract32(ctrl, R_MCHP_CCL_LUTCTRL_INSEL0_SHIFT + 4 * x, 4)) {
++    case INSEL_FEEDBACK:
++        return extract32(s->seq, n / 2, 1);
++    case INSEL_LINK:
++        return extract32(s->out, (n + 1) % MCHP_CCL_LUTS, 1);
++    case INSEL_EVENT:
++        return FIELD_EX32(ctrl, MCHP_CCL_LUTCTRL, LUTEI) &&
++               extract32(s->strobe, n, 1);
++    case INSEL_IO:
++        return extract32(s->io, 3 * n + x, 1);
++    case INSEL_AC:
++        return s->ac_count && extract32(s->ac, n % s->ac_count, 1);
++    case INSEL_TC:
++        return extract32(s->tc, n, 1);
++    case INSEL_ALTTC:
++        return extract32(s->tc, n + 1, 1);
++    case INSEL_TCC:
++        return s->tcc_count &&
++               extract32(s->tcc, 3 * (n % s->tcc_count) + x, 1);
++    case INSEL_SERCOM:
++        return true;            /* idle */
++    default:
++        return false;           /* MASK, reserved */
++    }
++}
++
++/* LUTn after its filter and edge detector */
++static bool ccl_value(MchpCclState *s, unsigned n)
++{
++    uint32_t ctrl = ccl_lut(s, n);
++
++    if (FIELD_EX32(ctrl, MCHP_CCL_LUTCTRL, EDGESEL)) {
++        return extract32(s->pulse, n, 1);
++    }
++    return extract32(FIELD_EX32(ctrl, MCHP_CCL_LUTCTRL, FILTSEL) ?
++                     s->filt : s->comb, n, 1);
++}
++
++/* One step of LUTn's pipeline at @now */
++static void ccl_step_lut(MchpCclState *s, unsigned n, int64_t now)
++{
++    uint32_t ctrl = ccl_lut(s, n);
++    unsigned filtsel = FIELD_EX32(ctrl, MCHP_CCL_LUTCTRL, FILTSEL);
++    bool on = ccl_lut_on(s, n);
++    unsigned idx = 0;
++    bool comb, filt;
++
++    for (unsigned x = 0; x < 3; x++) {
++        idx |= ccl_input(s, n, x) << x;
++    }
++    comb = on && extract32(FIELD_EX32(ctrl, MCHP_CCL_LUTCTRL, TRUTH), idx, 1);
++    if (comb != extract32(s->comb, n, 1)) {
++        s->comb = deposit32(s->comb, n, 1, comb);
++        if (filtsel && on) {
++            s->filt_at[n] = ccl_edge(s, now, filtsel == 2 ? CCL_FILTER_EDGES
++                                                          : CCL_SYNCH_EDGES);
++        }
++    }
++    filt = extract32(s->filt, n, 1);
++    if (!filtsel || !on) {
++        filt = comb;
++        s->filt_at[n] = INT64_MAX;
++    } else if (s->filt_at[n] <= now) {
++        /* comb held since it last changed (a later change rescheduled) */
++        filt = comb;
++        s->filt_at[n] = INT64_MAX;
++    }
++    if (filt != extract32(s->filt, n, 1)) {
++        s->filt = deposit32(s->filt, n, 1, filt);
++        if (filt && on && FIELD_EX32(ctrl, MCHP_CCL_LUTCTRL, EDGESEL)) {
++            s->pulse |= BIT(n);
++            s->pulse_end[n] = ccl_edge(s, now, 1);
++        }
++    }
++    if (extract32(s->pulse, n, 1) && (!on || s->pulse_end[n] <= now)) {
++        s->pulse &= ~BIT(n);
++        s->pulse_end[n] = INT64_MAX;
++    }
++}
++
++/* The clocked sequencer's next state from D/J (@a), G/K (@b) and @q */
++static bool ccl_seq_next(unsigned mode, bool a, bool b, bool q)
++{
++    if (mode == SEQ_DFF) {
++        return b ? a : q;
++    }
++    return a && b ? !q : a ? true : b ? false : q;          /* JK */
++}
++
++static void ccl_step_seq(MchpCclState *s, unsigned pair, int64_t now)
++{
++    unsigned mode = ccl_seqsel(s, pair);
++    bool a = ccl_value(s, 2 * pair), b = ccl_value(s, 2 * pair + 1);
++    bool q = extract32(s->seq, pair, 1);
++
++    if (!ccl_lut_on(s, 2 * pair) || mode < SEQ_DFF || mode > SEQ_RS) {
++        q = false;
++        s->seq_at[pair] = INT64_MAX;
++    } else if (mode == SEQ_LATCH) {
++        q = b ? a : q;
++    } else if (mode == SEQ_RS) {
++        q = a ? true : b ? false : q;
++    } else {
++        if (s->seq_at[pair] <= now) {
++            q = ccl_seq_next(mode, a, b, q);        /* a clock edge */
++            s->seq_at[pair] = INT64_MAX;
++        }
++        if (ccl_seq_next(mode, a, b, q) == q) {
++            s->seq_at[pair] = INT64_MAX;
++        } else if (s->seq_at[pair] == INT64_MAX) {
++            s->seq_at[pair] = ccl_edge(s, now, 1);
++        }
++    }
++    s->seq = deposit32(s->seq, pair, 1, q);
++}
++
++static uint8_t ccl_outputs(MchpCclState *s)
++{
++    uint8_t out = 0;
++
++    for (unsigned n = 0; n < MCHP_CCL_LUTS; n++) {
++        bool v;
++
++        if (!ccl_lut_on(s, n)) {
++            v = false;
++        } else if (!(n & 1) && ccl_seqsel(s, n / 2)) {
++            v = extract32(s->seq, n / 2, 1);
++        } else {
++            v = ccl_value(s, n);
++        }
++        out |= v << n;
++    }
++    return out;
++}
++
++static void ccl_signal(MchpCclState *s)
++{
++    uint8_t evo = 0, tc = 0;
++    uint16_t tcc = 0;
++
++    for (unsigned n = 0; n < MCHP_CCL_LUTS; n++) {
++        uint32_t ctrl = ccl_lut(s, n);
++
++        if (FIELD_EX32(ctrl, MCHP_CCL_LUTCTRL, LUTEO)) {
++            evo |= s->out & BIT(n);
++        }
++        if (!ccl_lut_on(s, n)) {
++            continue;
++        }
++        for (unsigned x = 0; x < 3; x++) {
++            switch (extract32(ctrl, R_MCHP_CCL_LUTCTRL_INSEL0_SHIFT + 4 * x,
++                              4)) {
++            case INSEL_TC:
++                tc |= BIT(n);
++                break;
++            case INSEL_ALTTC:
++                tc |= BIT(n + 1);
++                break;
++            case INSEL_TCC:
++                if (s->tcc_count) {
++                    tcc |= BIT(3 * (n % s->tcc_count) + x);
++                }
++                break;
++            default:
++                break;
++            }
++        }
++    }
++    /* Taps first: a TC or TCC must stop coasting before we read it */
++    for (unsigned m = 0; m < MCHP_CCL_TAP_TC; m++) {
++        if (extract32(tc ^ s->tc_sig, m, 1)) {
++            qemu_set_irq(s->tc_active[m], extract32(tc, m, 1));
++        }
++    }
++    for (unsigned m = 0; m < MCHP_CCL_TAP_TCC; m++) {
++        if (extract32(tcc ^ s->tcc_sig, m, 1)) {
++            qemu_set_irq(s->tcc_active[m], extract32(tcc, m, 1));
++        }
++    }
++    s->tc_sig = tc;
++    s->tcc_sig = tcc;
++    for (unsigned n = 0; n < MCHP_CCL_LUTS; n++) {
++        if (extract32(s->out ^ s->out_sig, n, 1)) {
++            qemu_set_irq(s->pad_out[n], extract32(s->out, n, 1));
++        }
++        if (extract32(evo ^ s->evo_sig, n, 1)) {
++            qemu_set_irq(s->event_out[n], extract32(evo, n, 1));
++        }
++    }
++    s->out_sig = s->out;
++    s->evo_sig = evo;
++}
++
++static void ccl_eval(MchpCclState *s)
++{
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    int64_t next = INT64_MAX;
++
++    if (s->busy) {
++        s->dirty = true;
++        return;
++    }
++    s->busy = true;
++    do {
++        unsigned pass;
++
++        s->dirty = false;
++        for (unsigned n = 0; n < MCHP_CCL_LUTS; n++) {
++            if (s->ev_at[n] <= now) {
++                s->ev_at[n] = INT64_MAX;
++                s->strobe |= BIT(n);
++            }
++        }
++        for (pass = 0; pass < CCL_PASSES; pass++) {
++            uint8_t before = s->comb ^ (s->filt << 4);
++            uint8_t out;
++
++            for (unsigned n = 0; n < MCHP_CCL_LUTS; n++) {
++                ccl_step_lut(s, n, now);
++            }
++            for (unsigned pair = 0; pair < 2; pair++) {
++                ccl_step_seq(s, pair, now);
++            }
++            out = ccl_outputs(s);
++            if (out == s->out && before == (s->comb ^ (s->filt << 4))) {
++                break;
++            }
++            s->out = out;
++        }
++        if (pass == CCL_PASSES) {
++            qemu_log_mask(LOG_GUEST_ERROR, "%s: the LUTs form a loop with no "
++                          "clocked stage; outputs held\n",
++                          MCHP_REGBLOCK(s)->name);
++        }
++        ccl_signal(s);
++        if (s->strobe) {
++            s->strobe = 0;              /* the strobe lasts an instant */
++            s->dirty = true;
++        }
++    } while (s->dirty);
++    for (unsigned n = 0; n < MCHP_CCL_LUTS; n++) {
++        next = MIN(next, MIN(s->filt_at[n], s->pulse_end[n]));
++        next = MIN(next, s->ev_at[n]);
++    }
++    next = MIN(next, MIN(s->seq_at[0], s->seq_at[1]));
++    if (next == INT64_MAX) {
++        timer_del(s->timer);
++    } else {
++        timer_mod(s->timer, MAX(next, now));
++    }
++    s->busy = false;
++}
++
++static void ccl_tick(void *opaque)
++{
++    ccl_eval(opaque);
++}
++
++static void ccl_set_bit16(MchpCclState *s, uint16_t *bits, int n, int level)
++{
++    *bits = deposit32(*bits, n, 1, level > 0);
++    ccl_eval(s);
++}
++
++static void ccl_io_in(void *opaque, int n, int level)
++{
++    MchpCclState *s = opaque;
++
++    ccl_set_bit16(s, &s->io, n, level);
++}
++
++static void ccl_tcc_in(void *opaque, int n, int level)
++{
++    MchpCclState *s = opaque;
++
++    ccl_set_bit16(s, &s->tcc, n, level);
++}
++
++static void ccl_tc_in(void *opaque, int n, int level)
++{
++    MchpCclState *s = opaque;
++
++    s->tc = deposit32(s->tc, n, 1, level > 0);
++    ccl_eval(s);
++}
++
++static void ccl_ac_in(void *opaque, int n, int level)
++{
++    MchpCclState *s = opaque;
++
++    s->ac = deposit32(s->ac, n, 1, level > 0);
++    ccl_eval(s);
++}
++
++/* "lutin-event-in": an edge (rising, falling with INVEI) strobes later */
++static void ccl_event_in(void *opaque, int n, int level)
++{
++    MchpCclState *s = opaque;
++    uint32_t ctrl = ccl_lut(s, n);
++    bool old = extract32(s->ev, n, 1), lvl = level > 0;
++
++    s->ev = deposit32(s->ev, n, 1, lvl);
++    if (old != lvl && lvl != FIELD_EX32(ctrl, MCHP_CCL_LUTCTRL, INVEI) &&
++        FIELD_EX32(ctrl, MCHP_CCL_LUTCTRL, LUTEI) && ccl_lut_on(s, n)) {
++        int64_t at = ccl_edge(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL),
++                              CCL_EVENT_EDGES);
++
++        s->ev_at[n] = MIN(s->ev_at[n], at);
++        ccl_eval(s);
++    }
++}
++
++static void ccl_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                           unsigned idx, uint32_t old, uint32_t written,
++                           uint32_t we)
++{
++    MchpCclState *s = MCHP_CCL(rf->opaque);
++
++    if (ri->offset == A_MCHP_CCL_CTRL &&
++        (written & we & R_MCHP_CCL_CTRL_SWRST_MASK)) {
++        return;                 /* mchp-regblock resets the CCL next */
++    }
++    if (ri->offset == A_MCHP_CCL_LUTCTRL &&
++        (ccl_on(s) || (old & R_MCHP_CCL_LUTCTRL_ENABLE_MASK))) {
++        /* Only ENABLE takes (silicon) */
++        uint32_t val = mchp_regfile_get(rf, ri, idx);
++
++        mchp_regfile_set(rf, ri, idx,
++                         (old & ~R_MCHP_CCL_LUTCTRL_ENABLE_MASK) |
++                         (val & R_MCHP_CCL_LUTCTRL_ENABLE_MASK));
++    }
++    ccl_eval(s);
++}
++
++static void ccl_gclk_update(MchpRegBlock *rb, ClockEvent event)
++{
++    if (event == ClockUpdate) {
++        ccl_eval(MCHP_CCL(rb));
++    }
++}
++
++static void ccl_reset_hold(MchpRegBlock *rb)
++{
++    MchpCclState *s = MCHP_CCL(rb);
++
++    s->strobe = 0;
++    s->comb = s->filt = s->pulse = s->seq = s->out = 0;
++    for (unsigned n = 0; n < MCHP_CCL_LUTS; n++) {
++        s->ev_at[n] = s->filt_at[n] = s->pulse_end[n] = INT64_MAX;
++    }
++    s->seq_at[0] = s->seq_at[1] = INT64_MAX;
++    timer_del(s->timer);
++    ccl_signal(s);
++}
++
++static void ccl_init(Object *obj)
++{
++    MchpCclState *s = MCHP_CCL(obj);
++    DeviceState *dev = DEVICE(obj);
++
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ccl_tick, s);
++    for (unsigned n = 0; n < MCHP_CCL_LUTS; n++) {
++        s->ev_at[n] = s->filt_at[n] = s->pulse_end[n] = INT64_MAX;
++    }
++    s->seq_at[0] = s->seq_at[1] = INT64_MAX;
++    qdev_init_gpio_out_named(dev, s->pad_out, "pad-out", MCHP_CCL_LUTS);
++    qdev_init_gpio_in_named(dev, ccl_io_in, "pad-in-in", CCL_NIN);
++    qdev_init_gpio_out_named(dev, s->event_out, "lutout-event",
++                             MCHP_CCL_LUTS);
++    qdev_init_gpio_in_named(dev, ccl_event_in, "lutin-event-in",
++                            MCHP_CCL_LUTS);
++    qdev_init_gpio_in_named(dev, ccl_tc_in, MCHP_CCL_TAP_TC_IN,
++                            MCHP_CCL_TAP_TC);
++    qdev_init_gpio_out_named(dev, s->tc_active, MCHP_CCL_TAP_TC_ACTIVE,
++                             MCHP_CCL_TAP_TC);
++    qdev_init_gpio_in_named(dev, ccl_tcc_in, MCHP_CCL_TAP_TCC_IN,
++                            MCHP_CCL_TAP_TCC);
++    qdev_init_gpio_out_named(dev, s->tcc_active, MCHP_CCL_TAP_TCC_ACTIVE,
++                             MCHP_CCL_TAP_TCC);
++    qdev_init_gpio_in_named(dev, ccl_ac_in, MCHP_CCL_TAP_AC_IN,
++                            MCHP_CCL_TAP_AC);
++}
++
++static void ccl_finalize(Object *obj)
++{
++    timer_free(MCHP_CCL(obj)->timer);
++}
++
++static const Property ccl_properties[] = {
++    DEFINE_PROP_UINT32("tcc-count", MchpCclState, tcc_count, 0),
++    DEFINE_PROP_UINT32("ac-count", MchpCclState, ac_count, 0),
++};
++
++static const VMStateDescription vmstate_mchp_ccl = {
++    .name = TYPE_MCHP_CCL,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpCclState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_TIMER_PTR(timer, MchpCclState),
++        VMSTATE_UINT16(io, MchpCclState),
++        VMSTATE_UINT8(ev, MchpCclState),
++        VMSTATE_UINT8(tc, MchpCclState),
++        VMSTATE_UINT16(tcc, MchpCclState),
++        VMSTATE_UINT8(ac, MchpCclState),
++        VMSTATE_INT64_ARRAY(ev_at, MchpCclState, MCHP_CCL_LUTS),
++        VMSTATE_UINT8(comb, MchpCclState),
++        VMSTATE_UINT8(filt, MchpCclState),
++        VMSTATE_INT64_ARRAY(filt_at, MchpCclState, MCHP_CCL_LUTS),
++        VMSTATE_UINT8(pulse, MchpCclState),
++        VMSTATE_INT64_ARRAY(pulse_end, MchpCclState, MCHP_CCL_LUTS),
++        VMSTATE_UINT8(seq, MchpCclState),
++        VMSTATE_INT64_ARRAY(seq_at, MchpCclState, 2),
++        VMSTATE_UINT8(out, MchpCclState),
++        VMSTATE_UINT8(out_sig, MchpCclState),
++        VMSTATE_UINT8(evo_sig, MchpCclState),
++        VMSTATE_UINT8(tc_sig, MchpCclState),
++        VMSTATE_UINT16(tcc_sig, MchpCclState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void ccl_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->vmsd = &vmstate_mchp_ccl;
++    device_class_set_props(dc, ccl_properties);
++    c->post_write = ccl_post_write;
++    c->reset_hold = ccl_reset_hold;
++    c->gclk_update = ccl_gclk_update;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_ccl_types[] = {
++    {
++        .name = TYPE_MCHP_CCL,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpCclState),
++        .instance_init = ccl_init,
++        .instance_finalize = ccl_finalize,
++        .class_init = ccl_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_ccl_types)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 48dcfce..66771af 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -40,6 +40,7 @@ system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files(
+   'mchp_edbg_dgi.c',
+   'mchp_eic.c',
+   'mchp_dac.c',
++  'mchp_ccl.c',
+   'mchp_dac_u2214.c',
+   'mchp_evsys.c',
+   'mchp_evsys5x.c',
+diff --git a/include/hw/gpio/mchp_port.h b/include/hw/gpio/mchp_port.h
+index 5f30a8e..59f396f 100644
+--- a/include/hw/gpio/mchp_port.h
++++ b/include/hw/gpio/mchp_port.h
+@@ -18,6 +18,9 @@
+  *   "func-a"[n]    the level of pad n while the pin is muxed to peripheral
+  *                  function A (PINCFG.PMUXEN, PMUX = 0: EIC EXTINT/NMI),
+  *                  else 0; the SoC wires it to the EIC
++ *   "func-in"[n * 16 + f]  the level of pad n while the pin is muxed to
++ *                  function f, else 0: a peripheral's input from the pad;
++ *                  the SoC wires it to the models that take that signal
+  *   "ev-event-in"[4] in: EVSYS event inputs (EVCTRL PORTEIn)
+  *   "pmux-in"[n * 16 + f]  in: peripheral function f (PMUX value) drives
+  *                  pad n: 0 or 1, -1 when it does not drive, or
+@@ -57,6 +60,7 @@
+ #define MCHP_PORT_OUT "port-out"
+ #define MCHP_PORT_IN "port-in"
+ #define MCHP_PORT_FUNC_A "func-a"
++#define MCHP_PORT_FUNC_IN "func-in"
+ #define MCHP_PORT_EVENT_IN "ev-event-in"
+ #define MCHP_PORT_EVENTS 4
+ #define MCHP_PORT_PMUX_IN "pmux-in"
+diff --git a/include/hw/mchp/gen/atsame51j20a/ccl_u2225.h b/include/hw/mchp/gen/atsame51j20a/ccl_u2225.h
+index d462c7b..2463974 100644
+--- a/include/hw/mchp/gen/atsame51j20a/ccl_u2225.h
++++ b/include/hw/mchp/gen/atsame51j20a/ccl_u2225.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/ccl_u2225.yaml (sha1 46346d17e568)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,16 +23,17 @@ static const MchpRegInfo atsame51j20a_ccl_regs[] = {
+     {
+         .name = "CTRL", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x43, .wmask = 0x43, .rdz = 0x01,
+-        .flags = 0,
++        .enprot = 0x40, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "SEQCTRL", .offset = 0x04, .size = 1, .count = 2, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
++        .enprot = 0x0F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "LUTCTRL", .offset = 0x08, .size = 4, .count = 4, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFF7FFFB2,
+-        .wmask = 0xFF7FFFB2, .flags = 0,
++        .wmask = 0xFF7FFFB2, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+ };
+ #define ATSAME51J20A_CCL_NREGS 3
+diff --git a/include/hw/mchp/gen/ccl_u2225.h b/include/hw/mchp/gen/ccl_u2225.h
+index 5f6dfeb..276db61 100644
+--- a/include/hw/mchp/gen/ccl_u2225.h
++++ b/include/hw/mchp/gen/ccl_u2225.h
+@@ -10,7 +10,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/ccl_u2225.yaml (sha1 46346d17e568)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/ccl_u2225.h b/include/hw/mchp/gen/pic32cm1216mc00048/ccl_u2225.h
+index a97a879..26ad8ac 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/ccl_u2225.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/ccl_u2225.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/ccl_u2225.yaml (sha1 46346d17e568)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,16 +23,17 @@ static const MchpRegInfo pic32cm1216mc00048_ccl_regs[] = {
+     {
+         .name = "CTRL", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x43, .wmask = 0x43, .rdz = 0x01,
+-        .flags = 0,
++        .enprot = 0x40, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "SEQCTRL", .offset = 0x04, .size = 1, .count = 2, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
++        .enprot = 0x0F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "LUTCTRL", .offset = 0x08, .size = 4, .count = 4, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFF7FFFB2,
+-        .wmask = 0xFF7FFFB2, .flags = 0,
++        .wmask = 0xFF7FFFB2, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+ };
+ #define PIC32CM1216MC00048_CCL_NREGS 3
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/ccl_u2225.h b/include/hw/mchp/gen/pic32cm5164jh01100/ccl_u2225.h
+index ec85b9b..cc05201 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/ccl_u2225.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/ccl_u2225.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/ccl_u2225.yaml (sha1 46346d17e568)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,16 +23,17 @@ static const MchpRegInfo pic32cm5164jh01100_ccl_regs[] = {
+     {
+         .name = "CTRL", .offset = 0x00, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x43, .wmask = 0x43, .rdz = 0x01,
+-        .flags = 0,
++        .enprot = 0x40, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "SEQCTRL", .offset = 0x04, .size = 1, .count = 2, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
++        .enprot = 0x0F, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "LUTCTRL", .offset = 0x08, .size = 4, .count = 4, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xFF7FFFB2,
+-        .wmask = 0xFF7FFFB2, .flags = 0,
++        .wmask = 0xFF7FFFB2, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+ };
+ #define PIC32CM5164JH01100_CCL_NREGS 3
+diff --git a/include/hw/misc/mchp_ccl.h b/include/hw/misc/mchp_ccl.h
+new file mode 100644
+index 0000000..d59b0a8
+--- /dev/null
++++ b/include/hw/misc/mchp_ccl.h
+@@ -0,0 +1,41 @@
++/*
++ * Microchip configurable custom logic (CCL U2225)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * An mchp-regblock (see mchp_ccl.c). GPIO lines:
++ *   "pad-out"[4]         out: OUTn on its pads (0 while disabled)
++ *   "pad-in-in"[12]      in: the pad of IN[x] while muxed to the CCL
++ *   "lutout-event"[4]    out: OUTn's level while LUTCTRLn.LUTEO
++ *   "lutin-event-in"[4]  in: LUTn's event input
++ *   "tap-tc"[8]          in: TCm's WO[0] (INSEL TC, ALTTC)
++ *   "tap-tc-active"[8]   out: 1 while a LUT reads TCm's WO[0]
++ *   "tap-tcc"[12]        in: TCCm's WO[x] at 3m + x (INSEL TCC)
++ *   "tap-tcc-active"[12] out: 1 while a LUT reads it
++ *   "tap-ac"[4]          in: comparator m's output (INSEL AC)
++ * Properties "tcc-count" and "ac-count": the TCC instances and comparator
++ * outputs the SoC wired, for LUTn's TCC(n % count) and AC(n % count).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_MCHP_CCL_H
++#define HW_MISC_MCHP_CCL_H
++
++#include "hw/misc/mchp_regblock.h"
++
++#define TYPE_MCHP_CCL "mchp-ccl"
++
++#define MCHP_CCL_LUTS 4
++#define MCHP_CCL_TAP_TC 8
++#define MCHP_CCL_TAP_TCC 12
++#define MCHP_CCL_TAP_AC 4
++
++#define MCHP_CCL_TAP_TC_IN "tap-tc"
++#define MCHP_CCL_TAP_TC_ACTIVE "tap-tc-active"
++#define MCHP_CCL_TAP_TCC_IN "tap-tcc"
++#define MCHP_CCL_TAP_TCC_ACTIVE "tap-tcc-active"
++#define MCHP_CCL_TAP_AC_IN "tap-ac"
++
++#endif /* HW_MISC_MCHP_CCL_H */
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index d6ede02..e3d3649 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -253,7 +253,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-nvmctrl-test', 'pic32cm-wdt-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-dmac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-adc-test', 'pic32cm-dac-test', 'pic32cm-pm-test', 'pic32cm-click-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-nvmctrl-test', 'pic32cm-wdt-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-dmac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-adc-test', 'pic32cm-dac-test', 'pic32cm-pm-test', 'pic32cm-ccl-test', 'pic32cm-click-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-ccl-test.c b/tests/qtest/pic32cm-ccl-test.c
+new file mode 100644
+index 0000000..35e977a
+--- /dev/null
++++ b/tests/qtest/pic32cm-ccl-test.c
+@@ -0,0 +1,171 @@
++/*
++ * QTest for the CCL of the PIC32CM MC00 (pic32cm-mc00-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The mchp-ccl model through its lines: the truth table on pad inputs,
++ * the LUTCTRL protection, LINK, the filter's GCLK edges and a clocked
++ * sequencer. firmware/hello APP=ccl checks the same against silicon.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++
++#define MACHINE         "-M pic32cm-mc00-cpro"
++#define CCL             0x42005C00
++#define CCL_PATH        "/machine/soc/ccl"
++#define GCLK_PCHCTRL    0x40001C80
++#define CCL_GCLK_ID     32
++#define R_CTRL          0x00
++#define R_SEQCTRL(n)    (0x04 + (n))
++#define R_LUTCTRL(n)    (0x08 + 4 * (n))
++#define C_SWRST         0x01
++#define C_ENABLE        0x02
++#define L_ENABLE        BIT(1)
++#define L_SYNCH         (1 << 4)
++#define L_FILTER        (2 << 4)
++#define LINK            2
++#define IO              4
++#define DFF             1
++#define CYCLE_NS        250             /* GCLK0: 4 MHz */
++
++static uint32_t lut(uint32_t in0, uint32_t in1, uint32_t in2, uint32_t truth,
++                    uint32_t extra)
++{
++    return (in0 << 8) | (in1 << 12) | (in2 << 16) | (truth << 24) | extra;
++}
++
++static QTestState *ccl_init(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, GCLK_PCHCTRL + 4 * CCL_GCLK_ID, 0x40);
++    qtest_irq_intercept_out_named(qts, CCL_PATH, "pad-out");
++    return qts;
++}
++
++static void io(QTestState *qts, int n, int level)
++{
++    qtest_set_irq_in(qts, CCL_PATH, "pad-in-in", n, level);
++}
++
++/* OUTn = TRUTH[IN2 IN1 IN0], IN0 = IN[3n] */
++static void test_truth(void)
++{
++    QTestState *qts = ccl_init();
++
++    qtest_writel(qts, CCL + R_LUTCTRL(1), lut(IO, IO, IO, 0x96, L_ENABLE));
++    qtest_writeb(qts, CCL + R_CTRL, C_ENABLE);
++    for (unsigned v = 0; v < 8; v++) {
++        io(qts, 3, v & 1);
++        io(qts, 4, (v >> 1) & 1);
++        io(qts, 5, (v >> 2) & 1);
++        g_assert_cmpint(qtest_get_irq(qts, 1), ==, (0x96 >> v) & 1);
++    }
++    qtest_quit(qts);
++}
++
++/* LUTCTRL takes its other bits only with the CCL and the LUT off */
++static void test_protection(void)
++{
++    QTestState *qts = ccl_init();
++
++    qtest_writel(qts, CCL + R_LUTCTRL(0), lut(0, 0, 0, 0x11, L_ENABLE));
++    qtest_writel(qts, CCL + R_LUTCTRL(0), lut(0, 0, 0, 0x22, 0));
++    g_assert_cmphex(qtest_readl(qts, CCL + R_LUTCTRL(0)), ==, 0x11000000);
++    qtest_writel(qts, CCL + R_LUTCTRL(0), lut(0, 0, 0, 0x33, L_ENABLE));
++    g_assert_cmphex(qtest_readl(qts, CCL + R_LUTCTRL(0)), ==, 0x33000002);
++    qtest_writeb(qts, CCL + R_CTRL, C_ENABLE);
++    qtest_writel(qts, CCL + R_LUTCTRL(0), lut(0, 0, 0, 0x44, 0));
++    g_assert_cmphex(qtest_readl(qts, CCL + R_LUTCTRL(0)), ==, 0x33000000);
++    qtest_writeb(qts, CCL + R_SEQCTRL(0), 2);
++    g_assert_cmphex(qtest_readb(qts, CCL + R_SEQCTRL(0)), ==, 0);
++    qtest_quit(qts);
++}
++
++/* LINK: LUT3 reads LUT0, LUT0 reads LUT1 */
++static void test_link(void)
++{
++    QTestState *qts = ccl_init();
++
++    qtest_writel(qts, CCL + R_LUTCTRL(1), lut(IO, 0, 0, 0xAA, L_ENABLE));
++    qtest_writel(qts, CCL + R_LUTCTRL(0), lut(LINK, 0, 0, 0xAA, L_ENABLE));
++    qtest_writel(qts, CCL + R_LUTCTRL(3), lut(LINK, 0, 0, 0x55, L_ENABLE));
++    qtest_writeb(qts, CCL + R_CTRL, C_ENABLE);
++    io(qts, 3, 1);
++    g_assert_cmpint(qtest_get_irq(qts, 0), ==, 1);
++    g_assert_cmpint(qtest_get_irq(qts, 3), ==, 0);
++    io(qts, 3, 0);
++    g_assert_cmpint(qtest_get_irq(qts, 0), ==, 0);
++    g_assert_cmpint(qtest_get_irq(qts, 3), ==, 1);
++    qtest_quit(qts);
++}
++
++/* SYNCH passes a change at the second GCLK edge, FILTER at the fourth */
++static void test_filter(void)
++{
++    QTestState *qts = ccl_init();
++
++    qtest_writel(qts, CCL + R_LUTCTRL(1),
++                 lut(IO, 0, 0, 0xAA, L_ENABLE | L_SYNCH));
++    qtest_writel(qts, CCL + R_LUTCTRL(2),
++                 lut(IO, 0, 0, 0xAA, L_ENABLE | L_FILTER));
++    qtest_writeb(qts, CCL + R_CTRL, C_ENABLE);
++    qtest_clock_step(qts, CYCLE_NS / 2);        /* mid-cycle */
++    io(qts, 3, 1);
++    io(qts, 6, 1);
++    qtest_clock_step(qts, CYCLE_NS);            /* first edge passed */
++    g_assert_cmpint(qtest_get_irq(qts, 1), ==, 0);
++    qtest_clock_step(qts, CYCLE_NS);            /* second */
++    g_assert_cmpint(qtest_get_irq(qts, 1), ==, 1);
++    g_assert_cmpint(qtest_get_irq(qts, 2), ==, 0);
++    qtest_clock_step(qts, 2 * CYCLE_NS);        /* fourth */
++    g_assert_cmpint(qtest_get_irq(qts, 2), ==, 1);
++    /* a two-cycle pulse does not pass FILTER */
++    io(qts, 6, 0);
++    qtest_clock_step(qts, 2 * CYCLE_NS);
++    io(qts, 6, 1);
++    qtest_clock_step(qts, 8 * CYCLE_NS);
++    g_assert_cmpint(qtest_get_irq(qts, 2), ==, 1);
++    qtest_quit(qts);
++}
++
++/* DFF: Q takes D at the GCLK edge after G rises; OUT1 stays the odd LUT */
++static void test_dff(void)
++{
++    QTestState *qts = ccl_init();
++
++    qtest_writeb(qts, CCL + R_SEQCTRL(0), DFF);
++    qtest_writel(qts, CCL + R_LUTCTRL(1), lut(IO, 0, 0, 0xAA, L_ENABLE));
++    qtest_writel(qts, CCL + R_LUTCTRL(0), lut(IO, 0, 0, 0xAA, L_ENABLE));
++    qtest_writeb(qts, CCL + R_CTRL, C_ENABLE);
++    qtest_clock_step(qts, CYCLE_NS / 2);
++    io(qts, 0, 1);                              /* D */
++    io(qts, 3, 1);                              /* G */
++    g_assert_cmpint(qtest_get_irq(qts, 0), ==, 0);
++    g_assert_cmpint(qtest_get_irq(qts, 1), ==, 1);
++    qtest_clock_step(qts, CYCLE_NS);
++    g_assert_cmpint(qtest_get_irq(qts, 0), ==, 1);
++    io(qts, 3, 0);                              /* hold */
++    io(qts, 0, 0);
++    qtest_clock_step(qts, 2 * CYCLE_NS);
++    g_assert_cmpint(qtest_get_irq(qts, 0), ==, 1);
++    qtest_writel(qts, CCL + R_LUTCTRL(0), lut(IO, 0, 0, 0xAA, 0));
++    g_assert_cmpint(qtest_get_irq(qts, 0), ==, 0);   /* cleared */
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++    qtest_add_func("pic32cm-ccl/truth", test_truth);
++    qtest_add_func("pic32cm-ccl/protection", test_protection);
++    qtest_add_func("pic32cm-ccl/link", test_link);
++    qtest_add_func("pic32cm-ccl/filter", test_filter);
++    qtest_add_func("pic32cm-ccl/dff", test_dff);
++    return g_test_run();
++}
+-- 
+2.53.0.windows.2
+

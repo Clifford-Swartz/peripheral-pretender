@@ -11059,7 +11059,16 @@
    "version": "2.0.0",
    "caption": "Configurable Custom Logic",
    "core": false,
-   "overlay": null,
+   "overlay": {
+    "file": "overlays/ccl_u2225.yaml",
+    "sha1": "46346d17e568370c689efb039cc4d78be3f59ffa",
+    "status": "applied",
+    "versions": [
+     "1.0.1",
+     "1.1.0",
+     "2.0.0"
+    ]
+   },
    "size": 24,
    "selector": null,
    "default_view": "",
@@ -11084,11 +11093,14 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 1,
-       "enprot": 0,
+       "enprot": 64,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Control",
@@ -11155,8 +11167,18 @@
        "provenance": [
         [
          "rdz",
-         "heuristic",
-         "SWRST self-clearing"
+         "overlay",
+         "self_clearing SWRST"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
+         "enprot",
+         "overlay",
+         "all except SWRST, ENABLE = 0x40"
         ]
        ]
       },
@@ -11174,11 +11196,14 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 15,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "SEQ Control x",
@@ -11219,7 +11244,18 @@
          ]
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
+         "enprot",
+         "overlay",
+         "all = 0xF"
+        ]
+       ]
       },
       {
        "name": "LUTCTRL",
@@ -11239,7 +11275,10 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC",
+        "HOOK_POST_WRITE"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "LUT Control x",
@@ -11580,7 +11619,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       }
      ],
      "reset_overrides": [],

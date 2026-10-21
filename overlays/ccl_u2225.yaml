@@ -1,0 +1,22 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for CCL U2225 (configurable custom logic: four LUTs,
+# two sequencers). The register layout is the same on the PIC32CM MC00
+# (1.0.1), the SAM E51 (1.1.0) and the PIC32CM JH01 (2.0.0); the
+# mchp-ccl model takes the per-device INSEL wiring from the SoC.
+ip: CCL
+id: U2225
+versions: ["1.0.1", "1.1.0", "2.0.0"]
+references:
+  - "PIC32CM MC00 data sheet DS60001638E, chapter 35 (CCL)"
+  - "PIC32CM MC00 silicon, firmware/hello APP=cclprobe, cclprobe2 (2026-10-21)"
+registers:
+  CTRL:
+    pac_protected: true
+    enable_protected: {all_except: [SWRST, ENABLE]}   # RUNSTDBY (silicon)
+    self_clearing: [SWRST]                            # reads 0 at once
+    hooks: [post_write]
+  SEQCTRL: {pac_protected: true, enable_protected: all, hooks: [post_write]}
+  # LUTCTRLn's bits but ENABLE take a write only while CTRL.ENABLE is 0 and
+  # the LUT was disabled before it (silicon): the model's post_write hook
+  LUTCTRL: {pac_protected: true, hooks: [post_write]}

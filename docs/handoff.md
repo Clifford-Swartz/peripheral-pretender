@@ -627,9 +627,16 @@ on demand); a TC/TCC resumes where it stopped; only what still runs wakes the co
 `sleep` and qtest `pic32cm-pm-test`. A pp-qemu hook in target/arm (`ARMCPU.sleep_hook`) tells the
 SoC about WFI. Note `pm-u2240.md`, playbook `peripherals/pm.md`.
 
+**Pad input path and CCL** (patch 0074): PORT "func-in" gives any model a pad's level while
+the pin is muxed to its function (`pic32cm_connect_pad_inputs()`, inputs named
+"pad-<group>-in"); the CCL model (four LUTs, two sequencers, filters, edge detectors, events, the
+TC/TCC/AC taps) follows `cclprobe` and `cclprobe2` on silicon, checked by `ccl` and qtest
+`pic32cm-ccl-test`. Silicon's LUTCTRL protection is stricter than the data sheet says. Note
+`ccl-u2225.md` sections 8-9, playbook `peripherals/ccl.md`.
+
 Next on the MC00, in order (the owner's list of 2026-10-21):
 
-1. A generic **pad-to-peripheral input path**, then **PDEC** and **CCL**.
+1. **PDEC** (the pad input path is ready for its QDI pins).
 2. The long tail: MTB, PAC protection, DSU CRC32, SERCOM client modes, clock failure detection,
    BOD, RTC tamper, PORT sampling, MCLK gating.
 
