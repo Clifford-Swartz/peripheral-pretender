@@ -1,0 +1,1491 @@
+From dae6b01daa535fb2ed98aa8ae06092c90321b5fc Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 21 Oct 2026 13:29:49 -0700
+Subject: [PATCH] hw/arm: PIC32CM standby: GCLK channel gating, CPU clock, WFI
+ hook
+
+Standby as PIC32CM MC00 silicon showed it (firmware/hello
+APP=sleepprobe and sleepprobe2, checked by sleep): a WFI with
+PM.SLEEPCFG = STANDBY stops every GCLK peripheral channel that no
+enabled peripheral with RUNSTDBY asks for, and the CPU clock; sources
+and generators run on demand whatever their own RUNSTDBY, and every
+peripheral on a running channel counts, RUNSTDBY or not. What still
+runs (RTC, WDT, EIC, peripherals with RUNSTDBY) wakes the core.
+
+- target/arm: ARMCPU.sleep_hook, called with the BQL when WFI halts
+  the CPU and when arm_cpu_exec_halt() leaves that halt.
+- The SoC hooks it: it reads SLEEPCFG, finds the channels to keep from
+  each instance's RUNSTDBY and ENABLE (new MchpInstanceInfo standby_*
+  fields, generated from the ATDF's CTRLA/CTRL), and calls
+  mchp_gclk_set_standby() and mchp_mclk_set_standby(). Channels with no
+  such instance keep running. A "standby" QOM property does the same
+  for tests; a reset leaves standby.
+- armv7m_systick: a stopped CPU clock holds the count (ptimer_stop)
+  instead of setting a zero period, which disabled the timer for good;
+  cpuclk changes are ignored while SysTick runs on refclk, as the
+  comment there intended.
+- TC and TCC fold the ticks since their last event into the count when
+  their clock changes rate, and a clock coming back from 0 restarts
+  the time base at that moment (the TC used to count the whole standby
+  on waking up).
+
+qtest pic32cm-pm-test: channels, a shared channel, SysTick.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst   |  11 +-
+ hw/arm/pic32cm_soc.c                    | 104 +++++++++++++++++++
+ hw/misc/mchp_clock.c                    |  45 ++++++--
+ hw/misc/mchp_sysctrl.c                  |   5 +-
+ hw/timer/armv7m_systick.c               |  14 ++-
+ hw/timer/mchp_tc.c                      |  23 ++++-
+ hw/timer/mchp_tcc.c                     |  17 +++-
+ include/hw/arm/atsame51j20a_gen.h       |  44 ++++++--
+ include/hw/arm/pic32cm1216mc00048_gen.h |  39 +++++--
+ include/hw/arm/pic32cm5164jh01100_gen.h |  52 +++++++---
+ include/hw/arm/pic32cm_soc.h            |   1 +
+ include/hw/avr/avr64ea48_gen.h          |  33 ++++--
+ include/hw/mchp/mchp_device.h           |   8 ++
+ include/hw/misc/mchp_sysctrl.h          |  14 ++-
+ target/arm/cpu.c                        |  20 ++++
+ target/arm/cpu.h                        |   8 ++
+ target/arm/internals.h                  |   3 +
+ target/arm/tcg/op_helper.c              |   1 +
+ tests/qtest/meson.build                 |   2 +-
+ tests/qtest/pic32cm-pm-test.c           | 130 ++++++++++++++++++++++++
+ 20 files changed, 510 insertions(+), 64 deletions(-)
+ create mode 100644 tests/qtest/pic32cm-pm-test.c
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index 00204e1..9f828cd 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -55,7 +55,12 @@ Supported devices
+   CLEAR key (also while the WDT is disabled) or a clear in the closed
+   window resets the system. Reserved PER, WINDOW and EWOFFSET values count
+   as 16384 clocks. ALWAYSON holds through system resets.
+-- PM: SLEEPCFG and STDBYCFG
++- PM: SLEEPCFG and STDBYCFG. A WFI with SLEEPCFG = STANDBY stops every
++  GCLK peripheral channel that no enabled peripheral with RUNSTDBY asks
++  for, and the CPU clock with SysTick, as a PIC32CM MC00 does (a channel
++  is gated, so everything on a running channel counts; sources and
++  generators run on demand); what still runs wakes the core. The SoC's
++  ``standby`` property does the same without a WFI.
+ - PAC: WRCTRL bookkeeping in STATUSx with the data sheet's error rules
+ - DSU: device ID (revision set by the SoC property ``silicon-rev``), the
+   DSU_EXT view at 0x41002100 and the CoreSight ROM table
+@@ -180,8 +185,8 @@ Missing devices
+   EVACT0 STAMP, the fault capture modes but CAPT, the ALTFAULT source,
+   RAMP2CS, CTRLBSET.IDXCMD, the outputs' start latency and the STATUS
+   read lag.
+-- PAC write protection, DSU CRC32 and chip erase, sleep modes and every other
+-  peripheral behaviour (CCL, PDEC, CAN, ...). DAC START events.
++- PAC write protection, DSU CRC32 and chip erase, SLEEPONEXIT and
++  STDBYCFG, and every other peripheral behaviour (CCL, PDEC, CAN, ...).
+ 
+ Board and SoC properties
+ """"""""""""""""""""""""
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index e7e0fef..e501d6e 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -43,6 +43,7 @@
+ #include "hw/ssi/mchp_qspi.h"
+ #include "system/address-spaces.h"
+ #include "target/arm/cpu-qom.h"
++#include "target/arm/cpu.h"
+ 
+ /*
+  * The QOM type modelling each ATDF module (and IP id, where devices carry
+@@ -1083,6 +1084,98 @@ static void pic32cm_connect_resets(Pic32cmSocState *s)
+                                R_MCHP_RSTC_RCAUSE_WDT_SHIFT));
+ }
+ 
++/*
++ * Standby (PM.SLEEPCFG = STANDBY at a WFI), as PIC32CM MC00 silicon showed
++ * it (firmware/hello APP=sleepprobe, sleepprobe2): a GCLK channel keeps
++ * running only while one of its peripherals asks for it, an enabled one
++ * with RUNSTDBY (then every peripheral on that channel counts, RUNSTDBY or
++ * not); the generators and oscillators run on demand whatever their own
++ * RUNSTDBY says; the CPU clock and so SysTick stop. Channels with no
++ * instance that has a RUNSTDBY bit (EIC, EVSYS, FREQM, the FDPLL96M
++ * reference) keep running, as do the RTC and the WDT on their 32 kHz
++ * clocks: they and the peripherals still running wake the core.
++ */
++#define PIC32CM_PM_SLEEPCFG     0x01
++#define PIC32CM_PM_STANDBY      4
++
++/* Instance @i asks for its GCLK channels in standby */
++static bool pic32cm_runs_in_standby(Pic32cmSocState *s, unsigned i)
++{
++    const MchpInstanceInfo *info = &s->dev->instances[i];
++    uint32_t both = info->standby_mask | info->standby_enable;
++    uint32_t v;
++
++    if (!info->standby_mask ||
++        !object_dynamic_cast(OBJECT(s->periph[i]), TYPE_MCHP_REGBLOCK)) {
++        return true;            /* no RUNSTDBY: its clock is not ours to stop */
++    }
++    v = mchp_regfile_peek(&MCHP_REGBLOCK(s->periph[i])->rf,
++                          info->standby_offset,
++                          both > 0xFFFF ? 4 : both > 0xFF ? 2 : 1);
++    return (v & info->standby_mask) && (v & info->standby_enable);
++}
++
++/* The GCLK channels that keep running in standby */
++static uint64_t pic32cm_standby_channels(Pic32cmSocState *s)
++{
++    uint64_t used = 0, keep = 0;
++
++    for (unsigned i = 0; i < s->dev->ninstances; i++) {
++        const MchpInstanceInfo *info = &s->dev->instances[i];
++        int16_t ch[2] = { info->gclk_core, info->gclk_slow };
++
++        if (!s->periph[i]) {
++            continue;
++        }
++        for (unsigned k = 0; k < ARRAY_SIZE(ch); k++) {
++            if (ch[k] < 0 || ch[k] >= 64) {
++                continue;
++            }
++            used |= BIT_ULL(ch[k]);
++            if (pic32cm_runs_in_standby(s, i)) {
++                keep |= BIT_ULL(ch[k]);
++            }
++        }
++    }
++    return keep | ~used;
++}
++
++static void pic32cm_set_standby(Pic32cmSocState *s, bool standby)
++{
++    DeviceState *gclk = pic32cm_periph(s, "GCLK");
++    DeviceState *mclk = pic32cm_periph(s, "MCLK");
++
++    if (standby == s->standby || !gclk || !mclk) {
++        return;
++    }
++    s->standby = standby;
++    mchp_gclk_set_standby(gclk, standby,
++                          standby ? pic32cm_standby_channels(s) : 0);
++    mchp_mclk_set_standby(mclk, standby);
++}
++
++/* The CPU's sleep hook: WFI halted it (@asleep) or it woke up */
++static void pic32cm_sleep(void *opaque, bool asleep)
++{
++    Pic32cmSocState *s = opaque;
++    DeviceState *pm = pic32cm_periph(s, "PM");
++    uint32_t mode = pm ? mchp_regfile_peek(&MCHP_REGBLOCK(pm)->rf,
++                                           PIC32CM_PM_SLEEPCFG, 1) & 7 : 0;
++
++    pic32cm_set_standby(s, asleep && mode == PIC32CM_PM_STANDBY);
++}
++
++/* "standby": the sleep state, also settable (qtest) */
++static bool pic32cm_get_standby(Object *obj, Error **errp)
++{
++    return PIC32CM_SOC(obj)->standby;
++}
++
++static void pic32cm_set_standby_prop(Object *obj, bool value, Error **errp)
++{
++    pic32cm_set_standby(PIC32CM_SOC(obj), value);
++}
++
+ static void pic32cm_soc_realize(DeviceState *dev, Error **errp)
+ {
+     Pic32cmSocState *s = PIC32CM_SOC(dev);
+@@ -1109,6 +1202,8 @@ static void pic32cm_soc_realize(DeviceState *dev, Error **errp)
+     pic32cm_dmac_pulses(s);
+     pic32cm_connect_pads(s);
+     pic32cm_analog_pads(s);
++    s->armv7m.cpu->sleep_hook = pic32cm_sleep;
++    s->armv7m.cpu->sleep_opaque = s;
+     for (unsigned i = 0; i < s->dev->ninstances; i++) {
+         if (s->periph[i] && object_property_find(OBJECT(s->periph[i]),
+                                                  "vdd")) {
+@@ -1125,10 +1220,19 @@ static const Property pic32cm_soc_properties[] = {
+     DEFINE_PROP_INT32("vddana", Pic32cmSocState, vddana_mv, 3300),
+ };
+ 
++/* A reset wakes the part: GCLK and MCLK leave standby in their own reset */
++static void pic32cm_soc_reset_hold(Object *obj, ResetType type)
++{
++    PIC32CM_SOC(obj)->standby = false;
++}
++
+ static void pic32cm_soc_class_init(ObjectClass *klass, const void *data)
+ {
+     DeviceClass *dc = DEVICE_CLASS(klass);
+ 
++    RESETTABLE_CLASS(klass)->phases.hold = pic32cm_soc_reset_hold;
++    object_class_property_add_bool(klass, "standby", pic32cm_get_standby,
++                                   pic32cm_set_standby_prop);
+     dc->realize = pic32cm_soc_realize;
+     device_class_set_props(dc, pic32cm_soc_properties);
+     /* Reason: mapped at fixed addresses on the system bus */
+diff --git a/hw/misc/mchp_clock.c b/hw/misc/mchp_clock.c
+index de71b58..85744ba 100644
+--- a/hw/misc/mchp_clock.c
++++ b/hw/misc/mchp_clock.c
+@@ -14,6 +14,12 @@
+  * An oscillator is ready as soon as it is enabled (and its crystal, if it
+  * needs one, is fitted), FDPLL96M locks as soon as it has a reference, and
+  * every synchronization completes instantly (SYNCBUSY reads 0).
++ *
++ * Standby (mchp_gclk_set_standby(), mchp_mclk_set_standby(), driven by the
++ * SoC from PM.SLEEPCFG): a peripheral channel runs only if one of its
++ * peripherals asks for it, whatever GENCTRL.RUNSTDBY and the oscillators'
++ * RUNSTDBY say (PIC32CM MC00 silicon, firmware/hello APP=sleepprobe2: a
++ * requested clock runs on demand); the CPU clock stops.
+  * References: DS60001632H chapters 14 (GCLK), 15 (MCLK), 16 (OSC32KCTRL)
+  * and 17 (OSCCTRL).
+  *
+@@ -551,6 +557,8 @@ struct MchpGclkState {
+     Clock *src[MCHP_GCLK_NSRC];
+     Clock *gen[MCHP_GCLK_GENCTRL_COUNT];
+     Clock *pch[MCHP_GCLK_PCHCTRL_COUNT];
++    bool standby;
++    uint64_t keep;                  /* channels running in standby */
+     /* Generators and channels this device has (the constants: the most) */
+     unsigned ngen;
+     unsigned npch;
+@@ -620,7 +628,8 @@ static void mchp_gclk_compute(MchpRegBlock *rb)
+     for (unsigned m = 0; m < s->npch; m++) {
+         uint32_t ctrl = mchp_clk_reg(rb, A_MCHP_GCLK_PCHCTRL + 4 * m, 4);
+         uint32_t gen = FIELD_EX32(ctrl, MCHP_GCLK_PCHCTRL, GEN);
+-        bool on = FIELD_EX32(ctrl, MCHP_GCLK_PCHCTRL, CHEN) && gen < s->ngen;
++        bool on = FIELD_EX32(ctrl, MCHP_GCLK_PCHCTRL, CHEN) && gen < s->ngen &&
++                  (!s->standby || extract64(s->keep, m, 1));
+ 
+         mchp_regblock_set_clock_period(rb, s->pch[m], on ? period[gen] : 0);
+     }
+@@ -636,6 +645,15 @@ static void mchp_gclk_clk_update(void *opaque, ClockEvent event)
+     mchp_gclk_update(MCHP_GCLK(opaque));
+ }
+ 
++void mchp_gclk_set_standby(DeviceState *dev, bool standby, uint64_t keep)
++{
++    MchpGclkState *s = MCHP_GCLK(dev);
++
++    s->standby = standby;
++    s->keep = keep;
++    mchp_gclk_update(s);
++}
++
+ static void mchp_gclk_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+                                  unsigned idx, uint32_t old,
+                                  uint32_t written, uint32_t we)
+@@ -662,6 +680,7 @@ static void mchp_gclk_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+ 
+ static void mchp_gclk_reset_exit(MchpRegBlock *rb)
+ {
++    MCHP_GCLK(rb)->standby = false;
+     mchp_gclk_update(MCHP_GCLK(rb));
+ }
+ 
+@@ -713,11 +732,13 @@ static void mchp_gclk_init(Object *obj)
+ 
+ static const VMStateDescription vmstate_mchp_gclk = {
+     .name = TYPE_MCHP_GCLK,
+-    .version_id = 3,
+-    .minimum_version_id = 3,
++    .version_id = 4,
++    .minimum_version_id = 4,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpGclkState, 1, vmstate_mchp_regblock,
+                        MchpRegBlock),
++        VMSTATE_BOOL(standby, MchpGclkState),
++        VMSTATE_UINT64(keep, MchpGclkState),
+         VMSTATE_ARRAY_CLOCK(src, MchpGclkState, MCHP_GCLK_NSRC),
+         VMSTATE_ARRAY_CLOCK(gen, MchpGclkState, MCHP_GCLK_GENCTRL_COUNT),
+         VMSTATE_ARRAY_CLOCK(pch, MchpGclkState, MCHP_GCLK_PCHCTRL_COUNT),
+@@ -745,6 +766,7 @@ struct MchpMclkState {
+ 
+     Clock *main;
+     Clock *cpu;
++    bool standby;               /* the CPU clock is stopped */
+ };
+ 
+ static void mchp_mclk_update(MchpMclkState *s)
+@@ -752,7 +774,16 @@ static void mchp_mclk_update(MchpMclkState *s)
+     MchpRegBlock *rb = MCHP_REGBLOCK(s);
+     uint32_t div = mchp_clk_reg(rb, A_MCHP_MCLK_CPUDIV, 1);
+ 
+-    mchp_regblock_set_clock(rb, s->cpu, div ? clock_get_hz(s->main) / div : 0);
++    mchp_regblock_set_clock(rb, s->cpu, div && !s->standby ?
++                            clock_get_hz(s->main) / div : 0);
++}
++
++void mchp_mclk_set_standby(DeviceState *dev, bool standby)
++{
++    MchpMclkState *s = MCHP_MCLK(dev);
++
++    s->standby = standby;
++    mchp_mclk_update(s);
+ }
+ 
+ static void mchp_mclk_clk_update(void *opaque, ClockEvent event)
+@@ -782,6 +813,7 @@ static void mchp_mclk_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+ 
+ static void mchp_mclk_reset_exit(MchpRegBlock *rb)
+ {
++    MCHP_MCLK(rb)->standby = false;
+     mchp_mclk_update(MCHP_MCLK(rb));
+ }
+ 
+@@ -796,11 +828,12 @@ static void mchp_mclk_init(Object *obj)
+ 
+ static const VMStateDescription vmstate_mchp_mclk = {
+     .name = TYPE_MCHP_MCLK,
+-    .version_id = 2,
+-    .minimum_version_id = 2,
++    .version_id = 3,
++    .minimum_version_id = 3,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpMclkState, 1, vmstate_mchp_regblock,
+                        MchpRegBlock),
++        VMSTATE_BOOL(standby, MchpMclkState),
+         VMSTATE_CLOCK(main, MchpMclkState),
+         VMSTATE_CLOCK(cpu, MchpMclkState),
+         VMSTATE_END_OF_LIST()
+diff --git a/hw/misc/mchp_sysctrl.c b/hw/misc/mchp_sysctrl.c
+index 811ed09..367ba2b 100644
+--- a/hw/misc/mchp_sysctrl.c
++++ b/hw/misc/mchp_sysctrl.c
+@@ -979,7 +979,10 @@ static void mchp_wdt_class_init(ObjectClass *klass, const void *data)
+     c->log_writes = false;
+ }
+ 
+-/* PM: SLEEPCFG and STDBYCFG only store; sleep is the CPU's WFI. */
++/*
++ * PM: SLEEPCFG and STDBYCFG only store. The SoC reads SLEEPCFG when WFI
++ * halts the CPU (its sleep hook) and stops the clocks of STANDBY.
++ */
+ 
+ static void mchp_pm_class_init(ObjectClass *klass, const void *data)
+ {
+diff --git a/hw/timer/armv7m_systick.c b/hw/timer/armv7m_systick.c
+index 65cfaf4..dddd5c8 100644
+--- a/hw/timer/armv7m_systick.c
++++ b/hw/timer/armv7m_systick.c
+@@ -220,10 +220,22 @@ static void systick_cpuclk_update(void *opaque, ClockEvent event)
+ 
+     if (!(s->control & SYSTICK_CLKSOURCE)) {
+         /* currently using refclk, we can ignore cpuclk changes */
++        return;
+     }
+ 
+     ptimer_transaction_begin(s->ptimer);
+-    ptimer_set_period_from_clock(s->ptimer, s->cpuclk, 1);
++    if (!clock_is_enabled(s->cpuclk)) {
++        /*
++         * Peripheral Pretender: a stopped CPU clock (standby) holds the
++         * count; a ptimer with period 0 would disable itself instead
++         */
++        ptimer_stop(s->ptimer);
++    } else {
++        ptimer_set_period_from_clock(s->ptimer, s->cpuclk, 1);
++        if (s->control & SYSTICK_ENABLE) {
++            ptimer_run(s->ptimer, 0);
++        }
++    }
+     ptimer_transaction_commit(s->ptimer);
+ }
+ 
+diff --git a/hw/timer/mchp_tc.c b/hw/timer/mchp_tc.c
+index 960e4e7..4e2fc23 100644
+--- a/hw/timer/mchp_tc.c
++++ b/hw/timer/mchp_tc.c
+@@ -1048,9 +1048,28 @@ static void mchp_tc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+ static void mchp_tc_gclk_update(MchpRegBlock *rb, ClockEvent event)
+ {
+     MchpTcState *s = MCHP_TC(rb);
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+ 
+-    /* Count at the old rate up to now, then reschedule at the new one */
+-    mchp_tc_advance(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
++    if (event == ClockPreUpdate) {
++        if (mchp_tc_hz(s)) {
++            /*
++             * Count at the old rate up to now, the ticks since the last
++             * event included
++             */
++            uint64_t ticks;
++
++            mchp_tc_advance(s, now);
++            ticks = mchp_tc_ticks(s, now);
++            s->count = mchp_tc_value(s, ticks);
++            mchp_tc_base_tick(s, ticks);
++            mchp_tc_wo_resync(s);
++            mchp_tc_update_pads(s);
++        } else {
++            mchp_tc_base_set(s, now);   /* stopped (standby): no ticks */
++        }
++        return;
++    }
++    mchp_tc_advance(s, now);            /* reschedule at the new rate */
+ }
+ 
+ static void mchp_tc_reset_hold(MchpRegBlock *rb)
+diff --git a/hw/timer/mchp_tcc.c b/hw/timer/mchp_tcc.c
+index 5916bfa..332d19d 100644
+--- a/hw/timer/mchp_tcc.c
++++ b/hw/timer/mchp_tcc.c
+@@ -2083,9 +2083,22 @@ static void tcc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+ static void tcc_gclk_update(MchpRegBlock *rb, ClockEvent event)
+ {
+     MchpTccState *s = MCHP_TCC(rb);
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+ 
+-    /* Count at the old rate up to now, then reschedule at the new one */
+-    tcc_advance(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
++    if (event == ClockPreUpdate) {
++        if (tcc_hz(s)) {
++            /*
++             * Count at the old rate up to now, the ticks since the last
++             * event included
++             */
++            tcc_advance(s, now);
++            tcc_jump(s, tcc_ticks(s, now));
++        } else {
++            tcc_base_set(s, now);       /* stopped (standby): no ticks */
++        }
++        return;
++    }
++    tcc_advance(s, now);                /* reschedule at the new rate */
+ }
+ 
+ static void tcc_reset_hold(MchpRegBlock *rb)
+diff --git a/include/hw/arm/atsame51j20a_gen.h b/include/hw/arm/atsame51j20a_gen.h
+index 1a9e591..81fc8c7 100644
+--- a/include/hw/arm/atsame51j20a_gen.h
++++ b/include/hw/arm/atsame51j20a_gen.h
+@@ -371,6 +371,7 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .ip_version = "5.0.0", .base = 0x40003000, .slot_size = 0x400,
+         .irq = 46, .irq_input = 0, .nirqs = 4, .pac_id = 12, .gclk_core = 7,
+         .gclk_slow = 3, .dmac_rx = 4, .dmac_tx = 5, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = ATSAME51J20A_SERCOM_REGS_SIZE,
+         .regs = atsame51j20a_sercom_usart_ext_regs,
+         .nregs = ATSAME51J20A_SERCOM_USART_EXT_NREGS,
+@@ -385,6 +386,7 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .ip_version = "5.0.0", .base = 0x40003400, .slot_size = 0x400,
+         .irq = 50, .irq_input = 0, .nirqs = 4, .pac_id = 13, .gclk_core = 8,
+         .gclk_slow = 3, .dmac_rx = 6, .dmac_tx = 7, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = ATSAME51J20A_SERCOM_REGS_SIZE,
+         .regs = atsame51j20a_sercom_usart_ext_regs,
+         .nregs = ATSAME51J20A_SERCOM_USART_EXT_NREGS,
+@@ -398,7 +400,8 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .name = "TC0", .module = "TC", .ip_id = "U2249", .ip_version = "3.0.0",
+         .base = 0x40003800, .slot_size = 0x400, .irq = 107, .irq_input = 0,
+         .pac_id = 14, .gclk_core = 9, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .regs_size = ATSAME51J20A_TC_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = ATSAME51J20A_TC_REGS_SIZE,
+         .regs = atsame51j20a_tc_count16_regs,
+         .nregs = ATSAME51J20A_TC_COUNT16_NREGS, .views = atsame51j20a_tc_views,
+         .nviews = ATSAME51J20A_TC_NVIEWS,
+@@ -410,7 +413,8 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .name = "TC1", .module = "TC", .ip_id = "U2249", .ip_version = "3.0.0",
+         .base = 0x40003C00, .slot_size = 0x400, .irq = 108, .irq_input = 0,
+         .pac_id = 15, .gclk_core = 9, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .regs_size = ATSAME51J20A_TC_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = ATSAME51J20A_TC_REGS_SIZE,
+         .regs = atsame51j20a_tc_count16_regs,
+         .nregs = ATSAME51J20A_TC_COUNT16_NREGS, .views = atsame51j20a_tc_views,
+         .nviews = ATSAME51J20A_TC_NVIEWS,
+@@ -422,7 +426,8 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .name = "USB", .module = "USB", .ip_id = "U2222", .ip_version = "1.2.0",
+         .base = 0x41000000, .slot_size = 0x400, .irq = 80, .irq_input = 0,
+         .nirqs = 4, .pac_id = 32, .gclk_core = 10, .gclk_slow = -1,
+-        .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .dmac_rx = -1, .dmac_tx = -1, .flags = 0, .standby_offset = 0x0,
++        .standby_mask = 0x4, .standby_enable = 0x2,
+         .regs_size = ATSAME51J20A_USB_REGS_SIZE,
+         .regs = atsame51j20a_usb_device_regs,
+         .nregs = ATSAME51J20A_USB_DEVICE_NREGS, .views = atsame51j20a_usb_views,
+@@ -494,6 +499,7 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .ip_version = "5.0.0", .base = 0x41012000, .slot_size = 0x400,
+         .irq = 54, .irq_input = 0, .nirqs = 4, .pac_id = 41, .gclk_core = 23,
+         .gclk_slow = 3, .dmac_rx = 8, .dmac_tx = 9, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = ATSAME51J20A_SERCOM_REGS_SIZE,
+         .regs = atsame51j20a_sercom_usart_ext_regs,
+         .nregs = ATSAME51J20A_SERCOM_USART_EXT_NREGS,
+@@ -508,6 +514,7 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .ip_version = "5.0.0", .base = 0x41014000, .slot_size = 0x400,
+         .irq = 58, .irq_input = 0, .nirqs = 4, .pac_id = 42, .gclk_core = 24,
+         .gclk_slow = 3, .dmac_rx = 10, .dmac_tx = 11, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = ATSAME51J20A_SERCOM_REGS_SIZE,
+         .regs = atsame51j20a_sercom_usart_ext_regs,
+         .nregs = ATSAME51J20A_SERCOM_USART_EXT_NREGS,
+@@ -525,6 +532,7 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .counter_bits = 24, .channels = 6, .outputs = 8,
+         .features = MCHP_TCC_FEAT_DTI | MCHP_TCC_FEAT_SWAP |
+             MCHP_TCC_FEAT_OTMX | MCHP_TCC_FEAT_PG | MCHP_TCC_FEAT_DITHERING,
++        .standby_offset = 0x0, .standby_mask = 0x800, .standby_enable = 0x2,
+         .regs_size = ATSAME51J20A_TCC_REGS_SIZE, .regs = atsame51j20a_tcc_regs,
+         .nregs = ATSAME51J20A_TCC_NREGS,
+     },
+@@ -536,6 +544,7 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .counter_bits = 24, .channels = 4, .outputs = 8,
+         .features = MCHP_TCC_FEAT_DTI | MCHP_TCC_FEAT_SWAP |
+             MCHP_TCC_FEAT_OTMX | MCHP_TCC_FEAT_PG | MCHP_TCC_FEAT_DITHERING,
++        .standby_offset = 0x0, .standby_mask = 0x800, .standby_enable = 0x2,
+         .regs_size = ATSAME51J20A_TCC_REGS_SIZE, .regs = atsame51j20a_tcc_regs,
+         .nregs = ATSAME51J20A_TCC_NREGS,
+     },
+@@ -543,7 +552,8 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .name = "TC2", .module = "TC", .ip_id = "U2249", .ip_version = "3.0.0",
+         .base = 0x4101A000, .slot_size = 0x400, .irq = 109, .irq_input = 0,
+         .pac_id = 45, .gclk_core = 26, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .regs_size = ATSAME51J20A_TC_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = ATSAME51J20A_TC_REGS_SIZE,
+         .regs = atsame51j20a_tc_count16_regs,
+         .nregs = ATSAME51J20A_TC_COUNT16_NREGS, .views = atsame51j20a_tc_views,
+         .nviews = ATSAME51J20A_TC_NVIEWS,
+@@ -555,7 +565,8 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .name = "TC3", .module = "TC", .ip_id = "U2249", .ip_version = "3.0.0",
+         .base = 0x4101C000, .slot_size = 0x400, .irq = 110, .irq_input = 0,
+         .pac_id = 46, .gclk_core = 26, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .regs_size = ATSAME51J20A_TC_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = ATSAME51J20A_TC_REGS_SIZE,
+         .regs = atsame51j20a_tc_count16_regs,
+         .nregs = ATSAME51J20A_TC_COUNT16_NREGS, .views = atsame51j20a_tc_views,
+         .nviews = ATSAME51J20A_TC_NVIEWS,
+@@ -593,8 +604,10 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .irq = 97, .irq_input = 0, .nirqs = 4, .pac_id = 67, .gclk_core = 29,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
+         .counter_bits = 16, .channels = 3, .outputs = 3,
+-        .features = MCHP_TCC_FEAT_OTMX, .regs_size = ATSAME51J20A_TCC_REGS_SIZE,
+-        .regs = atsame51j20a_tcc_regs, .nregs = ATSAME51J20A_TCC_NREGS,
++        .features = MCHP_TCC_FEAT_OTMX, .standby_offset = 0x0,
++        .standby_mask = 0x800, .standby_enable = 0x2,
++        .regs_size = ATSAME51J20A_TCC_REGS_SIZE, .regs = atsame51j20a_tcc_regs,
++        .nregs = ATSAME51J20A_TCC_NREGS,
+     },
+     {
+         .name = "TCC3", .module = "TCC", .ip_id = "U2213",
+@@ -602,6 +615,7 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .irq = 101, .irq_input = 0, .nirqs = 3, .pac_id = 68, .gclk_core = 29,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
+         .counter_bits = 16, .channels = 2, .outputs = 2, .features = 0,
++        .standby_offset = 0x0, .standby_mask = 0x800, .standby_enable = 0x2,
+         .regs_size = ATSAME51J20A_TCC_REGS_SIZE, .regs = atsame51j20a_tcc_regs,
+         .nregs = ATSAME51J20A_TCC_NREGS,
+     },
+@@ -609,7 +623,8 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .name = "TC4", .module = "TC", .ip_id = "U2249", .ip_version = "3.0.0",
+         .base = 0x42001400, .slot_size = 0x400, .irq = 111, .irq_input = 0,
+         .pac_id = 69, .gclk_core = 30, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .regs_size = ATSAME51J20A_TC_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = ATSAME51J20A_TC_REGS_SIZE,
+         .regs = atsame51j20a_tc_count16_regs,
+         .nregs = ATSAME51J20A_TC_COUNT16_NREGS, .views = atsame51j20a_tc_views,
+         .nviews = ATSAME51J20A_TC_NVIEWS,
+@@ -621,7 +636,8 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .name = "TC5", .module = "TC", .ip_id = "U2249", .ip_version = "3.0.0",
+         .base = 0x42001800, .slot_size = 0x400, .irq = 112, .irq_input = 0,
+         .pac_id = 70, .gclk_core = 30, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .regs_size = ATSAME51J20A_TC_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = ATSAME51J20A_TC_REGS_SIZE,
+         .regs = atsame51j20a_tc_count16_regs,
+         .nregs = ATSAME51J20A_TC_COUNT16_NREGS, .views = atsame51j20a_tc_views,
+         .nviews = ATSAME51J20A_TC_NVIEWS,
+@@ -634,6 +650,7 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .ip_version = "1.0.0", .base = 0x42001C00, .slot_size = 0x400,
+         .irq = 115, .irq_input = 0, .nirqs = 3, .pac_id = 71, .gclk_core = 31,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = ATSAME51J20A_PDEC_REGS_SIZE,
+         .regs = atsame51j20a_pdec_regs, .nregs = ATSAME51J20A_PDEC_NREGS,
+     },
+@@ -656,6 +673,7 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .ip_version = "1.1.0", .base = 0x42002800, .slot_size = 0x400,
+         .irq = 131, .irq_input = 0, .pac_id = 74, .gclk_core = -1,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = ATSAME51J20A_TRNG_REGS_SIZE,
+         .regs = atsame51j20a_trng_regs, .nregs = ATSAME51J20A_TRNG_NREGS,
+     },
+@@ -678,7 +696,8 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .name = "CCL", .module = "CCL", .ip_id = "U2225", .ip_version = "1.1.0",
+         .base = 0x42003800, .slot_size = 0x400, .irq = -1, .irq_input = 0,
+         .pac_id = 78, .gclk_core = 33, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .regs_size = ATSAME51J20A_CCL_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = ATSAME51J20A_CCL_REGS_SIZE,
+         .regs = atsame51j20a_ccl_regs, .nregs = ATSAME51J20A_CCL_NREGS,
+     },
+     {
+@@ -686,6 +705,7 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .ip_version = "5.0.0", .base = 0x43000000, .slot_size = 0x400,
+         .irq = 62, .irq_input = 0, .nirqs = 4, .pac_id = 96, .gclk_core = 34,
+         .gclk_slow = 3, .dmac_rx = 12, .dmac_tx = 13, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = ATSAME51J20A_SERCOM_REGS_SIZE,
+         .regs = atsame51j20a_sercom_usart_ext_regs,
+         .nregs = ATSAME51J20A_SERCOM_USART_EXT_NREGS,
+@@ -700,6 +720,7 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .ip_version = "5.0.0", .base = 0x43000400, .slot_size = 0x400,
+         .irq = 66, .irq_input = 0, .nirqs = 4, .pac_id = 97, .gclk_core = 35,
+         .gclk_slow = 3, .dmac_rx = 14, .dmac_tx = 15, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = ATSAME51J20A_SERCOM_REGS_SIZE,
+         .regs = atsame51j20a_sercom_usart_ext_regs,
+         .nregs = ATSAME51J20A_SERCOM_USART_EXT_NREGS,
+@@ -715,6 +736,7 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .irq = 104, .irq_input = 0, .nirqs = 3, .pac_id = 100, .gclk_core = 38,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
+         .counter_bits = 16, .channels = 2, .outputs = 2, .features = 0,
++        .standby_offset = 0x0, .standby_mask = 0x800, .standby_enable = 0x2,
+         .regs_size = ATSAME51J20A_TCC_REGS_SIZE, .regs = atsame51j20a_tcc_regs,
+         .nregs = ATSAME51J20A_TCC_NREGS,
+     },
+@@ -723,6 +745,7 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .ip_version = "1.0.0", .base = 0x43001C00, .slot_size = 0x400,
+         .irq = 118, .irq_input = 0, .nirqs = 2, .pac_id = 103, .gclk_core = 40,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = ATSAME51J20A_ADC_REGS_SIZE, .regs = atsame51j20a_adc_regs,
+         .nregs = ATSAME51J20A_ADC_NREGS,
+     },
+@@ -731,6 +754,7 @@ static const MchpInstanceInfo atsame51j20a_instances[] = {
+         .ip_version = "1.0.0", .base = 0x43002000, .slot_size = 0x400,
+         .irq = 120, .irq_input = 0, .nirqs = 2, .pac_id = 104, .gclk_core = 41,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = ATSAME51J20A_ADC_REGS_SIZE, .regs = atsame51j20a_adc_regs,
+         .nregs = ATSAME51J20A_ADC_NREGS,
+     },
+diff --git a/include/hw/arm/pic32cm1216mc00048_gen.h b/include/hw/arm/pic32cm1216mc00048_gen.h
+index 4a5f8f5..2221fdb 100644
+--- a/include/hw/arm/pic32cm1216mc00048_gen.h
++++ b/include/hw/arm/pic32cm1216mc00048_gen.h
+@@ -312,7 +312,8 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .name = "TSENS", .module = "TSENS", .ip_id = "U2261",
+         .ip_version = "1.0.1", .base = 0x40003000, .slot_size = 0x400, .irq = 5,
+         .irq_input = 0, .pac_id = 12, .gclk_core = 5, .gclk_slow = -1,
+-        .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .dmac_rx = -1, .dmac_tx = -1, .flags = 0, .standby_offset = 0x0,
++        .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = PIC32CM1216MC00048_TSENS_REGS_SIZE,
+         .regs = pic32cm1216mc00048_tsens_regs,
+         .nregs = PIC32CM1216MC00048_TSENS_NREGS,
+@@ -391,7 +392,8 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .name = "SERCOM0", .module = "SERCOM", .ip_id = "U2201",
+         .ip_version = "3.1.1", .base = 0x42000400, .slot_size = 0x400, .irq = 9,
+         .irq_input = 0, .pac_id = 65, .gclk_core = 19, .gclk_slow = 18,
+-        .dmac_rx = 2, .dmac_tx = 3, .flags = 0,
++        .dmac_rx = 2, .dmac_tx = 3, .flags = 0, .standby_offset = 0x0,
++        .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = PIC32CM1216MC00048_SERCOM_REGS_SIZE,
+         .regs = pic32cm1216mc00048_sercom_usart_ext_regs,
+         .nregs = PIC32CM1216MC00048_SERCOM_USART_EXT_NREGS,
+@@ -406,6 +408,7 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .ip_version = "3.1.1", .base = 0x42000800, .slot_size = 0x400,
+         .irq = 10, .irq_input = 0, .pac_id = 66, .gclk_core = 20,
+         .gclk_slow = 18, .dmac_rx = 4, .dmac_tx = 5, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = PIC32CM1216MC00048_SERCOM_REGS_SIZE,
+         .regs = pic32cm1216mc00048_sercom_usart_ext_regs,
+         .nregs = PIC32CM1216MC00048_SERCOM_USART_EXT_NREGS,
+@@ -420,6 +423,7 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .ip_version = "3.1.1", .base = 0x42000C00, .slot_size = 0x400,
+         .irq = 11, .irq_input = 0, .pac_id = 67, .gclk_core = 21,
+         .gclk_slow = 18, .dmac_rx = 6, .dmac_tx = 7, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = PIC32CM1216MC00048_SERCOM_REGS_SIZE,
+         .regs = pic32cm1216mc00048_sercom_usart_ext_regs,
+         .nregs = PIC32CM1216MC00048_SERCOM_USART_EXT_NREGS,
+@@ -434,6 +438,7 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .ip_version = "3.1.1", .base = 0x42001000, .slot_size = 0x400,
+         .irq = 12, .irq_input = 0, .pac_id = 68, .gclk_core = 22,
+         .gclk_slow = 18, .dmac_rx = 8, .dmac_tx = 9, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = PIC32CM1216MC00048_SERCOM_REGS_SIZE,
+         .regs = pic32cm1216mc00048_sercom_usart_ext_regs,
+         .nregs = PIC32CM1216MC00048_SERCOM_USART_EXT_NREGS,
+@@ -451,6 +456,7 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .counter_bits = 24, .channels = 4, .outputs = 8,
+         .features = MCHP_TCC_FEAT_DTI | MCHP_TCC_FEAT_SWAP |
+             MCHP_TCC_FEAT_OTMX | MCHP_TCC_FEAT_PG | MCHP_TCC_FEAT_DITHERING,
++        .standby_offset = 0x0, .standby_mask = 0x800, .standby_enable = 0x2,
+         .regs_size = PIC32CM1216MC00048_TCC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_tcc_regs,
+         .nregs = PIC32CM1216MC00048_TCC_NREGS,
+@@ -462,6 +468,7 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
+         .counter_bits = 24, .channels = 2, .outputs = 4,
+         .features = MCHP_TCC_FEAT_PG | MCHP_TCC_FEAT_DITHERING,
++        .standby_offset = 0x0, .standby_mask = 0x800, .standby_enable = 0x2,
+         .regs_size = PIC32CM1216MC00048_TCC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_tcc_regs,
+         .nregs = PIC32CM1216MC00048_TCC_NREGS,
+@@ -472,6 +479,7 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .irq = 15, .irq_input = 0, .pac_id = 75, .gclk_core = 24,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
+         .counter_bits = 16, .channels = 2, .outputs = 2, .features = 0,
++        .standby_offset = 0x0, .standby_mask = 0x800, .standby_enable = 0x2,
+         .regs_size = PIC32CM1216MC00048_TCC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_tcc_regs,
+         .nregs = PIC32CM1216MC00048_TCC_NREGS,
+@@ -480,7 +488,8 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .name = "TC0", .module = "TC", .ip_id = "U2249", .ip_version = "2.0.0",
+         .base = 0x42003000, .slot_size = 0x400, .irq = 16, .irq_input = 0,
+         .pac_id = 76, .gclk_core = 25, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .regs_size = PIC32CM1216MC00048_TC_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = PIC32CM1216MC00048_TC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_tc_count16_regs,
+         .nregs = PIC32CM1216MC00048_TC_COUNT16_NREGS,
+         .views = pic32cm1216mc00048_tc_views,
+@@ -493,7 +502,8 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .name = "TC1", .module = "TC", .ip_id = "U2249", .ip_version = "2.0.0",
+         .base = 0x42003400, .slot_size = 0x400, .irq = 17, .irq_input = 0,
+         .pac_id = 77, .gclk_core = 25, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .regs_size = PIC32CM1216MC00048_TC_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = PIC32CM1216MC00048_TC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_tc_count16_regs,
+         .nregs = PIC32CM1216MC00048_TC_COUNT16_NREGS,
+         .views = pic32cm1216mc00048_tc_views,
+@@ -506,7 +516,8 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .name = "TC2", .module = "TC", .ip_id = "U2249", .ip_version = "2.0.0",
+         .base = 0x42003800, .slot_size = 0x400, .irq = 18, .irq_input = 0,
+         .pac_id = 78, .gclk_core = 26, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .regs_size = PIC32CM1216MC00048_TC_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = PIC32CM1216MC00048_TC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_tc_count16_regs,
+         .nregs = PIC32CM1216MC00048_TC_COUNT16_NREGS,
+         .views = pic32cm1216mc00048_tc_views,
+@@ -519,7 +530,8 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .name = "TC3", .module = "TC", .ip_id = "U2249", .ip_version = "2.0.0",
+         .base = 0x42003C00, .slot_size = 0x400, .irq = 19, .irq_input = 0,
+         .pac_id = 79, .gclk_core = 26, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .regs_size = PIC32CM1216MC00048_TC_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = PIC32CM1216MC00048_TC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_tc_count16_regs,
+         .nregs = PIC32CM1216MC00048_TC_COUNT16_NREGS,
+         .views = pic32cm1216mc00048_tc_views,
+@@ -532,7 +544,8 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .name = "TC4", .module = "TC", .ip_id = "U2249", .ip_version = "2.0.0",
+         .base = 0x42004000, .slot_size = 0x400, .irq = 20, .irq_input = 0,
+         .pac_id = 80, .gclk_core = 27, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .regs_size = PIC32CM1216MC00048_TC_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = PIC32CM1216MC00048_TC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_tc_count16_regs,
+         .nregs = PIC32CM1216MC00048_TC_COUNT16_NREGS,
+         .views = pic32cm1216mc00048_tc_views,
+@@ -546,6 +559,7 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .ip_version = "2.2.0", .base = 0x42004400, .slot_size = 0x400,
+         .irq = 21, .irq_input = 0, .pac_id = 81, .gclk_core = 28,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = PIC32CM1216MC00048_ADC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_adc_regs,
+         .nregs = PIC32CM1216MC00048_ADC_NREGS,
+@@ -555,6 +569,7 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .ip_version = "2.2.0", .base = 0x42004800, .slot_size = 0x400,
+         .irq = 22, .irq_input = 0, .pac_id = 82, .gclk_core = 29,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = PIC32CM1216MC00048_ADC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_adc_regs,
+         .nregs = PIC32CM1216MC00048_ADC_NREGS,
+@@ -564,6 +579,7 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .ip_version = "1.0.1", .base = 0x42004C00, .slot_size = 0x400,
+         .irq = 25, .irq_input = 0, .pac_id = 83, .gclk_core = 30,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = PIC32CM1216MC00048_SDADC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_sdadc_regs,
+         .nregs = PIC32CM1216MC00048_SDADC_NREGS,
+@@ -580,8 +596,8 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .name = "DAC", .module = "DAC", .ip_id = "U2214", .ip_version = "2.0.1",
+         .base = 0x42005400, .slot_size = 0x400, .irq = 24, .irq_input = 0,
+         .pac_id = 85, .gclk_core = 31, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0,
+-        .regs_size = PIC32CM1216MC00048_DAC_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = PIC32CM1216MC00048_DAC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_dac_regs,
+         .nregs = PIC32CM1216MC00048_DAC_NREGS,
+     },
+@@ -589,8 +605,8 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .name = "CCL", .module = "CCL", .ip_id = "U2225", .ip_version = "1.0.1",
+         .base = 0x42005C00, .slot_size = 0x400, .irq = -1, .irq_input = 0,
+         .pac_id = 87, .gclk_core = 32, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0,
+-        .regs_size = PIC32CM1216MC00048_CCL_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = PIC32CM1216MC00048_CCL_REGS_SIZE,
+         .regs = pic32cm1216mc00048_ccl_regs,
+         .nregs = PIC32CM1216MC00048_CCL_NREGS,
+     },
+@@ -599,6 +615,7 @@ static const MchpInstanceInfo pic32cm1216mc00048_instances[] = {
+         .ip_version = "1.0.0", .base = 0x42006800, .slot_size = 0x400,
+         .irq = 26, .irq_input = 0, .pac_id = 90, .gclk_core = 34,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = PIC32CM1216MC00048_PDEC_REGS_SIZE,
+         .regs = pic32cm1216mc00048_pdec_regs,
+         .nregs = PIC32CM1216MC00048_PDEC_NREGS,
+diff --git a/include/hw/arm/pic32cm5164jh01100_gen.h b/include/hw/arm/pic32cm5164jh01100_gen.h
+index cd915f7..67add0a 100644
+--- a/include/hw/arm/pic32cm5164jh01100_gen.h
++++ b/include/hw/arm/pic32cm5164jh01100_gen.h
+@@ -423,6 +423,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .ip_version = "3.1.1", .base = 0x42000400, .slot_size = 0x400, .irq = 9,
+         .irq_input = 0, .pac_id = 65, .gclk_core = 18, .gclk_slow = 17,
+         .dmac_rx = 2, .dmac_tx = 3, .flags = MCHP_INST_SHARED_IRQ,
++        .standby_offset = 0x0, .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_SERCOM_REGS_SIZE,
+         .regs = pic32cm5164jh01100_sercom_usart_ext_regs,
+         .nregs = PIC32CM5164JH01100_SERCOM_USART_EXT_NREGS,
+@@ -437,7 +438,8 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .ip_version = "3.1.1", .base = 0x42000800, .slot_size = 0x400,
+         .irq = 10, .irq_input = 0, .pac_id = 66, .gclk_core = 19,
+         .gclk_slow = 17, .dmac_rx = 4, .dmac_tx = 5,
+-        .flags = MCHP_INST_SHARED_IRQ,
++        .flags = MCHP_INST_SHARED_IRQ, .standby_offset = 0x0,
++        .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_SERCOM_REGS_SIZE,
+         .regs = pic32cm5164jh01100_sercom_usart_ext_regs,
+         .nregs = PIC32CM5164JH01100_SERCOM_USART_EXT_NREGS,
+@@ -452,6 +454,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .ip_version = "3.1.1", .base = 0x42000C00, .slot_size = 0x400,
+         .irq = 11, .irq_input = 0, .pac_id = 67, .gclk_core = 20,
+         .gclk_slow = 17, .dmac_rx = 6, .dmac_tx = 7, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_SERCOM_REGS_SIZE,
+         .regs = pic32cm5164jh01100_sercom_usart_ext_regs,
+         .nregs = PIC32CM5164JH01100_SERCOM_USART_EXT_NREGS,
+@@ -466,6 +469,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .ip_version = "3.1.1", .base = 0x42001000, .slot_size = 0x400,
+         .irq = 12, .irq_input = 0, .pac_id = 68, .gclk_core = 21,
+         .gclk_slow = 17, .dmac_rx = 8, .dmac_tx = 9, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_SERCOM_REGS_SIZE,
+         .regs = pic32cm5164jh01100_sercom_usart_ext_regs,
+         .nregs = PIC32CM5164JH01100_SERCOM_USART_EXT_NREGS,
+@@ -480,6 +484,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .ip_version = "3.1.1", .base = 0x42001400, .slot_size = 0x400,
+         .irq = 13, .irq_input = 0, .pac_id = 69, .gclk_core = 22,
+         .gclk_slow = 17, .dmac_rx = 10, .dmac_tx = 11, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_SERCOM_REGS_SIZE,
+         .regs = pic32cm5164jh01100_sercom_usart_ext_regs,
+         .nregs = PIC32CM5164JH01100_SERCOM_USART_EXT_NREGS,
+@@ -494,6 +499,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .ip_version = "3.1.1", .base = 0x42001800, .slot_size = 0x400,
+         .irq = 14, .irq_input = 0, .pac_id = 70, .gclk_core = 23,
+         .gclk_slow = 17, .dmac_rx = 12, .dmac_tx = 13, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_SERCOM_REGS_SIZE,
+         .regs = pic32cm5164jh01100_sercom_usart_ext_regs,
+         .nregs = PIC32CM5164JH01100_SERCOM_USART_EXT_NREGS,
+@@ -529,6 +535,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .outputs = 8,
+         .features = MCHP_TCC_FEAT_DTI | MCHP_TCC_FEAT_SWAP |
+             MCHP_TCC_FEAT_OTMX | MCHP_TCC_FEAT_PG | MCHP_TCC_FEAT_DITHERING,
++        .standby_offset = 0x0, .standby_mask = 0x800, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_TCC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tcc_regs,
+         .nregs = PIC32CM5164JH01100_TCC_NREGS,
+@@ -539,6 +546,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .pac_id = 74, .gclk_core = 28, .gclk_slow = -1, .dmac_rx = -1,
+         .dmac_tx = -1, .flags = 0, .counter_bits = 24, .channels = 2,
+         .outputs = 4, .features = MCHP_TCC_FEAT_PG | MCHP_TCC_FEAT_DITHERING,
++        .standby_offset = 0x0, .standby_mask = 0x800, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_TCC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tcc_regs,
+         .nregs = PIC32CM5164JH01100_TCC_NREGS,
+@@ -548,7 +556,8 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .base = 0x42002C00, .slot_size = 0x400, .irq = 19, .irq_input = 0,
+         .pac_id = 75, .gclk_core = 29, .gclk_slow = -1, .dmac_rx = -1,
+         .dmac_tx = -1, .flags = 0, .counter_bits = 16, .channels = 2,
+-        .outputs = 2, .features = 0,
++        .outputs = 2, .features = 0, .standby_offset = 0x0,
++        .standby_mask = 0x800, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_TCC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tcc_regs,
+         .nregs = PIC32CM5164JH01100_TCC_NREGS,
+@@ -557,7 +566,8 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .name = "TC0", .module = "TC", .ip_id = "U2249", .ip_version = "3.0.0",
+         .base = 0x42003000, .slot_size = 0x400, .irq = 20, .irq_input = 0,
+         .pac_id = 76, .gclk_core = 30, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = MCHP_INST_SHARED_IRQ,
++        .dmac_tx = -1, .flags = MCHP_INST_SHARED_IRQ, .standby_offset = 0x0,
++        .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_TC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tc_count16_regs,
+         .nregs = PIC32CM5164JH01100_TC_COUNT16_NREGS,
+@@ -571,7 +581,8 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .name = "TC1", .module = "TC", .ip_id = "U2249", .ip_version = "3.0.0",
+         .base = 0x42003400, .slot_size = 0x400, .irq = 21, .irq_input = 0,
+         .pac_id = 77, .gclk_core = 30, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = MCHP_INST_SHARED_IRQ,
++        .dmac_tx = -1, .flags = MCHP_INST_SHARED_IRQ, .standby_offset = 0x0,
++        .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_TC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tc_count16_regs,
+         .nregs = PIC32CM5164JH01100_TC_COUNT16_NREGS,
+@@ -585,7 +596,8 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .name = "TC2", .module = "TC", .ip_id = "U2249", .ip_version = "3.0.0",
+         .base = 0x42003800, .slot_size = 0x400, .irq = 22, .irq_input = 0,
+         .pac_id = 78, .gclk_core = 31, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = MCHP_INST_SHARED_IRQ,
++        .dmac_tx = -1, .flags = MCHP_INST_SHARED_IRQ, .standby_offset = 0x0,
++        .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_TC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tc_count16_regs,
+         .nregs = PIC32CM5164JH01100_TC_COUNT16_NREGS,
+@@ -599,7 +611,8 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .name = "TC3", .module = "TC", .ip_id = "U2249", .ip_version = "3.0.0",
+         .base = 0x42003C00, .slot_size = 0x400, .irq = 23, .irq_input = 0,
+         .pac_id = 79, .gclk_core = 31, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .regs_size = PIC32CM5164JH01100_TC_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = PIC32CM5164JH01100_TC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tc_count16_regs,
+         .nregs = PIC32CM5164JH01100_TC_COUNT16_NREGS,
+         .views = pic32cm5164jh01100_tc_views,
+@@ -612,7 +625,8 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .name = "TC4", .module = "TC", .ip_id = "U2249", .ip_version = "3.0.0",
+         .base = 0x42004000, .slot_size = 0x400, .irq = 24, .irq_input = 0,
+         .pac_id = 80, .gclk_core = 32, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .regs_size = PIC32CM5164JH01100_TC_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = PIC32CM5164JH01100_TC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tc_count16_regs,
+         .nregs = PIC32CM5164JH01100_TC_COUNT16_NREGS,
+         .views = pic32cm5164jh01100_tc_views,
+@@ -626,6 +640,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .ip_version = "2.4.0", .base = 0x42004400, .slot_size = 0x400,
+         .irq = 25, .irq_input = 0, .pac_id = 81, .gclk_core = 36,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_ADC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_adc_regs,
+         .nregs = PIC32CM5164JH01100_ADC_NREGS,
+@@ -635,6 +650,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .ip_version = "2.4.0", .base = 0x42004800, .slot_size = 0x400,
+         .irq = 26, .irq_input = 0, .pac_id = 82, .gclk_core = 37,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_ADC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_adc_regs,
+         .nregs = PIC32CM5164JH01100_ADC_NREGS,
+@@ -651,8 +667,8 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .name = "DAC", .module = "DAC", .ip_id = "U2214", .ip_version = "2.1.0",
+         .base = 0x42005000, .slot_size = 0x400, .irq = 28, .irq_input = 0,
+         .pac_id = 84, .gclk_core = 38, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0,
+-        .regs_size = PIC32CM5164JH01100_DAC_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = PIC32CM5164JH01100_DAC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_dac_regs,
+         .nregs = PIC32CM5164JH01100_DAC_NREGS,
+     },
+@@ -666,8 +682,8 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .name = "CCL", .module = "CCL", .ip_id = "U2225", .ip_version = "2.0.0",
+         .base = 0x42005800, .slot_size = 0x400, .irq = -1, .irq_input = 0,
+         .pac_id = 86, .gclk_core = 40, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0,
+-        .regs_size = PIC32CM5164JH01100_CCL_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x2, .regs_size = PIC32CM5164JH01100_CCL_REGS_SIZE,
+         .regs = pic32cm5164jh01100_ccl_regs,
+         .nregs = PIC32CM5164JH01100_CCL_NREGS,
+     },
+@@ -685,6 +701,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .ip_version = "1.0.0", .base = 0x42006800, .slot_size = 0x400,
+         .irq = 29, .irq_input = 0, .pac_id = 90, .gclk_core = 41,
+         .gclk_slow = -1, .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .standby_offset = 0x0, .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_PDEC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_pdec_regs,
+         .nregs = PIC32CM5164JH01100_PDEC_NREGS,
+@@ -703,6 +720,7 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .ip_version = "3.1.1", .base = 0x43000000, .slot_size = 0x400, .irq = 9,
+         .irq_input = 1, .pac_id = 96, .gclk_core = 24, .gclk_slow = 17,
+         .dmac_rx = 49, .dmac_tx = 50, .flags = MCHP_INST_SHARED_IRQ,
++        .standby_offset = 0x0, .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_SERCOM_REGS_SIZE,
+         .regs = pic32cm5164jh01100_sercom_usart_ext_regs,
+         .nregs = PIC32CM5164JH01100_SERCOM_USART_EXT_NREGS,
+@@ -717,7 +735,8 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .ip_version = "3.1.1", .base = 0x43000400, .slot_size = 0x400,
+         .irq = 10, .irq_input = 1, .pac_id = 97, .gclk_core = 25,
+         .gclk_slow = 17, .dmac_rx = 51, .dmac_tx = 52,
+-        .flags = MCHP_INST_SHARED_IRQ,
++        .flags = MCHP_INST_SHARED_IRQ, .standby_offset = 0x0,
++        .standby_mask = 0x80, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_SERCOM_REGS_SIZE,
+         .regs = pic32cm5164jh01100_sercom_usart_ext_regs,
+         .nregs = PIC32CM5164JH01100_SERCOM_USART_EXT_NREGS,
+@@ -731,7 +750,8 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .name = "TC5", .module = "TC", .ip_id = "U2249", .ip_version = "3.0.0",
+         .base = 0x43000800, .slot_size = 0x400, .irq = 20, .irq_input = 1,
+         .pac_id = 98, .gclk_core = 33, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = MCHP_INST_SHARED_IRQ,
++        .dmac_tx = -1, .flags = MCHP_INST_SHARED_IRQ, .standby_offset = 0x0,
++        .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_TC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tc_count16_regs,
+         .nregs = PIC32CM5164JH01100_TC_COUNT16_NREGS,
+@@ -745,7 +765,8 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .name = "TC6", .module = "TC", .ip_id = "U2249", .ip_version = "3.0.0",
+         .base = 0x43000C00, .slot_size = 0x400, .irq = 21, .irq_input = 1,
+         .pac_id = 99, .gclk_core = 34, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = MCHP_INST_SHARED_IRQ,
++        .dmac_tx = -1, .flags = MCHP_INST_SHARED_IRQ, .standby_offset = 0x0,
++        .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_TC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tc_count16_regs,
+         .nregs = PIC32CM5164JH01100_TC_COUNT16_NREGS,
+@@ -759,7 +780,8 @@ static const MchpInstanceInfo pic32cm5164jh01100_instances[] = {
+         .name = "TC7", .module = "TC", .ip_id = "U2249", .ip_version = "3.0.0",
+         .base = 0x43001000, .slot_size = 0x400, .irq = 22, .irq_input = 1,
+         .pac_id = 100, .gclk_core = 35, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = MCHP_INST_SHARED_IRQ,
++        .dmac_tx = -1, .flags = MCHP_INST_SHARED_IRQ, .standby_offset = 0x0,
++        .standby_mask = 0x40, .standby_enable = 0x2,
+         .regs_size = PIC32CM5164JH01100_TC_REGS_SIZE,
+         .regs = pic32cm5164jh01100_tc_count16_regs,
+         .nregs = PIC32CM5164JH01100_TC_COUNT16_NREGS,
+diff --git a/include/hw/arm/pic32cm_soc.h b/include/hw/arm/pic32cm_soc.h
+index 787f5b2..60c3e04 100644
+--- a/include/hw/arm/pic32cm_soc.h
++++ b/include/hw/arm/pic32cm_soc.h
+@@ -88,6 +88,7 @@ struct Pic32cmSocState {
+     char *silicon_rev;
+     char *serial_number;
+     int32_t vddana_mv;              /* the analog models' "vdd" */
++    bool standby;                   /* asleep in PM.SLEEPCFG STANDBY */
+ };
+ 
+ /*
+diff --git a/include/hw/avr/avr64ea48_gen.h b/include/hw/avr/avr64ea48_gen.h
+index b6db080..790d6d6 100644
+--- a/include/hw/avr/avr64ea48_gen.h
++++ b/include/hw/avr/avr64ea48_gen.h
+@@ -328,7 +328,8 @@ static const MchpInstanceInfo avr64ea48_instances[] = {
+         .name = "CCL", .module = "CCL", .ip_id = "cla_ccl_v1", .ip_version = "",
+         .base = 0x000001C0, .slot_size = 0x18, .irq = 6, .irq_input = 0,
+         .pac_id = -1, .gclk_core = -1, .gclk_slow = -1, .dmac_rx = -1,
+-        .dmac_tx = -1, .flags = 0, .regs_size = AVR64EA48_CCL_REGS_SIZE,
++        .dmac_tx = -1, .flags = 0, .standby_offset = 0x0, .standby_mask = 0x40,
++        .standby_enable = 0x1, .regs_size = AVR64EA48_CCL_REGS_SIZE,
+         .regs = avr64ea48_ccl_regs, .nregs = AVR64EA48_CCL_NREGS,
+     },
+     {
+@@ -398,7 +399,8 @@ static const MchpInstanceInfo avr64ea48_instances[] = {
+         .name = "ADC0", .module = "ADC", .ip_id = "adc_12b_diff_ctrl_avr_v2",
+         .ip_version = "", .base = 0x00000600, .slot_size = 0x20, .irq = 23,
+         .irq_input = 0, .pac_id = -1, .gclk_core = -1, .gclk_slow = -1,
+-        .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .dmac_rx = -1, .dmac_tx = -1, .flags = 0, .standby_offset = 0x0,
++        .standby_mask = 0x80, .standby_enable = 0x1,
+         .regs_size = AVR64EA48_ADC_REGS_SIZE, .regs = avr64ea48_adc_regs,
+         .nregs = AVR64EA48_ADC_NREGS,
+     },
+@@ -406,7 +408,8 @@ static const MchpInstanceInfo avr64ea48_instances[] = {
+         .name = "AC0", .module = "AC", .ip_id = "cmp_control_v8",
+         .ip_version = "", .base = 0x00000680, .slot_size = 0x8, .irq = 22,
+         .irq_input = 0, .pac_id = -1, .gclk_core = -1, .gclk_slow = -1,
+-        .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .dmac_rx = -1, .dmac_tx = -1, .flags = 0, .standby_offset = 0x0,
++        .standby_mask = 0x80, .standby_enable = 0x1,
+         .regs_size = AVR64EA48_AC_REGS_SIZE, .regs = avr64ea48_ac_regs,
+         .nregs = AVR64EA48_AC_NREGS,
+     },
+@@ -414,7 +417,8 @@ static const MchpInstanceInfo avr64ea48_instances[] = {
+         .name = "AC1", .module = "AC", .ip_id = "cmp_control_v8",
+         .ip_version = "", .base = 0x00000688, .slot_size = 0x8, .irq = 26,
+         .irq_input = 0, .pac_id = -1, .gclk_core = -1, .gclk_slow = -1,
+-        .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .dmac_rx = -1, .dmac_tx = -1, .flags = 0, .standby_offset = 0x0,
++        .standby_mask = 0x80, .standby_enable = 0x1,
+         .regs_size = AVR64EA48_AC_REGS_SIZE, .regs = avr64ea48_ac_regs,
+         .nregs = AVR64EA48_AC_NREGS,
+     },
+@@ -422,7 +426,8 @@ static const MchpInstanceInfo avr64ea48_instances[] = {
+         .name = "DAC0", .module = "DAC", .ip_id = "dac_nbit_ctrl_avr_v6",
+         .ip_version = "", .base = 0x000006A0, .slot_size = 0x4, .irq = -1,
+         .irq_input = 0, .pac_id = -1, .gclk_core = -1, .gclk_slow = -1,
+-        .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .dmac_rx = -1, .dmac_tx = -1, .flags = 0, .standby_offset = 0x0,
++        .standby_mask = 0x80, .standby_enable = 0x1,
+         .regs_size = AVR64EA48_DAC_REGS_SIZE, .regs = avr64ea48_dac_regs,
+         .nregs = AVR64EA48_DAC_NREGS,
+     },
+@@ -470,7 +475,8 @@ static const MchpInstanceInfo avr64ea48_instances[] = {
+         .name = "TCA0", .module = "TCA", .ip_id = "tmr_16b_pwm_v1",
+         .ip_version = "", .base = 0x00000A00, .slot_size = 0x40, .irq = 8,
+         .irq_input = 0, .pac_id = -1, .gclk_core = -1, .gclk_slow = -1,
+-        .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .dmac_rx = -1, .dmac_tx = -1, .flags = 0, .standby_offset = 0x0,
++        .standby_mask = 0x80, .standby_enable = 0x1,
+         .regs_size = AVR64EA48_TCA_REGS_SIZE, .regs = avr64ea48_tca_single_regs,
+         .nregs = AVR64EA48_TCA_SINGLE_NREGS, .views = avr64ea48_tca_views,
+         .nviews = AVR64EA48_TCA_NVIEWS,
+@@ -482,7 +488,8 @@ static const MchpInstanceInfo avr64ea48_instances[] = {
+         .name = "TCA1", .module = "TCA", .ip_id = "tmr_16b_pwm_v1",
+         .ip_version = "", .base = 0x00000A40, .slot_size = 0x40, .irq = 38,
+         .irq_input = 0, .pac_id = -1, .gclk_core = -1, .gclk_slow = -1,
+-        .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .dmac_rx = -1, .dmac_tx = -1, .flags = 0, .standby_offset = 0x0,
++        .standby_mask = 0x80, .standby_enable = 0x1,
+         .regs_size = AVR64EA48_TCA_REGS_SIZE, .regs = avr64ea48_tca_single_regs,
+         .nregs = AVR64EA48_TCA_SINGLE_NREGS, .views = avr64ea48_tca_views,
+         .nviews = AVR64EA48_TCA_NVIEWS,
+@@ -494,7 +501,8 @@ static const MchpInstanceInfo avr64ea48_instances[] = {
+         .name = "TCB0", .module = "TCB", .ip_id = "tmr_16b_capture_v1",
+         .ip_version = "", .base = 0x00000B00, .slot_size = 0x10, .irq = 13,
+         .irq_input = 0, .pac_id = -1, .gclk_core = -1, .gclk_slow = -1,
+-        .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .dmac_rx = -1, .dmac_tx = -1, .flags = 0, .standby_offset = 0x0,
++        .standby_mask = 0x40, .standby_enable = 0x1,
+         .regs_size = AVR64EA48_TCB_REGS_SIZE, .regs = avr64ea48_tcb_regs,
+         .nregs = AVR64EA48_TCB_NREGS,
+     },
+@@ -502,7 +510,8 @@ static const MchpInstanceInfo avr64ea48_instances[] = {
+         .name = "TCB1", .module = "TCB", .ip_id = "tmr_16b_capture_v1",
+         .ip_version = "", .base = 0x00000B10, .slot_size = 0x10, .irq = 14,
+         .irq_input = 0, .pac_id = -1, .gclk_core = -1, .gclk_slow = -1,
+-        .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .dmac_rx = -1, .dmac_tx = -1, .flags = 0, .standby_offset = 0x0,
++        .standby_mask = 0x40, .standby_enable = 0x1,
+         .regs_size = AVR64EA48_TCB_REGS_SIZE, .regs = avr64ea48_tcb_regs,
+         .nregs = AVR64EA48_TCB_NREGS,
+     },
+@@ -510,7 +519,8 @@ static const MchpInstanceInfo avr64ea48_instances[] = {
+         .name = "TCB2", .module = "TCB", .ip_id = "tmr_16b_capture_v1",
+         .ip_version = "", .base = 0x00000B20, .slot_size = 0x10, .irq = 28,
+         .irq_input = 0, .pac_id = -1, .gclk_core = -1, .gclk_slow = -1,
+-        .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .dmac_rx = -1, .dmac_tx = -1, .flags = 0, .standby_offset = 0x0,
++        .standby_mask = 0x40, .standby_enable = 0x1,
+         .regs_size = AVR64EA48_TCB_REGS_SIZE, .regs = avr64ea48_tcb_regs,
+         .nregs = AVR64EA48_TCB_NREGS,
+     },
+@@ -518,7 +528,8 @@ static const MchpInstanceInfo avr64ea48_instances[] = {
+         .name = "TCB3", .module = "TCB", .ip_id = "tmr_16b_capture_v1",
+         .ip_version = "", .base = 0x00000B30, .slot_size = 0x10, .irq = 37,
+         .irq_input = 0, .pac_id = -1, .gclk_core = -1, .gclk_slow = -1,
+-        .dmac_rx = -1, .dmac_tx = -1, .flags = 0,
++        .dmac_rx = -1, .dmac_tx = -1, .flags = 0, .standby_offset = 0x0,
++        .standby_mask = 0x40, .standby_enable = 0x1,
+         .regs_size = AVR64EA48_TCB_REGS_SIZE, .regs = avr64ea48_tcb_regs,
+         .nregs = AVR64EA48_TCB_NREGS,
+     },
+diff --git a/include/hw/mchp/mchp_device.h b/include/hw/mchp/mchp_device.h
+index 1e4c691..0a531d7 100644
+--- a/include/hw/mchp/mchp_device.h
++++ b/include/hw/mchp/mchp_device.h
+@@ -81,6 +81,14 @@ typedef struct MchpInstanceInfo {
+     uint8_t channels;               /* TCC compare channels, 0: n/a */
+     uint8_t outputs;                /* TCC OW_NUM: waveform outputs, 0 */
+     uint8_t features;               /* TCC optional units, MCHP_TCC_FEAT_* */
++    /*
++     * CTRLA's (or CTRL's) RUNSTDBY and ENABLE masks at standby_offset: an
++     * enabled instance with RUNSTDBY keeps its GCLK channel running in
++     * standby. standby_mask 0: the instance has no such bit.
++     */
++    uint16_t standby_offset;
++    uint32_t standby_mask;
++    uint32_t standby_enable;
+     uint32_t regs_size;             /* register file bytes (MCHP_<IP>_SIZE) */
+     const MchpRegInfo *regs;        /* view at reset; NULL: no table */
+     unsigned nregs;
+diff --git a/include/hw/misc/mchp_sysctrl.h b/include/hw/misc/mchp_sysctrl.h
+index a75091f..2e6a5d5 100644
+--- a/include/hw/misc/mchp_sysctrl.h
++++ b/include/hw/misc/mchp_sysctrl.h
+@@ -39,9 +39,18 @@
+  */
+ #define TYPE_MCHP_GCLK "mchp-gclk"
+ 
++/*
++ * Standby (@standby true): peripheral channel m keeps running only if bit
++ * m of @keep is set; false: every channel runs as configured
++ */
++void mchp_gclk_set_standby(DeviceState *gclk, bool standby, uint64_t keep);
++
+ /* MCLK U2234. Clock input "gclk-main" (generator 0); output "cpu". */
+ #define TYPE_MCHP_MCLK "mchp-mclk"
+ 
++/* Standby: the "cpu" clock (and with it SysTick) stops */
++void mchp_mclk_set_standby(DeviceState *mclk, bool standby);
++
+ /*
+  * NVMCTRL 03929: commands, the page buffer and the programming of the
+  * flash arrays, with the PIC32CM MC00's timings. The SoC maps the arrays as
+@@ -83,7 +92,10 @@ MemTxResult mchp_nvmctrl_load(DeviceState *nvm, MchpNvmArray array,
+ #define TYPE_MCHP_WDT "mchp-wdt"
+ #define MCHP_WDT_SYSTEM_RESET "system-reset"
+ 
+-/* PM U2240: SLEEPCFG/STDBYCFG store and read back; WFI is the CPU's. */
++/*
++ * PM U2240: SLEEPCFG/STDBYCFG store and read back; the SoC's sleep hook
++ * acts on SLEEPCFG at a WFI (STANDBY stops the clocks nobody asks for).
++ */
+ #define TYPE_MCHP_PM "mchp-pm"
+ 
+ /* PAC U2120: WRCTRL/STATUSx bookkeeping and errors, no enforcement. */
+diff --git a/target/arm/cpu.c b/target/arm/cpu.c
+index fa3a01c..4dc3401 100644
+--- a/target/arm/cpu.c
++++ b/target/arm/cpu.c
+@@ -22,6 +22,7 @@
+ #include "qemu/qemu-print.h"
+ #include "qemu/timer.h"
+ #include "qemu/log.h"
++#include "qemu/main-loop.h"
+ #include "exec/page-vary.h"
+ #include "system/whpx.h"
+ #include "target/arm/tcg/idau.h"
+@@ -870,6 +871,22 @@ static bool arm_cpu_internal_is_big_endian(CPUState *cs)
+ }
+ 
+ #ifdef CONFIG_TCG
++void arm_cpu_sleep_notify(ARMCPU *cpu, bool asleep)
++{
++    bool locked = bql_locked();
++
++    if (!cpu->sleep_hook) {
++        return;
++    }
++    if (!locked) {
++        bql_lock();
++    }
++    cpu->sleep_hook(cpu->sleep_opaque, asleep);
++    if (!locked) {
++        bql_unlock();
++    }
++}
++
+ bool arm_cpu_exec_halt(CPUState *cs)
+ {
+     bool leave_halt = cpu_has_work(cs);
+@@ -880,6 +897,9 @@ bool arm_cpu_exec_halt(CPUState *cs)
+         if (cpu->wfxt_timer) {
+             timer_del(cpu->wfxt_timer);
+         }
++        if (cpu->env.halt_reason == HALT_WFI) {
++            arm_cpu_sleep_notify(cpu, false);   /* Peripheral Pretender */
++        }
+         /* clear the halt reason */
+         cpu->env.halt_reason = NOT_HALTED;
+     }
+diff --git a/target/arm/cpu.h b/target/arm/cpu.h
+index 750cb86..205e1ee 100644
+--- a/target/arm/cpu.h
++++ b/target/arm/cpu.h
+@@ -969,6 +969,14 @@ struct ArchCPU {
+     /* Timer used for WFxT timeouts OR event stream events */
+     QEMUTimer *wfxt_timer;
+ 
++    /*
++     * Peripheral Pretender: called (with the BQL) when WFI halts the CPU
++     * (asleep true) and when it leaves that halt, so that a board can stop
++     * its clocks for the sleep mode it selected; NULL: none
++     */
++    void (*sleep_hook)(void *opaque, bool asleep);
++    void *sleep_opaque;
++
+     /* GPIO outputs for generic timer */
+     qemu_irq gt_timer_outputs[NUM_GTIMERS];
+     /* GPIO output for GICv3 maintenance interrupt signal */
+diff --git a/target/arm/internals.h b/target/arm/internals.h
+index 7b5ae31..8f8849b 100644
+--- a/target/arm/internals.h
++++ b/target/arm/internals.h
+@@ -434,6 +434,9 @@ void arm_cpu_synchronize_from_tb(CPUState *cs, const TranslationBlock *tb);
+ 
+ /* Our implementation of TCGCPUOps::cpu_exec_halt */
+ bool arm_cpu_exec_halt(CPUState *cs);
++
++/* Peripheral Pretender: run cpu->sleep_hook, with the BQL held */
++void arm_cpu_sleep_notify(ARMCPU *cpu, bool asleep);
+ int arm_cpu_mmu_index(CPUState *cs, bool ifetch);
+ #endif /* CONFIG_TCG */
+ 
+diff --git a/target/arm/tcg/op_helper.c b/target/arm/tcg/op_helper.c
+index c4433be..9868723 100644
+--- a/target/arm/tcg/op_helper.c
++++ b/target/arm/tcg/op_helper.c
+@@ -406,6 +406,7 @@ void HELPER(wfi)(CPUARMState *env, uint32_t insn_len)
+     env->halt_reason = HALT_WFI;
+     cs->exception_index = EXCP_HLT;
+     cs->halted = 1;
++    arm_cpu_sleep_notify(env_archcpu(env), true);  /* Peripheral Pretender */
+     cpu_loop_exit(cs);
+ #endif
+ }
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index 5e42027..d6ede02 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -253,7 +253,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-nvmctrl-test', 'pic32cm-wdt-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-dmac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-adc-test', 'pic32cm-dac-test', 'pic32cm-click-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-nvmctrl-test', 'pic32cm-wdt-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-dmac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-adc-test', 'pic32cm-dac-test', 'pic32cm-pm-test', 'pic32cm-click-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-pm-test.c b/tests/qtest/pic32cm-pm-test.c
+new file mode 100644
+index 0000000..266411e
+--- /dev/null
++++ b/tests/qtest/pic32cm-pm-test.c
+@@ -0,0 +1,130 @@
++/*
++ * QTest for standby on the PIC32CM MC00 (pic32cm-mc00-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The SoC's "standby" property does what a WFI with PM.SLEEPCFG =
++ * STANDBY does: GCLK channels that no peripheral asks for stop, the CPU
++ * clock (SysTick) stops. firmware/hello APP=sleep checks the same against
++ * silicon.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++#include "qobject/qdict.h"
++
++#define MACHINE         "-M pic32cm-mc00-cpro"
++#define SOC_PATH        "/machine/soc"
++
++#define GCLK_PCHCTRL    0x40001C80
++#define TC0             0x42003000
++#define TC2             0x42003800
++#define TC0_GCLK_ID     25              /* TC0 and TC1 */
++#define TC2_GCLK_ID     26              /* TC2 and TC3 */
++#define R_CTRLA         0x00
++#define R_CTRLBSET      0x05
++#define R_COUNT         0x14
++#define ENABLE          BIT(1)
++#define RUNSTDBY        BIT(6)
++#define CMD_READSYNC    (4 << 5)
++#define SYST_CSR        0xE000E010
++#define SYST_RVR        0xE000E014
++#define SYST_CVR        0xE000E018
++#define MS              1000000
++
++static void standby(QTestState *qts, bool on)
++{
++    qtest_qmp_assert_success(qts, "{ 'execute': 'qom-set', 'arguments':"
++                             " { 'path': '" SOC_PATH "',"
++                             " 'property': 'standby', 'value': %i } }", on);
++}
++
++/* TC @base in COUNT16 on GCLK0 (4 MHz): a tick every 250 ns */
++static void tc_start(QTestState *qts, uint32_t base, unsigned id,
++                     uint32_t ctrla)
++{
++    qtest_writel(qts, GCLK_PCHCTRL + 4 * id, 0x40);
++    qtest_writel(qts, base + R_CTRLA, ctrla);
++    qtest_writel(qts, base + R_CTRLA, ctrla | ENABLE);
++}
++
++static uint32_t tc_count(QTestState *qts, uint32_t base)
++{
++    qtest_writeb(qts, base + R_CTRLBSET, CMD_READSYNC);
++    return qtest_readw(qts, base + R_COUNT);
++}
++
++/*
++ * TC0 without RUNSTDBY stops in standby; TC2 with it runs; so does TC1 on
++ * TC0's channel once TC1 asks for it (silicon: everyone on a running
++ * channel counts)
++ */
++static void test_channels(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++    uint32_t a, b;
++
++    tc_start(qts, TC0, TC0_GCLK_ID, 0);
++    tc_start(qts, TC2, TC2_GCLK_ID, RUNSTDBY);
++    qtest_clock_step(qts, 1000);
++    a = tc_count(qts, TC0);
++    b = tc_count(qts, TC2);
++    standby(qts, true);
++    qtest_clock_step(qts, 5000);                /* 20 ticks */
++    standby(qts, false);
++    g_assert_cmpuint(tc_count(qts, TC0), ==, a);
++    g_assert_cmpuint(tc_count(qts, TC2), ==, (b + 20) & 0xFFFF);
++    qtest_clock_step(qts, 2500);                /* 10 ticks, awake */
++    g_assert_cmpuint(tc_count(qts, TC0), ==, (a + 10) & 0xFFFF);
++    qtest_quit(qts);
++}
++
++/* TC1 with RUNSTDBY keeps the shared channel, and TC0 with it, running */
++static void test_shared_channel(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++    uint32_t a;
++
++    tc_start(qts, TC0, TC0_GCLK_ID, 0);
++    tc_start(qts, TC0 + 0x400, TC0_GCLK_ID, RUNSTDBY);      /* TC1 */
++    qtest_clock_step(qts, 1000);
++    a = tc_count(qts, TC0);
++    standby(qts, true);
++    qtest_clock_step(qts, 5000);
++    standby(qts, false);
++    g_assert_cmpuint(tc_count(qts, TC0), ==, (a + 20) & 0xFFFF);
++    qtest_quit(qts);
++}
++
++/* SysTick on the CPU clock holds its count in standby and goes on after */
++static void test_systick(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++    uint32_t v;
++
++    qtest_writel(qts, SYST_RVR, 0xFFFFFF);
++    qtest_writel(qts, SYST_CVR, 0);
++    qtest_writel(qts, SYST_CSR, 0x5);           /* CPU clock, enabled */
++    qtest_clock_step(qts, MS);
++    standby(qts, true);
++    v = qtest_readl(qts, SYST_CVR);
++    qtest_clock_step(qts, 10 * MS);
++    g_assert_cmphex(qtest_readl(qts, SYST_CVR), ==, v);
++    standby(qts, false);
++    qtest_clock_step(qts, MS);
++    g_assert_cmphex(qtest_readl(qts, SYST_CVR), <, v);
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++    qtest_add_func("pic32cm-pm/channels", test_channels);
++    qtest_add_func("pic32cm-pm/shared-channel", test_shared_channel);
++    qtest_add_func("pic32cm-pm/systick", test_systick);
++    return g_test_run();
++}
+-- 
+2.53.0.windows.2
+

@@ -437,6 +437,20 @@ def ip_tables(ds: DeviceSem, ip: IpSem) -> str:
 # SoC description header
 
 
+def _runstdby(ip) -> tuple[int, int, int] | None:
+    """(offset, RUNSTDBY mask, ENABLE mask) of CTRLA or CTRL, in any view"""
+    if ip is None:
+        return None
+    for view in ip.views:
+        for r in view.regs:
+            if r.name not in ("CTRLA", "CTRL"):
+                continue
+            masks = {f.name: f.mask for f in r.fields}
+            if "RUNSTDBY" in masks and "ENABLE" in masks:
+                return r.offset, masks["RUNSTDBY"], masks["ENABLE"]
+    return None
+
+
 def _inst_entry(ds: DeviceSem, i: InstanceSem) -> list[str]:
     items = [f".name = {c_str(i.name)}", f".module = {c_str(i.module)}",
              f".ip_id = {c_str(i.ip_id)}", f".ip_version = {c_str(i.ip_version)}",
@@ -466,6 +480,13 @@ def _inst_entry(ds: DeviceSem, i: InstanceSem) -> list[str]:
                  ("DTI", "SWAP", "OTMX", "PG", "DITHERING")
                  if i.params.get(p, "0") not in ("0", "")]
         items.append(".features = " + (" | ".join(feats) or "0"))
+    standby = _runstdby(i.ip)
+    if standby:
+        # CTRLA's (or CTRL's) RUNSTDBY and ENABLE: whether the instance asks
+        # for its GCLK channel in standby
+        items += [f".standby_offset = 0x{standby[0]:X}",
+                  f".standby_mask = 0x{standby[1]:X}",
+                  f".standby_enable = 0x{standby[2]:X}"]
     ip = i.ip
     if ip.views and not ip.core:
         view = ip.view(ip.default_view)

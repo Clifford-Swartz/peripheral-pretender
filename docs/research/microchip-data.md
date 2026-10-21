@@ -187,6 +187,11 @@ I examined PIC32CM-JH DFP 1.3.221 (about 91 MB, 24 parts). For each part it ship
      enable sets EMPTY, even with DATABUF full; with DITHER, EMPTY comes every 16th START from
      the enable and UNDERRUN only on the START opening a group, while a full DATABUF moves at any
      START (`dac-u2214.md` section 3).
+   - PM and standby: SLEEPCFG resets to 0, a value Table 16-1 calls reserved; in standby a
+     requested GCLK channel runs on demand even with its generator's and OSC48M's RUNSTDBY at
+     0, where Table 16-2 says such a source stops; a channel (not a peripheral) is gated, so a
+     TC without RUNSTDBY counts when another peripheral on its channel asks for it
+     (`pm-u2240.md` section 3).
 
 ## Table: DFP inventory
 | folder / file | contents | approx size | contribution to a QEMU twin |

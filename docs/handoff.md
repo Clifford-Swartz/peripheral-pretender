@@ -620,11 +620,17 @@ and UNDERRUN, SYNCBUSY.DATA/DATABUF held until a START (writes meanwhile dropped
 and DMA trigger (the last DMA trigger: all are wired now), dithering's 16-START rhythm, from
 `dacprobe`..`dacprobe3`, checked by `dacbuf`. Note `dac-u2214.md`, playbook `peripherals/dac.md`.
 
+**Sleep and standby** (patch 0073): WFI with PM.SLEEPCFG = STANDBY stops every GCLK channel that
+no enabled RUNSTDBY peripheral asks for and the CPU clock (SysTick), as `sleepprobe` and
+`sleepprobe2` showed on silicon (a channel is gated, not a peripheral; sources and generators run
+on demand); a TC/TCC resumes where it stopped; only what still runs wakes the core. Checked by
+`sleep` and qtest `pic32cm-pm-test`. A pp-qemu hook in target/arm (`ARMCPU.sleep_hook`) tells the
+SoC about WFI. Note `pm-u2240.md`, playbook `peripherals/pm.md`.
+
 Next on the MC00, in order (the owner's list of 2026-10-21):
 
-1. **Sleep and standby** (PM).
-2. A generic **pad-to-peripheral input path**, then **PDEC** and **CCL**.
-3. The long tail: MTB, PAC protection, DSU CRC32, SERCOM client modes, clock failure detection,
+1. A generic **pad-to-peripheral input path**, then **PDEC** and **CCL**.
+2. The long tail: MTB, PAC protection, DSU CRC32, SERCOM client modes, clock failure detection,
    BOD, RTC tamper, PORT sampling, MCLK gating.
 
 The JH01, SAM E51 and AVR blocks wait for their boards to be plugged in, so they can be checked

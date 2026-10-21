@@ -1,0 +1,10 @@
+PP sleep: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+reset sleepcfg=0x00 stdbycfg=0x0400 ok
+idle woke=0x01 systick_ms=49 tc0=3068 tc2=3068 ok
+standby_first woke=0x01 tc0=252 tc2=3129 ok
+standby woke=0x01 systick_us=13 tc0=252 tc2=3006 ok
+idle_tc4 woke=0x02 tc4=313 rtc=8 ok
+standby_tc4_stopped woke_rtc=0x01 tc4=1 ok
+standby_tc4_runstdby woke=0x02 tc4=313 rtc=15 ok
+shared_channel woke=0x01 tc0=3194 ok
+PP:EXIT 0

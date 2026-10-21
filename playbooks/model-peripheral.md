@@ -226,3 +226,10 @@ These cost a probe run each to learn. Check new probes against them.
   scripts with the Write tool, or edit with the Edit tool.
 - **Twin runs use icount.** `twin` and the golden tests use `--icount 5`, so the twin's timing
   is deterministic. Leave timing checks a margin for the board's clock error anyway.
+- **A model with timing must stop at 0 Hz.** Standby stops the GCLK channels nobody asks for
+  (`peripherals/pm.md`), and so does disabling a channel. On ClockPreUpdate bring the state up to
+  the moment (ticks since the last event included), and when the old rate was 0 move the time base
+  to now: the TC once counted the whole standby at once on waking up.
+- **Print what a check checks.** A flag checked as its mask prints in `put_range()`'s few digits
+  (bit 18 in two digits reads 0x00), and a timed-out wait looks like a long one: print 0/1 and
+  how a wait ended.

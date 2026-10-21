@@ -15,6 +15,7 @@ changing or reusing a model. When you learn something new against silicon, add i
 | NVMCTRL (flash programming) | 03929 | [nvmctrl.md](nvmctrl.md) |
 | ADC (conversions, sequences, events, DMA) | U2247 | [adc.md](adc.md) |
 | DAC (DATABUF, START, EMPTY, DMA, dithering) | U2214 | [dac.md](dac.md) |
+| PM (sleep modes, standby clock gating) | U2240 | [pm.md](pm.md) |
 | SAM D5x: DMAC, USB (with a host), QSPI, DAC, EVSYS, clocks, ADC | U2503, U2222, U2008, U2502, U2504, ... | [samd5x.md](samd5x.md) |
 
 The procedure for a new model, or a gap in one, is [../model-peripheral.md](../model-peripheral.md):
