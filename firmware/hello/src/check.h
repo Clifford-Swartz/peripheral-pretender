@@ -12,6 +12,12 @@
  *     already be pending): space timed events with margin, or use
  *     clock_zero()/now_us() and never print while timing (a print blocks
  *     longer than a SysTick period, and wraps are lost)
+ *   - after scope_start() a SysTick period is 2^24 cycles, so delay_ms()
+ *     waits about 350 ms per millisecond: use delay_us() there
+ *   - put_range() prints @digits hex digits: check a single flag as 0/1,
+ *     not as its mask (bit 18 printed in two digits reads 0x00)
+ *   - a bounded wait that timed out looks like a long delay: when a wait
+ *     can end by timing out, print which way it ended
  *
  * Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
  */

@@ -189,7 +189,7 @@ WRBADDR + 16 × ch. Further descriptors are linked through DESCADDR (§24.5.2.3 
 | 0x21-0x23 | TC4 OVF, MC0, MC1 | same | same |
 | 0x24 / 0x25 | ADC0 / ADC1 RESRDY | set when a result (or average) is ready, cleared by the RESULT read (§36.6.4 p.737) | level: INTFLAG.RESRDY at base + 0x06, with a DMAC kick |
 | 0x26 | SDADC RESRDY | same (§37.6.4) | level: INTFLAG.RESRDY at base + 0x07, with a DMAC kick |
-| 0x27 | DAC EMPTY | set when DATABUF moves into the DAC, cleared by a DATABUF write or by writing INTFLAG.EMPTY. Requested as soon as the DAC is enabled (§39.6.3) | not wired |
+| 0x27 | DAC EMPTY | set when DATABUF moves into the DAC, cleared by a DATABUF write or by writing INTFLAG.EMPTY. Requested as soon as the DAC is enabled (§39.6.3) | level: INTFLAG.EMPTY at base + 0x06, with a DMAC kick (silicon: every enable sets EMPTY, `dac-u2214.md`) |
 | 0x28-0x3F | reserved | | |
 
 The ATDF value-group `DMAC_CHCTRLB__TRIGSRC` (and so dmac.h's `DMAC_CHCTRLB_TRIGSRC_*_Val`) matches
@@ -475,7 +475,7 @@ are IP-neutral except for how they read channel configuration. These are suggest
 
 11. **SoC**: add `{ "DMAC", TYPE_MCHP_DMAC_U2223, "U2223" }` to `pic32cm_models[]`. Trigger ids already
     come from `dmac_triggers` (correct, §2.4), and `MCHP_DMAC_MAX_TRIGGERS` = 128 covers 6-bit TRIGSRC.
-    The DAC's EMPTY trigger is not wired yet (§2.4).
+    All of §2.4's triggers are wired.
 12. **Places where the U2503 model and the U2223 data sheet disagree.** Check the SAM D5x data sheet
     before changing the shared engine, since its wording is probably the same:
     1. Invalid descriptor: the model raises TERR and FERR and disables. The DS says SUSP and FERR, channel

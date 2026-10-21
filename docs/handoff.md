@@ -615,13 +615,16 @@ RESRDY, from `dmaprobe`, checked by `dmatrig` and the DMAC qtest. A level reques
 a channel is enabled now moves at once, as on silicon. Peripherals that set a level trigger call
 `mchp_dmac_kick_machine()`. Note `dmac-u2223.md` section 8.
 
+**DAC data buffer** (patch 0072): DATABUF moved by the START event, EMPTY (set at every enable)
+and UNDERRUN, SYNCBUSY.DATA/DATABUF held until a START (writes meanwhile dropped), the EMPTY event
+and DMA trigger (the last DMA trigger: all are wired now), dithering's 16-START rhythm, from
+`dacprobe`..`dacprobe3`, checked by `dacbuf`. Note `dac-u2214.md`, playbook `peripherals/dac.md`.
+
 Next on the MC00, in order (the owner's list of 2026-10-21):
 
-1. **The DAC's DATABUF, START event, EMPTY/UNDERRUN and its EMPTY DMA trigger** (the last trigger
-   not wired; the U2214 model converts DATA writes only).
-2. **Sleep and standby** (PM).
-3. A generic **pad-to-peripheral input path**, then **PDEC** and **CCL**.
-4. The long tail: MTB, PAC protection, DSU CRC32, SERCOM client modes, clock failure detection,
+1. **Sleep and standby** (PM).
+2. A generic **pad-to-peripheral input path**, then **PDEC** and **CCL**.
+3. The long tail: MTB, PAC protection, DSU CRC32, SERCOM client modes, clock failure detection,
    BOD, RTC tamper, PORT sampling, MCLK gating.
 
 The JH01, SAM E51 and AVR blocks wait for their boards to be plugged in, so they can be checked

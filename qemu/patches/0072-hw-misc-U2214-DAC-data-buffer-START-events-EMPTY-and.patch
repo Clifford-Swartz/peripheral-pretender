@@ -1,0 +1,678 @@
+From ffac562a8a502dc98c2542751090ef105dfd89f7 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 21 Oct 2026 13:04:30 -0700
+Subject: [PATCH] hw/misc: U2214 DAC data buffer, START events, EMPTY and DMA
+
+The PIC32CM DAC's buffered path as PIC32CM MC00 silicon showed it
+(firmware/hello APP=dacprobe..dacprobe3, checked by dacbuf):
+
+- Every enable sets INTFLAG.EMPTY, whatever DATABUF holds; a DATA or
+  DATABUF write clears it.
+- A DATABUF write fills the buffer; SYNCBUSY.DATA and DATABUF read 1
+  until a START event moves it into DATA, and writes meanwhile are
+  dropped (the data sheet's rule for writes during synchronization).
+- A START event ("start-event-in", EVCTRL.STARTEI, rising edge or
+  falling with INVEI) moves a full DATABUF; without dithering every
+  START sets EMPTY, and one finding DATABUF empty sets UNDERRUN too.
+- CTRLB.DITHER: the 14-bit value, output as its average; EMPTY comes
+  every 16th START from the enable and UNDERRUN only on the START that
+  opens a group of 16, while a full DATABUF moves at any START.
+- Setting EMPTY pulses "empty-event" (EVCTRL.EMPTYEO) and is the EMPTY
+  DMA request: the SoC wires DMAC_ID_EMPTY as a level trigger on
+  INTFLAG, and the DAC kicks the DMAC. All PIC32CM DMA triggers are
+  wired now.
+
+The overlay gives SYNCBUSY a read hook. qtest pic32cm-dac-test: EMPTY
+at the enable, DATABUF and START, INVEI, dithering, DMA.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst         |   9 +-
+ hw/arm/pic32cm_soc.c                          |   5 +
+ hw/misc/mchp_dac_u2214.c                      | 188 +++++++++++++--
+ include/hw/mchp/gen/dac_u2214.h               |   2 +-
+ .../mchp/gen/pic32cm1216mc00048/dac_u2214.h   |   5 +-
+ .../mchp/gen/pic32cm5164jh01100/dac_u2214.h   |   5 +-
+ include/hw/misc/mchp_dac.h                    |   2 +
+ tests/qtest/meson.build                       |   2 +-
+ tests/qtest/pic32cm-dac-test.c                | 219 ++++++++++++++++++
+ 9 files changed, 404 insertions(+), 33 deletions(-)
+ create mode 100644 tests/qtest/pic32cm-dac-test.c
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index ff8ecd8..00204e1 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -131,7 +131,10 @@ Supported devices
+   from the ADC's ``ain`` property (``"channel=millivolts,..."``), or are
+   VDDANA or 0 while the PORT drives the pad; INTREF, the scaled supplies
+   and the DAC are internal inputs. DAC (U2214): the 10-bit output on VOUT
+-  (PA02, which ADC0 reads back) and to the ADC and AC. SDADC (U2260,
++  (PA02, which ADC0 reads back) and to the ADC and AC, with DATABUF moved
++  by the START event, the EMPTY and UNDERRUN flags, the EMPTY event and
++  DMA request, SYNCBUSY while DATABUF waits, and dithering (the average
++  of its 16 sub-conversions), as on a PIC32CM MC00. SDADC (U2260,
+   PIC32CM MC00 only): conversions of its differential inputs.
+ - AC (U2245): two (MC00) or four (JH01) comparators of AIN pads (``ain``,
+   as the ADC), VSCALE, INTREF and the DAC, with the start-up times,
+@@ -153,8 +156,8 @@ Supported devices
+   static or round-robin priority, the CRC-16/CRC-32 engine (I/O and
+   channel modes), event inputs and outputs, INTPEND and ACTIVE, as
+   measured on PIC32CM MC00 silicon. SERCOM, TC (OVF), TCC (OVF, and MCx
+-  at each compare match or capture), ADC, SDADC and TSENS (RESRDY)
+-  triggers are wired; the DAC's EMPTY trigger is not yet.
++  at each compare match or capture), ADC, SDADC and TSENS (RESRDY) and
++  DAC (EMPTY) triggers are wired.
+ - LED0 (PC05, active low) is a QEMU LED device; its state changes show
+   in the ``led_set_intensity`` trace event. SW0 (PB19, to ground) is the
+   machine property ``sw0-pressed``.
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index 4552649..e7e0fef 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -676,6 +676,11 @@ static void pic32cm_dmac_triggers(Pic32cmSocState *s, DeviceState *dmac)
+             mchp_dmac_set_trigger(dmac, ref->id, info->base + 0x07, 0x01);
+             continue;
+         }
++        if (!strcmp(ref->param, "DMAC_ID_EMPTY") &&
++            !strcmp(info->module, "DAC") && !strcmp(info->ip_id, "U2214")) {
++            mchp_dmac_set_trigger(dmac, ref->id, info->base + 0x06, 0x02);
++            continue;
++        }
+         if (strcmp(info->module, "SERCOM")) {
+             continue;
+         }
+diff --git a/hw/misc/mchp_dac_u2214.c b/hw/misc/mchp_dac_u2214.c
+index 4d382b3..91cd506 100644
+--- a/hw/misc/mchp_dac_u2214.c
++++ b/hw/misc/mchp_dac_u2214.c
+@@ -12,15 +12,34 @@
+  * parts: the ADC reads it back there, see mchp_dac_u2214_vout_mv()); with
+  * IOEN it feeds the ADC as its DAC reference and the AC as its DAC input
+  * (mchp_dac_u2214_add_notifier() hears of changes). STATUS.READY reads 1
+- * while enabled, and SYNCBUSY never shows busy. "vout" (read-only) is the
+- * VOUT pin's voltage in mV, -1 while the DAC does not drive it.
++ * while enabled. "vout" (read-only) is the VOUT pin's voltage in mV, -1
++ * while the DAC does not drive it.
+  *
+- * Checked on PIC32CM MC00 silicon (firmware/hello APP=dac, read back by
+- * ADC0 on PA02): linear from 0 to 1023 against VDDANA, INTREF full scale
+- * at 1.02 V, READY set at once after enable. Silicon's offset of about 15
+- * mV at code 0 is not modelled. Not modelled: DATABUF with START events
+- * (logged), the EMPTY and UNDERRUN flags, dithering, VPD, the
+- * conversion time.
++ * DATABUF and START, as PIC32CM MC00 silicon did (firmware/hello
++ * APP=dacprobe..dacprobe3):
++ *
++ *   - Every enable sets INTFLAG.EMPTY, whatever DATABUF holds.
++ *   - A DATABUF write (enabled or not) fills the buffer and clears EMPTY;
++ *     SYNCBUSY.DATA and DATABUF then read 1 until a START event moves it
++ *     into DATA, and DATA or DATABUF writes meanwhile are dropped (the
++ *     data sheet's rule for writes during synchronization). A DATA write
++ *     clears EMPTY too.
++ *   - A START event (EVCTRL.STARTEI; rising edge, falling with INVEI)
++ *     moves a full DATABUF into DATA. Without dithering every START sets
++ *     EMPTY, and one finding DATABUF empty sets UNDERRUN as well.
++ *   - CTRLB.DITHER: DATA[13:0] (DATA[15:2] with LEFTADJ) is the code in
++ *     sixteenths; the output is their average. A full DATABUF still moves
++ *     at any START, but EMPTY comes every 16th START from the enable, and
++ *     UNDERRUN only on the START opening a group of 16 with DATABUF empty.
++ *   - Setting EMPTY pulses "empty-event" (with EVCTRL.EMPTYEO) and is the
++ *     EMPTY DMA request (a level, wired by the SoC).
++ *
++ * Checked on PIC32CM MC00 silicon (APP=dac, read back by ADC0 on PA02):
++ * linear from 0 to 1023 against VDDANA, INTREF full scale at 1.02 V,
++ * READY set at once after enable. Silicon's offset of about 15 mV at code
++ * 0 is not modelled. Not modelled: the dithered output's sub-conversion
++ * steps (the average only), VPD, the conversion time, standby (EMPTY set
++ * on wake-up), the bus error of a write dropped during synchronization.
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -29,6 +48,8 @@
+ #include "qapi/error.h"
+ #include "qapi/visitor.h"
+ #include "qemu/log.h"
++#include "hw/core/irq.h"
++#include "hw/dma/mchp_dmac.h"
+ #include "hw/misc/mchp_dac.h"
+ #include "hw/misc/mchp_sysctrl.h"
+ #include "hw/mchp/gen/dac_u2214.h"
+@@ -37,13 +58,19 @@
+ /* SUPC VREF (hw/mchp/gen/supc_u2117.h): SEL bits 16-19 */
+ #define SUPC_VREF_OFFSET    0x1C
+ #define SUPC_VREF_SEL(v)    extract32(v, 16, 4)
++#define DAC_GROUP           16          /* dithered sub-conversions */
+ 
+ OBJECT_DECLARE_SIMPLE_TYPE(MchpDacU2214State, MCHP_DAC_U2214)
+ 
+ struct MchpDacU2214State {
+     MchpRegBlock parent_obj;
+ 
+-    uint16_t code;              /* the converted 10-bit code */
++    uint16_t code16;            /* the converted code, in sixteenths */
++    uint16_t databuf;           /* DATABUF as written */
++    bool full;                  /* DATABUF waits for a START */
++    uint8_t sub;                /* STARTs into the dithering group */
++    bool start_level;           /* the START event input */
++    qemu_irq empty_event;
+     int32_t vdd_mv;
+     int32_t vrefa_mv;           /* < 0: VDDANA */
+     MchpRegBlock *supc;         /* the SUPC, for VREF (found on first use) */
+@@ -55,6 +82,12 @@ static uint32_t dac_reg(MchpDacU2214State *s, hwaddr off, unsigned size)
+     return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, off, size);
+ }
+ 
++static void dac_set(MchpDacU2214State *s, hwaddr off, unsigned size,
++                    uint32_t v)
++{
++    mchp_regfile_poke(&MCHP_REGBLOCK(s)->rf, off, size, v);
++}
++
+ static int32_t dac_ref_mv(MchpDacU2214State *s)
+ {
+     uint32_t vref;
+@@ -84,10 +117,28 @@ static bool dac_enabled(MchpDacU2214State *s)
+                       ENABLE);
+ }
+ 
++static bool dac_dither(MchpDacU2214State *s)
++{
++    return FIELD_EX32(dac_reg(s, A_MCHP_DAC_CTRLB, 1), MCHP_DAC_CTRLB,
++                      DITHER);
++}
++
++/* A DATA or DATABUF value in sixteenths of a code (DS Table 39-1) */
++static uint16_t dac_value16(MchpDacU2214State *s, uint16_t v)
++{
++    bool left = FIELD_EX32(dac_reg(s, A_MCHP_DAC_CTRLB, 1), MCHP_DAC_CTRLB,
++                           LEFTADJ);
++
++    if (dac_dither(s)) {
++        return (left ? v >> 2 : v) & 0x3FFF;
++    }
++    return (left ? v >> 6 : v & 0x3FF) << 4;
++}
++
+ /* The output voltage while enabled, in mV */
+ static int32_t dac_out_mv(MchpDacU2214State *s)
+ {
+-    return (int64_t)s->code * dac_ref_mv(s) / 1023;
++    return (int64_t)s->code16 * dac_ref_mv(s) / (1023 * DAC_GROUP);
+ }
+ 
+ int32_t mchp_dac_u2214_vout_mv(DeviceState *dev)
+@@ -113,15 +164,74 @@ void mchp_dac_u2214_add_notifier(DeviceState *dev, Notifier *n)
+     notifier_list_add(&MCHP_DAC_U2214(dev)->changed, n);
+ }
+ 
++static void dac_flags(MchpDacU2214State *s, uint8_t set, uint8_t clear)
++{
++    dac_set(s, A_MCHP_DAC_INTFLAG, 1,
++            (dac_reg(s, A_MCHP_DAC_INTFLAG, 1) & ~clear) | set);
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++/* DATABUF can take new data: the flag, the event and the DMA request */
++static void dac_empty(MchpDacU2214State *s)
++{
++    dac_flags(s, R_MCHP_DAC_INTFLAG_EMPTY_MASK, 0);
++    if (FIELD_EX32(dac_reg(s, A_MCHP_DAC_EVCTRL, 1), MCHP_DAC_EVCTRL,
++                   EMPTYEO)) {
++        qemu_irq_pulse(s->empty_event);
++    }
++    mchp_dmac_kick_machine();
++}
++
++static void dac_start(MchpDacU2214State *s)
++{
++    bool dither = dac_dither(s);
++    bool opens = s->sub == 0;           /* the first START of a group */
++
++    if (s->full) {
++        s->code16 = dac_value16(s, s->databuf);
++        s->full = false;
++        notifier_list_notify(&s->changed, NULL);
++    } else if (!dither || opens) {
++        dac_flags(s, R_MCHP_DAC_INTFLAG_UNDERRUN_MASK, 0);
++    }
++    if (dither) {
++        s->sub = (s->sub + 1) % DAC_GROUP;
++        if (s->sub == 0) {
++            dac_empty(s);               /* every 16th START */
++        }
++    } else {
++        dac_empty(s);
++    }
++}
++
++/* "start-event-in": the START event, on the edge EVCTRL.INVEI selects */
++static void dac_start_event(void *opaque, int n, int level)
++{
++    MchpDacU2214State *s = opaque;
++    uint8_t ev = dac_reg(s, A_MCHP_DAC_EVCTRL, 1);
++    bool edge = FIELD_EX32(ev, MCHP_DAC_EVCTRL, INVEI) ?
++                s->start_level && level <= 0 : !s->start_level && level > 0;
++
++    s->start_level = level > 0;
++    if (edge && dac_enabled(s) && FIELD_EX32(ev, MCHP_DAC_EVCTRL, STARTEI)) {
++        dac_start(s);
++    }
++}
++
+ static uint32_t dac_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
+                              unsigned idx, uint32_t stored, bool side_effects)
+ {
+     MchpDacU2214State *s = MCHP_DAC_U2214(rf->opaque);
+ 
+-    if (ri->offset == A_MCHP_DAC_STATUS) {
++    switch (ri->offset) {
++    case A_MCHP_DAC_STATUS:
+         return dac_enabled(s) ? R_MCHP_DAC_STATUS_READY_MASK : 0;
++    case A_MCHP_DAC_SYNCBUSY:
++        return s->full ? R_MCHP_DAC_SYNCBUSY_DATA_MASK |
++                         R_MCHP_DAC_SYNCBUSY_DATABUF_MASK : 0;
++    default:
++        return stored;
+     }
+-    return stored;              /* SYNCBUSY: idle, writes are instant */
+ }
+ 
+ static void dac_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+@@ -129,14 +239,33 @@ static void dac_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+                            uint32_t we)
+ {
+     MchpDacU2214State *s = MCHP_DAC_U2214(rf->opaque);
+-    uint16_t data = dac_reg(s, A_MCHP_DAC_DATA, 2);
+-
+-    if (ri->offset == A_MCHP_DAC_DATA) {
+-        s->code = FIELD_EX32(dac_reg(s, A_MCHP_DAC_CTRLB, 1), MCHP_DAC_CTRLB,
+-                             LEFTADJ) ? data >> 6 : data & 0x3FF;
+-    } else if (ri->offset == A_MCHP_DAC_DATABUF) {
+-        qemu_log_mask(LOG_UNIMP, "%s: DATABUF (START events) not "
+-                      "modelled\n", MCHP_REGBLOCK(s)->name);
++    uint16_t v = written & we;
++
++    switch (ri->offset) {
++    case A_MCHP_DAC_CTRLA:
++        if (!(written & we & R_MCHP_DAC_CTRLA_SWRST_MASK) &&
++            !(old & R_MCHP_DAC_CTRLA_ENABLE_MASK) && dac_enabled(s)) {
++            s->sub = 0;
++            dac_empty(s);               /* DATABUF counts as empty */
++        }
++        break;
++    case A_MCHP_DAC_DATA:
++        if (s->full) {
++            break;                      /* dropped: DATA synchronizes */
++        }
++        s->code16 = dac_value16(s, v);
++        dac_flags(s, 0, R_MCHP_DAC_INTFLAG_EMPTY_MASK);
++        break;
++    case A_MCHP_DAC_DATABUF:
++        if (s->full) {
++            break;                      /* dropped: DATABUF synchronizes */
++        }
++        s->databuf = v;
++        s->full = true;
++        dac_flags(s, 0, R_MCHP_DAC_INTFLAG_EMPTY_MASK);
++        break;
++    default:
++        break;
+     }
+     notifier_list_notify(&s->changed, NULL);    /* DATA, CTRLA, CTRLB */
+ }
+@@ -145,7 +274,10 @@ static void dac_reset_hold(MchpRegBlock *rb)
+ {
+     MchpDacU2214State *s = MCHP_DAC_U2214(rb);
+ 
+-    s->code = 0;
++    s->code16 = 0;
++    s->databuf = 0;
++    s->full = false;
++    s->sub = 0;
+     notifier_list_notify(&s->changed, NULL);
+ }
+ 
+@@ -176,6 +308,10 @@ static void dac_init(Object *obj)
+     s->vdd_mv = 3300;
+     s->vrefa_mv = -1;
+     notifier_list_init(&s->changed);
++    qdev_init_gpio_in_named(DEVICE(obj), dac_start_event,
++                            MCHP_DAC_START_EVENT_IN, 1);
++    qdev_init_gpio_out_named(DEVICE(obj), &s->empty_event,
++                             MCHP_DAC_EMPTY_EVENT, 1);
+     object_property_add(obj, "vout", "int32", dac_get_vout, NULL, NULL,
+                         NULL);
+     object_property_add(obj, "vdd", "int32", dac_get_i32, dac_set_i32, NULL,
+@@ -186,12 +322,16 @@ static void dac_init(Object *obj)
+ 
+ static const VMStateDescription vmstate_mchp_dac_u2214 = {
+     .name = TYPE_MCHP_DAC_U2214,
+-    .version_id = 1,
+-    .minimum_version_id = 1,
++    .version_id = 2,
++    .minimum_version_id = 2,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpDacU2214State, 1,
+                        vmstate_mchp_regblock, MchpRegBlock),
+-        VMSTATE_UINT16(code, MchpDacU2214State),
++        VMSTATE_UINT16(code16, MchpDacU2214State),
++        VMSTATE_UINT16(databuf, MchpDacU2214State),
++        VMSTATE_BOOL(full, MchpDacU2214State),
++        VMSTATE_UINT8(sub, MchpDacU2214State),
++        VMSTATE_BOOL(start_level, MchpDacU2214State),
+         VMSTATE_INT32(vdd_mv, MchpDacU2214State),
+         VMSTATE_INT32(vrefa_mv, MchpDacU2214State),
+         VMSTATE_END_OF_LIST()
+diff --git a/include/hw/mchp/gen/dac_u2214.h b/include/hw/mchp/gen/dac_u2214.h
+index 037c273..4418698 100644
+--- a/include/hw/mchp/gen/dac_u2214.h
++++ b/include/hw/mchp/gen/dac_u2214.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/dac_u2214.yaml (sha1 53870fd5ebdd)
++ * Overlay: overlays/dac_u2214.yaml (sha1 b373891ed9c6)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h b/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h
+index d6e806b..65bfe48 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/dac_u2214.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/dac_u2214.yaml (sha1 53870fd5ebdd)
++ * Overlay: overlays/dac_u2214.yaml (sha1 b373891ed9c6)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -71,7 +71,8 @@ static const MchpRegInfo pic32cm1216mc00048_dac_regs[] = {
+     {
+         .name = "SYNCBUSY", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000000F,
+-        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
++        .wmask = 0x00000000,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_HOOK_PRE_READ | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x14, .size = 1, .count = 1, .stride = 1,
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h b/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h
+index d604989..889c604 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/dac_u2214.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/dac_u2214.yaml (sha1 53870fd5ebdd)
++ * Overlay: overlays/dac_u2214.yaml (sha1 b373891ed9c6)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -71,7 +71,8 @@ static const MchpRegInfo pic32cm5164jh01100_dac_regs[] = {
+     {
+         .name = "SYNCBUSY", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000000F,
+-        .wmask = 0x00000000, .flags = MCHP_F_DYNAMIC | MCHP_F_READ_ONLY,
++        .wmask = 0x00000000,
++        .flags = MCHP_F_DYNAMIC | MCHP_F_HOOK_PRE_READ | MCHP_F_READ_ONLY,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x14, .size = 1, .count = 1, .stride = 1,
+diff --git a/include/hw/misc/mchp_dac.h b/include/hw/misc/mchp_dac.h
+index 460a986..821f654 100644
+--- a/include/hw/misc/mchp_dac.h
++++ b/include/hw/misc/mchp_dac.h
+@@ -29,5 +29,7 @@ int32_t mchp_dac_u2214_internal_mv(DeviceState *dev);
+ /* @n runs (data NULL) whenever the U2214 DAC's output or CTRLB changes */
+ void mchp_dac_u2214_add_notifier(DeviceState *dev, Notifier *n);
+ #define MCHP_DAC_START_EVENT_IN "start-event-in"
++/* The U2214 DAC's EMPTY event output: a pulse each time EMPTY sets */
++#define MCHP_DAC_EMPTY_EVENT "empty-event"
+ 
+ #endif /* HW_MISC_MCHP_DAC_H */
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index ddc053a..5e42027 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -253,7 +253,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-nvmctrl-test', 'pic32cm-wdt-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-dmac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-adc-test', 'pic32cm-click-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-nvmctrl-test', 'pic32cm-wdt-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-dmac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-adc-test', 'pic32cm-dac-test', 'pic32cm-click-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-dac-test.c b/tests/qtest/pic32cm-dac-test.c
+new file mode 100644
+index 0000000..3e7b26c
+--- /dev/null
++++ b/tests/qtest/pic32cm-dac-test.c
+@@ -0,0 +1,219 @@
++/*
++ * QTest for the DAC of the PIC32CM MC00 (pic32cm-mc00-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The U2214 model's DATABUF path: EMPTY at the enable, START events,
++ * UNDERRUN, SYNCBUSY while DATABUF is full, dithering's rhythm and the
++ * EMPTY DMA request. firmware/hello APP=dacbuf checks the same against
++ * silicon.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++#include "qemu/bswap.h"
++#include "qobject/qdict.h"
++
++#define MACHINE         "-M pic32cm-mc00-cpro"
++
++#define DAC             0x42005400
++#define DAC_PATH        "/machine/soc/dac"
++#define R_CTRLA         0x00
++#define R_CTRLB         0x01
++#define R_EVCTRL        0x02
++#define R_INTFLAG       0x06
++#define R_DATA          0x08
++#define R_DATABUF       0x0C
++#define R_SYNCBUSY      0x10
++
++#define ENABLE          BIT(1)
++#define OUT_VDD         0x41            /* EOEN, REFSEL VDDANA */
++#define DITHER          BIT(5)
++#define STARTEI         BIT(0)
++#define EMPTYEO         BIT(1)
++#define INVEI           BIT(2)
++#define UNDERRUN        BIT(0)
++#define EMPTY           BIT(1)
++#define SB_DATA_BUF     0x0C            /* SYNCBUSY.DATA | DATABUF */
++
++#define DMAC            0x41006000
++#define DESC            0x20001000
++#define WB              0x20001100
++#define SRC             0x20001200
++#define TRIG_DAC_EMPTY  39
++
++static QTestState *dac_init(uint8_t ctrlb, uint8_t evctrl)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writeb(qts, DAC + R_CTRLB, ctrlb);
++    qtest_writeb(qts, DAC + R_EVCTRL, evctrl);
++    qtest_writeb(qts, DAC + R_CTRLA, ENABLE);
++    return qts;
++}
++
++static int vout(QTestState *qts)
++{
++    QDict *rsp = qtest_qmp(qts, "{ 'execute': 'qom-get', 'arguments':"
++                           " { 'path': '" DAC_PATH "',"
++                           " 'property': 'vout' } }");
++    int mv = qdict_get_int(rsp, "return");
++
++    qobject_unref(rsp);
++    return mv;
++}
++
++/* VDDANA 3.3 V: @code16 sixteenths of a code in mV */
++static int mv16(int code16)
++{
++    return (int64_t)code16 * 3300 / (1023 * 16);
++}
++
++static void start(QTestState *qts)
++{
++    qtest_set_irq_in(qts, DAC_PATH, "start-event-in", 0, 1);
++    qtest_set_irq_in(qts, DAC_PATH, "start-event-in", 0, 0);
++}
++
++/* @flags were set, then cleared */
++static uint8_t flags(QTestState *qts)
++{
++    uint8_t f = qtest_readb(qts, DAC + R_INTFLAG);
++
++    qtest_writeb(qts, DAC + R_INTFLAG, f);
++    return f;
++}
++
++/* Every enable sets EMPTY; a DATA write clears it */
++static void test_empty_at_enable(void)
++{
++    QTestState *qts = dac_init(OUT_VDD, 0);
++
++    g_assert_cmphex(flags(qts), ==, EMPTY);
++    qtest_writeb(qts, DAC + R_CTRLA, 0);
++    g_assert_cmphex(flags(qts), ==, 0);
++    qtest_writeb(qts, DAC + R_CTRLA, ENABLE);
++    g_assert_cmphex(qtest_readb(qts, DAC + R_INTFLAG), ==, EMPTY);
++    qtest_writew(qts, DAC + R_DATA, 200);
++    g_assert_cmphex(qtest_readb(qts, DAC + R_INTFLAG), ==, 0);
++    g_assert_cmpint(vout(qts), ==, mv16(200 << 4));
++    qtest_quit(qts);
++}
++
++/*
++ * DATABUF waits for START, SYNCBUSY.DATA/DATABUF set meanwhile and DATA
++ * writes dropped; a START with DATABUF empty underruns
++ */
++static void test_databuf_start(void)
++{
++    QTestState *qts = dac_init(OUT_VDD, STARTEI);
++
++    flags(qts);
++    qtest_writew(qts, DAC + R_DATABUF, 700);
++    g_assert_cmphex(qtest_readl(qts, DAC + R_SYNCBUSY), ==, SB_DATA_BUF);
++    qtest_writew(qts, DAC + R_DATA, 100);           /* dropped */
++    qtest_writew(qts, DAC + R_DATABUF, 900);        /* dropped */
++    g_assert_cmpint(vout(qts), ==, 0);
++    start(qts);
++    g_assert_cmpint(vout(qts), ==, mv16(700 << 4));
++    g_assert_cmphex(qtest_readl(qts, DAC + R_SYNCBUSY), ==, 0);
++    g_assert_cmphex(flags(qts), ==, EMPTY);
++    start(qts);
++    g_assert_cmphex(flags(qts), ==, EMPTY | UNDERRUN);
++    g_assert_cmpint(vout(qts), ==, mv16(700 << 4));
++    qtest_quit(qts);
++}
++
++/* INVEI: the falling edge starts */
++static void test_invei(void)
++{
++    QTestState *qts = dac_init(OUT_VDD, STARTEI | INVEI);
++
++    qtest_writew(qts, DAC + R_DATABUF, 300);
++    qtest_set_irq_in(qts, DAC_PATH, "start-event-in", 0, 1);
++    g_assert_cmpint(vout(qts), ==, 0);
++    qtest_set_irq_in(qts, DAC_PATH, "start-event-in", 0, 0);
++    g_assert_cmpint(vout(qts), ==, mv16(300 << 4));
++    qtest_quit(qts);
++}
++
++/*
++ * DITHER: the code in sixteenths; DATABUF moves at any START, EMPTY every
++ * 16th START, UNDERRUN on the START opening a group
++ */
++static void test_dither(void)
++{
++    QTestState *qts = dac_init(OUT_VDD | DITHER, STARTEI);
++    uint32_t e = 0, u = 0;
++
++    qtest_writew(qts, DAC + R_DATABUF, (300 << 4) | 8);
++    flags(qts);
++    for (unsigned k = 0; k < 32; k++) {
++        uint8_t f;
++
++        start(qts);
++        f = flags(qts);
++        e |= (uint32_t)!!(f & EMPTY) << k;
++        u |= (uint32_t)!!(f & UNDERRUN) << k;
++        if (k == 0) {
++            g_assert_cmpint(vout(qts), ==, mv16((300 << 4) | 8));
++            qtest_writew(qts, DAC + R_DATABUF, (600 << 4) | 4);
++        } else if (k == 1) {
++            g_assert_cmpint(vout(qts), ==, mv16((600 << 4) | 4));
++        }
++    }
++    g_assert_cmphex(e, ==, 0x80008000);
++    g_assert_cmphex(u, ==, 0x00010000);
++    qtest_quit(qts);
++}
++
++/* EMPTY requests DMA: a beat at the enable, then one per START */
++static void test_dma(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++    uint8_t d[16];
++
++    for (unsigned i = 0; i < 4; i++) {
++        qtest_writew(qts, SRC + 2 * i, 100 + 200 * i);
++    }
++    stw_le_p(&d[0], 0x0401 | (1 << 8));     /* VALID, HWORD, SRCINC */
++    stw_le_p(&d[2], 4);
++    stl_le_p(&d[4], SRC + 8);
++    stl_le_p(&d[8], DAC + R_DATABUF);
++    stl_le_p(&d[12], 0);
++    qtest_memwrite(qts, DESC, d, sizeof(d));
++    qtest_writel(qts, DMAC + 0x34, DESC);
++    qtest_writel(qts, DMAC + 0x38, WB);
++    qtest_writew(qts, DMAC + 0x00, 0x0F02);
++    qtest_writeb(qts, DMAC + 0x3F, 0);
++    qtest_writel(qts, DMAC + 0x44, (TRIG_DAC_EMPTY << 8) | (2 << 22));
++    qtest_writeb(qts, DMAC + 0x40, 0x02);
++    qtest_writeb(qts, DAC + R_CTRLB, OUT_VDD);
++    qtest_writeb(qts, DAC + R_EVCTRL, STARTEI);
++    qtest_writeb(qts, DAC + R_CTRLA, ENABLE);
++    qtest_clock_step(qts, 1000);
++    g_assert_cmphex(qtest_readl(qts, DAC + R_SYNCBUSY), ==, SB_DATA_BUF);
++    for (unsigned i = 0; i < 4; i++) {
++        start(qts);
++        qtest_clock_step(qts, 1000);
++        g_assert_cmpint(vout(qts), ==, mv16((100 + 200 * i) << 4));
++    }
++    g_assert_cmphex(qtest_readb(qts, DMAC + 0x4E), ==, 0x02);     /* TCMPL */
++    g_assert_cmphex(qtest_readb(qts, DAC + R_INTFLAG), ==, EMPTY);
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++    qtest_add_func("pic32cm-dac/empty-at-enable", test_empty_at_enable);
++    qtest_add_func("pic32cm-dac/databuf-start", test_databuf_start);
++    qtest_add_func("pic32cm-dac/invei", test_invei);
++    qtest_add_func("pic32cm-dac/dither", test_dither);
++    qtest_add_func("pic32cm-dac/dma", test_dma);
++    return g_test_run();
++}
+-- 
+2.53.0.windows.2
+

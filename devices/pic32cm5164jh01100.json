@@ -11596,7 +11596,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/dac_u2214.yaml",
-    "sha1": "53870fd5ebdd24af01a11350f27ce9ced4c5fd62",
+    "sha1": "b373891ed9c66101d0e48d6062e8c46f474aee34",
     "status": "applied",
     "versions": [
      "2.0.1",
@@ -12186,10 +12186,11 @@
        "sync_per_element": false,
        "flags": [
         "DYNAMIC",
+        "HOOK_PRE_READ",
         "READ_ONLY"
        ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Synchronization Busy",
        "note": "",
        "fields": [
@@ -12236,6 +12237,11 @@
          "dynamic",
          "overlay",
          "dynamic"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
         ]
        ]
       },

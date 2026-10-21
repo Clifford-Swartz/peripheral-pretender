@@ -1,0 +1,10 @@
+PP dacbuf: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+enable swrst=0x00 enabled=0x02 disabled=0x00 again=0x02 data_clears=0x00 vout_200=784 ok
+databuf syncbusy=0x0C flags=0x00 vout_held=10 start_syncbusy=0x00 start_flags=0x02 vout_700=2786 underrun=0x03 vout_kept=2786 ok
+no_startei syncbusy=0x0C vout=786 start_flags=0x00 vout_start=786 ok
+before_enable syncbusy=0x0C flags=0x02 start_flags=0x02 vout_600=2388 ok
+invei start_flags=0x02 vout_300=1186 evctrl_protected=0x05 ctrlb_protected=0x41 ok
+empty_event enable=0x01 databuf=0x00 start=0x01 underrun=0x01 ok
+dma enable_syncbusy=0x0C v1=384 v2=1187 v3=1987 v4=2789 last_flags=0x02 underrun=0x03 tcmpl=0x02 ok
+dither vout_a=1189 vout_b=2389 empty=0x80008000 underrun=0x00010000 ok
+PP:EXIT 0

@@ -181,6 +181,12 @@ I examined PIC32CM-JH DFP 1.3.221 (about 91 MB, 24 parts). For each part it ship
      update condition; a PER or CCx write also writes its buffer; DSBOTH's circular PER swaps
      only at ZERO while CCx swaps at TOP and ZERO; STATUS.FAULTnIN shows EVn for any event
      action (`tcc-u2213.md` section 6).
+   - DAC: EVCTRL is enable-protected as 39.6.2.1 says, though its register description (39.7.3)
+     lists only PAC protection; SYNCBUSY.DATA and DATABUF stay set from a DATABUF write until a
+     START event moves it (forever with STARTEI = 0), so writes meanwhile are dropped; every
+     enable sets EMPTY, even with DATABUF full; with DITHER, EMPTY comes every 16th START from
+     the enable and UNDERRUN only on the START opening a group, while a full DATABUF moves at any
+     START (`dac-u2214.md` section 3).
 
 ## Table: DFP inventory
 | folder / file | contents | approx size | contribution to a QEMU twin |
