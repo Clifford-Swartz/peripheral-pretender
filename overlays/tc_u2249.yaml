@@ -2,8 +2,8 @@
 #
 # Behavior overlay for TC U2249 (Timer/Counter). The mchp-tc model counts
 # in COUNT8/16/32 with the waveform TOP rules, commands, one-shot, double
-# buffering and compare-match flags; capture, events and waveform pins are
-# not modelled.
+# buffering, compare-match flags, events, waveform outputs on pins and
+# capture (hw/timer/mchp_tc.c).
 ip: TC
 id: U2249
 versions: ["2.0.0", "3.0.0"]      # 2.0.0: MC00; 3.0.0: JH01 (capture modes)

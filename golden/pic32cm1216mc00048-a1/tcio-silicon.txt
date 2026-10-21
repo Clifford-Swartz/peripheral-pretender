@@ -1,0 +1,17 @@
+PP tcio: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+npwm_up wo0: first_fall=35 period=133 high=33 wo1: first_fall=102 period=133 high=100 ok
+npwm_down wo0: first_fall=135 period=133 high=33 wo1: first_fall=135 period=133 high=100 ok
+inven0 wo0: first_fall=135 period=133 high=100 ok
+nfrq wo0: first=35 half=133 period=266 ok
+mfrq wo0: first=67 half=66 period=133 wo1: first=28 half=67 period=133 ok
+mpwm wo0_falls=0x3 wo0_period=133 wo0_pulse=1 wo1: first_fall=35 period=133 high=33 ok
+edges cc0_0_changes=0x0 cc0_0_level=0x0 cc1_top_falls=0x3 cc1_top_pulse=2 cc1_above_falls=0x0 cc1_above_level=0x1 ok
+stops stop_pins=0x00000000 stop_status=0x01 oneshot_falls=0x1 oneshot_pins=0x00000000 oneshot_status=0x01 disabled_pins=0x00000000 ok
+count16 wo0: first_fall=342 period=1365 high=341 wo1: first_fall=1024 period=1366 high=1024 ok
+stamp mc0=0x10 mc1_at_start=0x20 step1=45 step2=45 fifo_step=38 err=0x02 ok
+overflow mc=0x30 cc0=0xFF cc1=0xFF ok
+ppw mc=0x30 err=0x00 first_period=0x0002 width=150 period=375 width2=150 ok
+pwp mc=0x30 err=0x00 first_period=0x0002 width=150 period=375 width2=150 ok
+pw mc0=0x10 stopped=0x01 width=150 width2=150 inv_low=225 ok
+plain rise=0x02 fall=77 ok
+PP:EXIT 0

@@ -195,6 +195,14 @@ These cost a probe run each to learn. Check new probes against them.
   before programming, because a sticky NVMCTRL error left by the last firmware made the DFP's
   flash algorithm fail ("flash erase sector failure (address 0x00000000; result code 0x1)").
   If programming fails like that, reset the part (pyOCD `reset_and_halt`) and try again.
+- **Pins without wiring.** `firmware/hello/src/scope.h` records the edges of a peripheral's own
+  output pins through PORT.IN (PINCFG.INEN), from RAM, timed by SysTick over 24 bits. For inputs,
+  an EIC pin's pull resistor turned by PORT.OUT makes clean pulses (a pin muxed to a TC or TCC
+  loses its pull). Silicon often starts outputs a clock tick after the enable: check periods
+  and widths, not absolute times.
+- **Prints take milliseconds on silicon and nothing on the twin** (instant SERCOM TX): never let
+  a timed behaviour run across a print, or the transcripts differ for reasons unrelated to the
+  model (`tcprobe4.c`).
 - **Line endings in pp-qemu.** pp-qemu keeps bytes as they are (no autocrlf), and Python's
   `write_text()` writes CRLF on Windows: read and write bytes in edit scripts. `export` refuses
   a commit that adds CRLF lines. Git Bash heredocs also mangle backslashes in C strings: write

@@ -157,6 +157,18 @@ I examined PIC32CM-JH DFP 1.3.221 (about 91 MB, 24 parts). For each part it ship
      `devices/*.json dmac_triggers` and Harmony agree on 0x00-0x27 without gaps (TCC0_OVF = 0x0A).
      Use the instance parameters (`docs/research/peripherals/dmac-u2223.md`).
 
+21. (high) [PIC32CM MC00 data sheet gaps found on silicon (DS60001638E)] Places where rev A1
+   silicon does what DS60001638E does not say, or not what it says (each probed and checked; see
+   the research note named):
+   - WDT: a CLEAR write with a wrong key resets the part also while the WDT is disabled; the data
+     sheet only describes it for a running WDT (`wdt-u2251.md`).
+   - NVMCTRL: ADDR is 16 bits wide and relative to the array (0 for the first data flash word),
+     where the data sheet shows ADDR[21:0] and implies absolute addresses; 16-bit page buffer
+     writes load like 32-bit ones, and 8-bit writes fault but still load their halfword, where
+     the data sheet says both fault (`nvmctrl-03929.md`).
+   - TC: CTRLA bit 15 is writable with no documented field; CAPTMIN/CAPTMAX are described (33.6.3.3)
+     but CTRLA.CAPTMODE does not exist on this part (nor in the DFP) (`tc-u2249.md`).
+
 ## Table: DFP inventory
 | folder / file | contents | approx size | contribution to a QEMU twin |
 | Microchip.PIC32CM-JH_DFP.pdsc (+ package.content, .sha1) | CMSIS-Pack index of 24 devices (JH00: 14, JH01: 10): memories IROM1 0x0/0x80000, IROM2 0x400000/0x2000, IRAM1 0x20000000/0x10000; flash algorithms; Microchip extension pointing at atdf/edc/xc32/hwtools | 332 KB (+336 KB, 80 KB) | Device list and file index for the generator front-end; memory cross-check |

@@ -1,0 +1,1043 @@
+From b39fb1dbb0ecce7a7e0bf52b05b4cabfbf52190a Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 21 Oct 2026 09:57:59 -0700
+Subject: [PATCH] hw/timer: TC waveform outputs on pins and capture (U2249)
+
+The TC now drives the pads muxed to WO[1:0], as a PIC32CM MC00 does
+(firmware/hello APP=tcprobe2): NFRQ and MFRQ toggle on CCx matches,
+NPWM and MPWM set at the start and the wrap and clear on the match
+counting up (the reverse counting down), the match winning on a shared
+tick; INVENx inverts; a stopped TC drives low, a disabled one floats.
+While a pad selects an output the counter steps through its changes.
+
+Capture from the event input: OFF/RETRIGGER/COUNT/START and STAMP
+capture COUNT on the active edge (TCINV), STAMP captures MAX at each
+overflow, PPW/PWP capture period and width and restart, PW captures
+the width, stops, and waits for the first active edge after the
+enable. Each channel is a two-deep FIFO with ERR; a read moves the
+buffer up and MCx returns two GCLK_TC cycles later (tcprobe3/4). A
+start with COUNT = CCx sets MCx, as silicon does. A COPEN channel does
+not drive its pad; capture on pins is not modelled yet.
+
+qtest: pads, STAMP FIFO and overflow capture, PPW, PW.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst         |   7 +-
+ hw/timer/mchp_tc.c                            | 437 ++++++++++++++++--
+ include/hw/mchp/gen/atsame51j20a/tc_u2249.h   |   2 +-
+ .../hw/mchp/gen/pic32cm1216mc00048/tc_u2249.h |   2 +-
+ .../hw/mchp/gen/pic32cm5164jh01100/tc_u2249.h |   2 +-
+ include/hw/mchp/gen/tc_u2249.h                |   2 +-
+ include/hw/timer/mchp_tc.h                    |   6 +-
+ tests/qtest/pic32cm-tc-test.c                 | 169 ++++++-
+ 8 files changed, 588 insertions(+), 39 deletions(-)
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index 3ea3395..1bf1178 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -92,7 +92,10 @@ Supported devices
+   prescaler, up or down, TOP from PER/MAX/CC0, overflow and match flags,
+   one-shot, commands, double buffering, COUNT32 pairs, event outputs and
+   the COUNT, RETRIGGER and START event actions. COUNT reads need
+-  READSYNC, as on silicon.
++  READSYNC, as on silicon. Waveform outputs on the pads (NFRQ, MFRQ, NPWM,
++  MPWM, INVEN, low when stopped, floating when disabled) and capture from
++  the event input (STAMP with MAX at overflows, PPW, PWP, PW, plain event
++  capture) through the two-deep CCx FIFO with ERR, as on a PIC32CM MC00.
+ - TCC: counting in the single- and dual-slope waveform modes with the
+   instance's counter width, overflow and match flags, the waveform output
+   state in STATUS.CMPx, one-shot, commands, double buffering (a buffer
+@@ -151,7 +154,7 @@ Missing devices
+   timeouts and 10-bit/high-speed I2C addressing, the USART external clock
+   (XCK), synchronous mode, LIN and auto-baud frames, IrDA, 9-bit characters
+   and receive errors. PORT: the sampling mode (CTRL).
+-- TC capture, waveform outputs on pins; the JH01 RTC (03608). TCC faults,
++- TC capture on pins (COPEN) and CAPTMODE; the JH01 RTC (03608). TCC faults,
+   dead time, pattern generation, dithering, capture, circular buffers and
+   the DSCRITICAL waveform.
+ - PAC write protection, DSU CRC32 and chip erase, sleep modes and every other
+diff --git a/hw/timer/mchp_tc.c b/hw/timer/mchp_tc.c
+index 5a2ef89..353169e 100644
+--- a/hw/timer/mchp_tc.c
++++ b/hw/timer/mchp_tc.c
+@@ -13,8 +13,31 @@
+  * COUNT reads return the last synchronized value: firmware must issue
+  * READSYNC first, as on silicon. The event input (TCEI, TCINV) counts
+  * (EVACT COUNT: events replace the prescaled clock), retriggers or
+- * starts the counter. Not modelled: capture and the capture event
+- * actions, waveform outputs on pins, prescaler synchronization, sleep.
++ * starts the counter.
++ *
++ * Waveform outputs WO[x] drive the pads muxed to them (PIC32CM MC00
++ * silicon, firmware/hello/tests/tcprobe2.c): NFRQ and MFRQ toggle on each
++ * match of CCx (MFRQ's WO[0] when the counter reaches TOP = CC0); NPWM and
++ * MPWM set the output at a start and at each wrap and clear it on a match
++ * counting up, the other way round counting down, the match winning when
++ * both fall on one tick (CC0 = 0 stays low, CC0 = TOP gives a one-tick
++ * pulse; MPWM's WO[0] is that pulse). DRVCTRL.INVENx inverts. A stopped
++ * TC drives its pads low, a disabled one leaves them floating, pull off.
++ *
++ * Capture (CTRLA.CAPTENx) from the event input: the active edge (rising,
++ * falling with TCINV) captures COUNT with EVACT OFF, RETRIGGER, COUNT,
++ * START and STAMP, and STAMP captures MAX at each overflow. PPW captures
++ * the period in CC0 and restarts the count on the active edge and the
++ * pulse width in CC1 on the other; PWP swaps the channels; PW captures in
++ * CC0 on the inactive edge, clears the count and stops, and restarts on
++ * the active edge; it waits for the first active edge after the enable.
++ * Each channel is a two-deep FIFO, CCx then its buffer: MCx says CCx holds
++ * a capture, a CCx read clears it and moves the buffer up (MCx again two
++ * GCLK_TC cycles later), a capture with both full sets ERR and is lost.
++ * A start with COUNT = CCx is a match (MCx). A capture pin (COPENx) is not
++ * driven. Not modelled: capture on pins, CAPTMODE (JH01), prescaler
++ * synchronization (silicon starts about a tick after the enable),
++ * undocumented CTRLA bit 15 (writable on the MC00), sleep.
+  *
+  * Behaviour the data sheet leaves open follows PIC32CM MC00 silicon
+  * (firmware/hello/tests/tcprobe.c): enabling counts on from COUNT in either
+@@ -41,6 +64,7 @@
+ #include "hw/core/clock.h"
+ #include "hw/core/irq.h"
+ #include "hw/core/qdev-properties.h"
++#include "hw/gpio/mchp_port.h"
+ #include "hw/timer/mchp_tc.h"
+ #include "hw/mchp/gen/tc_u2249.h"
+ #include "migration/vmstate.h"
+@@ -54,6 +78,7 @@
+ #define A_INTFLAG       A_MCHP_TC_COUNT16_INTFLAG
+ #define A_STATUS        A_MCHP_TC_COUNT16_STATUS
+ #define A_WAVE          A_MCHP_TC_COUNT16_WAVE
++#define A_DRVCTRL       A_MCHP_TC_COUNT16_DRVCTRL
+ #define A_SYNCBUSY      A_MCHP_TC_COUNT16_SYNCBUSY
+ #define A_COUNT         A_MCHP_TC_COUNT16_COUNT
+ #define A_PER           A_MCHP_TC_COUNT8_PER
+@@ -90,6 +115,16 @@ struct MchpTcState {
+     uint32_t sync_pending;      /* SYNCBUSY bits waiting for GCLK_TC */
+     uint32_t count;             /* counter value at t_base */
+     int64_t t_base;             /* QEMU_CLOCK_VIRTUAL ns */
++
++    QEMUTimer *refill_timer;    /* MCx again after a FIFO move */
++    uint8_t refill;             /* channels waiting for it */
++    int64_t refill_at[MCHP_TC_CHANNELS];
++    qemu_irq pad_wo[MCHP_TC_CHANNELS];
++    uint8_t wo;                 /* waveform state of WO[1:0] */
++    uint8_t wo_active;          /* outputs a pad is muxed to */
++    int32_t pad_level[MCHP_TC_CHANNELS];    /* last driven, -1 unknown */
++    uint32_t cap_buf[MCHP_TC_CHANNELS];     /* the capture FIFO's 2nd */
++    uint8_t cap_full;           /* cap_buf[x] holds a capture */
+ };
+ 
+ static const uint16_t mchp_tc_prescale[] = { 1, 2, 4, 8, 16, 64, 256, 1024 };
+@@ -222,10 +257,11 @@ static int64_t mchp_tc_tick_time(MchpTcState *s, uint64_t n)
+ 
+ /*
+  * Ticks until the next overflow/underflow (*ovf) and until each compare
+- * match (match[ch], 0: none) from the current count.
++ * match (match[ch], 0: none) from the current count; with @all, capture
++ * channels too (their waveform outputs still follow CCx, silicon).
+  */
+-static void mchp_tc_next(MchpTcState *s, uint64_t *ovf,
+-                         uint64_t match[MCHP_TC_CHANNELS])
++static void mchp_tc_next_all(MchpTcState *s, uint64_t *ovf,
++                             uint64_t match[MCHP_TC_CHANNELS], bool all)
+ {
+     uint32_t top = mchp_tc_top(s), count = s->count;
+     bool down = mchp_tc_down(s);
+@@ -240,7 +276,7 @@ static void mchp_tc_next(MchpTcState *s, uint64_t *ovf,
+         uint32_t cc = mchp_tc_cc(s, ch);
+ 
+         match[ch] = 0;
+-        if (mchp_tc_capture(s, ch)) {
++        if (!all && mchp_tc_capture(s, ch)) {
+             continue;
+         }
+         if (!down && cc > count && (uint64_t)cc - count < *ovf) {
+@@ -255,6 +291,139 @@ static void mchp_tc_next(MchpTcState *s, uint64_t *ovf,
+     }
+ }
+ 
++static void mchp_tc_next(MchpTcState *s, uint64_t *ovf,
++                         uint64_t match[MCHP_TC_CHANNELS])
++{
++    mchp_tc_next_all(s, ovf, match, false);
++}
++
++/* NFRQ and MFRQ toggle their outputs; NPWM and MPWM set and clear them */
++static bool mchp_tc_toggles(MchpTcState *s)
++{
++    unsigned w = mchp_tc_wavegen(s);
++
++    return w == MCHP_TC_COUNT16_WAVE_WAVEGEN_NFRQ ||
++           w == MCHP_TC_COUNT16_WAVE_WAVEGEN_MFRQ;
++}
++
++/*
++ * A wrap (@ovf) and matches (@match) on one tick: PWM sets the output at
++ * the wrap counting up (clears it counting down), a match clears it (sets
++ * it) and wins; a match toggles NFRQ and MFRQ
++ */
++static void mchp_tc_wo_step(MchpTcState *s, bool ovf,
++                            const bool match[MCHP_TC_CHANNELS])
++{
++    bool down = mchp_tc_down(s), toggles = mchp_tc_toggles(s);
++
++    for (unsigned ch = 0; ch < MCHP_TC_CHANNELS; ch++) {
++        bool o = extract32(s->wo, ch, 1);
++
++        if (ovf && !toggles) {
++            o = !down;
++        }
++        if (match[ch]) {
++            o = toggles ? !o : down;
++        }
++        s->wo = deposit32(s->wo, ch, 1, o);
++    }
++}
++
++/* The outputs at a start from s->count: the start acts as a wrap */
++static void mchp_tc_wo_start(MchpTcState *s)
++{
++    bool match[MCHP_TC_CHANNELS];
++
++    for (unsigned ch = 0; ch < MCHP_TC_CHANNELS; ch++) {
++        match[ch] = mchp_tc_cc(s, ch) == s->count;
++    }
++    if (mchp_tc_toggles(s)) {
++        s->wo = 0;
++    }
++    mchp_tc_wo_step(s, true, match);
++}
++
++/* A start at COUNT = CCx is a match: CC1 = 0 sets MC1 at once (silicon) */
++static void mchp_tc_start_flags(MchpTcState *s)
++{
++    uint32_t flags = 0, evctrl = mchp_tc_reg(s, A_EVCTRL, 2);
++
++    for (unsigned ch = 0; ch < MCHP_TC_CHANNELS; ch++) {
++        if (!mchp_tc_capture(s, ch) && mchp_tc_cc(s, ch) == s->count) {
++            flags |= R_MCHP_TC_COUNT16_INTFLAG_MC0_MASK << ch;
++            if (evctrl & (F(EVCTRL, MCEO0) << ch)) {
++                qemu_irq_pulse(s->mc_event[ch]);
++            }
++        }
++    }
++    mchp_tc_mod_reg(s, A_INTFLAG, 1, 0, flags);
++}
++
++/* PWM outputs from the count alone, after the counter jumped */
++static void mchp_tc_wo_resync(MchpTcState *s)
++{
++    if (mchp_tc_toggles(s)) {
++        return;
++    }
++    for (unsigned ch = 0; ch < MCHP_TC_CHANNELS; ch++) {
++        uint32_t cc = mchp_tc_cc(s, ch);
++
++        s->wo = deposit32(s->wo, ch, 1, mchp_tc_down(s) ? s->count <= cc :
++                                                          s->count < cc);
++    }
++}
++
++/* Drive the pads: low while stopped, floating (pull off) while disabled */
++static void mchp_tc_update_pads(MchpTcState *s)
++{
++    bool on = FIELD_EX32(mchp_tc_reg(s, A_CTRLA, 4), MCHP_TC_COUNT16_CTRLA,
++                         ENABLE);
++    uint32_t inv = mchp_tc_reg(s, A_DRVCTRL, 1);
++
++    uint32_t copen = extract32(mchp_tc_reg(s, A_CTRLA, 4),
++                               R_MCHP_TC_COUNT16_CTRLA_COPEN0_SHIFT, 2);
++
++    for (unsigned ch = 0; ch < MCHP_TC_CHANNELS; ch++) {
++        /* A capture pin (COPENx) is an input: not driven, pull off */
++        int level = !on || extract32(copen, ch, 1) ? MCHP_PORT_PAD_HIZ :
++                    !s->running ? 0 :
++                    (int)(extract32(s->wo, ch, 1) ^ extract32(inv, ch, 1));
++
++        if (level != s->pad_level[ch]) {
++            s->pad_level[ch] = level;
++            qemu_set_irq(s->pad_wo[ch], level);
++        }
++    }
++}
++
++/* Capture @v on channel @ch: CCx, else its buffer, else ERR */
++static void mchp_tc_capture_value(MchpTcState *s, unsigned ch, uint32_t v)
++{
++    uint32_t mc = R_MCHP_TC_COUNT16_INTFLAG_MC0_MASK << ch;
++    unsigned size = mchp_tc_size(s);
++
++    if (!(mchp_tc_reg(s, A_INTFLAG, 1) & mc) && !extract32(s->refill, ch, 1)) {
++        mchp_tc_set_reg(s, A_CC + ch * size, size, v);
++        mchp_tc_mod_reg(s, A_INTFLAG, 1, 0, mc);
++        if (mchp_tc_reg(s, A_EVCTRL, 2) & (F(EVCTRL, MCEO0) << ch)) {
++            qemu_irq_pulse(s->mc_event[ch]);
++        }
++    } else if (!extract32(s->cap_full, ch, 1)) {
++        s->cap_buf[ch] = v;
++        s->cap_full = deposit32(s->cap_full, ch, 1, 1);
++    } else {
++        mchp_tc_mod_reg(s, A_INTFLAG, 1, 0, F(INTFLAG, ERR));
++    }
++}
++
++/* Capture channels fed by the event input (CAPTENx, not COPENx) */
++static bool mchp_tc_event_capture(MchpTcState *s, unsigned ch)
++{
++    return mchp_tc_capture(s, ch) &&
++           !extract32(mchp_tc_reg(s, A_CTRLA, 4),
++                      R_MCHP_TC_COUNT16_CTRLA_COPEN0_SHIFT + ch, 1);
++}
++
+ /* Copy the valid buffers into PER/CCx (UPDATE condition or command) */
+ static void mchp_tc_update_buffers(MchpTcState *s)
+ {
+@@ -285,11 +454,13 @@ static void mchp_tc_stop(MchpTcState *s, uint32_t count)
+     s->running = false;
+     s->count = count;
+     mchp_tc_mod_reg(s, A_STATUS, 1, 0, F(STATUS, STOP));
++    mchp_tc_update_pads(s);
+ }
+ 
+-/* Apply the events @n ticks after t_base */
++/* Apply the events @n ticks after t_base (@wo_match: the outputs') */
+ static void mchp_tc_step(MchpTcState *s, uint64_t n, bool ovf,
+-                         const bool match[MCHP_TC_CHANNELS])
++                         const bool match[MCHP_TC_CHANNELS],
++                         const bool wo_match[MCHP_TC_CHANNELS])
+ {
+     uint32_t flags = 0, evctrl = mchp_tc_reg(s, A_EVCTRL, 2);
+     bool down = mchp_tc_down(s);
+@@ -301,6 +472,15 @@ static void mchp_tc_step(MchpTcState *s, uint64_t n, bool ovf,
+     } else {
+         s->count = down ? s->count - n : s->count + n;
+     }
++    mchp_tc_wo_step(s, ovf, wo_match);
++    if (ovf && mchp_tc_evact(s) == MCHP_TC_COUNT16_EVCTRL_EVACT_STAMP) {
++        /* STAMP captures MAX at an overflow (DS 33.6.3.2) */
++        for (unsigned ch = 0; ch < MCHP_TC_CHANNELS; ch++) {
++            if (mchp_tc_event_capture(s, ch)) {
++                mchp_tc_capture_value(s, ch, mchp_tc_max(s));
++            }
++        }
++    }
+     for (unsigned ch = 0; ch < MCHP_TC_CHANNELS; ch++) {
+         if (match[ch]) {
+             flags |= R_MCHP_TC_COUNT16_INTFLAG_MC0_MASK << ch;
+@@ -327,6 +507,7 @@ static void mchp_tc_step(MchpTcState *s, uint64_t n, bool ovf,
+     mchp_event_time_set(-1);
+     trace_mchp_tc_event(MCHP_REGBLOCK(s)->name, s->count, flags);
+     mchp_tc_mod_reg(s, A_INTFLAG, 1, 0, flags);
++    mchp_tc_update_pads(s);
+ }
+ 
+ /*
+@@ -343,7 +524,10 @@ static bool mchp_tc_quiet(MchpTcState *s, const uint64_t match[])
+             want |= R_MCHP_TC_COUNT16_INTFLAG_MC0_MASK << ch;
+         }
+     }
+-    return (flags & want) == want &&
++    bool stamp = mchp_tc_evact(s) == MCHP_TC_COUNT16_EVCTRL_EVACT_STAMP &&
++                 (mchp_tc_event_capture(s, 0) || mchp_tc_event_capture(s, 1));
++
++    return (flags & want) == want && !s->wo_active && !stamp &&
+            !(mchp_tc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, ONESHOT)) &&
+            !(mchp_tc_reg(s, A_STATUS, 1) &
+              (F(STATUS, PERBUFV) | F(STATUS, CCBUFV0) | F(STATUS, CCBUFV1))) &&
+@@ -382,10 +566,11 @@ static void mchp_tc_advance(MchpTcState *s, int64_t now)
+ {
+     for (unsigned steps = 0;
+          s->running && mchp_tc_hz(s) && !mchp_tc_counts_events(s); steps++) {
+-        uint64_t ovf, match[MCHP_TC_CHANNELS], next;
+-        bool at[MCHP_TC_CHANNELS], quiet;
++        uint64_t ovf, match[MCHP_TC_CHANNELS], wom[MCHP_TC_CHANNELS], next;
++        bool at[MCHP_TC_CHANNELS], wat[MCHP_TC_CHANNELS], quiet;
+ 
+         mchp_tc_next(s, &ovf, match);
++        mchp_tc_next_all(s, &ovf, wom, true);
+         quiet = mchp_tc_quiet(s, match);
+         if (quiet || steps >= (s->dma_wanted ? MCHP_TC_MAX_DMA_STEPS :
+                                MCHP_TC_MAX_STEPS)) {
+@@ -394,6 +579,8 @@ static void mchp_tc_advance(MchpTcState *s, int64_t now)
+ 
+             s->count = mchp_tc_value(s, ticks);
+             s->t_base = mchp_tc_tick_time(s, ticks);
++            mchp_tc_wo_resync(s);
++            mchp_tc_update_pads(s);
+             if (quiet) {
+                 timer_del(s->timer);
+                 return;
+@@ -408,6 +595,9 @@ static void mchp_tc_advance(MchpTcState *s, int64_t now)
+             if (match[ch] && match[ch] < next) {
+                 next = match[ch];
+             }
++            if (s->wo_active && wom[ch] && wom[ch] < next) {
++                next = wom[ch];
++            }
+         }
+         if (mchp_tc_tick_time(s, next) > now) {
+             timer_mod(s->timer, mchp_tc_tick_time(s, next));
+@@ -415,8 +605,9 @@ static void mchp_tc_advance(MchpTcState *s, int64_t now)
+         }
+         for (unsigned ch = 0; ch < MCHP_TC_CHANNELS; ch++) {
+             at[ch] = match[ch] == next;
++            wat[ch] = wom[ch] == next;
+         }
+-        mchp_tc_step(s, next, next == ovf, at);
++        mchp_tc_step(s, next, next == ovf, at, wat);
+     }
+     timer_del(s->timer);
+ }
+@@ -437,6 +628,17 @@ static void mchp_tc_load(MchpTcState *s, uint32_t count)
+ {
+     s->count = count & mchp_tc_max(s);
+     s->t_base = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    mchp_tc_wo_resync(s);
++    mchp_tc_update_pads(s);
++}
++
++/* A retrigger while running: from the start value, outputs as at a start */
++static void mchp_tc_restart(MchpTcState *s, uint32_t count)
++{
++    mchp_tc_load(s, count);
++    mchp_tc_wo_start(s);
++    mchp_tc_start_flags(s);
++    mchp_tc_update_pads(s);
+ }
+ 
+ /* Count on from the current value; starting is an UPDATE condition */
+@@ -448,6 +650,9 @@ static void mchp_tc_start(MchpTcState *s)
+     }
+     s->running = true;
+     s->t_base = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    mchp_tc_wo_start(s);
++    mchp_tc_start_flags(s);
++    mchp_tc_update_pads(s);
+ }
+ 
+ /* The odd TC of a COUNT32 pair reports STATUS.SLAVE (DS 33.6.2.4) */
+@@ -467,16 +672,11 @@ static void mchp_tc_report_unimp(MchpTcState *s)
+ {
+     MchpRegBlock *rb = MCHP_REGBLOCK(s);
+     uint32_t ctrla = mchp_tc_reg(s, A_CTRLA, 4);
+-    unsigned evact = mchp_tc_evact(s);
+ 
+-    if (ctrla & (F(CTRLA, CAPTEN0) | F(CTRLA, CAPTEN1))) {
+-        qemu_log_mask(LOG_UNIMP, "%s.CTRLA: capture not modelled\n",
++    if (ctrla & (F(CTRLA, COPEN0) | F(CTRLA, COPEN1))) {
++        qemu_log_mask(LOG_UNIMP, "%s.CTRLA: capture on pins not modelled\n",
+                       rb->name);
+     }
+-    if (evact > MCHP_TC_COUNT16_EVCTRL_EVACT_START) {
+-        qemu_log_mask(LOG_UNIMP, "%s.EVCTRL: event action %u not modelled\n",
+-                      rb->name, evact);
+-    }
+ }
+ 
+ static void mchp_tc_command(MchpTcState *s, unsigned cmd)
+@@ -492,7 +692,7 @@ static void mchp_tc_command(MchpTcState *s, unsigned cmd)
+     switch (cmd) {
+     case MCHP_TC_COUNT16_CTRLBSET_CMD_RETRIGGER:
+         if (s->running) {
+-            mchp_tc_load(s, mchp_tc_start_value(s));
++            mchp_tc_restart(s, mchp_tc_start_value(s));
+         } else {
+             mchp_tc_start(s);   /* resume from COUNT */
+         }
+@@ -519,17 +719,69 @@ static void mchp_tc_command(MchpTcState *s, unsigned cmd)
+ /* One event with EVACT COUNT: a counter tick */
+ static void mchp_tc_count_event(MchpTcState *s, int64_t now)
+ {
+-    uint64_t ovf, match[MCHP_TC_CHANNELS];
+-    bool at[MCHP_TC_CHANNELS];
++    uint64_t ovf, match[MCHP_TC_CHANNELS], wom[MCHP_TC_CHANNELS];
++    bool at[MCHP_TC_CHANNELS], wat[MCHP_TC_CHANNELS];
+ 
+     mchp_tc_next(s, &ovf, match);
++    mchp_tc_next_all(s, &ovf, wom, true);
+     for (unsigned ch = 0; ch < MCHP_TC_CHANNELS; ch++) {
+         at[ch] = match[ch] == 1;
++        wat[ch] = wom[ch] == 1;
+     }
+-    mchp_tc_step(s, 1, ovf == 1, at);
++    mchp_tc_step(s, 1, ovf == 1, at, wat);
+     s->t_base = now;
+ }
+ 
++/* Capture @v on every channel the event input feeds */
++static void mchp_tc_capture_all(MchpTcState *s, uint32_t v)
++{
++    for (unsigned ch = 0; ch < MCHP_TC_CHANNELS; ch++) {
++        if (mchp_tc_event_capture(s, ch)) {
++            mchp_tc_capture_value(s, ch, v);
++        }
++    }
++}
++
++/*
++ * PPW, PWP and PW act on both edges of the input (@active: the edge to
++ * the level TCINV does not invert away)
++ */
++static void mchp_tc_period_event(MchpTcState *s, unsigned evact, bool active,
++                                 uint32_t now_count)
++{
++    unsigned per = evact == MCHP_TC_COUNT16_EVCTRL_EVACT_PWP;
++
++    if (evact == MCHP_TC_COUNT16_EVCTRL_EVACT_PW) {
++        if (!active && !s->running) {
++            return;             /* no pulse started yet (silicon) */
++        }
++        if (!active) {
++            /* The pulse ends: capture its width, clear and stop */
++            if (mchp_tc_event_capture(s, 0)) {
++                mchp_tc_capture_value(s, 0, now_count);
++            }
++            mchp_tc_stop(s, 0);
++        } else if (s->running) {
++            mchp_tc_load(s, 0);
++        } else {
++            s->count = 0;
++            mchp_tc_start(s);
++        }
++        return;
++    }
++    if (active) {
++        /* A period ends: capture it and count the next from ZERO */
++        if (mchp_tc_event_capture(s, per)) {
++            mchp_tc_capture_value(s, per, now_count);
++        }
++        if (s->running) {
++            mchp_tc_load(s, 0);
++        }
++    } else if (mchp_tc_event_capture(s, !per)) {
++        mchp_tc_capture_value(s, !per, now_count);
++    }
++}
++
+ /* "evu-event-in": the event input; the edge TCINV selects acts */
+ static void mchp_tc_set_event(void *opaque, int n, int level)
+ {
+@@ -537,18 +789,33 @@ static void mchp_tc_set_event(void *opaque, int n, int level)
+     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+     uint32_t evctrl = mchp_tc_reg(s, A_EVCTRL, 2);
+     bool inv = evctrl & F(EVCTRL, TCINV);
++    unsigned evact = mchp_tc_evact(s);
++    uint32_t now_count;
++    bool active;
+ 
+     if (s->ev_level == (level > 0)) {
+         return;
+     }
+     s->ev_level = level > 0;
+-    if (!(evctrl & F(EVCTRL, TCEI)) || s->ev_level == inv ||
++    active = s->ev_level != inv;
++    if (!(evctrl & F(EVCTRL, TCEI)) ||
+         !FIELD_EX32(mchp_tc_reg(s, A_CTRLA, 4), MCHP_TC_COUNT16_CTRLA,
+                     ENABLE)) {
+         return;
+     }
+     mchp_tc_advance(s, now);
+-    switch (mchp_tc_evact(s)) {
++    now_count = mchp_tc_value(s, mchp_tc_ticks(s, now));
++    if (evact >= MCHP_TC_COUNT16_EVCTRL_EVACT_PPW) {
++        mchp_tc_period_event(s, evact, active, now_count);
++        mchp_tc_advance(s, now);
++        mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++        return;
++    }
++    if (!active) {
++        return;
++    }
++    mchp_tc_capture_all(s, now_count);
++    switch (evact) {
+     case MCHP_TC_COUNT16_EVCTRL_EVACT_COUNT:
+         if (s->running && mchp_tc_hz(s)) {
+             mchp_tc_count_event(s, now);
+@@ -556,7 +823,7 @@ static void mchp_tc_set_event(void *opaque, int n, int level)
+         break;
+     case MCHP_TC_COUNT16_EVCTRL_EVACT_RETRIGGER:
+         if (s->running) {
+-            mchp_tc_load(s, mchp_tc_start_value(s));
++            mchp_tc_restart(s, mchp_tc_start_value(s));
+         } else {
+             mchp_tc_start(s);
+         }
+@@ -581,6 +848,23 @@ static void mchp_tc_update_busy(MchpTcState *s)
+                              MCHP_TC_COUNT16_CTRLA, ENABLE));
+ }
+ 
++/* Arm the refill timer for the earliest waiting channel */
++static void mchp_tc_refill_arm(MchpTcState *s)
++{
++    int64_t next = INT64_MAX;
++
++    for (unsigned ch = 0; ch < MCHP_TC_CHANNELS; ch++) {
++        if (extract32(s->refill, ch, 1)) {
++            next = MIN(next, s->refill_at[ch]);
++        }
++    }
++    if (next == INT64_MAX) {
++        timer_del(s->refill_timer);
++    } else {
++        timer_mod(s->refill_timer, next);
++    }
++}
++
+ static uint32_t mchp_tc_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
+                                  unsigned idx, uint32_t stored,
+                                  bool side_effects)
+@@ -600,6 +884,33 @@ static uint32_t mchp_tc_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
+         }
+         return stored;
+     case A_CC:
++        if (mchp_tc_capture(s, idx)) {
++            uint32_t mc = R_MCHP_TC_COUNT16_INTFLAG_MC0_MASK << idx;
++
++            /*
++             * A read empties CCx and moves the FIFO's buffer up; MCx comes
++             * back two GCLK_TC cycles later: not in the next access, by
++             * the third (silicon)
++             */
++            if (side_effects && (mchp_tc_reg(s, A_INTFLAG, 1) & mc)) {
++                mchp_tc_mod_reg(s, A_INTFLAG, 1, mc, 0);
++                if (extract32(s->cap_full, idx, 1)) {
++                    unsigned size = mchp_tc_size(s);
++                    Clock *clk = MCHP_REGBLOCK(s)->gclk;
++
++                    s->cap_full = deposit32(s->cap_full, idx, 1, 0);
++                    mchp_tc_set_reg(s, A_CC + idx * size, size,
++                                    s->cap_buf[idx]);
++                    s->refill = deposit32(s->refill, idx, 1, 1);
++                    s->refill_at[idx] = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                                        (mchp_tc_hz(s) ?
++                                         clock_ticks_to_ns(clk, 2) : 100);
++                    mchp_tc_refill_arm(s);
++                }
++                mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++            }
++            return stored;
++        }
+         /* Likewise CCx while CCBUFVx is set */
+         if (mchp_tc_reg(s, A_STATUS, 1) & (F(STATUS, CCBUFV0) << idx)) {
+             unsigned size = mchp_tc_size(s);
+@@ -641,9 +952,14 @@ static void mchp_tc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+             unsigned evact = mchp_tc_evact(s);
+ 
+             mchp_tc_report_unimp(s);
+-            /* RETRIGGER/START event actions wait for an event */
++            /*
++             * RETRIGGER/START event actions wait for an event, PW for the
++             * start of a pulse (silicon)
++             */
+             if (evact != MCHP_TC_COUNT16_EVCTRL_EVACT_RETRIGGER &&
+-                evact != MCHP_TC_COUNT16_EVCTRL_EVACT_START) {
++                evact != MCHP_TC_COUNT16_EVCTRL_EVACT_START &&
++                !(evact == MCHP_TC_COUNT16_EVCTRL_EVACT_PW &&
++                  (mchp_tc_reg(s, A_EVCTRL, 2) & F(EVCTRL, TCEI)))) {
+                 mchp_tc_start(s);
+             }
+         } else if (old & ~val & F(CTRLA, ENABLE)) {
+@@ -653,6 +969,11 @@ static void mchp_tc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+         }
+         mchp_tc_update_client(s);
+         mchp_tc_update_busy(s);
++        mchp_tc_update_pads(s);
++        break;
++    case A_DRVCTRL:
++        mchp_tc_advance(s, now);
++        mchp_tc_update_pads(s);
+         break;
+     case A_CTRLBSET: {
+         unsigned cmd = FIELD_EX32(val, MCHP_TC_COUNT16_CTRLBSET, CMD);
+@@ -699,8 +1020,30 @@ static void mchp_tc_reset_hold(MchpRegBlock *rb)
+     s->running = false;
+     s->sync_pending = 0;
+     s->count = 0;
++    timer_del(s->refill_timer);
++    s->wo = 0;
++    s->cap_full = 0;
++    s->refill = 0;
+     mchp_tc_update_client(s);
+     mchp_tc_update_busy(s);
++    mchp_tc_update_pads(s);
++}
++
++/* Captures moved up the FIFO are valid by now */
++static void mchp_tc_refill(void *opaque)
++{
++    MchpTcState *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    for (unsigned ch = 0; ch < MCHP_TC_CHANNELS; ch++) {
++        if (extract32(s->refill, ch, 1) && s->refill_at[ch] <= now) {
++            mchp_tc_mod_reg(s, A_INTFLAG, 1, 0,
++                            R_MCHP_TC_COUNT16_INTFLAG_MC0_MASK << ch);
++            s->refill = deposit32(s->refill, ch, 1, 0);
++        }
++    }
++    mchp_tc_refill_arm(s);
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
+ }
+ 
+ static bool mchp_tc_realize(MchpRegBlock *rb, Error **errp)
+@@ -708,6 +1051,7 @@ static bool mchp_tc_realize(MchpRegBlock *rb, Error **errp)
+     MchpTcState *s = MCHP_TC(rb);
+ 
+     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mchp_tc_tick, s);
++    s->refill_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mchp_tc_refill, s);
+     return true;
+ }
+ 
+@@ -722,10 +1066,28 @@ static void mchp_tc_set_dma_wanted(void *opaque, int n, int level)
+     }
+ }
+ 
++/* "pad-wo-active": a pad is muxed to WO[@x] */
++static void mchp_tc_set_wo_active(void *opaque, int x, int level)
++{
++    MchpTcState *s = opaque;
++
++    mchp_tc_advance(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
++    s->wo_active = deposit32(s->wo_active, x, 1, level > 0);
++    mchp_tc_sync(s);
++    mchp_tc_update_pads(s);
++}
++
+ static void mchp_tc_init(Object *obj)
+ {
+     MchpTcState *s = MCHP_TC(obj);
+ 
++    for (unsigned ch = 0; ch < MCHP_TC_CHANNELS; ch++) {
++        s->pad_level[ch] = -1;
++    }
++    qdev_init_gpio_out_named(DEVICE(obj), s->pad_wo, MCHP_TC_PAD_WO,
++                             MCHP_TC_CHANNELS);
++    qdev_init_gpio_in_named(DEVICE(obj), mchp_tc_set_wo_active,
++                            MCHP_TC_PAD_WO_ACTIVE, MCHP_TC_CHANNELS);
+     qdev_init_gpio_in_named(DEVICE(obj), mchp_tc_set_dma_wanted,
+                             MCHP_TC_OVF_DMA_WANTED, 1);
+     qdev_init_gpio_out_named(DEVICE(obj), &s->ovf_dma, MCHP_TC_OVF_DMA, 1);
+@@ -743,13 +1105,18 @@ static void mchp_tc_init(Object *obj)
+ 
+ static void mchp_tc_finalize(Object *obj)
+ {
+-    timer_free(MCHP_TC(obj)->timer);
++    MchpTcState *s = MCHP_TC(obj);
++
++    if (s->timer) {
++        timer_free(s->timer);
++        timer_free(s->refill_timer);
++    }
+ }
+ 
+ static const VMStateDescription vmstate_mchp_tc = {
+     .name = TYPE_MCHP_TC,
+-    .version_id = 2,
+-    .minimum_version_id = 2,
++    .version_id = 3,
++    .minimum_version_id = 3,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpTcState, 1, vmstate_mchp_regblock,
+                        MchpRegBlock),
+@@ -759,6 +1126,14 @@ static const VMStateDescription vmstate_mchp_tc = {
+         VMSTATE_INT64(t_base, MchpTcState),
+         VMSTATE_UINT32(sync_pending, MchpTcState),
+         VMSTATE_BOOL(ev_level, MchpTcState),
++        VMSTATE_UINT8(wo, MchpTcState),
++        VMSTATE_UINT8(wo_active, MchpTcState),
++        VMSTATE_INT32_ARRAY(pad_level, MchpTcState, MCHP_TC_CHANNELS),
++        VMSTATE_UINT32_ARRAY(cap_buf, MchpTcState, MCHP_TC_CHANNELS),
++        VMSTATE_UINT8(cap_full, MchpTcState),
++        VMSTATE_TIMER_PTR(refill_timer, MchpTcState),
++        VMSTATE_UINT8(refill, MchpTcState),
++        VMSTATE_INT64_ARRAY(refill_at, MchpTcState, MCHP_TC_CHANNELS),
+         VMSTATE_END_OF_LIST()
+     },
+ };
+diff --git a/include/hw/mchp/gen/atsame51j20a/tc_u2249.h b/include/hw/mchp/gen/atsame51j20a/tc_u2249.h
+index abf94cf..862f279 100644
+--- a/include/hw/mchp/gen/atsame51j20a/tc_u2249.h
++++ b/include/hw/mchp/gen/atsame51j20a/tc_u2249.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/tc_u2249.yaml (sha1 41f9f7b2548b)
++ * Overlay: overlays/tc_u2249.yaml (sha1 6e7030ff5659)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/tc_u2249.h b/include/hw/mchp/gen/pic32cm1216mc00048/tc_u2249.h
+index 0f04be0..b35d7ee 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/tc_u2249.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/tc_u2249.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/tc_u2249.yaml (sha1 41f9f7b2548b)
++ * Overlay: overlays/tc_u2249.yaml (sha1 6e7030ff5659)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/tc_u2249.h b/include/hw/mchp/gen/pic32cm5164jh01100/tc_u2249.h
+index f87e3db..43ff21d 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/tc_u2249.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/tc_u2249.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/tc_u2249.yaml (sha1 41f9f7b2548b)
++ * Overlay: overlays/tc_u2249.yaml (sha1 6e7030ff5659)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/tc_u2249.h b/include/hw/mchp/gen/tc_u2249.h
+index 4f79cb9..6bfdb77 100644
+--- a/include/hw/mchp/gen/tc_u2249.h
++++ b/include/hw/mchp/gen/tc_u2249.h
+@@ -10,7 +10,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * Overlay: overlays/tc_u2249.yaml (sha1 41f9f7b2548b)
++ * Overlay: overlays/tc_u2249.yaml (sha1 6e7030ff5659)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/timer/mchp_tc.h b/include/hw/timer/mchp_tc.h
+index 03f7292..00866d2 100644
+--- a/include/hw/timer/mchp_tc.h
++++ b/include/hw/timer/mchp_tc.h
+@@ -11,7 +11,9 @@
+  * GPIO outputs "ovf-event" and "mc-event"[2]: a pulse per overflow and
+  * compare match with EVCTRL.OVFEO/MCEOx set. GPIO input "evu-event-in":
+  * the event input (EVSYS user); output "evu-event-busy": 1 while the TC
+- * cannot take events (disabled).
++ * cannot take events (disabled). GPIO outputs "pad-wo"[2]: the waveform
++ * outputs WO[x] (0, 1, or MCHP_PORT_PAD_HIZ while disabled); inputs
++ * "pad-wo-active"[2]: 1 while a pad is muxed to WO[x].
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -33,5 +35,7 @@
+ #define MCHP_TC_MC_EVENT "mc-event"
+ #define MCHP_TC_EVU_EVENT_IN "evu-event-in"
+ #define MCHP_TC_EVU_BUSY "evu-event-busy"
++#define MCHP_TC_PAD_WO "pad-wo"
++#define MCHP_TC_PAD_WO_ACTIVE "pad-wo-active"
+ 
+ #endif /* HW_TIMER_MCHP_TC_H */
+diff --git a/tests/qtest/pic32cm-tc-test.c b/tests/qtest/pic32cm-tc-test.c
+index 78933b5..9e777ac 100644
+--- a/tests/qtest/pic32cm-tc-test.c
++++ b/tests/qtest/pic32cm-tc-test.c
+@@ -15,6 +15,7 @@
+ #include "qemu/osdep.h"
+ #include "libqtest.h"
+ #include "qemu/bitops.h"
++#include "qobject/qdict.h"
+ 
+ #define MACHINE         "-M pic32cm-mc00-cpro "
+ 
+@@ -96,6 +97,9 @@ static void test_count8_timing(void)
+     qtest_writeb(qts, TC0 + T_CC0, 10);
+     qtest_writel(qts, TC0 + T_CTRLA, MODE_COUNT8 | DIV1024 | CTRLA_ENABLE);
+     g_assert_cmphex(qtest_readb(qts, TC0 + T_STATUS) & STOP, ==, 0);
++    /* CC1 (0) matches at the start, COUNT being 0 (tcprobe2) */
++    g_assert_cmphex(qtest_readb(qts, TC0 + T_INTFLAG), ==, MC1);
++    qtest_writeb(qts, TC0 + T_INTFLAG, MC1);
+     qtest_clock_step(qts, 9 * TICK_NS + TICK_NS / 2);
+     g_assert_cmphex(qtest_readb(qts, TC0 + T_INTFLAG), ==, 0);
+     qtest_clock_step(qts, TICK_NS);
+@@ -103,7 +107,7 @@ static void test_count8_timing(void)
+     qtest_clock_step(qts, 89 * TICK_NS);
+     g_assert_cmphex(qtest_readb(qts, TC0 + T_INTFLAG), ==, MC0);
+     qtest_clock_step(qts, TICK_NS);
+-    /* CC1 (0) matches as COUNT wraps to ZERO */
++    /* and again as COUNT wraps to ZERO */
+     g_assert_cmphex(qtest_readb(qts, TC0 + T_INTFLAG), ==, MC0 | MC1 | OVF);
+     qtest_quit(qts);
+ }
+@@ -240,6 +244,165 @@ static void test_noclock(void)
+     qtest_quit(qts);
+ }
+ 
++/* ---- waveform outputs and capture (tcprobe2..4, APP=tcio) ---- */
++
++#define PA              0x41000000
++#define P_IN            0x20
++#define P_PMUX          0x30
++#define P_PINCFG        0x40
++#define EIC             0x40002800
++#define EVSYS           0x42000000
++#define T_EVCTRL        0x06
++#define T_CC1           0x1D
++#define WO0_PIN         22      /* PA22: TC0 WO0, function E */
++#define EXT_PIN         16      /* PA16: EXTINT0 */
++#define CAPTEN0         BIT(16)
++#define CAPTEN1         BIT(17)
++#define MODE_COUNT16    (0 << 2)
++#define NPWM            2
++#define TCEI            BIT(5)
++#define TCINV           BIT(4)
++#define EVACT_STAMP     4
++#define EVACT_PPW       5
++#define EVACT_PW        7
++#define ERR             0x02
++#define GEN_EIC0        14
++#define USER_TC0        23
++
++static bool wo0(QTestState *qts)
++{
++    return qtest_readl(qts, PA + P_IN) & BIT(WO0_PIN);
++}
++
++static void test_wave_pad(void)
++{
++    QTestState *qts = tc_init(MODE_COUNT8 | DIV1024, 9);
++
++    qtest_writeb(qts, PA + P_PINCFG + WO0_PIN, 0x03);      /* PMUXEN, INEN */
++    qtest_writeb(qts, PA + P_PMUX + WO0_PIN / 2, 0x04);     /* E */
++    qtest_writeb(qts, TC0 + T_WAVE, NPWM);
++    qtest_writeb(qts, TC0 + T_CC0, 3);
++    g_assert_false(wo0(qts));                               /* floating */
++    qtest_writel(qts, TC0 + T_CTRLA, MODE_COUNT8 | DIV1024 | CTRLA_ENABLE);
++    g_assert_true(wo0(qts));
++    qtest_clock_step(qts, 3 * TICK_NS - TICK_NS / 2);
++    g_assert_true(wo0(qts));
++    qtest_clock_step(qts, TICK_NS);
++    g_assert_false(wo0(qts));                               /* CC0 */
++    qtest_clock_step(qts, 7 * TICK_NS);
++    g_assert_true(wo0(qts));                                /* the wrap */
++    qtest_writeb(qts, TC0 + T_CTRLBSET, CMD_STOP);
++    g_assert_false(wo0(qts));                               /* stopped */
++    qtest_quit(qts);
++}
++
++/* PA16 (EXTINT0, HIGH, asynchronous) through an asynchronous channel */
++static QTestState *capture_init(uint32_t ctrla, uint16_t evctrl)
++{
++    QTestState *qts = qtest_init(MACHINE);
++    QDict *rsp;
++
++    rsp = qtest_qmp(qts, "{ 'execute': 'qom-set', 'arguments':"
++                    " { 'path': '/machine/soc/port', 'property': 'pa-in-mask',"
++                    " 'value': %u } }", BIT(EXT_PIN));
++    qobject_unref(rsp);
++    qtest_writeb(qts, PA + P_PINCFG + EXT_PIN, 0x03);
++    qtest_writeb(qts, PA + P_PMUX + EXT_PIN / 2, 0x00);     /* A */
++    qtest_writel(qts, EIC + 0x1C, 0x4);                     /* HIGH */
++    qtest_writel(qts, EIC + 0x18, 0x1);                     /* ASYNCH */
++    qtest_writel(qts, EIC + 0x08, 0x1);                     /* EXTINTEO0 */
++    qtest_writeb(qts, EIC + 0x00, 0x02);
++    qtest_writel(qts, EVSYS + 0x20, GEN_EIC0 | (2 << 8));  /* asynchronous */
++    qtest_writel(qts, EVSYS + 0x80 + 4 * USER_TC0, 1);
++    qtest_writel(qts, GCLK + 0x80 + 4 * TC0_GCLK_ID, 0x40);
++    qtest_writel(qts, TC0 + T_CTRLA, ctrla);
++    qtest_writew(qts, TC0 + T_EVCTRL, evctrl | TCEI);
++    qtest_writel(qts, TC0 + T_CTRLA, ctrla | CTRLA_ENABLE);
++    return qts;
++}
++
++static void ext(QTestState *qts, bool level)
++{
++    QDict *rsp = qtest_qmp(qts, "{ 'execute': 'qom-set', 'arguments':"
++                           " { 'path': '/machine/soc/port', 'property':"
++                           " 'pa-in', 'value': %u } }",
++                           level ? BIT(EXT_PIN) : 0);
++
++    qobject_unref(rsp);
++}
++
++/* STAMP: a two-deep FIFO per channel, ERR when full; MAX at an overflow */
++static void test_capture_stamp(void)
++{
++    QTestState *qts = capture_init(MODE_COUNT8 | DIV1024 | CAPTEN0,
++                                   EVACT_STAMP);
++
++    qtest_writeb(qts, TC0 + T_PER, 200);
++    qtest_clock_step(qts, 3 * TICK_NS + TICK_NS / 2);
++    ext(qts, true);                                         /* COUNT 3 */
++    ext(qts, false);
++    qtest_clock_step(qts, 4 * TICK_NS);
++    ext(qts, true);                                         /* COUNT 7 */
++    ext(qts, false);
++    g_assert_cmphex(qtest_readb(qts, TC0 + T_INTFLAG) & (MC0 | ERR), ==,
++                    MC0);
++    g_assert_cmpuint(qtest_readb(qts, TC0 + T_CC0), ==, 3);
++    g_assert_cmphex(qtest_readb(qts, TC0 + T_INTFLAG) & MC0, ==, 0);
++    qtest_clock_step(qts, 1000);                            /* 2 GCLK */
++    g_assert_cmphex(qtest_readb(qts, TC0 + T_INTFLAG) & MC0, ==, MC0);
++    g_assert_cmpuint(qtest_readb(qts, TC0 + T_CC0), ==, 7);
++    for (int i = 0; i < 3; i++) {
++        ext(qts, true);
++        ext(qts, false);
++    }
++    g_assert_cmphex(qtest_readb(qts, TC0 + T_INTFLAG) & ERR, ==, ERR);
++    qtest_quit(qts);
++
++    qts = capture_init(MODE_COUNT8 | DIV1024 | CAPTEN0 | CAPTEN1,
++                       EVACT_STAMP);
++    qtest_writeb(qts, TC0 + T_PER, 20);
++    qtest_clock_step(qts, 22 * TICK_NS);                    /* one wrap */
++    g_assert_cmpuint(qtest_readb(qts, TC0 + T_CC0), ==, 0xFF);
++    g_assert_cmpuint(qtest_readb(qts, TC0 + T_CC1), ==, 0xFF);
++    qtest_quit(qts);
++}
++
++/* PPW: the period in CC0 and a restart on the rise, the width in CC1 */
++static void test_capture_ppw(void)
++{
++    QTestState *qts = capture_init(MODE_COUNT16 | DIV1024 | CAPTEN0 |
++                                   CAPTEN1, EVACT_PPW);
++
++    ext(qts, true);
++    qtest_clock_step(qts, 5 * TICK_NS);
++    ext(qts, false);
++    qtest_clock_step(qts, 7 * TICK_NS);
++    ext(qts, true);
++    g_assert_cmpuint(qtest_readw(qts, TC0 + T_CC0), ==, 0);
++    g_assert_cmpuint(qtest_readw(qts, TC0 + 0x1E), ==, 5);  /* CC1 */
++    qtest_clock_step(qts, 1000);
++    g_assert_cmpuint(qtest_readw(qts, TC0 + T_CC0), ==, 12);
++    qtest_quit(qts);
++}
++
++/* PW waits for the first active edge, captures at the inactive one, stops */
++static void test_capture_pw(void)
++{
++    QTestState *qts = capture_init(MODE_COUNT16 | DIV1024 | CAPTEN0,
++                                   EVACT_PW | TCINV);
++
++    ext(qts, true);                         /* inactive: nothing started */
++    g_assert_cmphex(qtest_readb(qts, TC0 + T_INTFLAG) & MC0, ==, 0);
++    qtest_clock_step(qts, 2 * TICK_NS);
++    ext(qts, false);                        /* active: count from ZERO */
++    qtest_clock_step(qts, 9 * TICK_NS);
++    ext(qts, true);
++    g_assert_cmphex(qtest_readb(qts, TC0 + T_INTFLAG) & MC0, ==, MC0);
++    g_assert_cmpuint(qtest_readw(qts, TC0 + T_CC0), ==, 9);
++    g_assert_cmphex(qtest_readb(qts, TC0 + T_STATUS) & STOP, ==, STOP);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+@@ -254,6 +417,10 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-tc/count32-pair", test_count32_pair);
+     qtest_add_func("pic32cm-tc/irq", test_irq);
+     qtest_add_func("pic32cm-tc/noclock", test_noclock);
++    qtest_add_func("pic32cm-tc/wave-pad", test_wave_pad);
++    qtest_add_func("pic32cm-tc/capture-stamp", test_capture_stamp);
++    qtest_add_func("pic32cm-tc/capture-ppw", test_capture_ppw);
++    qtest_add_func("pic32cm-tc/capture-pw", test_capture_pw);
+ 
+     return g_test_run();
+ }
+-- 
+2.53.0.windows.2
+

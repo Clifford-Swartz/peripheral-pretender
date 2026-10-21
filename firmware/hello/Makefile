@@ -48,7 +48,8 @@ CRTI     := $(shell $(CC) $(ARCH) -print-file-name=crti.o)
 CRTN     := $(shell $(CC) $(ARCH) -print-file-name=crtn.o)
 LDFLAGS  := $(ARCH) -T$(LDSCRIPT) -nostartfiles --specs=nano.specs \
             -Wl,--entry=Reset_Handler -Wl,--gc-sections \
-            -Wl,-Map=$(BUILD)/$(APP).map -Wl,--print-memory-usage
+            -Wl,-Map=$(BUILD)/$(APP).map -Wl,--print-memory-usage \
+            -Wl,--no-warn-rwx-segments
 
 .PHONY: all check clean packs
 
