@@ -160,7 +160,9 @@ py -m tools.periph qtest pic32cm-<name>-test
 4. Commit the repository and push.
 5. Engine code changed, so the VS Code extension's bundled QEMU is stale. Bump
    `vscode/package.json`, build the VSIX (`py scripts/build_vsix.py --qemu C:/pp/pp-qemu`),
-   run `cd vscode && npm test`, update the version in `SETUP.md`, and publish a release. When
+   run `cd vscode && npm test` (from a terminal inside VS Code, with `ELECTRON_RUN_AS_NODE`
+   unset: `env -u ELECTRON_RUN_AS_NODE npm test`, or Code.exe rejects `--user-data-dir`),
+   update the version in `SETUP.md`, and publish a release. When
    several peripherals go through the process in one session, one release after the last of
    them will do, but never report the batch to the owner before it exists.
 
