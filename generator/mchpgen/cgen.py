@@ -458,6 +458,14 @@ def _inst_entry(ds: DeviceSem, i: InstanceSem) -> list[str]:
     if i.module == "TCC" and "CC_NUM" in i.params:
         # Compare/capture channels of this instance (ATDF parameter CC_NUM)
         items.append(f".channels = {int(i.params['CC_NUM'])}")
+    if i.module == "TCC" and "OW_NUM" in i.params:
+        # Waveform outputs and the optional units (ATDF parameters OW_NUM,
+        # DTI, SWAP, OTMX, PG, DITHERING)
+        items.append(f".outputs = {int(i.params['OW_NUM'])}")
+        feats = [f"MCHP_TCC_FEAT_{p}" for p in
+                 ("DTI", "SWAP", "OTMX", "PG", "DITHERING")
+                 if i.params.get(p, "0") not in ("0", "")]
+        items.append(".features = " + (" | ".join(feats) or "0"))
     ip = i.ip
     if ip.views and not ip.core:
         view = ip.view(ip.default_view)

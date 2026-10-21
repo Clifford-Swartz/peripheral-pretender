@@ -102254,7 +102254,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/tcc_u2213.yaml",
-    "sha1": "7f219d23569c44c63703167b1fe5b2d397a2fa7a",
+    "sha1": "22eef6d3d8a5cc5829b743bc2c4d876abde757b2",
     "status": "applied",
     "versions": [
      "3.0.0",
@@ -103499,7 +103499,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "PAC"
+        "PAC",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": null,
        "read_side_effect": false,
@@ -103565,6 +103566,11 @@
        ],
        "provenance": [
         [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
          "enprot",
          "overlay",
          "all = 0xFFFF0F03"
@@ -103590,7 +103596,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "PAC"
+        "PAC",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": null,
        "read_side_effect": false,
@@ -103807,6 +103814,11 @@
         }
        ],
        "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
         [
          "enprot",
          "overlay",
@@ -105009,10 +105021,12 @@
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
        "flags": [
-        "PAC"
+        "PAC",
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Pattern",
        "note": "",
        "fields": [
@@ -105147,6 +105161,16 @@
        ],
        "provenance": [
         [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ],
+        [
          "sync",
          "overlay",
          "PATT: SYNCBUSY 0x20"
@@ -105162,8 +105186,8 @@
        "reset": 0,
        "access": "RW",
        "access_size": null,
-       "impl": 255791031,
-       "wmask": 255791031,
+       "impl": 255791095,
+       "wmask": 255791095,
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
@@ -105376,6 +105400,11 @@
        ],
        "provenance": [
         [
+         "impl",
+         "overlay",
+         "RAMPX = 0x40: on silicon, not in the ATDF"
+        ],
+        [
          "hooks",
          "overlay",
          "post_write"
@@ -105521,7 +105550,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "PAC"
+        "PAC",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": null,
        "read_side_effect": false,
@@ -105657,7 +105687,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "PERBUF",

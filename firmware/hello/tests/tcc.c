@@ -519,7 +519,9 @@ static uint32_t pa08_duty(void)
  * The waveform on a pad: TCC1 WO[2] on PA08 (function F) and PA24 (LED0).
  * The duty cycle is CCx / (PER + 1); a disabled TCC leaves the pad
  * undriven (PA08 reads 0 even with the pull-up, PA24 reads 1 through the
- * LED); after STOP the pad shows the start of a cycle.
+ * LED). STOP releases the pad too (DRVCTRL.NRE2 clear), a few GCLK_TCC
+ * cycles after the command: PA08 then reads 0, pull-up or not
+ * (tccprobe6/7; delay_ms(1) can last almost nothing, so wait 2).
  */
 static void test_pins(void)
 {
@@ -566,8 +568,8 @@ static void test_pins(void)
         put_checked("-ok", d >= cases[i][2] && d <= cases[i][3], 1, 1);
     }
     t1->TCC_CTRLBSET = TCC_CTRLBSET_CMD_STOP;
-    delay_ms(1);
-    put_checked("stopped", (PORT_REGS->GROUP[0].PORT_IN >> 8) & 1U, 1, 1);
+    delay_ms(2);
+    put_checked("stopped", (PORT_REGS->GROUP[0].PORT_IN >> 8) & 1U, 0, 1);
     t1->TCC_CTRLA = 0;
     while (t1->TCC_SYNCBUSY != 0U) {
     }

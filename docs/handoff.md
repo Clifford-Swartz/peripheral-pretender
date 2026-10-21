@@ -584,10 +584,20 @@ fault but still load. A sticky NVMCTRL error once broke programming the board; `
 and halts first. Answers in `docs/research/peripherals/nvmctrl-03929.md`. VS Code extension 0.4.4
 carries both.
 
+**TC and TCC on pins** (patches 0066, 0067): the TC's waveform outputs and capture (`tcio`), and
+the TCC's waveform extension (output matrix, dead time, swap, pattern, inversion), DSCRITICAL,
+RAMP2/2A/2C, dithering, per-instance units and the outputs after STOP (`tccwave`), all checked on
+the desk board without wiring: `firmware/hello/src/scope.h` records pin edges through PORT.IN.
+Undriven pins keep their charge, so "kept" and "released" outputs look alike until a probe drives
+a known state; STOP releases the outputs unless DRVCTRL.NREx is set. A dithering qtest found that
+the TC and TCC lost a tick every few hundred events (the timer's +1 ns went into the base time);
+both now keep exact tick instants. Notes: `tc-u2249.md`, `tcc-u2213.md`.
+
 Next on the MC00, in order (the owner's list of 2026-10-21):
 
-1. **TC/TCC on pins** (waveform outputs, capture) and the TCC motor-control features (dead time,
-   faults, pattern generation, dithering).
+1. **TCC faults** (recoverable A/B with blanking, qualification, keep, restart, capture and halt;
+   non-recoverable with DRVCTRL NRE/NRV; FILTERVAL), then TCC capture (CPTEN, MCEI, PPW/PWP)
+   and circular buffers.
 2. **ADC events and sequencing**, and the remaining DMA triggers (ADC, DAC, TCC, SDADC, TSENS).
 3. **Sleep and standby** (PM).
 4. A generic **pad-to-peripheral input path**, then **PDEC** and **CCL**.

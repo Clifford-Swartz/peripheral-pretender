@@ -168,6 +168,11 @@ I examined PIC32CM-JH DFP 1.3.221 (about 91 MB, 24 parts). For each part it ship
      the data sheet says both fault (`nvmctrl-03929.md`).
    - TC: CTRLA bit 15 is writable with no documented field; CAPTMIN/CAPTMAX are described (33.6.3.3)
      but CTRLA.CAPTMODE does not exist on this part (nor in the DFP) (`tc-u2249.md`).
+   - TCC: a STOP leaves COUNT at 0 (TOP counting down), where 31.6.2.4 says the counter keeps its
+     value; WAVE and PATT drop a write made while the previous one synchronizes (about 4 GCLK
+     cycles), which the data sheet does not mention; WAVE bit 6 (RAMP's third bit) is writable
+     though the MC00 ATDF gives RAMP as 0x30 and the data sheet has no RAMP2CS; STATUS.CMPx reads
+     0 a few cycles after a STOP with prescaler DIV1 only (`tcc-u2213.md`).
 
 ## Table: DFP inventory
 | folder / file | contents | approx size | contribution to a QEMU twin |

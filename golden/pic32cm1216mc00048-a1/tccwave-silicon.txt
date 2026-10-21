@@ -1,0 +1,19 @@
+PP tccwave: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+units wexctrl=0xFFFF0F03 drvctrl=0xFFFFFFFF patt=0xFFFF wave=0x0F0F0FB7 wexctrl=0x00000000 drvctrl=0xFF0F0F0F patt=0x0F0F wave=0x000303B7 wexctrl=0x00000000 drvctrl=0xFF030303 patt=0x0000 wave=0x000303B7 ok
+otmx0 w1=20 w2=40 w3=60 w4=0 w5=20 w6=40 w7=60 ok
+otmx1 w1=20 w2=0 w3=20 w4=0 w5=20 w6=0 w7=20 ok
+otmx2 w1=0 w2=0 w3=0 w4=0 w5=0 w6=0 w7=0 ok
+otmx3 w1=19 w2=20 w3=19 w4=19 w5=19 w6=20 w7=20 ok
+dti ls_high=15 hs_rise=10 hs_high=70 ls_rise=5 ok
+swap w0_high=40 w4_high=20 ok
+pol w0_high=80 w1_high=40 ok
+dropped wave=0x00000002 ok
+patt w0_falls=0x0 w0_level=0x1 w1_level=0x1 w4_level=0x0 w2_period=100 patt_reads_buf=0x0000 ok
+inven w0_low=16 w4_high=30 ok
+dscritical w0_high=58 w0_period=98 w1_high=38 w2_high=38 w3_high=18 ok
+ramp2 w0_high=29 w0_period=100 w1_high=20 ok
+ramp2a w0_high=29 w0_period=100 w1_high=29 ok
+ramp2c w0_high=10 w0_period=80 w1_high=20 ok
+dith4 per_period=505 per_high=200 cc_period=499 cc_high=202 ok
+stop w0_before=0x0 w1_before=0x1 w0_after=0x1 w1_after=0x0 cmp=0x0 stopped=0x1 ok
+PP:EXIT 0

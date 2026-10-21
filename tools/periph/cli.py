@@ -180,7 +180,7 @@ def cmd_build(b: Board, app: str) -> None:
 def cmd_twin(b: Board, app: str, machine_opts: str = "") -> int:
     out = transcript(b, app, "twin")
     machine = b.machine + (f",{machine_opts}" if machine_opts else "")
-    stop_qemu()
+    # No stop_qemu() here: it kills every QEMU on the host, a gate's included
     with out.open("w", encoding="utf-8") as f:
         rc = subprocess.call([sys.executable, "-m", "tools.pp", "run",
                               str(elf(b, app)), "--machine", machine,

@@ -23,8 +23,11 @@ golden, a model and a qtest. When unsure how something is done, find how those f
   `REGISTER-ONLY`, a model type, or core/NVM, plus the apps that already have a silicon golden.
   A gap inside an existing model (the WDT time-out, NVMCTRL programming) does not show there:
   read the model's header comment ("Not modelled: ...").
-- **Shared pp-qemu.** Other sessions may use `C:/pp/pp-qemu`. `qemu`, `qtest`, `twin` and `gate`
-  stop every running QEMU first, and so stop theirs.
+- **Shared pp-qemu.** Other sessions may use `C:/pp/pp-qemu`. `qemu`, `qtest` and `gate` build
+  QEMU, and on Windows a build first stops every running QEMU (a running exe cannot be relinked),
+  theirs included. So never build QEMU while a gate runs: it kills the gate's QEMU and fails
+  tests for no reason (a web session test once died of it). `twin` and `probe` no longer stop
+  anything.
 
 ## Phase 1: Research
 
@@ -198,8 +201,12 @@ These cost a probe run each to learn. Check new probes against them.
 - **Pins without wiring.** `firmware/hello/src/scope.h` records the edges of a peripheral's own
   output pins through PORT.IN (PINCFG.INEN), from RAM, timed by SysTick over 24 bits. For inputs,
   an EIC pin's pull resistor turned by PORT.OUT makes clean pulses (a pin muxed to a TC or TCC
-  loses its pull). Silicon often starts outputs a clock tick after the enable: check periods
-  and widths, not absolute times.
+  loses its pull: released, it is pulled down whatever PORT.OUT says). Silicon often starts
+  outputs a clock tick after the enable: check periods and widths, not absolute times.
+- **Floating pins keep their charge** for a millisecond and more. "The output is kept" and "the
+  output is released" read the same until a probe drives the opposite level or uses the pull
+  (`tccprobe5..7`); board parts can pull a released pin too (the MC00's PA18/PA19 sit behind the
+  DGI level converter).
 - **Prints take milliseconds on silicon and nothing on the twin** (instant SERCOM TX): never let
   a timed behaviour run across a print, or the transcripts differ for reasons unrelated to the
   model (`tcprobe4.c`).

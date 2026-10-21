@@ -3,14 +3,16 @@
 # Behavior overlay for TCC U2213 (Timer/Counter for Control). The mchp-tcc
 # model counts in the single- and dual-slope waveform modes with the
 # commands, one-shot, double buffering, compare-match flags, waveform output
-# state (STATUS.CMPx) and events; faults, dead time, pattern generation,
-# dithering, capture and waveform pins are not modelled.
+# state (STATUS.CMPx), events, the waveform extension (output matrix, dead
+# time, swap, pattern, inversion), RAMP2/2A/2C, dithering and the waveform
+# pins; faults, capture and circular buffers are not modelled.
 ip: TCC
 id: U2213
 versions: ["3.0.0", "3.1.0", "4a0"]   # 3.0.0: MC00; 3.1.0: SAM E51; 4a0: JH01
 references:
   - "DS60001638E 31 (PIC32CM MC00 TCC), via Microchip's MCP server"
   - "silicon, PIC32CM1216MC00048 rev A1, firmware/hello/tests/tccprobe.c, 2026-10-13"
+  - "silicon, PIC32CM1216MC00048 rev A1, firmware/hello/tests/tccprobe2-5.c, 2026-10-21"
 registers:
   CTRLA:
     pac_protected: true
@@ -33,8 +35,8 @@ registers:
     hooks: [pre_read]             # pending until GCLK_TCC runs
   FCTRLA: {pac_protected: true, enable_protected: all}
   FCTRLB: {pac_protected: true, enable_protected: all}
-  WEXCTRL: {pac_protected: true, enable_protected: all}
-  DRVCTRL: {pac_protected: true, enable_protected: all}
+  WEXCTRL: {pac_protected: true, enable_protected: all, hooks: [post_write]}   # per-instance units
+  DRVCTRL: {pac_protected: true, enable_protected: all, hooks: [post_write]}   # per-instance outputs
   DBGCTRL: {pac_protected: true}
   EVCTRL: {pac_protected: true, enable_protected: all}
   INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
@@ -52,10 +54,17 @@ registers:
     pac_protected: true
     sync: COUNT
     hooks: [pre_read, post_write]   # last synchronized value; reload
-  PATT: {pac_protected: true, sync: PATT, optional: true}
+  PATT:
+    pac_protected: true
+    sync: PATT
+    optional: true
+    hooks: [pre_read, post_write]   # reads show PATTBUF while PATTBUFV; sync
   WAVE:
     pac_protected: true
     sync: WAVE
+    # RAMP's third bit (RAMP2CS): the MC00 ATDF's RAMP is 0x30, but MC00
+    # silicon keeps bit 6 (tccprobe2 B0); JH01 and E51 have it in RAMP
+    extra_fields: {RAMPX: [6, 1]}
     hooks: [post_write]
   PER:
     pac_protected: true
@@ -65,7 +74,10 @@ registers:
     pac_protected: true
     sync: "CC{n}"
     hooks: [pre_read, post_write]   # reads show CCBUFx while CCBUFVx
-  PATTBUF: {pac_protected: true, optional: true}
+  PATTBUF:
+    pac_protected: true
+    optional: true
+    hooks: [post_write]           # STATUS.PATTBUFV
   PERBUF:
     pac_protected: true
     hooks: [post_write]           # STATUS.PERBUFV
