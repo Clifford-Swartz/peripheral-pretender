@@ -1,0 +1,337 @@
+/*
+ * DMA trigger check (PIC32CM MC00, DMAC U2223): TSENS, SDADC and TCC0
+ * requests, and a request already set when a channel is enabled, against
+ * what silicon did in firmware/hello APP=dmaprobe
+ * (docs/research/peripherals/dmac-u2223.md, tcc-u2213.md). ADC RESRDY is
+ * in adcseq, TC OVF in dmac.
+ * Run: py -m tools.periph check mc00 dmatrig
+ *
+ * Bare EV15N46A. DMAC channel 0, one beat per trigger, trigger numbers
+ * from the ATDF's DMAC_ID_* parameters (dmac.h's are wrong from 0x0A up).
+ * TCC0 on GCLK_TCC0 1 MHz, DIV1, NPWM, PER 99 (a 100 us period), CC1 50.
+ * Capture input PA02 (EXTINT2, its pull turned by PORT.OUT), HIGH sense,
+ * ASYNCH, asynchronous EVSYS channel 0 to TCC0 MC_2. Times leave room for
+ * the TCC's start latency (a few GCLK_TCC cycles on silicon, none on the
+ * twin); analog values are not compared (the board's VDDANA and the
+ * TSENS calibration differ).
+ *
+ * Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+ */
+
+#include "scope.h"
+
+#define DM              DMAC_REGS
+#define T0              TCC0_REGS
+#define TS              TSENS_REGS
+#define SD              SDADC_REGS
+#define GA              0U
+#define FUNC_A          0U
+#define PIN_IN          2U
+#define GEN_EIC2        16U
+#define USER_MC2        13U
+#define TRIG_TSENS      1U
+#define TRIG_TCC0_OVF   10U
+#define TRIG_TCC0_MC1   12U
+#define TRIG_TCC0_MC2   13U
+#define TRIG_SDADC      38U
+#define WORD            (2U << 8)
+#define SRCINC          0x0400U
+#define DSTINC          0x0800U
+#define VALID           0x0001U
+#define UNWRITTEN       0xEEEEEEEEU
+
+typedef struct {
+    uint16_t btctrl;
+    uint16_t btcnt;
+    uint32_t src;
+    uint32_t dst;
+    uint32_t next;
+} desc_t;
+
+static desc_t desc[1] __attribute__((aligned(16)));
+static volatile desc_t wb[1] __attribute__((aligned(16)));   /* DMA writes */
+static volatile uint32_t buf[6];
+static const uint32_t table[4] = { 10, 20, 30, 40 };
+static volatile uint32_t word_src = 0x5A5A, word_dst;
+
+static void put_exact(const char *name, uint32_t value, uint32_t expect)
+{
+    put_range(name, value, expect, expect, 2);
+}
+
+static void sync0(void)
+{
+    for (uint32_t i = 0; T0->TCC_SYNCBUSY != 0U && i < 200000U; i++) {
+    }
+}
+
+static void dma_go(uint32_t trig, uint16_t btctrl, uint16_t n, uint32_t src,
+                   uint32_t dst)
+{
+    DM->DMAC_CTRL = 0;
+    DM->DMAC_CTRL = DMAC_CTRL_SWRST_Msk;
+    for (uint32_t i = 0; (DM->DMAC_CTRL & DMAC_CTRL_SWRST_Msk) && i < 100000U;
+         i++) {
+    }
+    for (unsigned int k = 0; k < 6; k++) {
+        buf[k] = UNWRITTEN;
+    }
+    desc[0].btctrl = btctrl;
+    desc[0].btcnt = n;
+    desc[0].src = src;
+    desc[0].dst = dst;
+    desc[0].next = 0;
+    DM->DMAC_BASEADDR = (uint32_t)desc;
+    DM->DMAC_WRBADDR = (uint32_t)wb;
+    DM->DMAC_CTRL = DMAC_CTRL_DMAENABLE_Msk | 0x0F00U;
+    DM->DMAC_CHID = 0;
+    DM->DMAC_CHCTRLB = DMAC_CHCTRLB_TRIGSRC(trig) | DMAC_CHCTRLB_TRIGACT_BEAT;
+    DM->DMAC_CHCTRLA = DMAC_CHCTRLA_ENABLE_Msk;
+}
+
+static uint32_t tcmpl(void)
+{
+    return DM->DMAC_CHINTFLAG & DMAC_CHINTFLAG_TCMPL_Msk;
+}
+
+/* The channel's end: done, nothing left in the write-back copy */
+static void put_done(void)
+{
+    put_exact("tcmpl", tcmpl(), DMAC_CHINTFLAG_TCMPL_Msk);
+    put_range("btcnt", wb[0].btcnt, 0, 0, 4);
+}
+
+/* 1 when the first @n words of buf were written with 24-bit results */
+static uint32_t results(unsigned int n)
+{
+    for (unsigned int k = 0; k < n; k++) {
+        if (buf[k] > 0x00FFFFFFU) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void check_tsens(void)
+{
+    TS->TSENS_CTRLA = TSENS_CTRLA_SWRST_Msk;
+    for (uint32_t i = 0; TS->TSENS_SYNCBUSY && i < 200000U; i++) {
+    }
+    dma_go(TRIG_TSENS, VALID | WORD | DSTINC, 3, (uint32_t)&TS->TSENS_VALUE,
+           (uint32_t)&buf[3]);
+    TS->TSENS_GAIN = 0x10000U;          /* 2.8 ms; GAIN 0 counts as 2^24 */
+    TS->TSENS_CTRLC = TSENS_CTRLC_FREERUN_Msk;
+    TS->TSENS_CTRLA = TSENS_CTRLA_ENABLE_Msk;
+    for (uint32_t i = 0; TS->TSENS_SYNCBUSY && i < 200000U; i++) {
+    }
+    TS->TSENS_CTRLB = TSENS_CTRLB_START_Msk;
+    delay_ms(50);
+    console_puts("tsens_resrdy");
+    put_done();
+    put_exact("results", results(3), 1);
+    end_line();
+    TS->TSENS_CTRLA = TSENS_CTRLA_SWRST_Msk;
+}
+
+static void check_sdadc(void)
+{
+    SD->SDADC_CTRLA = SDADC_CTRLA_SWRST_Msk;
+    for (uint32_t i = 0; SD->SDADC_SYNCBUSY && i < 200000U; i++) {
+    }
+    dma_go(TRIG_SDADC, VALID | WORD | DSTINC, 4, (uint32_t)&SD->SDADC_RESULT,
+           (uint32_t)&buf[4]);
+    SD->SDADC_REFCTRL = SDADC_REFCTRL_REFSEL_INTVCC;
+    SD->SDADC_CTRLB = SDADC_CTRLB_PRESCALER_DIV32 | SDADC_CTRLB_OSR(0) |
+                      SDADC_CTRLB_SKPCNT(2);
+    SD->SDADC_INPUTCTRL = 1U;
+    SD->SDADC_CTRLC = SDADC_CTRLC_FREERUN_Msk;
+    for (uint32_t i = 0; SD->SDADC_SYNCBUSY && i < 200000U; i++) {
+    }
+    SD->SDADC_CTRLA = SDADC_CTRLA_ENABLE_Msk;
+    for (uint32_t i = 0; SD->SDADC_SYNCBUSY && i < 200000U; i++) {
+    }
+    SD->SDADC_SWTRIG = SDADC_SWTRIG_START_Msk;
+    delay_ms(50);
+    console_puts("sdadc_resrdy");
+    put_done();
+    put_exact("results", results(4), 1);
+    end_line();
+    SD->SDADC_CTRLA = SDADC_CTRLA_SWRST_Msk;
+}
+
+/* A result left unread when the channel is enabled moves at once */
+static void check_level_at_enable(void)
+{
+    uint32_t t0;
+
+    SD->SDADC_CTRLA = SDADC_CTRLA_SWRST_Msk;
+    for (uint32_t i = 0; SD->SDADC_SYNCBUSY && i < 200000U; i++) {
+    }
+    SD->SDADC_REFCTRL = SDADC_REFCTRL_REFSEL_INTVCC;
+    SD->SDADC_CTRLB = SDADC_CTRLB_PRESCALER_DIV32 | SDADC_CTRLB_OSR(0) |
+                      SDADC_CTRLB_SKPCNT(2);
+    SD->SDADC_INPUTCTRL = 1U;
+    SD->SDADC_CTRLA = SDADC_CTRLA_ENABLE_Msk;
+    for (uint32_t i = 0; SD->SDADC_SYNCBUSY && i < 200000U; i++) {
+    }
+    SD->SDADC_SWTRIG = SDADC_SWTRIG_START_Msk;
+    for (uint32_t i = 0; !(SD->SDADC_INTFLAG & SDADC_INTFLAG_RESRDY_Msk) &&
+                         i < 2000000U; i++) {
+    }
+    dma_go(TRIG_SDADC, VALID | WORD, 1, (uint32_t)&SD->SDADC_RESULT,
+           (uint32_t)&buf[0]);
+    t0 = scope_now();
+    scope_wait_until(t0, SCOPE_CYC(5));     /* no DMAC access meanwhile */
+    console_puts("level_at_enable");
+    put_exact("moved", buf[0] != UNWRITTEN, 1);
+    put_exact("resrdy", SD->SDADC_INTFLAG & SDADC_INTFLAG_RESRDY_Msk, 0);
+    end_line();
+    SD->SDADC_CTRLA = SDADC_CTRLA_SWRST_Msk;
+}
+
+static void tcc_setup(uint32_t ctrla, uint32_t evctrl)
+{
+    T0->TCC_CTRLA = TCC_CTRLA_SWRST_Msk;
+    sync0();
+    T0->TCC_CTRLA = ctrla;
+    T0->TCC_WAVE = TCC_WAVE_WAVEGEN_NPWM;
+    sync0();
+    T0->TCC_PER = 99;
+    T0->TCC_CC[0] = 5;
+    T0->TCC_CC[1] = 50;
+    T0->TCC_EVCTRL = evctrl;
+    sync0();
+}
+
+/* OVF at 100, 200, 300 and 400 us: a table of 4 into CCBUF0 */
+static void check_tcc_ovf(void)
+{
+    uint32_t t0, a, b;
+
+    tcc_setup(0, 0);
+    dma_go(TRIG_TCC0_OVF, VALID | WORD | SRCINC, 4, (uint32_t)&table[4],
+           (uint32_t)&T0->TCC_CCBUF[0]);
+    t0 = scope_now();
+    T0->TCC_CTRLA |= TCC_CTRLA_ENABLE_Msk;
+    scope_wait_until(t0, SCOPE_CYC(250));
+    a = tcmpl();
+    b = wb[0].btcnt;
+    scope_wait_until(t0, SCOPE_CYC(600));
+    console_puts("tcc_ovf");
+    put_exact("done_250us", a, 0);
+    put_range("wb_250us", b, 4, 4, 4);  /* the copy changes at the end only */
+    put_done();
+    put_range("cc0", T0->TCC_CC[0], 40, 40, 8);
+    end_line();
+}
+
+/* MC1 compare matches at 50, 150 and 250 us: 3 beats RAM to RAM */
+static void check_tcc_mc(void)
+{
+    uint32_t t0, a;
+
+    tcc_setup(0, 0);
+    word_dst = 0;
+    dma_go(TRIG_TCC0_MC1, VALID | WORD, 3, (uint32_t)&word_src,
+           (uint32_t)&word_dst);
+    t0 = scope_now();
+    T0->TCC_CTRLA |= TCC_CTRLA_ENABLE_Msk;
+    scope_wait_until(t0, SCOPE_CYC(200));
+    a = tcmpl();
+    scope_wait_until(t0, SCOPE_CYC(600));
+    console_puts("tcc_mc1");
+    put_exact("done_200us", a, 0);
+    put_done();
+    put_range("dst", word_dst, 0x5A5A, 0x5A5A, 8);
+    end_line();
+}
+
+/* Three captures 30 us apart moved from CC2 */
+static void check_tcc_capture(void)
+{
+    uint32_t t0;
+
+    scope_pull(GA, PIN_IN, 0);
+    EVSYS_REGS->EVSYS_USER[USER_MC2] = 1U;
+    tcc_setup(TCC_CTRLA_CPTEN2_Msk, TCC_EVCTRL_MCEI2_Msk);
+    dma_go(TRIG_TCC0_MC2, VALID | WORD | DSTINC, 3, (uint32_t)&T0->TCC_CC[2],
+           (uint32_t)&buf[3]);
+    t0 = scope_now();
+    T0->TCC_CTRLA |= TCC_CTRLA_ENABLE_Msk;
+    for (unsigned int k = 0; k < 3; k++) {
+        scope_wait_until(t0, SCOPE_CYC(20 + 30 * k));
+        scope_pull(GA, PIN_IN, 1);
+        scope_wait_until(t0, SCOPE_CYC(25 + 30 * k));
+        scope_pull(GA, PIN_IN, 0);
+    }
+    scope_wait_until(t0, SCOPE_CYC(150));
+    console_puts("tcc_capture");
+    put_done();
+    put_dec_range("first", buf[0], 15, 21);
+    put_dec_range("step1", buf[1] - buf[0], 29, 31);
+    put_dec_range("step2", buf[2] - buf[1], 29, 31);
+    /* each read of CC2 cleared MC2 */
+    put_exact("mc2", T0->TCC_INTFLAG & TCC_INTFLAG_MC2_Msk, 0);
+    end_line();
+    EVSYS_REGS->EVSYS_USER[USER_MC2] = 0U;
+}
+
+int main(void)
+{
+    sys_initialize();
+    systick_start();
+    console_puts("PP dmatrig: " BOARD_BANNER "\r\n");
+    MCLK_REGS->MCLK_AHBMASK |= MCLK_AHBMASK_DMAC_Msk;
+    MCLK_REGS->MCLK_APBAMASK |= MCLK_APBAMASK_TSENS_Msk |
+                                MCLK_APBAMASK_EIC_Msk;
+    MCLK_REGS->MCLK_APBCMASK |= MCLK_APBCMASK_TCC0_Msk |
+                                MCLK_APBCMASK_SDADC_Msk |
+                                MCLK_APBCMASK_EVSYS_Msk;
+    GCLK_REGS->GCLK_GENCTRL[1] = GCLK_GENCTRL_SRC_OSC48M |
+                                 GCLK_GENCTRL_DIV(48) |
+                                 GCLK_GENCTRL_GENEN_Msk;
+    for (uint32_t i = 0; GCLK_REGS->GCLK_SYNCBUSY != 0U && i < 200000U;
+         i++) {
+    }
+    GCLK_REGS->GCLK_PCHCTRL[TCC0_GCLK_ID] = GCLK_PCHCTRL_GEN(1) |
+                                            GCLK_PCHCTRL_CHEN_Msk;
+    GCLK_REGS->GCLK_PCHCTRL[TSENS_GCLK_ID] = GCLK_PCHCTRL_GEN(0) |
+                                             GCLK_PCHCTRL_CHEN_Msk;
+    GCLK_REGS->GCLK_PCHCTRL[SDADC_GCLK_ID] = GCLK_PCHCTRL_GEN(0) |
+                                             GCLK_PCHCTRL_CHEN_Msk;
+    GCLK_REGS->GCLK_PCHCTRL[EIC_GCLK_ID] = GCLK_PCHCTRL_GEN(0) |
+                                           GCLK_PCHCTRL_CHEN_Msk;
+    for (uint32_t i = 0; !(GCLK_REGS->GCLK_PCHCTRL[TCC0_GCLK_ID] &
+                           GCLK_PCHCTRL_CHEN_Msk) && i < 200000U; i++) {
+    }
+    scope_pmux(GA, PIN_IN, FUNC_A, PORT_PINCFG_PULLEN_Msk);
+    scope_pull(GA, PIN_IN, 0);
+    EIC_REGS->EIC_CTRLA = EIC_CTRLA_SWRST_Msk;
+    for (uint32_t i = 0; EIC_REGS->EIC_SYNCBUSY != 0U && i < 200000U; i++) {
+    }
+    EIC_REGS->EIC_CONFIG0 = 0x4U << (4U * PIN_IN);          /* HIGH */
+    EIC_REGS->EIC_ASYNCH = 1U << PIN_IN;
+    EIC_REGS->EIC_EVCTRL = 1U << PIN_IN;
+    EIC_REGS->EIC_CTRLA = EIC_CTRLA_ENABLE_Msk;
+    for (uint32_t i = 0; EIC_REGS->EIC_SYNCBUSY != 0U && i < 200000U; i++) {
+    }
+    EVSYS_REGS->EVSYS_CHANNEL[0] = EVSYS_CHANNEL_EVGEN(GEN_EIC2) |
+                                   EVSYS_CHANNEL_PATH_ASYNCHRONOUS;
+
+    check_tsens();
+    check_sdadc();
+    scope_start();
+    check_level_at_enable();
+    check_tcc_ovf();
+    check_tcc_mc();
+    check_tcc_capture();
+
+    T0->TCC_CTRLA = TCC_CTRLA_SWRST_Msk;
+    sync0();
+    DM->DMAC_CTRL = 0;
+    EIC_REGS->EIC_CTRLA = EIC_CTRLA_SWRST_Msk;
+    EVSYS_REGS->EVSYS_CHANNEL[0] = 0;
+    scope_release(GA, PIN_IN);
+    PORT_REGS->GROUP[GA].PORT_OUTCLR = 1U << PIN_IN;
+    test_exit();
+}

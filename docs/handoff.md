@@ -610,10 +610,15 @@ with free running, sequences and SEQSTATUS, the START/SYNC events, RESRDY/WINMON
 the RESRDY DMA trigger (36, as the ATDF says; dmac.h's 0x2A is wrong) and ADC1 as ADC0's client,
 from `adcprobe`..`adcprobe5`, checked by `adcseq`. Note `adc-u2247.md`.
 
+**DMA triggers** (patch 0071): TCC OVF and MCx (compare match or capture), SDADC and TSENS
+RESRDY, from `dmaprobe`, checked by `dmatrig` and the DMAC qtest. A level request already set when
+a channel is enabled now moves at once, as on silicon. Peripherals that set a level trigger call
+`mchp_dmac_kick_machine()`. Note `dmac-u2223.md` section 8.
+
 Next on the MC00, in order (the owner's list of 2026-10-21):
 
-1. **The remaining DMA triggers** (DAC EMPTY, TCC, SDADC, TSENS RESRDY), and the DMAC reacting
-   at once to a request already set when a channel is enabled.
+1. **The DAC's DATABUF, START event, EMPTY/UNDERRUN and its EMPTY DMA trigger** (the last trigger
+   not wired; the U2214 model converts DATA writes only).
 2. **Sleep and standby** (PM).
 3. A generic **pad-to-peripheral input path**, then **PDEC** and **CCL**.
 4. The long tail: MTB, PAC protection, DSU CRC32, SERCOM client modes, clock failure detection,

@@ -1,0 +1,8 @@
+PP dmatrig: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+tsens_resrdy tcmpl=0x02 btcnt=0x0000 results=0x01 ok
+sdadc_resrdy tcmpl=0x02 btcnt=0x0000 results=0x01 ok
+level_at_enable moved=0x01 resrdy=0x00 ok
+tcc_ovf done_250us=0x00 wb_250us=0x0004 tcmpl=0x02 btcnt=0x0000 cc0=0x00000028 ok
+tcc_mc1 done_200us=0x00 tcmpl=0x02 btcnt=0x0000 dst=0x00005A5A ok
+tcc_capture tcmpl=0x02 btcnt=0x0000 first=19 step1=30 step2=30 mc2=0x00 ok
+PP:EXIT 0

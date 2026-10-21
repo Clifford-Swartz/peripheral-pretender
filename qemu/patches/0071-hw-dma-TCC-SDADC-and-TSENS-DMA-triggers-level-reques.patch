@@ -1,0 +1,685 @@
+From aa605639682ee8338adf9b3fb6e27cd2ab084cf5 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 21 Oct 2026 12:53:23 -0700
+Subject: [PATCH] hw/dma: TCC, SDADC and TSENS DMA triggers; level requests at
+ enable
+
+The remaining PIC32CM DMA triggers but the DAC's, as PIC32CM MC00
+silicon moved them (firmware/hello APP=dmaprobe, checked by dmatrig):
+
+- TCC: OVF pulses "ovf-dma" at each update condition and retrigger;
+  MCx pulses "mc-dma"[x] at each compare match, or for a capture
+  channel at each capture into CCx (the DMA's CCx read clears MCx).
+  As for the TC, the DMAC tells the TCC whether a channel waits
+  ("ovf-dma-wanted", "mc-dma-wanted"), so that it only then steps
+  through every event. The SoC wires DMAC_ID_OVF and DMAC_ID_MCn of
+  every instance that has these lines.
+- SDADC and TSENS RESRDY are level triggers on INTFLAG, like the
+  ADC's; each new result kicks the DMAC.
+
+New mchp_dmac_kick_machine() finds the machine's DMAC once and kicks
+it; the ADC uses it instead of its own lookup. The U2223 DMAC now
+serves a level request already set when a channel is enabled at once
+(silicon moved an unread SDADC result within 5 us); it used to wait
+for its 20 us batch.
+
+qtest pic32cm-dmac-test: TCC OVF, compare and capture, TSENS, SDADC,
+a level request at enable.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst |   5 +-
+ hw/adc/mchp_adc_u2247.c               |  13 +-
+ hw/adc/mchp_sdadc_u2260.c             |   5 +-
+ hw/arm/pic32cm_soc.c                  |  45 ++++--
+ hw/dma/mchp_dmac.c                    |  20 +++
+ hw/dma/mchp_dmac_u2223.c              |   8 +-
+ hw/misc/mchp_tsens_u2261.c            |   6 +-
+ hw/timer/mchp_tcc.c                   |  60 +++++++-
+ include/hw/dma/mchp_dmac.h            |   2 +
+ include/hw/timer/mchp_tcc.h           |   6 +
+ tests/qtest/pic32cm-dmac-test.c       | 188 ++++++++++++++++++++++++++
+ 11 files changed, 329 insertions(+), 29 deletions(-)
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index f071c98..ff8ecd8 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -152,8 +152,9 @@ Supported devices
+   and bus errors, the software trigger, arbitration by level with
+   static or round-robin priority, the CRC-16/CRC-32 engine (I/O and
+   channel modes), event inputs and outputs, INTPEND and ACTIVE, as
+-  measured on PIC32CM MC00 silicon. SERCOM, TC and ADC triggers are
+-  wired; DAC, TCC, SDADC and TSENS triggers are not yet.
++  measured on PIC32CM MC00 silicon. SERCOM, TC (OVF), TCC (OVF, and MCx
++  at each compare match or capture), ADC, SDADC and TSENS (RESRDY)
++  triggers are wired; the DAC's EMPTY trigger is not yet.
+ - LED0 (PC05, active low) is a QEMU LED device; its state changes show
+   in the ``led_set_intensity`` trace event. SW0 (PB19, to ground) is the
+   machine property ``sw0-pressed``.
+diff --git a/hw/adc/mchp_adc_u2247.c b/hw/adc/mchp_adc_u2247.c
+index bd974db..cf8496e 100644
+--- a/hw/adc/mchp_adc_u2247.c
++++ b/hw/adc/mchp_adc_u2247.c
+@@ -119,8 +119,6 @@ struct MchpAdcU2247State {
+     MchpAdcU2247State *host;    /* ADC0, for ADC1 (found on first use) */
+     MchpAdcU2247State *client;  /* ADC1, for ADC0 */
+     bool peers_looked;
+-    DeviceState *dmac;          /* to kick at RESRDY (found on first use) */
+-    bool dmac_looked;
+ };
+ 
+ static uint32_t adc_reg(MchpAdcU2247State *s, hwaddr off, unsigned size)
+@@ -397,16 +395,7 @@ static void adc_result(MchpAdcU2247State *s, unsigned mux)
+     adc_set(s, A_MCHP_ADC_RESULT, 2, (uint16_t)code);
+     adc_flag(s, R_MCHP_ADC_INTFLAG_RESRDY_MASK);
+     s->unread = true;
+-    /* RESRDY is a DMA request: let a waiting channel see it now */
+-    if (!s->dmac_looked) {
+-        Object *o = object_resolve_path_type("", TYPE_MCHP_DMAC_U2223, NULL);
+-
+-        s->dmac = o ? DEVICE(o) : NULL;
+-        s->dmac_looked = true;
+-    }
+-    if (s->dmac) {
+-        mchp_dmac_kick(s->dmac);
+-    }
++    mchp_dmac_kick_machine();   /* RESRDY is a DMA request */
+     if (ev & R_MCHP_ADC_EVCTRL_RESRDYEO_MASK) {
+         qemu_irq_pulse(s->resrdy_event);
+     }
+diff --git a/hw/adc/mchp_sdadc_u2260.c b/hw/adc/mchp_sdadc_u2260.c
+index 078b65d..e72aa58 100644
+--- a/hw/adc/mchp_sdadc_u2260.c
++++ b/hw/adc/mchp_sdadc_u2260.c
+@@ -22,7 +22,8 @@
+  * REFCTRL and CTRLB ignoring writes while enabled (the overlay makes them
+  * enable-protected). The window (WINCTRL.WINMODE, against WINLT/WINUT as 24-bit
+  * signed) sets INTFLAG.WINMON; RESRDY is cleared by reading RESULT, and
+- * OVERRUN is set when a result replaces an unread one. Inputs:
++ * OVERRUN is set when a result replaces an unread one. RESRDY is a DMA
++ * level trigger (the SoC wires it); a new result kicks the DMAC. Inputs:
+  *
+  * - the "ain" property ("channel=millivolts,..."): channel 2n is INNn,
+  *   2n + 1 is INPn (the sequencer's order: AINN0, AINP0, AINN1...); the
+@@ -42,6 +43,7 @@
+ #include "qapi/visitor.h"
+ #include "qemu/log.h"
+ #include "hw/adc/mchp_adc.h"
++#include "hw/dma/mchp_dmac.h"
+ #include "hw/misc/mchp_sysctrl.h"
+ #include "hw/misc/mchp_dac.h"
+ #include "hw/mchp/gen/sdadc_u2260.h"
+@@ -198,6 +200,7 @@ static void sd_convert(MchpSdadcState *s)
+     }
+     sd_set(s, A_MCHP_SDADC_RESULT, 4, (uint32_t)code & 0xFFFFFF);
+     sd_flag(s, R_MCHP_SDADC_INTFLAG_RESRDY_MASK);
++    mchp_dmac_kick_machine();   /* RESRDY is a DMA request */
+     s->unread = true;
+     mchp_regblock_update_irq(rb);
+ }
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index 8f8223c..4552649 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -665,11 +665,17 @@ static void pic32cm_dmac_triggers(Pic32cmSocState *s, DeviceState *dmac)
+         if (ref->id >= MCHP_DMAC_MAX_TRIGGERS) {
+             continue;
+         }
+-        if (!strcmp(info->module, "ADC") && !strcmp(info->ip_id, "U2247") &&
+-            !strcmp(ref->param, "DMAC_ID_RESRDY")) {
++        if (!strcmp(ref->param, "DMAC_ID_RESRDY") &&
++            ((!strcmp(info->module, "ADC") && !strcmp(info->ip_id, "U2247")) ||
++             !strcmp(info->module, "TSENS"))) {
+             mchp_dmac_set_trigger(dmac, ref->id, info->base + 0x06, 0x01);
+             continue;
+         }
++        if (!strcmp(ref->param, "DMAC_ID_RESRDY") &&
++            !strcmp(info->module, "SDADC")) {
++            mchp_dmac_set_trigger(dmac, ref->id, info->base + 0x07, 0x01);
++            continue;
++        }
+         if (strcmp(info->module, "SERCOM")) {
+             continue;
+         }
+@@ -681,10 +687,15 @@ static void pic32cm_dmac_triggers(Pic32cmSocState *s, DeviceState *dmac)
+     }
+ }
+ 
++static bool pic32cm_has_gpio(DeviceState *dev, const char *name, bool in,
++                             int n);
++
+ /*
+- * DMAC triggers pulsed by their peripheral: a TC's overflow (DMAC_ID_OVF)
+- * goes to DMAC input "trigger"[id]; the DMAC tells the TC whether a
+- * channel waits for it, so that the TC only then runs to every overflow
++ * DMAC triggers pulsed by their peripheral: a TC's or TCC's overflow
++ * (DMAC_ID_OVF, line "ovf-dma") and a TCC's channels (DMAC_ID_MCn,
++ * "mc-dma"[n]) go to DMAC input "trigger"[id]; the DMAC tells the
++ * peripheral whether a channel waits for it ("...-dma-wanted"), so that
++ * it only then runs through every event
+  */
+ static void pic32cm_dmac_pulses(Pic32cmSocState *s)
+ {
+@@ -698,15 +709,29 @@ static void pic32cm_dmac_pulses(Pic32cmSocState *s)
+         const MchpPeriphRef *ref = &s->dev->dmac_triggers[i];
+         DeviceState *dev = pic32cm_soc_periph(s, ref->instance);
+ 
+-        if (ref->id >= MCHP_DMAC_MAX_TRIGGERS || !dev ||
+-            !object_dynamic_cast(OBJECT(dev), TYPE_MCHP_TC) ||
+-            strcmp(ref->param, "DMAC_ID_OVF")) {
++        const char *out, *wanted;
++        int n = 0;
++
++        if (ref->id >= MCHP_DMAC_MAX_TRIGGERS || !dev) {
++            continue;
++        }
++        if (!strcmp(ref->param, "DMAC_ID_OVF")) {
++            out = "ovf-dma";
++            wanted = "ovf-dma-wanted";
++        } else if (sscanf(ref->param, "DMAC_ID_MC%d", &n) == 1) {
++            out = "mc-dma";
++            wanted = "mc-dma-wanted";
++        } else {
++            continue;
++        }
++        if (!pic32cm_has_gpio(dev, out, false, n) ||
++            !pic32cm_has_gpio(dev, wanted, true, n)) {
+             continue;
+         }
+-        qdev_connect_gpio_out_named(dev, MCHP_TC_OVF_DMA, 0,
++        qdev_connect_gpio_out_named(dev, out, n,
+             qdev_get_gpio_in_named(dmac, MCHP_DMAC_TRIGGER, ref->id));
+         qdev_connect_gpio_out_named(dmac, MCHP_DMAC_TRIGGER_WANTED, ref->id,
+-            qdev_get_gpio_in_named(dev, MCHP_TC_OVF_DMA_WANTED, 0));
++            qdev_get_gpio_in_named(dev, wanted, n));
+     }
+ }
+ 
+diff --git a/hw/dma/mchp_dmac.c b/hw/dma/mchp_dmac.c
+index fe405f2..18a9ed1 100644
+--- a/hw/dma/mchp_dmac.c
++++ b/hw/dma/mchp_dmac.c
+@@ -415,6 +415,26 @@ void mchp_dmac_kick(DeviceState *dev)
+     dmac_schedule(MCHP_DMAC(dev));
+ }
+ 
++/* Kick the machine's DMAC, if it has one (found on first use) */
++void mchp_dmac_kick_machine(void)
++{
++    static DeviceState *dmac;
++    static bool looked;
++
++    if (!looked) {
++        Object *o = object_resolve_path_type("", TYPE_MCHP_DMAC_U2223, NULL);
++
++        if (!o) {
++            o = object_resolve_path_type("", TYPE_MCHP_DMAC, NULL);
++        }
++        dmac = o ? DEVICE(o) : NULL;
++        looked = true;
++    }
++    if (dmac) {
++        mchp_dmac_kick(dmac);
++    }
++}
++
+ void mchp_dmac_set_trigger(DeviceState *dev, unsigned id, hwaddr flag_addr,
+                            uint8_t mask)
+ {
+diff --git a/hw/dma/mchp_dmac_u2223.c b/hw/dma/mchp_dmac_u2223.c
+index 401019c..f881a63 100644
+--- a/hw/dma/mchp_dmac_u2223.c
++++ b/hw/dma/mchp_dmac_u2223.c
+@@ -62,7 +62,10 @@
+  *     with no request or a software one it did nothing).
+  *
+  * Transfers run as in mchp_dmac.c: at the next read of a DMAC register
+- * or 20 us after the write that started them. Not modelled: beat timing,
++ * or 20 us after the write that started them. Peripheral requests run at
++ * once: pulses, level flags set when a channel is enabled (silicon moved
++ * a result left unread at once) and levels whose peripheral kicks the
++ * DMAC (mchp_dmac_kick_machine()). Not modelled: beat timing,
+  * CTRIG and CBLOCK events, QOSCTRL, ACTIVE.LVLEX, standby.
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+@@ -884,6 +887,9 @@ static void chctrla_write(MchpDmacU2223State *s, unsigned ch, uint32_t val)
+         s->pend[ch] = s->pend_hw[ch] = s->action[ch] = false;
+         fetch(s, ch, reg(s, A_MCHP_DMAC_BASEADDR, 4) + 16 * ch);
+         ch_take_swtrig(s, ch);
++        if (trigger_ready(s, ch)) {
++            mchp_dmac_u2223_kick(DEVICE(s));    /* silicon serves it at once */
++        }
+     } else if (!ch_on(s, ch) && was) {
+         write_back(s, ch);
+         if (s->last == ch) {
+diff --git a/hw/misc/mchp_tsens_u2261.c b/hw/misc/mchp_tsens_u2261.c
+index 6f7ea47..3b3f8c2 100644
+--- a/hw/misc/mchp_tsens_u2261.c
++++ b/hw/misc/mchp_tsens_u2261.c
+@@ -35,9 +35,11 @@
+  *     the WINMON event pulses on every matching result. The hysteresis
+  *     state restarts at enable.
+  *   - SWRST keeps GAIN, OFFSET, CAL and DBGCTRL.
++ *   - RESRDY is a DMA level trigger (the SoC wires it); a new result
++ *     kicks the DMAC.
+  *
+  * Not modelled: CAL (silicon: CAL = 0 shifts the reading by about -9 C;
+- * FCAL and TCAL trim it), the DMA trigger, sleep, DBGRUN, the reading's
++ * FCAL and TCAL trim it), sleep, DBGRUN, the reading's
+  * noise (silicon: about +-0.2 C).
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+@@ -50,6 +52,7 @@
+ #include "qemu/timer.h"
+ #include "hw/core/clock.h"
+ #include "hw/core/irq.h"
++#include "hw/dma/mchp_dmac.h"
+ #include "hw/misc/mchp_tsens.h"
+ #include "hw/mchp/gen/tsens_u2261.h"
+ #include "migration/vmstate.h"
+@@ -188,6 +191,7 @@ static void ts_done(void *opaque)
+         ts_flag(s, R_MCHP_TSENS_INTFLAG_RESRDY_MASK |
+                    (s->unread ? R_MCHP_TSENS_INTFLAG_OVERRUN_MASK : 0));
+         s->unread = true;
++        mchp_dmac_kick_machine();       /* RESRDY is a DMA request */
+         if (ts_window(s, v)) {
+             ts_flag(s, R_MCHP_TSENS_INTFLAG_WINMON_MASK);
+             if (ts_reg(s, A_MCHP_TSENS_EVCTRL, 1) &
+diff --git a/hw/timer/mchp_tcc.c b/hw/timer/mchp_tcc.c
+index 7b4ee54..5916bfa 100644
+--- a/hw/timer/mchp_tcc.c
++++ b/hw/timer/mchp_tcc.c
+@@ -101,6 +101,13 @@
+  * STAMP event action, the debug and update faults (DFS, UFS),
+  * CTRLBSET.IDXCMD, sleep.
+  *
++ * DMA requests (tccprobe.. dmaprobe on silicon): OVF pulses "ovf-dma" at
++ * each update condition and retrigger, MCx pulses "mc-dma"[x] at each
++ * compare match, or for a capture channel each time CCx takes a capture.
++ * While the DMAC says a channel waits ("ovf-dma-wanted", "mc-dma-wanted")
++ * the counter steps through every such event. Not modelled: CTRLA.DMAOS
++ * and the circular buffers' DMA rules.
++ *
+  * Counting is event driven on QEMU_CLOCK_VIRTUAL: the timer fires at the
+  * next tick that can change something and jumps over the rest.
+  *
+@@ -198,6 +205,9 @@ struct MchpTccState {
+     uint8_t nr_fault;           /* non-recoverable: EV0, EV1, A, B (bits) */
+     bool halted;                /* a fault holds the counter */
+     uint8_t cmp_prev;           /* channels 0, 1 waveform after a tick */
++    qemu_irq ovf_dma;
++    qemu_irq mc_dma[MCHP_TCC_CHANNELS];
++    uint8_t dma_wanted;         /* channels waiting: bit 0 OVF, 1 + x MCx */
+     QEMUTimer *capt_timer;      /* a capture FIFO moves up */
+     int64_t refill_at[MCHP_TCC_CHANNELS];   /* CCBUFx to CCx at, ns */
+ 
+@@ -772,6 +782,9 @@ static void tcc_tick(MchpTccState *s, int force_down)
+         if (tcc_match(s, a, b, s->cc[ch]) &&
+             !(tcc_capture_channels(s) & BIT(ch))) {
+             flags |= F(INTFLAG, MC0) << ch;
++            if (s->dma_wanted & BIT(1 + ch)) {
++                qemu_irq_pulse(s->mc_dma[ch]);
++            }
+         }
+         if ((s->wavegen == NFRQ || s->wavegen == MFRQ) && a == s->cc[ch]) {
+             s->toggle ^= BIT(ch);
+@@ -794,6 +807,9 @@ static void tcc_tick(MchpTccState *s, int force_down)
+     }
+     trace_mchp_tcc_tick(MCHP_REGBLOCK(s)->name, b, flags);
+     tcc_flag(s, flags);
++    if (update && (s->dma_wanted & 1)) {
++        qemu_irq_pulse(s->ovf_dma);     /* the DMA request at each update */
++    }
+     if (update) {
+         if (s->wavegen == NPWM && tcc_ramp(s) != RAMP1) {
+             s->ramp_idx = !s->ramp_idx;
+@@ -926,6 +942,28 @@ static void tcc_update_wo(MchpTccState *s)
+     s->wo_hiz = hiz;
+ }
+ 
++static void tcc_sync(MchpTccState *s);
++
++/* A DMAC channel waits for (or no longer for) request bit @bit */
++static void tcc_set_dma_wanted(MchpTccState *s, unsigned bit, int level)
++{
++    if (extract32(s->dma_wanted, bit, 1) != (level > 0)) {
++        tcc_sync(s);
++        s->dma_wanted = deposit32(s->dma_wanted, bit, 1, level > 0);
++        tcc_sync(s);
++    }
++}
++
++static void tcc_ovf_dma_wanted(void *opaque, int n, int level)
++{
++    tcc_set_dma_wanted(opaque, 0, level);
++}
++
++static void tcc_mc_dma_wanted(void *opaque, int n, int level)
++{
++    tcc_set_dma_wanted(opaque, 1 + n, level);
++}
++
+ /* "pad-wo-active": a pad is muxed to output @x */
+ static void tcc_set_wo_active(void *opaque, int x, int level)
+ {
+@@ -957,6 +995,7 @@ static bool tcc_quiet(MchpTccState *s)
+            s->wavegen != NFRQ && s->wavegen != MFRQ &&
+            !tcc_dith_bits(s) && !(s->wavegen == NPWM && tcc_ramp(s)) &&
+            !tcc_reg(s, A_FCTRLA, 4) && !tcc_reg(s, A_FCTRLB, 4) &&
++           !s->dma_wanted &&
+            !(tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, ONESHOT)) &&
+            !(tcc_reg(s, A_STATUS, 4) & (F(STATUS, PERBUFV) | (0xF << 16))) &&
+            !(ev & (F(EVCTRL, OVFEO) | (0xF << 24)));
+@@ -1072,6 +1111,9 @@ static void tcc_retrigger(MchpTccState *s)
+         tcc_update_buffers(s);
+     }
+     tcc_flag(s, F(INTFLAG, TRG));
++    if (s->dma_wanted & 1) {
++        qemu_irq_pulse(s->ovf_dma);     /* a retrigger is an update */
++    }
+ }
+ 
+ static void tcc_command(MchpTccState *s, unsigned cmd)
+@@ -1168,6 +1210,9 @@ static void tcc_capture_put(MchpTccState *s, unsigned ch, uint32_t v)
+         s->refill_at[ch] == INT64_MAX) {
+         tcc_set_reg(s, A_CC + 4 * ch, 4, v);
+         tcc_flag(s, F(INTFLAG, MC0) << ch);
++        if (s->dma_wanted & BIT(1 + ch)) {
++            qemu_irq_pulse(s->mc_dma[ch]);      /* CCx holds data */
++        }
+     } else if (!(tcc_reg(s, A_STATUS, 4) & (F(STATUS, CCBUFV0) << ch))) {
+         tcc_set_reg(s, A_CCBUF + 4 * ch, 4, v);
+         tcc_mod_reg(s, A_STATUS, 4, 0, F(STATUS, CCBUFV0) << ch);
+@@ -1217,6 +1262,9 @@ static void tcc_capture_cb(void *opaque)
+             tcc_set_reg(s, A_CC + 4 * ch, 4, tcc_reg(s, A_CCBUF + 4 * ch, 4));
+             tcc_mod_reg(s, A_STATUS, 4, valid, 0);
+             tcc_flag(s, F(INTFLAG, MC0) << ch);
++            if (s->dma_wanted & BIT(1 + ch)) {
++                qemu_irq_pulse(s->mc_dma[ch]);
++            }
+         }
+     }
+     tcc_capture_arm(s);
+@@ -2105,6 +2153,13 @@ static void tcc_init(Object *obj)
+     qdev_init_gpio_in_named(dev, tcc_set_event, MCHP_TCC_EV_EVENT_IN, 2);
+     qdev_init_gpio_in_named(dev, tcc_set_mc_event, MCHP_TCC_MC_EVENT_IN,
+                             MCHP_TCC_CHANNELS);
++    qdev_init_gpio_out_named(dev, &s->ovf_dma, MCHP_TCC_OVF_DMA, 1);
++    qdev_init_gpio_out_named(dev, s->mc_dma, MCHP_TCC_MC_DMA,
++                             MCHP_TCC_CHANNELS);
++    qdev_init_gpio_in_named(dev, tcc_ovf_dma_wanted, MCHP_TCC_OVF_DMA_WANTED,
++                            1);
++    qdev_init_gpio_in_named(dev, tcc_mc_dma_wanted, MCHP_TCC_MC_DMA_WANTED,
++                            MCHP_TCC_CHANNELS);
+     qdev_init_gpio_out_named(dev, s->ev_busy, MCHP_TCC_EV_BUSY, 2);
+     qdev_init_gpio_out_named(dev, s->wo, MCHP_TCC_PAD_WO, MCHP_TCC_OUTPUTS);
+     qdev_init_gpio_in_named(dev, tcc_set_wo_active, MCHP_TCC_PAD_WO_ACTIVE,
+@@ -2131,8 +2186,8 @@ static int tcc_post_load(void *opaque, int version_id)
+ 
+ static const VMStateDescription vmstate_mchp_tcc = {
+     .name = TYPE_MCHP_TCC,
+-    .version_id = 4,
+-    .minimum_version_id = 4,
++    .version_id = 5,
++    .minimum_version_id = 5,
+     .post_load = tcc_post_load,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpTccState, 1, vmstate_mchp_regblock,
+@@ -2165,6 +2220,7 @@ static const VMStateDescription vmstate_mchp_tcc = {
+         VMSTATE_UINT8(nr_fault, MchpTccState),
+         VMSTATE_BOOL(halted, MchpTccState),
+         VMSTATE_UINT8(cmp_prev, MchpTccState),
++        VMSTATE_UINT8(dma_wanted, MchpTccState),
+         VMSTATE_TIMER_PTR(capt_timer, MchpTccState),
+         VMSTATE_INT64_ARRAY(refill_at, MchpTccState, MCHP_TCC_CHANNELS),
+         VMSTATE_BOOL(down, MchpTccState),
+diff --git a/include/hw/dma/mchp_dmac.h b/include/hw/dma/mchp_dmac.h
+index 3560584..ab0ee3d 100644
+--- a/include/hw/dma/mchp_dmac.h
++++ b/include/hw/dma/mchp_dmac.h
+@@ -49,5 +49,7 @@ void mchp_dmac_u2223_kick(DeviceState *dmac);
+ 
+ /* Look again at the triggers (a peripheral's flags may have changed). */
+ void mchp_dmac_kick(DeviceState *dmac);
++/* The same for the machine's DMAC, if any: a level trigger was set */
++void mchp_dmac_kick_machine(void);
+ 
+ #endif /* HW_DMA_MCHP_DMAC_H */
+diff --git a/include/hw/timer/mchp_tcc.h b/include/hw/timer/mchp_tcc.h
+index b13b039..3cce878 100644
+--- a/include/hw/timer/mchp_tcc.h
++++ b/include/hw/timer/mchp_tcc.h
+@@ -14,6 +14,8 @@
+  *   "ev-event-busy"[2]     out: 1 while the TCC cannot take events
+  *   "pad-wo"[8]            out: waveform output WO[x] (0 or 1)
+  *   "pad-wo-active"[8]     in: 1 while a pad is muxed to WO[x]
++ *   "ovf-dma", "mc-dma"[4] out: a pulse per DMA request (OVF, MCx)
++ *   "ovf-dma-wanted", "mc-dma-wanted"[4]  in: a DMAC channel waits for it
+  * sysbus IRQ 0 is the TCC interrupt (INTFLAG & INTENSET).
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+@@ -35,5 +37,9 @@
+ #define MCHP_TCC_EV_BUSY "ev-event-busy"
+ #define MCHP_TCC_PAD_WO "pad-wo"
+ #define MCHP_TCC_PAD_WO_ACTIVE "pad-wo-active"
++#define MCHP_TCC_OVF_DMA "ovf-dma"
++#define MCHP_TCC_MC_DMA "mc-dma"
++#define MCHP_TCC_OVF_DMA_WANTED "ovf-dma-wanted"
++#define MCHP_TCC_MC_DMA_WANTED "mc-dma-wanted"
+ 
+ #endif /* HW_TIMER_MCHP_TCC_H */
+diff --git a/tests/qtest/pic32cm-dmac-test.c b/tests/qtest/pic32cm-dmac-test.c
+index 6c0630e..1ec99ba 100644
+--- a/tests/qtest/pic32cm-dmac-test.c
++++ b/tests/qtest/pic32cm-dmac-test.c
+@@ -41,6 +41,28 @@
+ #define DMAENABLE       0x0002
+ #define CRCENABLE       0x0004
+ #define LVLEN_ALL       0x0F00
++#define TA_BEAT         (2 << 22)
++#define VALID           0x0001
++#define WORD            (2 << 8)
++#define SRCINC          0x0400
++#define DSTINC          0x0800
++#define TCMPL           0x02
++
++/* Peripheral triggers (the ATDF's DMAC_ID_* numbers) and their sources */
++#define TRIG_TSENS      1
++#define TRIG_TCC0_OVF   10
++#define TRIG_TCC0_MC(n) (11 + (n))
++#define TRIG_SDADC      38
++#define GCLK_PCHCTRL    0x40001C80
++#define TSENS           0x40003000
++#define TSENS_GCLK_ID   5
++#define TCC0            0x42002400
++#define TCC0_GCLK_ID    23
++#define TCC0_PATH       "/machine/soc/tcc0"
++#define SDADC           0x42004C00
++#define SDADC_GCLK_ID   30
++#define US              1000
++#define FILL            0xEEEEEEEE
+ 
+ static QTestState *dmac_init(void)
+ {
+@@ -123,11 +145,177 @@ static void test_chid_alias(void)
+     qtest_quit(qts);
+ }
+ 
++/*
++ * Channel 0, a beat per trigger @trig: @n beats from @src to @dst (end
++ * addresses when incremented); @n words at DST and SRC read FILL first
++ */
++static void beat_channel(QTestState *qts, unsigned trig, uint16_t btctrl,
++                         uint16_t n, uint32_t src, uint32_t dst)
++{
++    uint8_t d[16];
++
++    for (unsigned i = 0; i < n; i++) {
++        qtest_writel(qts, DST + 4 * i, FILL);
++    }
++    stw_le_p(&d[0], btctrl);
++    stw_le_p(&d[2], n);
++    stl_le_p(&d[4], src);
++    stl_le_p(&d[8], dst);
++    stl_le_p(&d[12], 0);
++    qtest_memwrite(qts, DESC, d, sizeof(d));
++    qtest_writeb(qts, DMAC + R_CHID, 0);
++    qtest_writel(qts, DMAC + R_CHCTRLB, (trig << 8) | TA_BEAT);
++    qtest_writeb(qts, DMAC + R_CHCTRLA, 0x02);
++}
++
++static uint8_t chintflag(QTestState *qts)
++{
++    qtest_writeb(qts, DMAC + R_CHID, 0);
++    return qtest_readb(qts, DMAC + R_CHINTFLAG);
++}
++
++/* TCC0 on GCLK0 (4 MHz), DIV1, NPWM, PER 99 (25 us), CC1 50 */
++static void tcc0_start(QTestState *qts, uint32_t ctrla, uint32_t evctrl)
++{
++    qtest_writel(qts, GCLK_PCHCTRL + 4 * TCC0_GCLK_ID, 0x40);
++    qtest_writel(qts, TCC0 + 0x00, ctrla);
++    qtest_writel(qts, TCC0 + 0x3C, 2);              /* WAVE: NPWM */
++    qtest_writel(qts, TCC0 + 0x40, 99);             /* PER */
++    qtest_writel(qts, TCC0 + 0x48, 50);             /* CC1 */
++    qtest_writel(qts, TCC0 + 0x20, evctrl);
++    qtest_writel(qts, TCC0 + 0x00, ctrla | BIT(1));
++}
++
++/* OVF requests a beat at each update: 25, 50, 75 and 100 us */
++static void test_tcc_ovf(void)
++{
++    QTestState *qts = dmac_init();
++
++    for (unsigned i = 0; i < 4; i++) {
++        qtest_writel(qts, SRC + 4 * i, 10 * (i + 1));
++    }
++    beat_channel(qts, TRIG_TCC0_OVF, VALID | WORD | SRCINC, 4, SRC + 16,
++                 DST);
++    tcc0_start(qts, 0, 0);
++    qtest_clock_step(qts, 90 * US);
++    g_assert_cmphex(qtest_readl(qts, DST), ==, 30);
++    g_assert_cmphex(chintflag(qts), ==, 0);
++    qtest_clock_step(qts, 20 * US);
++    g_assert_cmphex(qtest_readl(qts, DST), ==, 40);
++    g_assert_cmphex(chintflag(qts), ==, TCMPL);
++    qtest_quit(qts);
++}
++
++/* MC1 requests a beat at each compare match: 12.5, 37.5 and 62.5 us */
++static void test_tcc_compare(void)
++{
++    QTestState *qts = dmac_init();
++
++    for (unsigned i = 0; i < 3; i++) {
++        qtest_writel(qts, SRC + 4 * i, i + 1);
++    }
++    beat_channel(qts, TRIG_TCC0_MC(1), VALID | WORD | SRCINC, 3, SRC + 12,
++                 DST);
++    tcc0_start(qts, 0, 0);
++    qtest_clock_step(qts, 50 * US);
++    g_assert_cmphex(qtest_readl(qts, DST), ==, 2);
++    g_assert_cmphex(chintflag(qts), ==, 0);
++    qtest_clock_step(qts, 20 * US);
++    g_assert_cmphex(qtest_readl(qts, DST), ==, 3);
++    g_assert_cmphex(chintflag(qts), ==, TCMPL);
++    qtest_quit(qts);
++}
++
++/* A capture channel requests a beat for each capture; reading CC2 clears MC2 */
++static void test_tcc_capture(void)
++{
++    QTestState *qts = dmac_init();
++
++    beat_channel(qts, TRIG_TCC0_MC(2), VALID | WORD | DSTINC, 2,
++                 TCC0 + 0x4C, DST + 8);
++    tcc0_start(qts, BIT(26), BIT(18));              /* CPTEN2; MCEI2 */
++    qtest_clock_step(qts, 125);                     /* mid-tick */
++    for (unsigned i = 0; i < 2; i++) {
++        qtest_clock_step(qts, 5 * US);              /* 20 ticks */
++        qtest_set_irq_in(qts, TCC0_PATH, "mc-event-in", 2, 1);
++        qtest_clock_step(qts, 1 * US);
++        qtest_set_irq_in(qts, TCC0_PATH, "mc-event-in", 2, 0);
++    }
++    g_assert_cmpuint(qtest_readl(qts, DST), ==, 20);
++    g_assert_cmpuint(qtest_readl(qts, DST + 4), ==, 44);
++    g_assert_cmphex(chintflag(qts), ==, TCMPL);
++    g_assert_cmphex(qtest_readl(qts, TCC0 + 0x2C) & BIT(18), ==, 0);
++    qtest_quit(qts);
++}
++
++/* TSENS RESRDY is a level trigger: a beat per result, 1 ms apart */
++static void test_tsens(void)
++{
++    QTestState *qts = dmac_init();
++
++    beat_channel(qts, TRIG_TSENS, VALID | WORD | DSTINC, 3, TSENS + 0x0C,
++                 DST + 12);
++    qtest_writel(qts, GCLK_PCHCTRL + 4 * TSENS_GCLK_ID, 0x40);
++    qtest_writel(qts, TSENS + 0x18, 1000);          /* GAIN: 4000 clocks */
++    qtest_writeb(qts, TSENS + 0x02, BIT(4));        /* CTRLC: FREERUN */
++    qtest_writeb(qts, TSENS + 0x00, BIT(1));        /* CTRLA: ENABLE */
++    qtest_writeb(qts, TSENS + 0x01, BIT(0));        /* CTRLB: START */
++    qtest_clock_step(qts, 2500 * US);
++    g_assert_cmphex(qtest_readl(qts, DST + 4), !=, FILL);
++    g_assert_cmphex(qtest_readl(qts, DST + 8), ==, FILL);
++    g_assert_cmphex(chintflag(qts), ==, 0);
++    qtest_clock_step(qts, 1000 * US);
++    g_assert_cmphex(qtest_readl(qts, DST + 8), !=, FILL);
++    g_assert_cmphex(chintflag(qts), ==, TCMPL);
++    qtest_quit(qts);
++}
++
++/* SDADC RESRDY: free running, each RESULT read brings the next result */
++static void test_sdadc(void)
++{
++    QTestState *qts = dmac_init();
++
++    beat_channel(qts, TRIG_SDADC, VALID | WORD | DSTINC, 4, SDADC + 0x24,
++                 DST + 16);
++    qtest_writel(qts, GCLK_PCHCTRL + 4 * SDADC_GCLK_ID, 0x40);
++    qtest_writeb(qts, SDADC + 0x0A, BIT(0));        /* CTRLC: FREERUN */
++    qtest_writeb(qts, SDADC + 0x00, BIT(1));        /* CTRLA: ENABLE */
++    qtest_writeb(qts, SDADC + 0x1C, BIT(1));        /* SWTRIG: START */
++    qtest_clock_step(qts, 1000 * US);
++    for (unsigned i = 0; i < 4; i++) {
++        g_assert_cmphex(qtest_readl(qts, DST + 4 * i), ==, 0);  /* 0 mV */
++    }
++    g_assert_cmphex(chintflag(qts), ==, TCMPL);
++    qtest_quit(qts);
++}
++
++/* A level request already set when the channel is enabled runs at once */
++static void test_level_at_enable(void)
++{
++    QTestState *qts = dmac_init();
++
++    qtest_writel(qts, GCLK_PCHCTRL + 4 * SDADC_GCLK_ID, 0x40);
++    qtest_writeb(qts, SDADC + 0x00, BIT(1));        /* CTRLA: ENABLE */
++    qtest_writeb(qts, SDADC + 0x1C, BIT(1));        /* SWTRIG: START */
++    g_assert_cmphex(qtest_readb(qts, SDADC + 0x07) & 1, ==, 1);  /* RESRDY */
++    beat_channel(qts, TRIG_SDADC, VALID | WORD, 1, SDADC + 0x24, DST);
++    qtest_clock_step(qts, 1 * US);  /* no DMAC read: within the 20 us batch */
++    g_assert_cmphex(qtest_readl(qts, DST), ==, 0);
++    g_assert_cmphex(qtest_readb(qts, SDADC + 0x07) & 1, ==, 0);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+     qtest_add_func("pic32cm-dmac/copy", test_copy);
+     qtest_add_func("pic32cm-dmac/crc", test_crc);
+     qtest_add_func("pic32cm-dmac/chid-alias", test_chid_alias);
++    qtest_add_func("pic32cm-dmac/tcc-ovf", test_tcc_ovf);
++    qtest_add_func("pic32cm-dmac/tcc-compare", test_tcc_compare);
++    qtest_add_func("pic32cm-dmac/tcc-capture", test_tcc_capture);
++    qtest_add_func("pic32cm-dmac/tsens", test_tsens);
++    qtest_add_func("pic32cm-dmac/sdadc", test_sdadc);
++    qtest_add_func("pic32cm-dmac/level-at-enable", test_level_at_enable);
+     return g_test_run();
+ }
+-- 
+2.53.0.windows.2
+

@@ -411,6 +411,9 @@ on both (`golden/pic32cm1216mc00048-a1/tsens-silicon.txt`). Numbers by question 
 9. 29.7-30.3 C, noise about +-0.2 C over 16 conversions.
 10. Not answered here.
 
+DMA (2026-10-21, `dmaprobe` X1, checked by `dmatrig`): RESRDY is DMA trigger 1, a level the DMAC
+serves once per result; three beats from VALUE in free running complete.
+
 OVERRUN: set when a result arrives while the previous one is unread (reading VALUE, not clearing
 RESRDY, counts as reading); it stays until written. One trap for test firmware: `delay_ms(5)` from
 `util.c` can last only 3.4 ms (a SysTick wrap already pending), less than one conversion.

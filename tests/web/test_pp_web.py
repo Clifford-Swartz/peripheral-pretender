@@ -1493,7 +1493,13 @@ def test_session_fan(qemu_path, qemu_machines):
                 await asyncio.sleep(0.1)
                 if "PP:EXIT" in app.uart_log:
                     break
-            spinning = await rpm(app)
+            # the fan still ramps to its 3000 rpm target; a loaded host
+            # reaches PP:EXIT earlier on that ramp
+            for _ in range(30):
+                spinning = await rpm(app)
+                if spinning > 2500:
+                    break
+                await asyncio.sleep(0.1)
             await app.control("ext1", "blocked", 1)
             held = await rpm(app)
         finally:

@@ -174,21 +174,21 @@ WRBADDR + 16 × ch. Further descriptors are linked through DESCADDR (§24.5.2.3 
 | TRIGSRC | Source | Request set / cleared (DS) | Twin today (SoC wiring) |
 |---|---|---|---|
 | 0x00 | DISABLE: software and event triggers only | | software trigger works |
-| 0x01 | TSENS RESRDY | set when a result is ready, cleared when VALUE is read (§40.5.3) | not wired |
+| 0x01 | TSENS RESRDY | set when a result is ready, cleared when VALUE is read (§40.5.3) | level: INTFLAG.RESRDY at base + 0x06 |
 | 0x02 / 0x03 | SERCOM0 RX / TX | USART RX: set while the RX FIFO has data, cleared by a DATA read. TX: set while the TX buffer is empty, cleared by a DATA write (§30.6.4.1 p.454) | level: INTFLAG.RXC / DRE at base + 0x18 |
 | 0x04 / 0x05 | SERCOM1 RX / TX | same | same |
 | 0x06 / 0x07 | SERCOM2 RX / TX | same | same |
 | 0x08 / 0x09 | SERCOM3 RX / TX | same | same |
-| 0x0A-0x0E | TCC0 OVF, MC0, MC1, MC2, MC3 | OVF: one request per update (CTRLA.DMAOS = 0) or after the DMAOS command. MCx: on compare match. Cleared on DMA acknowledge (§34.6.5.1 p.662) | not wired |
-| 0x0F-0x11 | TCC1 OVF, MC0, MC1 | same | not wired |
-| 0x12-0x14 | TCC2 OVF, MC0, MC1 | same | not wired |
+| 0x0A-0x0E | TCC0 OVF, MC0, MC1, MC2, MC3 | OVF: one request per update (CTRLA.DMAOS = 0) or after the DMAOS command. MCx: on compare match. Cleared on DMA acknowledge (§34.6.5.1 p.662) | pulses (`MCHP_TCC_OVF_DMA`, `MCHP_TCC_MC_DMA`): OVF per update or retrigger, MCx per compare match or capture into CCx |
+| 0x0F-0x11 | TCC1 OVF, MC0, MC1 | same | same |
+| 0x12-0x14 | TCC2 OVF, MC0, MC1 | same | same |
 | 0x15-0x17 | TC0 OVF, MC0, MC1 | OVF: set on overflow, underflow or re-trigger, cleared on DMA acknowledge. MCx compare: set on match, cleared on acknowledge. MCx capture: set while CCx holds data, cleared by the CCx read (§33.6.4 p.568) | OVF as a pulse (`MCHP_TC_OVF_DMA`), MCx not wired |
 | 0x18-0x1A | TC1 OVF, MC0, MC1 | same | same |
 | 0x1B-0x1D | TC2 OVF, MC0, MC1 | same | same |
 | 0x1E-0x20 | TC3 OVF, MC0, MC1 | same | same |
 | 0x21-0x23 | TC4 OVF, MC0, MC1 | same | same |
-| 0x24 / 0x25 | ADC0 / ADC1 RESRDY | set when a result (or average) is ready, cleared by the RESULT read (§36.6.4 p.737) | not wired |
-| 0x26 | SDADC RESRDY | same (§37.6.4) | not wired |
+| 0x24 / 0x25 | ADC0 / ADC1 RESRDY | set when a result (or average) is ready, cleared by the RESULT read (§36.6.4 p.737) | level: INTFLAG.RESRDY at base + 0x06, with a DMAC kick |
+| 0x26 | SDADC RESRDY | same (§37.6.4) | level: INTFLAG.RESRDY at base + 0x07, with a DMAC kick |
 | 0x27 | DAC EMPTY | set when DATABUF moves into the DAC, cleared by a DATABUF write or by writing INTFLAG.EMPTY. Requested as soon as the DAC is enabled (§39.6.3) | not wired |
 | 0x28-0x3F | reserved | | |
 
@@ -475,7 +475,7 @@ are IP-neutral except for how they read channel configuration. These are suggest
 
 11. **SoC**: add `{ "DMAC", TYPE_MCHP_DMAC_U2223, "U2223" }` to `pic32cm_models[]`. Trigger ids already
     come from `dmac_triggers` (correct, §2.4), and `MCHP_DMAC_MAX_TRIGGERS` = 128 covers 6-bit TRIGSRC.
-    TCC, ADC, SDADC, DAC and TSENS triggers are not wired yet (§2.4).
+    The DAC's EMPTY trigger is not wired yet (§2.4).
 12. **Places where the U2503 model and the U2223 data sheet disagree.** Check the SAM D5x data sheet
     before changing the shared engine, since its wording is probably the same:
     1. Invalid descriptor: the model raises TERR and FERR and disables. The DS says SUSP and FERR, channel
@@ -645,3 +645,21 @@ both (`golden/pic32cm1216mc00048-a1/dmac-silicon.txt`). Open questions of sectio
   channel with FERR and no flags (not modelled; no firmware does this).
 - Test firmware lesson: read memory a DMA writes through `volatile`; the compiler hoisted a load of
   the write-back copy above a DMAC register read and made the fetch look late.
+
+### Peripheral triggers (2026-10-21)
+
+`firmware/hello/tests/dmaprobe.c` (X1-X5), checked by `dmatrig.c`, one beat per trigger:
+
+- TSENS RESRDY (1) and SDADC RESRDY (38), free running, move one result per conversion and complete.
+  The TSENS probe first moved nothing: GAIN resets to 0, which silicon counts as 2^24 (0.7 s per
+  conversion).
+- TCC0 OVF (10) moves one beat per update (100 us period: incomplete after 250 us, done by 600 us;
+  CCBUF0 fed from a table reaches CC0). MC1 (12) moves one beat per compare match. MC2 (13) on a
+  capture channel moves each capture out of CC2, and the read clears INTFLAG.MC2.
+- The write-back BTCNT reads the descriptor's count until the end (O2), so timed reads check
+  CHINTFLAG.TCMPL instead.
+- A level request already set when the channel is enabled (an SDADC result left unread) moves
+  within 5 us, with no DMAC access meanwhile. The twin used to wait for its 20 us batch; it now
+  kicks the DMAC at the enable.
+- Twin difference: TCC timings run about one GCLK_TCC cycle early (the TCC's start latency is not
+  modelled, `tcc-u2213.md` 4.13); captures read one count higher.

@@ -82,8 +82,19 @@ match), never per tick.
   PER/CCx writes also write their buffers, so readbacks alone mislead.
 - A probe read taken after a print happens at an arbitrary phase: compare such values with care.
 
+## TCC DMA requests (dmaprobe, APP=dmatrig)
+
+- Trigger numbers come from the ATDF's `DMAC_ID_*` parameters (TCC0 OVF 10, MC0-MC3 11-14), never
+  from dmac.h. The SoC wires each instance's "ovf-dma" and "mc-dma"[n] lines by those names.
+- OVF requests a beat at each update condition (and retrigger); MCx at each compare match, or for
+  a capture channel at each capture into CCx. The DMA's read of CCx clears MCx.
+- The DMAC's write-back BTCNT keeps the descriptor's count until the end: time a transfer with
+  CHINTFLAG.TCMPL, and keep check times clear of the TCC's start latency (silicon runs a GCLK
+  cycle or more behind the twin).
+
 ## Not modelled
 
 TCC EVACT0 STAMP, the fault capture modes but CAPT, ALTFAULT, RAMP2CS, CTRLBSET.IDXCMD, the
-outputs' start and restart latency, the STATUS read lag; TC capture on pins (COPEN), CAPTMODE
+outputs' start and restart latency, the STATUS read lag, CTRLA.DMAOS and the circular buffers'
+DMA rules; TC capture on pins (COPEN), CAPTMODE
 (JH01).

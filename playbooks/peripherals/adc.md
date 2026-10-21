@@ -14,7 +14,12 @@ SDADC). Research: `docs/research/peripherals/adc-u2247.md`.
 - ADC1 as a client still needs its own GCLK for its SWRST: without it, CTRLA stays at SWRST.
 - The DMA trigger for ADC0 RESRDY is 36 (0x24), not dmac.h's 0x2A. Read the DMAC note's trigger
   table before probing a DMA path.
-- Leave no result unread before enabling a DMA channel on RESRDY: silicon moves it at once.
+- Leave no result unread before enabling a DMA channel on RESRDY: silicon moves it at once (so
+  does the twin since patch 0071).
+- SDADC RESRDY (38) and TSENS RESRDY (1) are DMA level triggers like the ADC's; a model that sets
+  such a flag calls `mchp_dmac_kick_machine()` so the DMAC serves it without polling.
+- TSENS GAIN resets to 0, which counts as 2^24 (0.7 s a conversion): load the factory
+  calibration, or at least a GAIN, before expecting results.
 - The desk board's VDDANA (5 V) differs from the twin's default (3.3 V): compare values as
   orders or ratios in checked apps.
 
