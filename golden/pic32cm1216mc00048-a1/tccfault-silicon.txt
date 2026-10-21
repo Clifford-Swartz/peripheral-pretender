@@ -1,0 +1,14 @@
+PP tccfault: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+source no_mcei_w0_changes=0 no_mcei_flag=0x0 w0_down=0 w0_up=0 w4_down=0 w1_high=30 flag=0x1 status_after=0x0 ok
+keep w0_low_to_cycle=0 ok
+qual qual_flag=0x0 noqual_flag=0x1 ok
+restart w1_fall=35 trg=0x1 ok
+halt_hw w1_high=44 ok
+halt_sw w1_changes=0 w0_back=0x1 status=0x1 held=0 cleared_moves=30 ok
+blank blanked_w0_changes=0 later_w0_down=0 first_cycle_w0_down=0 second_cycle_w0_changes=0 ok
+filter short_w0_changes=0 long_w0_down=11 ok
+invert w0_down=0 b_w1_down=0 b_w0_changes=0 b_flag=0x1 ok
+capture cc2=21 mc2=0x1 ok
+nonrec_ev0 w0_changes=0 w0=0x1 w1_down=0 w1=0x0 status=0x1 held=0 cleared_moves=30 cleared_status=0x0 ok
+halt_nr w0_changes=0 w0=0x1 w1_down=0 w1=0x0 status=0x1 held=0 cleared_moves=31 cleared_status=0x0 ok
+PP:EXIT 0

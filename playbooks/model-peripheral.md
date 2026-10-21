@@ -203,6 +203,10 @@ These cost a probe run each to learn. Check new probes against them.
   an EIC pin's pull resistor turned by PORT.OUT makes clean pulses (a pin muxed to a TC or TCC
   loses its pull: released, it is pulled down whatever PORT.OUT says). Silicon often starts
   outputs a clock tick after the enable: check periods and widths, not absolute times.
+- **Schedule probe actions by absolute time.** A loop that waits 1 us per step and acts on some
+  steps runs slower than 1 us per step and drifts by tens of microseconds. Put the stimuli and
+  reads in a time-ordered list and wait for each one's time from the same reference
+  (`tccprobe9.c`), or let `scope_record_stim` make them while it records.
 - **Floating pins keep their charge** for a millisecond and more. "The output is kept" and "the
   output is released" read the same until a probe drives the opposite level or uses the pull
   (`tccprobe5..7`); board parts can pull a released pin too (the MC00's PA18/PA19 sit behind the

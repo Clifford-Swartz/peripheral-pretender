@@ -57,7 +57,23 @@ match), never per tick.
 - 16 frames of dithering on eight outputs overflow a 128-edge recording: record the output under
   test alone.
 
+## TCC faults (tccprobe8..9, APP=tccfault)
+
+- Stimulate a fault with an EIC pin's pull resistor (HIGH sense, ASYNCH, event out) through an
+  asynchronous EVSYS channel to the TCC's MC_x or EV_x user; record the fault pin with the
+  outputs (`scope_record_stim` makes the pull changes at set times) and time everything from the
+  pin's recorded edges, since the pull takes a couple of microseconds.
+- A recoverable fault needs EVCTRL.MCEIx as well as FCTRLx.SRC.
+- STATUS lags a fault by several GCLK cycles: watch the pins, or read STATUS well after a change.
+- A polling loop of 1 us steps drifts: put the stimuli and reads in a time-ordered list and
+  wait for each one's absolute time (`tccprobe9.c`).
+- READSYNC takes microseconds on silicon and nothing on the twin: to measure how far COUNT moves,
+  time both reads from the same start.
+- Turn PULLEN on for the output pins: released, they are pulled down, so every run starts from 0
+  on silicon as on the twin.
+
 ## Not modelled
 
-TCC faults, capture, circular buffers, RAMP2CS, the outputs' start latency; TC capture on pins
-(COPEN), CAPTMODE (JH01).
+TCC capture from events, the fault capture modes but CAPT, ALTFAULT, circular buffers, RAMP2CS,
+the outputs' start and restart latency, the STATUS read lag; TC capture on pins (COPEN),
+CAPTMODE (JH01).

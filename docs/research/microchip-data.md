@@ -173,6 +173,10 @@ I examined PIC32CM-JH DFP 1.3.221 (about 91 MB, 24 parts). For each part it ship
      cycles), which the data sheet does not mention; WAVE bit 6 (RAMP's third bit) is writable
      though the MC00 ATDF gives RAMP as 0x30 and the data sheet has no RAMP2CS; STATUS.CMPx reads
      0 a few cycles after a STOP with prescaler DIV1 only (`tcc-u2213.md`).
+   - TCC faults: a recoverable fault acts only with EVCTRL.MCEIx set, which 34.6.3.5 does not
+     say; fault capture fills a channel only in capture mode (CTRLA.CPTENx); BLANK = START does
+     not blank the first cycle after the enable; STATUS shows a fault 5-8 GCLK cycles late
+     (`tcc-u2213.md` section 5).
 
 ## Table: DFP inventory
 | folder / file | contents | approx size | contribution to a QEMU twin |

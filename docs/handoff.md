@@ -593,11 +593,16 @@ a known state; STOP releases the outputs unless DRVCTRL.NREx is set. A dithering
 the TC and TCC lost a tick every few hundred events (the timer's +1 ns went into the base time);
 both now keep exact tick instants. Notes: `tc-u2249.md`, `tcc-u2213.md`.
 
+**TCC faults** (patch 0068): recoverable faults A/B (filter, blanking, qualification, keep,
+restart, hardware and software halt, capture) and non-recoverable faults, from `tccprobe8`/`9`
+and checked by `tccfault`. The stimulus is an EIC pin's pull resistor through an asynchronous
+EVSYS channel, recorded with the outputs (`scope_record_stim`). Silicon: a fault needs
+EVCTRL.MCEIx, STATUS shows faults several cycles late, BLANK = START skips the first cycle.
+
 Next on the MC00, in order (the owner's list of 2026-10-21):
 
-1. **TCC faults** (recoverable A/B with blanking, qualification, keep, restart, capture and halt;
-   non-recoverable with DRVCTRL NRE/NRV; FILTERVAL), then TCC capture (CPTEN, MCEI, PPW/PWP)
-   and circular buffers.
+1. **TCC capture** (CPTENx with MCEIx, PPW/PWP, the fault capture modes) and circular buffers,
+   then the VS Code extension release for step 2.
 2. **ADC events and sequencing**, and the remaining DMA triggers (ADC, DAC, TCC, SDADC, TSENS).
 3. **Sleep and standby** (PM).
 4. A generic **pad-to-peripheral input path**, then **PDEC** and **CCL**.

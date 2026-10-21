@@ -50405,7 +50405,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/tcc_u2213.yaml",
-    "sha1": "22eef6d3d8a5cc5829b743bc2c4d876abde757b2",
+    "sha1": "ae0e697bd41b4ff1a949ac2f2087a9e28dfedf69",
     "status": "applied",
     "versions": [
      "3.0.0",
@@ -52720,16 +52720,17 @@
        "access": "RW",
        "access_size": null,
        "impl": 252706735,
-       "wmask": 65280,
-       "w1c": 983212,
-       "ro": 251658243,
+       "wmask": 0,
+       "w1c": 1044652,
+       "ro": 251662083,
        "rdz": 0,
        "enprot": 0,
        "syncbusy": 8,
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
        "flags": [
-        "HOOK_PRE_READ"
+        "HOOK_PRE_READ",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": null,
        "read_side_effect": true,
@@ -52917,17 +52918,22 @@
         [
          "w1c",
          "overlay",
-         "UFS, DFS, PATTBUFV, PERBUFV, CCBUFV0, CCBUFV1, CCBUFV2, CCBUFV3 = 0xF00AC (no ATDF atomic-op)"
+         "UFS, DFS, PATTBUFV, PERBUFV, FAULTA, FAULTB, FAULT0, FAULT1, CCBUFV0, CCBUFV1, CCBUFV2, CCBUFV3 = 0xFF0AC (no ATDF atomic-op)"
         ],
         [
          "ro",
          "overlay",
-         "read-only STOP, IDX, CMP0, CMP1, CMP2, CMP3 = 0xF000003"
+         "read-only STOP, IDX, FAULTAIN, FAULTBIN, FAULT0IN, FAULT1IN, CMP0, CMP1, CMP2, CMP3 = 0xF000F03"
         ],
         [
          "hooks",
          "overlay",
          "pre_read"
+        ],
+        [
+         "hooks",
+         "overlay",
+         "post_write"
         ],
         [
          "sync",

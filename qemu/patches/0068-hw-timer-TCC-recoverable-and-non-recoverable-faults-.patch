@@ -1,0 +1,1162 @@
+From 1efcecac5bc29a89d7fbc15e269a2e9f993d325d Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 21 Oct 2026 11:28:40 -0700
+Subject: [PATCH] hw/timer: TCC recoverable and non-recoverable faults (U2213)
+
+The TCC's faults, as a PIC32CM MC00 does them (firmware/hello
+APP=tccprobe8 and tccprobe9, checked by tccfault). Recoverable faults A
+and B take the new "mc-event-in" inputs MC0 and MC1 (the EVSYS users),
+which need EVCTRL.MCEIx as well as FCTRLx.SRC (ENABLE or INVERT),
+through the FILTERVAL filter and two cycles of synchronization. QUAL
+ignores a fault while its channel's waveform is low; BLANK ignores one
+for BLANKVAL (x64 with BLANKPRESC) GCLK_TCC cycles after the selected
+waveform edge, or after each cycle start but the first. While a fault
+acts its channel is clamped low ahead of the output matrix (STATUS.CMPx
+still shows the waveform), to the end of the cycle with KEEP; RESTART
+retriggers the counter, HALT HW holds it while the fault lasts and SW
+until software clears STATUS.FAULTx, CAPTURE CAPT captures COUNT into a
+CPTENx channel. STATUS.FAULTxIN and FAULTx, INTFLAG.FAULTx.
+
+Non-recoverable faults (EV0/EV1 with the FAULT action, filtered by
+DRVCTRL.FILTERVALn, or FCTRLx.HALT = NR) hold the counter and put the
+outputs in the DRVCTRL non-recoverable state until software clears
+STATUS.FAULTx with the input gone; counting goes on from where it
+stopped. STATUS.FAULTx are write-one-to-clear.
+
+A retrigger while running no longer zeroes STATUS.CMPx until the next
+tick: silicon's outputs go on without a glitch.
+
+qtest: clamp, keep, qualification, restart, halt, blanking and filter,
+capture, non-recoverable faults.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst         |  12 +-
+ hw/timer/mchp_tcc.c                           | 523 +++++++++++++++++-
+ include/hw/mchp/gen/atsame51j20a/tcc_u2213.h  |   7 +-
+ .../mchp/gen/pic32cm1216mc00048/tcc_u2213.h   |   7 +-
+ .../mchp/gen/pic32cm5164jh01100/tcc_u2213.h   |   7 +-
+ include/hw/mchp/gen/tcc_u2213.h               |   2 +-
+ include/hw/timer/mchp_tcc.h                   |   3 +
+ tests/qtest/pic32cm-tcc-test.c                | 255 ++++++++-
+ 8 files changed, 776 insertions(+), 40 deletions(-)
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index 1a1dd3b..3d337eb 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -107,7 +107,11 @@ Supported devices
+   an instance lacks keep their bits at zero, and WAVE and PATT drop a
+   write made while the previous one synchronizes. STOP and the end of a
+   one-shot put each output at DRVCTRL.NRVx where NREx is set and leave
+-  the others floating.
++  the others floating. Recoverable faults A and B (the MC0/MC1 event
++  inputs) clamp their channel, with filter, blanking, qualification,
++  keep, restart, hardware and software halt and capture into a CPTENx
++  channel; non-recoverable faults (EV0/EV1, or HALT = NR) hold the
++  counter in the DRVCTRL state until software clears them.
+ - RTC (U2250, PIC32CM MC00 only): the three modes, periodic flags,
+   calendar with alarm, event outputs; reset only at power-on.
+ - EVSYS: channels on the three paths, software events, the users that
+@@ -160,8 +164,10 @@ Missing devices
+   timeouts and 10-bit/high-speed I2C addressing, the USART external clock
+   (XCK), synchronous mode, LIN and auto-baud frames, IrDA, 9-bit characters
+   and receive errors. PORT: the sampling mode (CTRL).
+-- TC capture on pins (COPEN) and CAPTMODE; the JH01 RTC (03608). TCC faults,
+-  capture, circular buffers, RAMP2CS and the outputs' start latency.
++- TC capture on pins (COPEN) and CAPTMODE; the JH01 RTC (03608). TCC
++  capture from events, the fault capture modes but CAPT, the ALTFAULT
++  source, circular buffers, RAMP2CS, the outputs' start latency and the
++  STATUS read lag.
+ - PAC write protection, DSU CRC32 and chip erase, sleep modes and every other
+   peripheral behaviour (CCL, PDEC, CAN, ...). ADC
+   sequencing and event inputs, DAC START events.
+diff --git a/hw/timer/mchp_tcc.c b/hw/timer/mchp_tcc.c
+index e950a5e..de3073e 100644
+--- a/hw/timer/mchp_tcc.c
++++ b/hw/timer/mchp_tcc.c
+@@ -62,8 +62,26 @@
+  * lacks (MchpInstanceInfo.features, .outputs, .channels) keep their bits
+  * at zero, as on silicon. WAVE and PATT synchronize for 4 GCLK_TCC
+  * cycles, and silicon drops a write made meanwhile.
+- * Not modelled: faults, circular buffers, capture, CTRLBSET.IDXCMD,
+- * sleep.
++ *
++ * Faults as on a PIC32CM MC00 (firmware/hello/tests/tccprobe8.c,
++ * tccprobe9.c). Recoverable fault A (B) takes the MC0 (MC1) event input,
++ * which needs EVCTRL.MCEIx as well as FCTRLx.SRC, through the FILTERVAL
++ * filter (and 2 cycles); QUAL ignores it while channel 0's (1's)
++ * waveform is low, and BLANK for BLANKVAL GCLK_TCC cycles from the
++ * selected waveform edge or from each cycle start (not the first one
++ * after the enable). While it acts, the channel's waveform is clamped
++ * low ahead of the output matrix (STATUS.CMPx still shows it), to the
++ * end of the cycle with KEEP;
++ * RESTART retriggers the counter, HALT holds it (SW: until software
++ * clears STATUS.FAULTx), CAPTURE CAPT captures COUNT into a CPTENx
++ * channel. A non-recoverable fault (EV0/EV1 FAULT action through
++ * DRVCTRL.FILTERVALn, or FCTRLx.HALT = NR) holds the counter and puts the
++ * outputs in the non-recoverable state until software clears its
++ * STATUS.FAULTx with the input gone; counting then goes on from where it
++ * stopped. STATUS reads are immediate (silicon: 5-8 GCLK_TCC cycles late).
++ * Not modelled: the ALTFAULT source, fault capture modes but CAPT, capture
++ * from events, circular buffers, the debug and update faults (DFS, UFS),
++ * CTRLBSET.IDXCMD, sleep.
+  *
+  * Counting is event driven on QEMU_CLOCK_VIRTUAL: the timer fires at the
+  * next tick that can change something and jumps over the rest.
+@@ -150,6 +168,19 @@ struct MchpTccState {
+     bool ramp_idx;              /* RAMP2 cycle: false A, true B */
+     uint8_t dith_cycle;         /* dithering: the cycle in the frame */
+ 
++    /* Faults: inputs 0, 1 recoverable A, B; 2, 3 non-recoverable EV0, EV1 */
++    QEMUTimer *fault_timer;     /* a filter or blanking time ends */
++    uint8_t mc_level;           /* MCx event inputs */
++    uint8_t flt_in;             /* fault inputs after their filters */
++    int64_t flt_at[4];          /* the filters pass a change at, ns */
++    int64_t blank_until[2];     /* faults A, B blanked to, ns */
++    uint8_t rf_active;          /* recoverable faults acting */
++    uint8_t rf_keep;            /* clamping to the end of the cycle (KEEP) */
++    uint8_t rf_halt;            /* holding the counter (HALT HW or SW) */
++    uint8_t nr_fault;           /* non-recoverable: EV0, EV1, A, B (bits) */
++    bool halted;                /* a fault holds the counter */
++    uint8_t cmp_prev;           /* channels 0, 1 waveform after a tick */
++
+     bool running;               /* counting (started, not stopped) */
+     bool moved;                 /* ticked since the start */
+     bool cnt_pending;           /* the start's CNT comes with the 1st tick */
+@@ -293,7 +324,7 @@ static uint64_t tcc_hz(MchpTccState *s)
+ /* The prescaled clock moves the counter (not events) */
+ static bool tcc_clock_counts(MchpTccState *s)
+ {
+-    if (!s->running || !tcc_hz(s)) {
++    if (!s->running || s->halted || !tcc_hz(s)) {
+         return false;
+     }
+     switch (tcc_evact(s, 0)) {
+@@ -605,6 +636,8 @@ static uint32_t tcc_cnt_stop(MchpTccState *s)
+ 
+ static uint32_t tcc_cmp(MchpTccState *s, int64_t now);
+ static void tcc_update_wo(MchpTccState *s);
++static void tcc_fault_cycle(MchpTccState *s, int64_t t);
++static void tcc_fault_edges(MchpTccState *s, int64_t t);
+ 
+ /* Silicon clears STATUS.CMPx this many GCLK_TCC cycles after a STOP */
+ #define MCHP_TCC_STOP_CLEAR 8
+@@ -701,6 +734,7 @@ static void tcc_tick(MchpTccState *s, int force_down)
+         }
+         s->dith_cycle++;
+         tcc_refresh(s);
++        tcc_fault_cycle(s, s->t_base);
+     }
+     if (update && !(tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, LUPD))) {
+         tcc_update_buffers(s);
+@@ -708,6 +742,7 @@ static void tcc_tick(MchpTccState *s, int force_down)
+     if (ovf && (tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, ONESHOT))) {
+         tcc_stop(s, true);
+     }
++    tcc_fault_edges(s, s->t_base);
+     if (s->wo_active) {
+         tcc_update_wo(s);
+     }
+@@ -800,7 +835,9 @@ static void tcc_update_wo(MchpTccState *s)
+     uint8_t level = 0, hiz = 0xFF;
+ 
+     if (tcc_enabled(s)) {
+-        level = tcc_extend(s, tcc_cmp(s, now), now);
++        /* Recoverable faults clamp their channel ahead of the matrix */
++        level = tcc_extend(s, tcc_cmp(s, now) & ~(s->rf_active | s->rf_keep),
++                           now);
+         hiz = 0;
+         if (s->nr_state) {
+             uint8_t nre = extract32(drv, 0, 8);
+@@ -849,6 +886,7 @@ static bool tcc_quiet(MchpTccState *s)
+     return (flags & want) == want && !s->cnt_pending && !s->wo_active &&
+            s->wavegen != NFRQ && s->wavegen != MFRQ &&
+            !tcc_dith_bits(s) && !(s->wavegen == NPWM && tcc_ramp(s)) &&
++           !tcc_reg(s, A_FCTRLA, 4) && !tcc_reg(s, A_FCTRLB, 4) &&
+            !(tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, ONESHOT)) &&
+            !(tcc_reg(s, A_STATUS, 4) & (F(STATUS, PERBUFV) | (0xF << 16))) &&
+            !(ev & (F(EVCTRL, OVFEO) | (0xF << 24)));
+@@ -927,7 +965,7 @@ static void tcc_start(MchpTccState *s)
+         tcc_update_buffers(s);
+     }
+     s->running = true;
+-    s->nr_state = false;
++    s->nr_state = s->nr_fault != 0;
+     s->moved = false;
+     s->down = s->dir;
+     tcc_base_set(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+@@ -953,9 +991,9 @@ static void tcc_retrigger(MchpTccState *s)
+         tcc_start(s);           /* resume from COUNT */
+         return;
+     }
++    /* The waveform goes on to the first tick (silicon: no glitch) */
+     s->count = tcc_start_value(s);
+     s->down = s->dir;
+-    s->moved = false;
+     tcc_base_set(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+     if (!(tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, LUPD))) {
+         tcc_update_buffers(s);
+@@ -1003,27 +1041,32 @@ static void tcc_report_unimp(MchpTccState *s)
+ {
+     MchpRegBlock *rb = MCHP_REGBLOCK(s);
+     uint32_t ctrla = tcc_reg(s, A_CTRLA, 4);
+-    static const struct {
+-        hwaddr offset;
+-        const char *name;
+-    } unimp[] = {
+-        { A_FCTRLA, "FCTRLA: faults" }, { A_FCTRLB, "FCTRLB: faults" },
+-    };
+-
+-    for (unsigned i = 0; i < ARRAY_SIZE(unimp); i++) {
+-        if (tcc_reg(s, unimp[i].offset, 4)) {
+-            qemu_log_mask(LOG_UNIMP, "%s.%s not modelled\n", rb->name,
+-                          unimp[i].name);
++    uint32_t mcei = extract32(tcc_reg(s, A_EVCTRL, 4),
++                              R_MCHP_TCC_EVCTRL_MCEI0_SHIFT, 4);
++    uint32_t fsrc = 0;
++    unsigned ev0 = tcc_evact(s, 0), ev1 = tcc_evact(s, 1);
++
++    for (unsigned n = 0; n < 2; n++) {
++        unsigned src = FIELD_EX32(tcc_reg(s, n ? A_FCTRLB : A_FCTRLA, 4),
++                                  MCHP_TCC_FCTRLA, SRC);
++
++        fsrc |= (src != 0) << n;
++        if (src == MCHP_TCC_FCTRLA_SRC_ALTFAULT) {
++            qemu_log_mask(LOG_UNIMP, "%s.FCTRL%c: ALTFAULT not modelled\n",
++                          rb->name, 'A' + n);
+         }
+     }
+-    if (ctrla & 0x0F000000) {
+-        qemu_log_mask(LOG_UNIMP, "%s.CTRLA: capture not modelled\n",
+-                      rb->name);
++    /* A CPTENx channel taking the MCx event captures (fault inputs aside) */
++    if (extract32(ctrla, R_MCHP_TCC_CTRLA_CPTEN0_SHIFT, 4) & mcei & ~fsrc) {
++        qemu_log_mask(LOG_UNIMP, "%s.CTRLA: capture from events not "
++                      "modelled\n", rb->name);
+     }
+-    if (tcc_evact(s, 0) > MCHP_TCC_EVCTRL_EVACT0_COUNT ||
+-        tcc_evact(s, 1) > MCHP_TCC_EVCTRL_EVACT1_DEC) {
+-        qemu_log_mask(LOG_UNIMP, "%s.EVCTRL: capture and fault event "
+-                      "actions not modelled\n", rb->name);
++    if ((ev0 > MCHP_TCC_EVCTRL_EVACT0_COUNT &&
++         ev0 != MCHP_TCC_EVCTRL_EVACT0_FAULT) ||
++        (ev1 > MCHP_TCC_EVCTRL_EVACT1_DEC &&
++         ev1 != MCHP_TCC_EVCTRL_EVACT1_FAULT)) {
++        qemu_log_mask(LOG_UNIMP, "%s.EVCTRL: capture event actions not "
++                      "modelled\n", rb->name);
+     }
+ }
+ 
+@@ -1036,6 +1079,410 @@ static void tcc_update_busy(MchpTccState *s)
+     }
+ }
+ 
++/* -- Faults ------------------------------------------------------------- */
++
++#define MCHP_TCC_FAULT_INPUTS 4
++
++static uint32_t tcc_fctrl(MchpTccState *s, unsigned n)
++{
++    return tcc_reg(s, n ? A_FCTRLB : A_FCTRLA, 4);
++}
++
++/*
++ * Fault input @i before its filter: 0 and 1 the recoverable faults A and
++ * B (the MC0 and MC1 events), 2 and 3 the EV0 and EV1 FAULT actions
++ */
++static bool tcc_fault_raw(MchpTccState *s, unsigned i)
++{
++    if (!tcc_enabled(s)) {
++        return false;
++    }
++    if (i >= 2) {
++        unsigned n = i - 2;
++
++        return tcc_ev_enabled(s, n) && tcc_ev_active(s, n) &&
++               tcc_evact(s, n) == (n ? MCHP_TCC_EVCTRL_EVACT1_FAULT :
++                                       MCHP_TCC_EVCTRL_EVACT0_FAULT);
++    }
++    /* EVCTRL.MCEIx is needed as well as FCTRLx.SRC (silicon) */
++    if (!(tcc_reg(s, A_EVCTRL, 4) & (F(EVCTRL, MCEI0) << i))) {
++        return false;
++    }
++    switch (FIELD_EX32(tcc_fctrl(s, i), MCHP_TCC_FCTRLA, SRC)) {
++    case MCHP_TCC_FCTRLA_SRC_ENABLE:
++        return extract32(s->mc_level, i, 1);
++    case MCHP_TCC_FCTRLA_SRC_INVERT:
++        return !extract32(s->mc_level, i, 1);
++    }
++    return false;
++}
++
++/* Fault input @i's filter, in GCLK_TCC cycles */
++static unsigned tcc_fault_filter(MchpTccState *s, unsigned i)
++{
++    if (i < 2) {
++        return FIELD_EX32(tcc_fctrl(s, i), MCHP_TCC_FCTRLA, FILTERVAL);
++    }
++    return extract32(tcc_reg(s, A_DRVCTRL, 4),
++                     R_MCHP_TCC_DRVCTRL_FILTERVAL0_SHIFT + 4 * (i - 2), 4);
++}
++
++/* A filtered input is synchronized too: 2 more GCLK_TCC cycles (silicon) */
++#define MCHP_TCC_FILTER_SYNC 2
++
++/*
++ * The filters: an input passes a change once it has held for FILTERVAL
++ * (and the synchronizer's) GCLK_TCC cycles; a shorter pulse is lost
++ */
++static void tcc_fault_sample(MchpTccState *s, int64_t now)
++{
++    for (unsigned i = 0; i < MCHP_TCC_FAULT_INPUTS; i++) {
++        bool raw = tcc_fault_raw(s, i);
++        unsigned fv = tcc_fault_filter(s, i);
++
++        if (raw == extract32(s->flt_in, i, 1)) {
++            s->flt_at[i] = INT64_MAX;
++        } else if (!fv || !tcc_hz(s) || now >= s->flt_at[i]) {
++            s->flt_in = deposit32(s->flt_in, i, 1, raw);
++            s->flt_at[i] = INT64_MAX;
++        } else if (s->flt_at[i] == INT64_MAX) {
++            s->flt_at[i] = now + clock_ticks_to_ns(MCHP_REGBLOCK(s)->gclk,
++                                                   fv + MCHP_TCC_FILTER_SYNC);
++        }
++    }
++}
++
++/* Recoverable fault @n's blanking time, ns (0: none) */
++static int64_t tcc_blank_ns(MchpTccState *s, unsigned n)
++{
++    uint32_t f = tcc_fctrl(s, n);
++    uint64_t v = FIELD_EX32(f, MCHP_TCC_FCTRLA, BLANKVAL);
++
++    if (f & R_MCHP_TCC_FCTRLA_BLANKPRESC_MASK) {
++        v *= 64;
++    }
++    return v ? clock_ticks_to_ns(MCHP_REGBLOCK(s)->gclk, v) : 0;
++}
++
++/* Hold the counter while a halt or a non-recoverable fault says so */
++static void tcc_fault_hold(MchpTccState *s, int64_t t)
++{
++    bool hold = s->rf_halt || s->nr_fault;
++
++    if (hold == s->halted) {
++        return;
++    }
++    if (hold) {
++        tcc_jump(s, tcc_ticks(s, t));   /* the count at @t is kept */
++        s->halted = true;
++        timer_del(s->timer);
++    } else {
++        s->halted = false;
++        tcc_base_set(s, t);
++    }
++}
++
++/* Restart the counter at @t (RESTART) */
++static void tcc_fault_restart(MchpTccState *s, int64_t t)
++{
++    tcc_retrigger(s);
++    tcc_base_set(s, t);
++}
++
++/* CAPTURE: COUNT at @t into the CHSEL channel, if CTRLA.CPTENx (silicon) */
++static void tcc_fault_capture(MchpTccState *s, unsigned n, int64_t t)
++{
++    uint32_t f = tcc_fctrl(s, n);
++    unsigned ch = FIELD_EX32(f, MCHP_TCC_FCTRLA, CHSEL);
++    unsigned mode = FIELD_EX32(f, MCHP_TCC_FCTRLA, CAPTURE);
++    unsigned nch = MCHP_REGBLOCK(s)->info->channels ?: MCHP_TCC_CHANNELS;
++
++    if (mode == MCHP_TCC_FCTRLA_CAPTURE_DISABLE) {
++        return;
++    }
++    if (mode != MCHP_TCC_FCTRLA_CAPTURE_CAPT) {
++        qemu_log_mask(LOG_UNIMP, "%s.FCTRL%c: capture mode %u not "
++                      "modelled\n", MCHP_REGBLOCK(s)->name, 'A' + n, mode);
++        return;
++    }
++    if (ch < nch && (tcc_reg(s, A_CTRLA, 4) & (F(CTRLA, CPTEN0) << ch))) {
++        bool down;
++        uint32_t c = tcc_after(s, tcc_ticks(s, t), &down);
++
++        tcc_set_reg(s, A_CC + 4 * ch, 4, c << tcc_dith_bits(s));
++        tcc_refresh(s);
++        tcc_flag(s, F(INTFLAG, MC0) << ch);
++    }
++}
++
++/* Recoverable fault @n starts acting at @t */
++static void tcc_rf_assert(MchpTccState *s, unsigned n, int64_t t)
++{
++    uint32_t f = tcc_fctrl(s, n);
++
++    s->rf_active |= BIT(n);
++    tcc_mod_reg(s, A_STATUS, 4, 0, F(STATUS, FAULTA) << n);
++    tcc_flag(s, F(INTFLAG, FAULTA) << n);
++    tcc_fault_capture(s, n, t);
++    if (f & R_MCHP_TCC_FCTRLA_KEEP_MASK) {
++        s->rf_keep |= BIT(n);
++    }
++    switch (FIELD_EX32(f, MCHP_TCC_FCTRLA, HALT)) {
++    case MCHP_TCC_FCTRLA_HALT_NR:
++        s->nr_fault |= BIT(2 + n);
++        s->nr_state = true;
++        break;
++    case MCHP_TCC_FCTRLA_HALT_HW:
++    case MCHP_TCC_FCTRLA_HALT_SW:
++        s->rf_halt |= BIT(n);
++        break;
++    default:
++        /* Restarted at the fault (silicon), clamped while it lasts */
++        if (f & R_MCHP_TCC_FCTRLA_RESTART_MASK) {
++            tcc_fault_restart(s, t);
++        }
++        break;
++    }
++    tcc_fault_hold(s, t);
++}
++
++/* Recoverable fault @n stops acting at @t */
++static void tcc_rf_release(MchpTccState *s, unsigned n, int64_t t)
++{
++    uint32_t f = tcc_fctrl(s, n);
++    unsigned halt = FIELD_EX32(f, MCHP_TCC_FCTRLA, HALT);
++
++    s->rf_active &= ~BIT(n);
++    if (halt == MCHP_TCC_FCTRLA_HALT_HW) {
++        s->rf_halt &= ~BIT(n);
++        tcc_fault_hold(s, t);
++        /* With a halt the restart comes at the end (DS 34.6.3.5) */
++        if (f & R_MCHP_TCC_FCTRLA_RESTART_MASK) {
++            tcc_fault_restart(s, t);
++        }
++    }
++    /* KEEP keeps STATUS.FAULTx to the cycle end, SW and NR to software */
++    if (!(s->rf_keep & BIT(n)) && halt != MCHP_TCC_FCTRLA_HALT_SW &&
++        halt != MCHP_TCC_FCTRLA_HALT_NR) {
++        tcc_mod_reg(s, A_STATUS, 4, F(STATUS, FAULTA) << n, 0);
++    }
++}
++
++/* Apply the filtered fault inputs at @t */
++static void tcc_faults(MchpTccState *s, int64_t t)
++{
++    uint32_t cmp = tcc_cmp(s, t), in = 0;
++    unsigned ramp = s->wavegen == NPWM ? tcc_ramp(s) : RAMP1;
++
++    for (unsigned n = 0; n < 2; n++) {
++        uint32_t f = tcc_fctrl(s, n);
++        bool on = extract32(s->flt_in, n, 1);
++        bool active = s->rf_active & BIT(n);
++
++        /* QUAL: not while the channel's waveform is low (silicon) */
++        if ((f & R_MCHP_TCC_FCTRLA_QUAL_MASK) && !extract32(cmp, n, 1)) {
++            on = false;
++        }
++        /* RAMP2: fault A in cycle A only, B in cycle B (DS 34.6.3.5) */
++        if (ramp != RAMP1 && s->ramp_idx != n) {
++            on = false;
++        }
++        if (on) {
++            in |= F(STATUS, FAULTAIN) << n;
++        }
++        if (on && !active && t >= s->blank_until[n]) {
++            tcc_rf_assert(s, n, t);
++        } else if (!on && active) {
++            tcc_rf_release(s, n, t);
++        }
++    }
++    for (unsigned n = 0; n < 2; n++) {
++        if (!extract32(s->flt_in, 2 + n, 1)) {
++            continue;
++        }
++        in |= F(STATUS, FAULT0IN) << n;
++        if (!(s->nr_fault & BIT(n))) {
++            s->nr_fault |= BIT(n);
++            s->nr_state = true;
++            tcc_mod_reg(s, A_STATUS, 4, 0, F(STATUS, FAULT0) << n);
++            tcc_flag(s, F(INTFLAG, FAULT0) << n);
++            tcc_fault_hold(s, t);
++        }
++    }
++    tcc_mod_reg(s, A_STATUS, 4, F(STATUS, FAULTAIN) | F(STATUS, FAULTBIN) |
++                F(STATUS, FAULT0IN) | F(STATUS, FAULT1IN), in);
++}
++
++/* The fault timer: the next filter or blanking time to end */
++static void tcc_fault_arm(MchpTccState *s, int64_t now)
++{
++    int64_t next = INT64_MAX;
++
++    for (unsigned i = 0; i < MCHP_TCC_FAULT_INPUTS; i++) {
++        next = MIN(next, s->flt_at[i]);
++    }
++    for (unsigned n = 0; n < 2; n++) {
++        if (extract32(s->flt_in, n, 1) && !(s->rf_active & BIT(n)) &&
++            now < s->blank_until[n]) {
++            next = MIN(next, s->blank_until[n]);
++        }
++    }
++    if (next == INT64_MAX) {
++        timer_del(s->fault_timer);
++    } else {
++        timer_mod(s->fault_timer, next);
++    }
++}
++
++/* The fault inputs changed, or a filter or blanking time ended */
++static void tcc_fault_update(MchpTccState *s, int64_t now)
++{
++    tcc_fault_sample(s, now);
++    tcc_faults(s, now);
++    tcc_fault_arm(s, now);
++}
++
++/* A new cycle at @t: KEEP lets go of faults gone; BLANK = START blanks */
++static void tcc_fault_cycle(MchpTccState *s, int64_t t)
++{
++    for (unsigned n = 0; n < 2; n++) {
++        uint32_t f = tcc_fctrl(s, n);
++        unsigned halt = FIELD_EX32(f, MCHP_TCC_FCTRLA, HALT);
++
++        if ((s->rf_keep & BIT(n)) && !(s->rf_active & BIT(n))) {
++            s->rf_keep &= ~BIT(n);
++            if (halt != MCHP_TCC_FCTRLA_HALT_SW &&
++                halt != MCHP_TCC_FCTRLA_HALT_NR) {
++                tcc_mod_reg(s, A_STATUS, 4, F(STATUS, FAULTA) << n, 0);
++            }
++        }
++        if (FIELD_EX32(f, MCHP_TCC_FCTRLA, BLANK) ==
++            MCHP_TCC_FCTRLA_BLANK_START && tcc_blank_ns(s, n)) {
++            s->blank_until[n] = t + tcc_blank_ns(s, n);
++        }
++    }
++}
++
++/*
++ * After a tick at @t: blanking from the waveform edges of channels 0 and
++ * 1, and the faults again (QUAL follows the waveform)
++ */
++static void tcc_fault_edges(MchpTccState *s, int64_t t)
++{
++    uint8_t cmp, edge[4];
++
++    if (!tcc_reg(s, A_FCTRLA, 4) && !tcc_reg(s, A_FCTRLB, 4)) {
++        return;
++    }
++    cmp = tcc_cmp(s, t) & 3;
++    edge[MCHP_TCC_FCTRLA_BLANK_START] = 0;
++    edge[MCHP_TCC_FCTRLA_BLANK_RISE] = cmp & ~s->cmp_prev;
++    edge[MCHP_TCC_FCTRLA_BLANK_FALL] = ~cmp & s->cmp_prev;
++    edge[MCHP_TCC_FCTRLA_BLANK_BOTH] = cmp ^ s->cmp_prev;
++    s->cmp_prev = cmp;
++    for (unsigned n = 0; n < 2; n++) {
++        unsigned b = FIELD_EX32(tcc_fctrl(s, n), MCHP_TCC_FCTRLA, BLANK);
++
++        if ((edge[b] & BIT(n)) && tcc_blank_ns(s, n)) {
++            s->blank_until[n] = t + tcc_blank_ns(s, n);
++        }
++    }
++    tcc_faults(s, t);
++    tcc_fault_arm(s, t);
++}
++
++/*
++ * Software cleared STATUS.FAULTx: a software halt or a non-recoverable
++ * fault ends if its input is gone (else the bit stays set)
++ */
++static void tcc_fault_cleared(MchpTccState *s, int64_t t)
++{
++    uint32_t st = tcc_reg(s, A_STATUS, 4);
++
++    for (unsigned n = 0; n < 2; n++) {
++        uint32_t bit = F(STATUS, FAULTA) << n;
++
++        if (st & bit || !(s->rf_halt & BIT(n) || s->nr_fault & BIT(2 + n) ||
++                          s->rf_active & BIT(n))) {
++            continue;
++        }
++        if (s->rf_active & BIT(n)) {
++            tcc_mod_reg(s, A_STATUS, 4, 0, bit);
++            continue;
++        }
++        if (s->rf_halt & BIT(n)) {
++            s->rf_halt &= ~BIT(n);
++            if (tcc_fctrl(s, n) & R_MCHP_TCC_FCTRLA_RESTART_MASK) {
++                tcc_fault_hold(s, t);
++                tcc_fault_restart(s, t);
++            }
++        }
++        s->nr_fault &= ~BIT(2 + n);
++    }
++    for (unsigned n = 0; n < 2; n++) {
++        uint32_t bit = F(STATUS, FAULT0) << n;
++
++        if (st & bit || !(s->nr_fault & BIT(n))) {
++            continue;
++        }
++        if (extract32(s->flt_in, 2 + n, 1)) {
++            tcc_mod_reg(s, A_STATUS, 4, 0, bit);
++        } else {
++            s->nr_fault &= ~BIT(n);
++        }
++    }
++    if (!s->nr_fault && !(st & F(STATUS, STOP))) {
++        s->nr_state = false;
++    }
++    tcc_fault_hold(s, t);
++}
++
++/* Disabled: no fault acts or waits */
++static void tcc_fault_reset(MchpTccState *s)
++{
++    timer_del(s->fault_timer);
++    s->flt_in = 0;
++    for (unsigned i = 0; i < MCHP_TCC_FAULT_INPUTS; i++) {
++        s->flt_at[i] = INT64_MAX;
++    }
++    memset(s->blank_until, 0, sizeof(s->blank_until));
++    s->rf_active = 0;
++    s->rf_keep = 0;
++    s->rf_halt = 0;
++    s->nr_fault = 0;
++    s->halted = false;
++    s->cmp_prev = 0;
++}
++
++static void tcc_fault_cb(void *opaque)
++{
++    MchpTccState *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    tcc_advance(s, now);
++    tcc_fault_update(s, now);
++    tcc_advance(s, now);
++    tcc_update_wo(s);
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++/* "mc-event-in": the MCx event inputs (faults A and B) */
++static void tcc_set_mc_event(void *opaque, int n, int level)
++{
++    MchpTccState *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    if (extract32(s->mc_level, n, 1) == (level > 0)) {
++        return;
++    }
++    tcc_advance(s, now);
++    s->mc_level = deposit32(s->mc_level, n, 1, level > 0);
++    tcc_fault_update(s, now);
++    tcc_advance(s, now);
++    tcc_update_wo(s);
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
+ /* "ev-event-in": TCCx_EV0 and TCCx_EV1 */
+ static void tcc_set_event(void *opaque, int n, int level)
+ {
+@@ -1120,6 +1567,7 @@ static void tcc_set_event(void *opaque, int n, int level)
+             break;
+         }
+     }
++    tcc_fault_update(s, now);
+     trace_mchp_tcc_event_in(MCHP_REGBLOCK(s)->name, n, level, s->count);
+     tcc_advance(s, now);
+     tcc_update_wo(s);
+@@ -1332,10 +1780,13 @@ static void tcc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+                 ev1 != MCHP_TCC_EVCTRL_EVACT1_RETRIGGER) {
+                 tcc_start(s);
+             }
++            tcc_fault_update(s, now);
+         } else if (old & ~val & F(CTRLA, ENABLE)) {
+             tcc_jump(s, tcc_ticks(s, now));
+             s->running = false;
+             timer_del(s->timer);
++            tcc_fault_reset(s);
++            s->nr_state = false;
+         }
+         tcc_update_busy(s);
+         break;
+@@ -1361,6 +1812,9 @@ static void tcc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+     case A_PATTBUF:
+         tcc_mod_reg(s, A_STATUS, 4, 0, F(STATUS, PATTBUFV));
+         break;
++    case A_STATUS:
++        tcc_fault_cleared(s, now);
++        break;
+     case A_PERBUF:
+     case A_CCBUF:
+         tcc_mod_reg(s, A_STATUS, 4, 0, ri->offset == A_PERBUF ?
+@@ -1418,6 +1872,8 @@ static void tcc_reset_hold(MchpRegBlock *rb)
+     memset(s->wsync_until, 0, sizeof(s->wsync_until));
+     s->ramp_idx = false;
+     s->dith_cycle = 0;
++    tcc_fault_reset(s);
++    s->mc_level = 0;
+     s->toggle = 0;
+     s->count = 0;
+     s->prev = 0;
+@@ -1441,6 +1897,7 @@ static bool tcc_realize(MchpRegBlock *rb, Error **errp)
+ 
+     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, tcc_timer_cb, s);
+     s->dti_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, tcc_dti_cb, s);
++    s->fault_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, tcc_fault_cb, s);
+     return true;
+ }
+ 
+@@ -1455,6 +1912,8 @@ static void tcc_init(Object *obj)
+     qdev_init_gpio_out_named(dev, s->mc_event, MCHP_TCC_MC_EVENT,
+                              MCHP_TCC_CHANNELS);
+     qdev_init_gpio_in_named(dev, tcc_set_event, MCHP_TCC_EV_EVENT_IN, 2);
++    qdev_init_gpio_in_named(dev, tcc_set_mc_event, MCHP_TCC_MC_EVENT_IN,
++                            MCHP_TCC_CHANNELS);
+     qdev_init_gpio_out_named(dev, s->ev_busy, MCHP_TCC_EV_BUSY, 2);
+     qdev_init_gpio_out_named(dev, s->wo, MCHP_TCC_PAD_WO, MCHP_TCC_OUTPUTS);
+     qdev_init_gpio_in_named(dev, tcc_set_wo_active, MCHP_TCC_PAD_WO_ACTIVE,
+@@ -1468,6 +1927,7 @@ static void tcc_finalize(Object *obj)
+     if (s->timer) {
+         timer_free(s->timer);
+         timer_free(s->dti_timer);
++        timer_free(s->fault_timer);
+     }
+ }
+ 
+@@ -1479,8 +1939,8 @@ static int tcc_post_load(void *opaque, int version_id)
+ 
+ static const VMStateDescription vmstate_mchp_tcc = {
+     .name = TYPE_MCHP_TCC,
+-    .version_id = 2,
+-    .minimum_version_id = 2,
++    .version_id = 3,
++    .minimum_version_id = 3,
+     .post_load = tcc_post_load,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpTccState, 1, vmstate_mchp_regblock,
+@@ -1502,6 +1962,17 @@ static const VMStateDescription vmstate_mchp_tcc = {
+         VMSTATE_INT64_ARRAY(wsync_until, MchpTccState, 2),
+         VMSTATE_BOOL(ramp_idx, MchpTccState),
+         VMSTATE_UINT8(dith_cycle, MchpTccState),
++        VMSTATE_TIMER_PTR(fault_timer, MchpTccState),
++        VMSTATE_UINT8(mc_level, MchpTccState),
++        VMSTATE_UINT8(flt_in, MchpTccState),
++        VMSTATE_INT64_ARRAY(flt_at, MchpTccState, 4),
++        VMSTATE_INT64_ARRAY(blank_until, MchpTccState, 2),
++        VMSTATE_UINT8(rf_active, MchpTccState),
++        VMSTATE_UINT8(rf_keep, MchpTccState),
++        VMSTATE_UINT8(rf_halt, MchpTccState),
++        VMSTATE_UINT8(nr_fault, MchpTccState),
++        VMSTATE_BOOL(halted, MchpTccState),
++        VMSTATE_UINT8(cmp_prev, MchpTccState),
+         VMSTATE_BOOL(down, MchpTccState),
+         VMSTATE_BOOL_ARRAY(ev_level, MchpTccState, 2),
+         VMSTATE_UINT8(toggle, MchpTccState),
+diff --git a/include/hw/mchp/gen/atsame51j20a/tcc_u2213.h b/include/hw/mchp/gen/atsame51j20a/tcc_u2213.h
+index e1da718..5c3aab9 100644
+--- a/include/hw/mchp/gen/atsame51j20a/tcc_u2213.h
++++ b/include/hw/mchp/gen/atsame51j20a/tcc_u2213.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/tcc_u2213.yaml (sha1 22eef6d3d8a5)
++ * Overlay: overlays/tcc_u2213.yaml (sha1 ae0e697bd41b)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -97,8 +97,9 @@ static const MchpRegInfo atsame51j20a_tcc_regs[] = {
+     {
+         .name = "STATUS", .offset = 0x30, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000001, .impl = 0x3F3FFFBF,
+-        .wmask = 0x3030FF10, .w1c = 0x000F00AC,
+-        .syncbusy = 0x00000008 /* SYNCBUSY */, .flags = MCHP_F_HOOK_PRE_READ,
++        .wmask = 0x30300010, .w1c = 0x000FF0AC,
++        .syncbusy = 0x00000008 /* SYNCBUSY */,
++        .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "COUNT", .offset = 0x34, .size = 4, .count = 1, .stride = 4,
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h b/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
+index 8a2d8eb..a0b7710 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/tcc_u2213.yaml (sha1 22eef6d3d8a5)
++ * Overlay: overlays/tcc_u2213.yaml (sha1 ae0e697bd41b)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -97,8 +97,9 @@ static const MchpRegInfo pic32cm1216mc00048_tcc_regs[] = {
+     {
+         .name = "STATUS", .offset = 0x30, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000001, .impl = 0x0F0FFFBF,
+-        .wmask = 0x0000FF10, .w1c = 0x000F00AC,
+-        .syncbusy = 0x00000008 /* SYNCBUSY */, .flags = MCHP_F_HOOK_PRE_READ,
++        .wmask = 0x00000010, .w1c = 0x000FF0AC,
++        .syncbusy = 0x00000008 /* SYNCBUSY */,
++        .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "COUNT", .offset = 0x34, .size = 4, .count = 1, .stride = 4,
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h b/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
+index 2fb6cfc..ead0c43 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/tcc_u2213.yaml (sha1 22eef6d3d8a5)
++ * Overlay: overlays/tcc_u2213.yaml (sha1 ae0e697bd41b)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -97,8 +97,9 @@ static const MchpRegInfo pic32cm5164jh01100_tcc_regs[] = {
+     {
+         .name = "STATUS", .offset = 0x30, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000001, .impl = 0x0F0FFFAF,
+-        .wmask = 0x0000FF00, .w1c = 0x000F00AC,
+-        .syncbusy = 0x00000008 /* SYNCBUSY */, .flags = MCHP_F_HOOK_PRE_READ,
++        .wmask = 0x00000000, .w1c = 0x000FF0AC,
++        .syncbusy = 0x00000008 /* SYNCBUSY */,
++        .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "COUNT", .offset = 0x34, .size = 4, .count = 1, .stride = 4,
+diff --git a/include/hw/mchp/gen/tcc_u2213.h b/include/hw/mchp/gen/tcc_u2213.h
+index 7e42c14..fb0f7cd 100644
+--- a/include/hw/mchp/gen/tcc_u2213.h
++++ b/include/hw/mchp/gen/tcc_u2213.h
+@@ -11,7 +11,7 @@
+  * Do not edit.
+  * Timer Counter for Control Applications
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * Overlay: overlays/tcc_u2213.yaml (sha1 22eef6d3d8a5)
++ * Overlay: overlays/tcc_u2213.yaml (sha1 ae0e697bd41b)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/timer/mchp_tcc.h b/include/hw/timer/mchp_tcc.h
+index fdfdfd5..b13b039 100644
+--- a/include/hw/timer/mchp_tcc.h
++++ b/include/hw/timer/mchp_tcc.h
+@@ -9,6 +9,8 @@
+  *   "ovf-event", "trg-event", "cnt-event", "mc-event"[4]   out: a pulse per
+  *                  event with its EVCTRL output enable set
+  *   "ev-event-in"[2]       in: the event inputs TCCx_EV0 and TCCx_EV1
++ *   "mc-event-in"[4]       in: the event inputs TCCx_MC0..3 (MC0 and MC1
++ *                          are the recoverable faults A and B)
+  *   "ev-event-busy"[2]     out: 1 while the TCC cannot take events
+  *   "pad-wo"[8]            out: waveform output WO[x] (0 or 1)
+  *   "pad-wo-active"[8]     in: 1 while a pad is muxed to WO[x]
+@@ -29,6 +31,7 @@
+ #define MCHP_TCC_CNT_EVENT "cnt-event"
+ #define MCHP_TCC_MC_EVENT "mc-event"
+ #define MCHP_TCC_EV_EVENT_IN "ev-event-in"
++#define MCHP_TCC_MC_EVENT_IN "mc-event-in"
+ #define MCHP_TCC_EV_BUSY "ev-event-busy"
+ #define MCHP_TCC_PAD_WO "pad-wo"
+ #define MCHP_TCC_PAD_WO_ACTIVE "pad-wo-active"
+diff --git a/tests/qtest/pic32cm-tcc-test.c b/tests/qtest/pic32cm-tcc-test.c
+index 14c9bef..e472d80 100644
+--- a/tests/qtest/pic32cm-tcc-test.c
++++ b/tests/qtest/pic32cm-tcc-test.c
+@@ -7,7 +7,8 @@
+  * GCLK0 runs at 4 MHz out of reset (OSC48M / 12); with the /1024
+  * prescaler a TCC tick is 256 us. Virtual time is stepped explicitly.
+  * Behaviour the data sheet leaves open follows PIC32CM MC00 silicon
+- * (firmware/hello/tests/tccprobe.c, tcc.c, tccprobe2-5.c and tccwave.c).
++ * (firmware/hello/tests/tccprobe.c, tcc.c, tccprobe2-9.c, tccwave.c and
++ * tccfault.c).
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -30,6 +31,7 @@
+ #define R_CTRLBCLR      0x04
+ #define R_CTRLBSET      0x05
+ #define R_SYNCBUSY      0x08
++#define R_FCTRLA        0x0C
+ #define R_WEXCTRL       0x14
+ #define R_DRVCTRL       0x18
+ #define R_EVCTRL        0x20
+@@ -77,6 +79,27 @@
+ #define PGV(n)          BIT(8 + (n))
+ #define SB_WAVE         BIT(6)
+ 
++#define FSRC            1               /* FCTRLA.SRC = ENABLE */
++#define FKEEP           BIT(3)
++#define FQUAL           BIT(4)
++#define FBLANK_RISE     (1 << 5)
++#define FRESTART        BIT(7)
++#define FHALT_HW        (1 << 8)
++#define FHALT_SW        (2 << 8)
++#define FCHSEL(n)       ((n) << 10)
++#define FCAPT           (1 << 12)
++#define FBLANKVAL(n)    ((n) << 16)
++#define FFILTERVAL(n)   ((n) << 24)
++#define EVACT0_FAULT    7
++#define TCEI0           BIT(14)
++#define MCEI0           BIT(16)
++#define CPTEN(n)        BIT(24 + (n))
++#define FAULTAIN        BIT(8)
++#define FAULT0IN        BIT(10)
++#define FAULTA          BIT(12)
++#define FAULT0          BIT(14)
++#define TCC0_PATH       "/machine/soc/tcc0"
++
+ #define OVF             BIT(0)
+ #define TRG             BIT(1)
+ #define CNT             BIT(2)
+@@ -668,6 +691,227 @@ static void test_stop_state(void)
+     qtest_quit(qts);
+ }
+ 
++/* The MC0..3 (faults A, B) and EV0/EV1 event inputs of TCC0 */
++static void mc_event(QTestState *qts, int n, int level)
++{
++    qtest_set_irq_in(qts, TCC0_PATH, "mc-event-in", n, level);
++}
++
++static void ev_event(QTestState *qts, int n, int level)
++{
++    qtest_set_irq_in(qts, TCC0_PATH, "ev-event-in", n, level);
++}
++
++static uint32_t tcc_status(QTestState *qts)
++{
++    return qtest_readl(qts, TCC0 + R_STATUS);
++}
++
++/* TCC0 as wave_init(), with FCTRLA and EVCTRL, enabled */
++static QTestState *fault_init(uint32_t ctrla, uint32_t fctrla,
++                              uint32_t evctrl, uint32_t drvctrl)
++{
++    QTestState *qts = wave_init(NPWM, 0);
++
++    qtest_writel(qts, TCC0 + R_CTRLA, ctrla);
++    qtest_writel(qts, TCC0 + R_FCTRLA, fctrla);
++    qtest_writel(qts, TCC0 + R_EVCTRL, evctrl);
++    qtest_writel(qts, TCC0 + R_DRVCTRL, drvctrl);
++    qtest_writel(qts, TCC0 + R_INTFLAG, 0xFFFFFFFF);
++    wave_enable(qts, ctrla);
++    return qts;
++}
++
++/*
++ * Fault A clamps channel 0 (WO0 and WO4, ahead of the output matrix)
++ * while MC0 is high; WO1 goes on. Without EVCTRL.MCEI0 it does nothing
++ */
++static void test_fault_clamp(void)
++{
++    QTestState *qts = fault_init(0, FSRC, MCEI0, 0);
++
++    wave_tick(qts, 5);
++    g_assert_cmphex(wo(qts) & 0x13, ==, 0x13);
++    mc_event(qts, 0, 1);
++    g_assert_cmphex(wo(qts) & 0x13, ==, 0x02);
++    g_assert_cmphex(tcc_status(qts) & (FAULTAIN | FAULTA), ==,
++                    FAULTAIN | FAULTA);
++    g_assert_cmphex(flags(qts) & FAULTA, ==, FAULTA);
++    g_assert_cmphex(tcc_status(qts) & BIT(24), ==, BIT(24));   /* CMP0 */
++    wave_tick(qts, 10);
++    mc_event(qts, 0, 0);
++    g_assert_cmphex(wo(qts) & 0x13, ==, 0x13);
++    g_assert_cmphex(tcc_status(qts) & (FAULTAIN | FAULTA), ==, 0);
++    qtest_quit(qts);
++
++    qts = fault_init(0, FSRC, 0, 0);
++    wave_tick(qts, 5);
++    mc_event(qts, 0, 1);
++    g_assert_cmphex(wo(qts) & 0x13, ==, 0x13);
++    g_assert_cmphex(flags(qts) & FAULTA, ==, 0);
++    qtest_quit(qts);
++}
++
++/* KEEP: clamped (and STATUS.FAULTA set) to the start of the next cycle */
++static void test_fault_keep(void)
++{
++    QTestState *qts = fault_init(0, FSRC | FKEEP, MCEI0, 0);
++
++    wave_tick(qts, 5);
++    mc_event(qts, 0, 1);
++    wave_tick(qts, 10);
++    mc_event(qts, 0, 0);
++    g_assert_cmphex(wo(qts) & 1, ==, 0);
++    wave_tick(qts, 99);
++    g_assert_cmphex(tcc_status(qts) & FAULTA, ==, FAULTA);
++    wave_tick(qts, 102);                    /* CMP0 rose at 101 */
++    g_assert_cmphex(wo(qts) & 1, ==, 1);
++    g_assert_cmphex(tcc_status(qts) & FAULTA, ==, 0);
++    qtest_quit(qts);
++}
++
++/* QUAL: a fault while channel 0's waveform is low is ignored */
++static void test_fault_qual(void)
++{
++    QTestState *qts = fault_init(0, FSRC | FQUAL, MCEI0, 0);
++
++    wave_tick(qts, 30);                     /* WO0 low from 21 */
++    mc_event(qts, 0, 1);
++    g_assert_cmphex(tcc_status(qts) & (FAULTAIN | FAULTA), ==, 0);
++    g_assert_cmphex(flags(qts) & FAULTA, ==, 0);
++    wave_tick(qts, 105);                    /* high again: it acts */
++    g_assert_cmphex(tcc_status(qts) & FAULTA, ==, FAULTA);
++    g_assert_cmphex(wo(qts) & 1, ==, 0);
++    qtest_quit(qts);
++}
++
++/* RESTART: the counter restarts at the fault, without an output glitch */
++static void test_fault_restart(void)
++{
++    QTestState *qts = fault_init(0, FSRC | FRESTART, MCEI0, 0);
++
++    wave_tick(qts, 30);
++    mc_event(qts, 0, 1);
++    g_assert_cmpuint(readsync(qts), ==, 0);
++    g_assert_cmphex(flags(qts) & TRG, ==, TRG);
++    g_assert_cmphex(wo(qts) & 0x3, ==, 0x2);    /* WO1 (CC1 40) stays */
++    wave_tick(qts, 35);
++    mc_event(qts, 0, 0);
++    g_assert_cmpuint(readsync(qts), ==, 5);
++    g_assert_cmphex(wo(qts) & 0x3, ==, 0x3);
++    qtest_quit(qts);
++}
++
++/*
++ * HALT = HW holds the counter while the fault lasts; HALT = SW until
++ * software clears STATUS.FAULTA (after the fault)
++ */
++static void test_fault_halt(void)
++{
++    QTestState *qts = fault_init(0, FSRC | FHALT_HW, MCEI0, 0);
++
++    wave_tick(qts, 5);
++    mc_event(qts, 0, 1);
++    wave_tick(qts, 15);
++    mc_event(qts, 0, 0);
++    wave_tick(qts, 25);
++    g_assert_cmpuint(readsync(qts), ==, 15);
++    qtest_quit(qts);
++
++    qts = fault_init(0, FSRC | FHALT_SW, MCEI0, 0);
++    wave_tick(qts, 5);
++    mc_event(qts, 0, 1);
++    wave_tick(qts, 15);
++    mc_event(qts, 0, 0);
++    g_assert_cmphex(wo(qts) & 1, ==, 1);        /* released, held */
++    wave_tick(qts, 25);
++    g_assert_cmpuint(readsync(qts), ==, 5);
++    g_assert_cmphex(tcc_status(qts) & FAULTA, ==, FAULTA);
++    qtest_writel(qts, TCC0 + R_STATUS, FAULTA);
++    g_assert_cmphex(tcc_status(qts) & FAULTA, ==, 0);
++    wave_tick(qts, 35);
++    g_assert_cmpuint(readsync(qts), ==, 15);
++    qtest_quit(qts);
++}
++
++/*
++ * BLANK = RISE for 10 cycles ignores a fault just after WO0 rises;
++ * FILTERVAL 4 (and the synchronizer's 2 cycles) loses a 3-cycle pulse
++ * and delays a longer one
++ */
++static void test_fault_blank_filter(void)
++{
++    QTestState *qts = fault_init(0, FSRC | FBLANK_RISE | FBLANKVAL(10),
++                                 MCEI0, 0);
++
++    wave_tick(qts, 3);                      /* WO0 rose at 1 */
++    mc_event(qts, 0, 1);
++    wave_tick(qts, 6);
++    mc_event(qts, 0, 0);
++    g_assert_cmphex(flags(qts) & FAULTA, ==, 0);
++    qtest_quit(qts);
++
++    qts = fault_init(0, FSRC | FFILTERVAL(4), MCEI0, 0);
++    wave_tick(qts, 5);
++    mc_event(qts, 0, 1);
++    wave_tick(qts, 8);
++    mc_event(qts, 0, 0);
++    wave_tick(qts, 10);
++    g_assert_cmphex(flags(qts) & FAULTA, ==, 0);
++    mc_event(qts, 0, 1);
++    wave_tick(qts, 15);
++    g_assert_cmphex(wo(qts) & 1, ==, 1);
++    wave_tick(qts, 17);
++    g_assert_cmphex(wo(qts) & 1, ==, 0);
++    qtest_quit(qts);
++}
++
++/* CAPTURE = CAPT, CHSEL 2: COUNT into CC2, a CPTEN2 channel */
++static void test_fault_capture(void)
++{
++    QTestState *qts = fault_init(CPTEN(2), FSRC | FCAPT | FCHSEL(2),
++                                 MCEI0, 0);
++
++    wave_tick(qts, 12);
++    mc_event(qts, 0, 1);
++    g_assert_cmpuint(qtest_readl(qts, TCC0 + R_CC(2)), ==, 12);
++    g_assert_cmphex(flags(qts) & MC(2), ==, MC(2));
++    qtest_quit(qts);
++}
++
++/*
++ * EV0 with the FAULT action: the counter holds and the outputs take their
++ * non-recoverable state until STATUS.FAULT0 is cleared with EV0 gone
++ */
++static void test_fault_nonrecoverable(void)
++{
++    QTestState *qts = fault_init(0, 0, EVACT0_FAULT | TCEI0,
++                                 NRE(0) | NRV(0) | NRE(1));
++    uint64_t h0, l0, h1, l1;
++
++    wave_tick(qts, 10);
++    ev_event(qts, 0, 1);
++    g_assert_cmphex(wo(qts) & 0x3, ==, 0x1);
++    g_assert_cmphex(tcc_status(qts) & (FAULT0IN | FAULT0), ==,
++                    FAULT0IN | FAULT0);
++    g_assert_cmphex(flags(qts) & FAULT0, ==, FAULT0);
++    pa_stats(qts, 18, &h0, &l0);            /* WO2: no NRE2, floating */
++    wave_tick(qts, 20);
++    pa_stats(qts, 18, &h1, &l1);
++    g_assert_cmpuint(h1 - h0 + l1 - l0, ==, 0);
++    g_assert_cmpuint(readsync(qts), ==, 10);
++    qtest_writel(qts, TCC0 + R_STATUS, FAULT0);     /* EV0 still high */
++    g_assert_cmphex(tcc_status(qts) & FAULT0, ==, FAULT0);
++    ev_event(qts, 0, 0);
++    g_assert_cmphex(tcc_status(qts) & (FAULT0IN | FAULT0), ==, FAULT0);
++    qtest_writel(qts, TCC0 + R_STATUS, FAULT0);
++    g_assert_cmphex(tcc_status(qts) & FAULT0, ==, 0);
++    g_assert_cmphex(wo(qts) & 0xF, ==, 0xF);    /* the waveform, COUNT 10 */
++    wave_tick(qts, 30);
++    g_assert_cmpuint(readsync(qts), ==, 20);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_test_init(&argc, &argv, NULL);
+@@ -692,6 +936,15 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-tcc/ramp", test_ramp);
+     qtest_add_func("pic32cm-tcc/dither", test_dither);
+     qtest_add_func("pic32cm-tcc/stop-state", test_stop_state);
++    qtest_add_func("pic32cm-tcc/fault-clamp", test_fault_clamp);
++    qtest_add_func("pic32cm-tcc/fault-keep", test_fault_keep);
++    qtest_add_func("pic32cm-tcc/fault-qual", test_fault_qual);
++    qtest_add_func("pic32cm-tcc/fault-restart", test_fault_restart);
++    qtest_add_func("pic32cm-tcc/fault-halt", test_fault_halt);
++    qtest_add_func("pic32cm-tcc/fault-blank-filter", test_fault_blank_filter);
++    qtest_add_func("pic32cm-tcc/fault-capture", test_fault_capture);
++    qtest_add_func("pic32cm-tcc/fault-nonrecoverable",
++                   test_fault_nonrecoverable);
+ 
+     return g_test_run();
+ }
+-- 
+2.53.0.windows.2
+

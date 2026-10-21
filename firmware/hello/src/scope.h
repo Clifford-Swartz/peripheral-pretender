@@ -89,6 +89,52 @@ SCOPE_RAM static unsigned int scope_record(volatile const uint32_t *in,
     return n;
 }
 
+/* A register write at a time: @val to *@reg @t cycles after the reference */
+typedef struct {
+    uint32_t t;
+    volatile uint32_t *reg;
+    uint32_t val;
+} ScopeStim;
+
+/*
+ * scope_record(), also making the @n writes of @stim (in time order) as
+ * their times come: a stimulus, such as a pull resistor turned by
+ * PORT.OUTSET/OUTCLR, timed against the edges it causes
+ */
+SCOPE_RAM static unsigned int scope_record_stim(volatile const uint32_t *in,
+                                                uint32_t mask, uint32_t t0,
+                                                uint32_t cyc, ScopeEdge *e,
+                                                unsigned int max,
+                                                const ScopeStim *stim,
+                                                unsigned int n)
+{
+    uint32_t last = *in & mask, v, t;
+    unsigned int k = 0, s = 0;
+
+    e[k].t = (t0 - SysTick->VAL) & 0x00FFFFFFU;
+    e[k++].v = last;
+    for (;;) {
+        v = *in & mask;
+        t = (t0 - SysTick->VAL) & 0x00FFFFFFU;
+        if (s < n && t >= stim[s].t) {
+            *stim[s].reg = stim[s].val;
+            s++;
+        }
+        if (v != last) {
+            e[k].t = t;
+            e[k].v = v;
+            last = v;
+            if (++k == max) {
+                break;
+            }
+        }
+        if (t > cyc) {
+            break;
+        }
+    }
+    return k;
+}
+
 /* Turn pin @pin of group @g's pull resistor up (1) or down (0) */
 static inline void scope_pull(unsigned int g, unsigned int pin, int up)
 {
