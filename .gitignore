@@ -16,3 +16,5 @@ examples/**/*.X/nbproject/private/
 # local tool state
 .claude/
 MPLABXLog.xml
+# desk boards for tools.periph (probe serials, ports)
+.pp-desk.json

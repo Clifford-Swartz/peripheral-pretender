@@ -162,21 +162,23 @@ def test_transcript_matches_silicon(mc00, app):
     assert result.uart == silicon.replace("\r\n", "\n")
 
 
-@pytest.mark.parametrize("app", ["ac", "adc", "dac", "dmac", "freqm", "sdadc",
-                                 "tsens"])
-def test_analog_checks_pass(mc00, app):
-    """The analog applications check themselves against what silicon did
-    (<app>-silicon.txt in GOLDEN: codes follow the supply and the open
-    inputs, so no byte golden); the twin passes the same checks."""
+# Checked applications: <app>-silicon.txt is what silicon printed passing
+# them (py -m tools.periph check mc00 <app> puts it there)
+CHECKED = sorted(p.name[:-len("-silicon.txt")]
+                 for p in GOLDEN.glob("*-silicon.txt"))
+
+
+@pytest.mark.parametrize("app", CHECKED)
+def test_checked_apps_pass(mc00, app):
+    """The checked applications test themselves against what silicon did
+    (values that follow the part, its supply or its temperature within a
+    range, so no byte golden); the twin passes the same checks, in
+    deterministic time (they time things with SysTick)."""
     elf = BUILD / f"{app}.elf"
     if not elf.is_file():
         pytest.skip(f"{elf.relative_to(ROOT)} not built (make -C firmware/hello "
                     f"BOARD=pic32cm_mc00_cpro APP={app})")
-    assert (GOLDEN / f"{app}-silicon.txt").is_file()
-    # ac, freqm and tsens time what they check with SysTick:
-    # deterministic time
-    timed = app in ("ac", "dmac", "freqm", "tsens")
     result = run(RunOptions(elf, machine=MACHINE, timeout_s=60,
-                            icount_shift=5 if timed else None))
+                            icount_shift=5))
     assert result.firmware_exit == 0, result.uart
     assert "FAIL" not in result.uart, result.uart

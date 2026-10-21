@@ -13,11 +13,6 @@ changing or reusing a model. When you learn something new against silicon, add i
 | Cortex-M0+ core and MPU | | [core.md](core.md) |
 | SAM D5x: DMAC, USB (with a host), QSPI, DAC, EVSYS, clocks, ADC | U2503, U2222, U2008, U2502, U2504, ... | [samd5x.md](samd5x.md) |
 
-General method for a new model, in this order:
-
-1. Read the datasheet chapter (Microchip docs MCP) and the existing overlay for the IP.
-2. Write a probe (`firmware/hello/tests/<ip>probe.c`) for every behaviour you are unsure of and
-   run it on silicon: `py -m harness.hw_run <elf> --allow-program`.
-3. Write the model in pp-qemu (`hw/<class>/mchp_<ip>.c`), event-driven on
-   `QEMU_CLOCK_VIRTUAL`, with no per-tick polling.
-4. Write a qtest, and a checked firmware test whose silicon transcript becomes a golden.
+The procedure for a new model, or a gap in one, is [../model-peripheral.md](../model-peripheral.md):
+research, probe the silicon, model, checked app and golden, qtest, hand-back. `py -m tools.periph`
+does the mechanical steps.

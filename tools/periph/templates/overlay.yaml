@@ -1,0 +1,11 @@
+# Copyright (c) $year Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for $MODULE $IP. Fill in each register's rules
+# (generator/README.md lists the keys), then `py -m tools.periph regen`.
+ip: $MODULE
+id: $IP
+versions: []
+references:
+  - "data sheet chapter ($MODULE); docs/research/peripherals/$module-$ip.md"
+registers:
+$OVERLAY_REGS

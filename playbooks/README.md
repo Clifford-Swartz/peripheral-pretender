@@ -24,6 +24,7 @@ guesses, the playbook is missing something, so fix the playbook, not just the bo
 | File | What it is |
 |---|---|
 | [onboard-board.md](onboard-board.md) | The procedure: phases, steps, gates |
+| [model-peripheral.md](model-peripheral.md) | Modelling one peripheral against the desk silicon: probe, model, checked app, golden (`py -m tools.periph`) |
 | [oracles.md](oracles.md) | What to believe when sources disagree: silicon, simulator, datasheet, ATDF |
 | [peripherals/](peripherals/) | Lessons per peripheral model, learned against silicon |
 | [click-boards.md](click-boards.md) | Adding a Click board or an adapter |
@@ -66,6 +67,7 @@ security bit or anything else that cannot be undone.
 | Tool | For |
 |---|---|
 | `generator/atdf2qemu.py` | Chip: ATDF + overlays to QEMU tables |
+| `py -m tools.periph` | A peripheral model: scaffold, probe on silicon, diff with the twin, checked app and golden, gate, patch export |
 | `py -m tools.pp run` | Run an ELF that prints `PP:EXIT` (test firmware) |
 | `py -m tools.pp_accept build / run / suite` | Microchip's examples: build with XC32, play scenarios, check expectations |
 | `py -m harness.hw_run` | Silicon: program, reset, capture the VCOM |
