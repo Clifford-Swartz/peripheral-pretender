@@ -1,0 +1,27 @@
+PP wdt: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+masks config_ff=0xFF config_00=0x00 ewctrl_ff=0x0F sb_wen=0x04 wen_us=3342 ctrla_wen=0x04 intenset_ff=0x01 intenclr_ff=0x00 intflag_ff=0x00 clear_rd=0x00 ok
+sync sb_en=0x02 ctrla_now=0x02 en_us=3387 sb_clr=0x10 clr_us=2987 clr2_write_us=4 clr2_us=2985 off_us=2982 sb_dclr=0x10 dclr_us=2987 ok
+protect config=0x0B ewctrl=0x0A ctrla_en_wen=0x02 ctrla_off_wen=0x00 ctrla_both=0x06 ctrla_off=0x04 ok
+ew_normal en_us=3087 ew_us=65873 flag_after_clear=0x01 ew2_us=66799 ok
+restarts reenable_ew_us=33892 clear_ew_us=34784 ok
+irq irqs=0x1 irq_us=34512 irqs2=0x2 irq2_us=34198 ok
+window ew_us=66244 ew2_us=65957 ok
+timeout armed
+PP wdt: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+timeout reset rcause=0x20 after_us=34602 seen=0x01 ctrla=0x00 ok
+ew_late armed
+PP wdt: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+ew_late reset rcause=0x20 after_us=18715 seen=0x00 ctrla=0x00 ok
+badkey_off armed
+PP wdt: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+badkey_off reset rcause=0x20 after_us=3497 seen=0x00 ctrla=0x00 ok
+badkey_on armed
+PP wdt: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+badkey_on reset rcause=0x20 after_us=2539 seen=0x00 ctrla=0x00 ok
+window_early armed
+PP wdt: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+window_early reset rcause=0x20 after_us=2337 seen=0x00 ctrla=0x00 ok
+window_timeout armed
+PP wdt: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+window_timeout reset rcause=0x20 after_us=66615 seen=0x01 ctrla=0x00 ok
+PP:EXIT 0

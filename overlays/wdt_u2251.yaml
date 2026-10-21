@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
 #
-# Behavior overlay for WDT U2251 (IRQ 1). Timeouts are out of scope in v0.
+# Behavior overlay for WDT U2251 (IRQ 1). The time-out, window mode, early
+# warning and sync delays are in hw/misc/mchp_sysctrl.c
+# (docs/research/peripherals/wdt-u2251.md).
 ip: WDT
 id: U2251
 versions: ["1.0.1", "1.1.0"]   # 1.1.0: SAM E51 (fuses in USER_WORD_1: its profile)
@@ -12,7 +14,7 @@ registers:
     pac_protected: true
     enable_protected: [WEN]       # WEN writable only while disabled
     sync: {ENABLE: ENABLE, WEN: WEN, ALWAYSON: ALWAYSON}
-    hooks: [post_write]           # ALWAYSON is set-only; LOG_UNIMP when enabled
+    hooks: [post_write]           # sync, ALWAYSON set-only, counting
   CONFIG: {pac_protected: true, enable_protected: all}   # also while ALWAYSON
   EWCTRL: {pac_protected: true, enable_protected: all}
   INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
@@ -20,10 +22,11 @@ registers:
   INTFLAG:
     w1c: [EW]
     irq_source: {enable: INTENSET}
-  SYNCBUSY: {dynamic: true}
+  SYNCBUSY: {dynamic: true}       # busy until the sync edge
   CLEAR:
     sync: CLEAR
     hooks: [post_write]           # 0xA5 restarts the period; other values reset
+                                  # (also while disabled)
 reset_from:
   CTRLA.ENABLE: USER_FUSES.USER_WORD_0.WDT_ENABLE
   CTRLA.ALWAYSON: USER_FUSES.USER_WORD_0.WDT_ALWAYSON

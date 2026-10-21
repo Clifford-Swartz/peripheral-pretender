@@ -1,0 +1,804 @@
+From 210d55e2ec4e70693b41218bb1a7b4c943d9b51b Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 21 Oct 2026 08:39:12 -0700
+Subject: [PATCH] hw/misc: WDT time-out, window mode and early warning (U2251)
+
+The watchdog counts CLK_WDT_OSC, 1.024 kHz, with the timings of a
+PIC32CM MC00 measured by firmware/hello APP=wdtprobe: CTRLA changes
+synchronize for 3 to 4 clocks and CLEAR for 2 to 3, by the write's
+phase, with SYNCBUSY meanwhile; the count starts one clock before an
+enable completes and restarts when a CLEAR completes; early warning
+after EWOFFSET clocks (only below PER) or at the start of the open
+window; the reset after PER or WINDOW + PER clocks. A wrong CLEAR key
+resets when its sync completes, also while the WDT is disabled (one
+clock later), and so does a clear in the closed window. Reserved PER,
+WINDOW and EWOFFSET values count as 16384 clocks, as PER 0xC did on
+silicon. ALWAYSON now survives system resets and leaves WEN writable.
+
+Resets come from a timer, so they no longer wait for the CPU to leave
+the access that asked for them. qtest pic32cm-wdt-test; the JH01
+reset-cause test steps past the CLEAR sync.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst         |  10 +-
+ hw/misc/mchp_sysctrl.c                        | 311 ++++++++++++++++--
+ include/hw/mchp/gen/atsame51j20a/wdt_u2251.h  |   2 +-
+ .../mchp/gen/pic32cm1216mc00048/wdt_u2251.h   |   2 +-
+ .../mchp/gen/pic32cm5164jh01100/wdt_u2251.h   |   2 +-
+ include/hw/mchp/gen/wdt_u2251.h               |   2 +-
+ include/hw/misc/mchp_sysctrl.h                |   6 +-
+ tests/qtest/meson.build                       |   2 +-
+ tests/qtest/pic32cm-jh-test.c                 |   6 +-
+ tests/qtest/pic32cm-wdt-test.c                | 240 ++++++++++++++
+ 10 files changed, 547 insertions(+), 36 deletions(-)
+ create mode 100644 tests/qtest/pic32cm-wdt-test.c
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index 6864dae..bd09538 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -42,8 +42,12 @@ Supported devices
+ - RSTC: RCAUSE is POR at power-up, SYST after AIRCR.SYSRESETREQ, WDT after
+   a watchdog reset and EXT after any other reset (for example
+   ``system_reset`` in the monitor); SRAM keeps its contents across them
+-- WDT: CTRLA, CONFIG and EWCTRL loaded from the user row; a wrong CLEAR key
+-  resets the system
++- WDT: time-out, window mode and early warning on the 1.024 kHz
++  CLK_WDT_OSC, with the synchronization delays of a PIC32CM MC00 (3 to 4
++  clocks); CTRLA, CONFIG and EWCTRL loaded from the user row. A wrong
++  CLEAR key (also while the WDT is disabled) or a clear in the closed
++  window resets the system. Reserved PER, WINDOW and EWOFFSET values count
++  as 16384 clocks. ALWAYSON holds through system resets.
+ - PM: SLEEPCFG and STDBYCFG
+ - PAC: WRCTRL bookkeeping in STATUSx with the data sheet's error rules
+ - DSU: device ID (revision set by the SoC property ``silicon-rev``), the
+@@ -143,7 +147,7 @@ Missing devices
+ - TC capture, waveform outputs on pins; the JH01 RTC (03608). TCC faults,
+   dead time, pattern generation, dithering, capture, circular buffers and
+   the DSCRITICAL waveform.
+-- Watchdog time-out, PAC write protection, flash programming through
++- PAC write protection, flash programming through
+   NVMCTRL, DSU CRC32 and chip erase, sleep modes and every other
+   peripheral behaviour (CCL, PDEC, CAN, ...). ADC
+   sequencing and event inputs, DAC START events.
+diff --git a/hw/misc/mchp_sysctrl.c b/hw/misc/mchp_sysctrl.c
+index 2fdb15f..f4ace92 100644
+--- a/hw/misc/mchp_sysctrl.c
++++ b/hw/misc/mchp_sysctrl.c
+@@ -13,7 +13,9 @@
+ 
+ #include "qemu/osdep.h"
+ #include "qapi/error.h"
++#include "qemu/host-utils.h"
+ #include "qemu/log.h"
++#include "qemu/timer.h"
+ #include "hw/core/irq.h"
+ #include "hw/core/qdev-properties.h"
+ #include "hw/mchp/gen/divas_u2258.h"
+@@ -224,26 +226,213 @@ static void mchp_rstc_class_init(ObjectClass *klass, const void *data)
+ 
+ /* WDT */
+ 
++/*
++ * The WDT counts CLK_WDT_OSC, the 1.024 kHz output of OSCULP32K; this
++ * model puts its edges at whole multiples of 1/1024 s of virtual time and
++ * counts in edge numbers. Timings are the PIC32CM MC00's
++ * (firmware/hello APP=wdtprobe, docs/research/peripherals/wdt-u2251.md):
++ *
++ *   - a write that changes CTRLA.ENABLE, WEN or ALWAYSON synchronizes
++ *     until the first edge at least 3 T - T/32 after it, a CLEAR write
++ *     until the third edge after it; SYNCBUSY meanwhile;
++ *   - the count starts one edge before an enable completes, and restarts
++ *     when a CLEAR with the key completes;
++ *   - early warning after EWOFFSET clocks, only when below PER (normal
++ *     mode), or after WINDOW clocks (window mode); the reset after PER
++ *     (normal) or WINDOW + PER clocks (window);
++ *   - a CLEAR with another value resets when it completes, one edge later
++ *     while the WDT is disabled (the data sheet says nothing about a
++ *     disabled WDT); so does the key in the closed window;
++ *   - reserved PER, WINDOW and EWOFFSET values count as 0xB (16384);
++ *   - ALWAYSON holds until power-on: it survives system resets, keeps
++ *     ENABLE, and leaves WEN writable (DS 22.5.5.1; the ALWAYSON bit
++ *     description says CTRLA is read-only). Not checked on silicon.
++ */
++
++#define MCHP_WDT_HZ             1024
++#define MCHP_WDT_NONE           INT64_MAX
++#define MCHP_WDT_ON \
++    (R_MCHP_WDT_CTRLA_ENABLE_MASK | R_MCHP_WDT_CTRLA_ALWAYSON_MASK)
++#define MCHP_WDT_CTRLA_SYNCED \
++    (MCHP_WDT_ON | R_MCHP_WDT_CTRLA_WEN_MASK)
++
+ OBJECT_DECLARE_SIMPLE_TYPE(MchpWdtState, MCHP_WDT)
+ 
+ struct MchpWdtState {
+     MchpRegBlock parent_obj;
+ 
+     qemu_irq system_reset;
++    QEMUTimer *timer;
++    bool alwayson;          /* set until power-on */
++    bool running;           /* counting: ENABLE or ALWAYSON, synchronized */
++    bool window;            /* WEN, synchronized */
++    bool ew_armed;          /* this period's early warning is still due */
++    uint8_t ctrla_busy;     /* SYNCBUSY bits of the CTRLA sync */
++    uint8_t clear_value;    /* the CLEAR write being synchronized */
++    int64_t origin;         /* edge where the count started */
++    int64_t ctrla_done;     /* edge where the CTRLA sync completes */
++    int64_t clear_done;     /* edge where the CLEAR sync completes */
++    int64_t reset_at;       /* edge of a pending system reset */
+ };
+ 
+-#define MCHP_WDT_ON \
+-    (R_MCHP_WDT_CTRLA_ENABLE_MASK | R_MCHP_WDT_CTRLA_ALWAYSON_MASK)
+-
+ static bool mchp_wdt_is_enabled(MchpRegFile *rf)
+ {
+     return mchp_regfile_peek(rf, A_MCHP_WDT_CTRLA, 1) & MCHP_WDT_ON;
+ }
+ 
+-static void mchp_wdt_report_enabled(MchpRegBlock *s)
++static int64_t mchp_wdt_edge_ns(int64_t n)
++{
++    return muldiv64(n, NANOSECONDS_PER_SECOND, MCHP_WDT_HZ);
++}
++
++/* The first edge at or after @ns */
++static int64_t mchp_wdt_edge_from(int64_t ns)
++{
++    int64_t n = muldiv64(ns, MCHP_WDT_HZ, NANOSECONDS_PER_SECOND);
++
++    return mchp_wdt_edge_ns(n) < ns ? n + 1 : n;
++}
++
++static uint32_t mchp_wdt_cycles(uint32_t field)
++{
++    return 8u << MIN(field, 0xB);
++}
++
++static uint32_t mchp_wdt_config(MchpWdtState *s, bool window)
++{
++    uint32_t config = mchp_reg(MCHP_REGBLOCK(s), A_MCHP_WDT_CONFIG, 1);
++
++    return mchp_wdt_cycles(window ?
++                           FIELD_EX32(config, MCHP_WDT_CONFIG, WINDOW) :
++                           FIELD_EX32(config, MCHP_WDT_CONFIG, PER));
++}
++
++/* The edges of this period's early warning and time-out */
++static void mchp_wdt_deadlines(MchpWdtState *s, int64_t *ew,
++                               int64_t *timeout)
++{
++    uint32_t ewctrl = mchp_reg(MCHP_REGBLOCK(s), A_MCHP_WDT_EWCTRL, 1);
++    uint32_t ewo = mchp_wdt_cycles(FIELD_EX32(ewctrl, MCHP_WDT_EWCTRL,
++                                              EWOFFSET));
++    uint32_t per = mchp_wdt_config(s, false);
++    uint32_t win = mchp_wdt_config(s, true);
++
++    *ew = *timeout = MCHP_WDT_NONE;
++    if (!s->running) {
++        return;
++    }
++    if (s->window) {
++        *ew = s->origin + win;
++        *timeout = s->origin + win + per;
++    } else {
++        *ew = ewo < per ? s->origin + ewo : MCHP_WDT_NONE;
++        *timeout = s->origin + per;
++    }
++    if (!s->ew_armed) {
++        *ew = MCHP_WDT_NONE;
++    }
++}
++
++static void mchp_wdt_ctrla_done(MchpWdtState *s, int64_t n)
++{
++    uint32_t ctrla = mchp_reg(MCHP_REGBLOCK(s), A_MCHP_WDT_CTRLA, 1);
++    bool run = ctrla & MCHP_WDT_ON;
++
++    s->ctrla_done = MCHP_WDT_NONE;
++    s->ctrla_busy = 0;
++    if (run && !s->running) {
++        s->origin = n - 1;
++        s->ew_armed = true;
++    }
++    s->running = run;
++    s->window = ctrla & R_MCHP_WDT_CTRLA_WEN_MASK;
++}
++
++static void mchp_wdt_clear_done(MchpWdtState *s, int64_t n)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++
++    s->clear_done = MCHP_WDT_NONE;
++    if (s->clear_value != MCHP_WDT_CLEAR_CLEAR_KEY) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s.CLEAR: wrong key 0x%02x; system"
++                      " reset\n", rb->name, s->clear_value);
++        s->reset_at = s->running ? n : n + 1;
++    } else if (s->running && s->window &&
++               n < s->origin + mchp_wdt_config(s, true)) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s.CLEAR: cleared in the closed"
++                      " window; system reset\n", rb->name);
++        s->reset_at = n;
++    } else if (s->running) {
++        s->origin = n;
++        s->ew_armed = true;
++    }
++}
++
++/* Run every event due by now, then arm the timer for the next one. */
++static void mchp_wdt_update(MchpWdtState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    for (;;) {
++        int64_t ew, timeout, next;
++
++        mchp_wdt_deadlines(s, &ew, &timeout);
++        next = MIN(MIN(s->ctrla_done, s->clear_done),
++                   MIN(MIN(ew, timeout), s->reset_at));
++        if (next == MCHP_WDT_NONE) {
++            timer_del(s->timer);
++            return;
++        }
++        if (mchp_wdt_edge_ns(next) > now) {
++            timer_mod(s->timer, mchp_wdt_edge_ns(next));
++            return;
++        }
++        if (next == s->ctrla_done) {
++            mchp_wdt_ctrla_done(s, next);
++        } else if (next == s->clear_done) {
++            mchp_wdt_clear_done(s, next);
++        } else if (next == ew) {
++            mchp_reg_set_bits(rb, A_MCHP_WDT_INTFLAG, 1,
++                              R_MCHP_WDT_INTFLAG_EW_MASK);
++            s->ew_armed = false;
++            mchp_regblock_update_irq(rb);
++        } else {
++            /* The time-out, or a reset that a CLEAR asked for */
++            s->running = false;
++            s->ctrla_done = s->clear_done = s->reset_at = MCHP_WDT_NONE;
++            timer_del(s->timer);
++            qemu_irq_pulse(s->system_reset);
++            return;
++        }
++    }
++}
++
++static void mchp_wdt_tick(void *opaque)
+ {
+-    qemu_log_mask(LOG_UNIMP, "%s.CTRLA: watchdog enabled; time-out not"
+-                  " modelled\n", s->name);
++    mchp_wdt_update(MCHP_WDT(opaque));
++}
++
++static uint32_t mchp_wdt_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                                  unsigned idx, uint32_t stored,
++                                  bool side_effects)
++{
++    MchpWdtState *s = MCHP_WDT(rf->opaque);
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    uint32_t busy = 0;
++
++    if (ri->offset != A_MCHP_WDT_SYNCBUSY) {
++        return stored;
++    }
++    if (s->ctrla_done != MCHP_WDT_NONE &&
++        mchp_wdt_edge_ns(s->ctrla_done) > now) {
++        busy |= s->ctrla_busy;
++    }
++    if (s->clear_done != MCHP_WDT_NONE &&
++        mchp_wdt_edge_ns(s->clear_done) > now) {
++        busy |= R_MCHP_WDT_SYNCBUSY_CLEAR_MASK;
++    }
++    return busy;
+ }
+ 
+ static void mchp_wdt_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+@@ -251,57 +440,128 @@ static void mchp_wdt_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+                                 uint32_t written, uint32_t we)
+ {
+     MchpWdtState *s = MCHP_WDT(rf->opaque);
+-    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    int64_t t = mchp_wdt_edge_ns(1);
+     uint32_t val = mchp_regfile_get(rf, ri, idx);
++    uint32_t changed;
++    int64_t n;
+ 
+     switch (ri->offset) {
+     case A_MCHP_WDT_CTRLA:
+-        /* ALWAYSON holds until power-on reset and locks CTRLA (DS 22.6.1) */
+         if (old & R_MCHP_WDT_CTRLA_ALWAYSON_MASK) {
+-            if (val != old) {
+-                qemu_log_mask(LOG_GUEST_ERROR, "%s.CTRLA: read-only while"
+-                              " ALWAYSON is set (ignored)\n", rb->name);
+-                mchp_regfile_set(rf, ri, idx, old);
+-            }
+-        } else if ((val & MCHP_WDT_ON) && !(old & MCHP_WDT_ON)) {
+-            mchp_wdt_report_enabled(rb);
++            val = (old & ~R_MCHP_WDT_CTRLA_WEN_MASK) |
++                  (written & R_MCHP_WDT_CTRLA_WEN_MASK);
++            mchp_regfile_set(rf, ri, idx, val);
++        }
++        if (val & R_MCHP_WDT_CTRLA_ALWAYSON_MASK) {
++            s->alwayson = true;
++        }
++        changed = (old ^ val) & MCHP_WDT_CTRLA_SYNCED;
++        if (!changed) {
++            break;
+         }
++        s->ctrla_busy |= changed & (R_MCHP_WDT_CTRLA_ENABLE_MASK |
++                                    R_MCHP_WDT_CTRLA_WEN_MASK);
++        if (changed & R_MCHP_WDT_CTRLA_ALWAYSON_MASK) {
++            s->ctrla_busy |= R_MCHP_WDT_SYNCBUSY_ALWAYSON_MASK;
++        }
++        s->ctrla_done = mchp_wdt_edge_from(now + 3 * t - t / 32);
++        mchp_wdt_update(s);
+         break;
+     case A_MCHP_WDT_CLEAR:
+-        /* Any value but the key resets the system at once (DS 22.6.8) */
+-        if (mchp_wdt_is_enabled(rf) &&
+-            FIELD_EX32(written, MCHP_WDT_CLEAR, CLEAR) !=
+-            MCHP_WDT_CLEAR_CLEAR_KEY) {
+-            qemu_log_mask(LOG_GUEST_ERROR, "%s.CLEAR: wrong key 0x%" PRIx32
+-                          "; system reset\n", rb->name,
+-                          FIELD_EX32(written, MCHP_WDT_CLEAR, CLEAR));
+-            qemu_irq_pulse(s->system_reset);
++        /* Write-only; a write while one is synchronizing is dropped */
++        mchp_regfile_set(rf, ri, idx, 0);
++        if (s->clear_done != MCHP_WDT_NONE) {
++            break;
+         }
++        n = mchp_wdt_edge_from(now);
++        if (mchp_wdt_edge_ns(n) == now) {
++            n++;
++        }
++        s->clear_value = FIELD_EX32(written, MCHP_WDT_CLEAR, CLEAR);
++        s->clear_done = n + 2;
++        mchp_wdt_update(s);
+         break;
+     }
+ }
+ 
++static void mchp_wdt_reset_hold(MchpRegBlock *rb)
++{
++    MchpWdtState *s = MCHP_WDT(rb);
++
++    timer_del(s->timer);
++    s->running = s->window = s->ew_armed = false;
++    s->ctrla_busy = s->clear_value = 0;
++    s->origin = 0;
++    s->ctrla_done = s->clear_done = s->reset_at = MCHP_WDT_NONE;
++    if (s->alwayson) {
++        mchp_reg_set_bits(rb, A_MCHP_WDT_CTRLA, 1,
++                          R_MCHP_WDT_CTRLA_ALWAYSON_MASK);
++    }
++}
++
++/* Enabled by the user row (or ALWAYSON): counting from the reset */
+ static void mchp_wdt_reset_exit(MchpRegBlock *rb)
+ {
+-    if (mchp_wdt_is_enabled(&rb->rf)) {
+-        mchp_wdt_report_enabled(rb);
++    MchpWdtState *s = MCHP_WDT(rb);
++    uint32_t ctrla = mchp_reg(rb, A_MCHP_WDT_CTRLA, 1);
++
++    if (!(ctrla & MCHP_WDT_ON)) {
++        return;
+     }
++    s->alwayson |= ctrla & R_MCHP_WDT_CTRLA_ALWAYSON_MASK;
++    s->running = true;
++    s->window = ctrla & R_MCHP_WDT_CTRLA_WEN_MASK;
++    s->ew_armed = true;
++    s->origin = mchp_wdt_edge_from(qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
++    mchp_wdt_update(s);
+ }
+ 
+ static void mchp_wdt_init(Object *obj)
+ {
+     MchpWdtState *s = MCHP_WDT(obj);
+ 
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mchp_wdt_tick, s);
+     qdev_init_gpio_out_named(DEVICE(obj), &s->system_reset,
+                              MCHP_WDT_SYSTEM_RESET, 1);
+ }
+ 
++static void mchp_wdt_finalize(Object *obj)
++{
++    timer_free(MCHP_WDT(obj)->timer);
++}
++
++static const VMStateDescription vmstate_mchp_wdt = {
++    .name = TYPE_MCHP_WDT,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpWdtState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_TIMER_PTR(timer, MchpWdtState),
++        VMSTATE_BOOL(alwayson, MchpWdtState),
++        VMSTATE_BOOL(running, MchpWdtState),
++        VMSTATE_BOOL(window, MchpWdtState),
++        VMSTATE_BOOL(ew_armed, MchpWdtState),
++        VMSTATE_UINT8(ctrla_busy, MchpWdtState),
++        VMSTATE_UINT8(clear_value, MchpWdtState),
++        VMSTATE_INT64(origin, MchpWdtState),
++        VMSTATE_INT64(ctrla_done, MchpWdtState),
++        VMSTATE_INT64(clear_done, MchpWdtState),
++        VMSTATE_INT64(reset_at, MchpWdtState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
+ static void mchp_wdt_class_init(ObjectClass *klass, const void *data)
+ {
+     MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
+ 
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_wdt;
++    c->pre_read = mchp_wdt_pre_read;
+     c->post_write = mchp_wdt_post_write;
+     c->is_enabled = mchp_wdt_is_enabled;
++    c->reset_hold = mchp_wdt_reset_hold;
+     c->reset_exit = mchp_wdt_reset_exit;
+     c->log_writes = false;
+ }
+@@ -591,6 +851,7 @@ static const TypeInfo mchp_sysctrl_types[] = {
+         .parent = TYPE_MCHP_REGBLOCK,
+         .instance_size = sizeof(MchpWdtState),
+         .instance_init = mchp_wdt_init,
++        .instance_finalize = mchp_wdt_finalize,
+         .class_init = mchp_wdt_class_init,
+     }, {
+         .name = TYPE_MCHP_PM,
+diff --git a/include/hw/mchp/gen/atsame51j20a/wdt_u2251.h b/include/hw/mchp/gen/atsame51j20a/wdt_u2251.h
+index 6f98c34..e0d254a 100644
+--- a/include/hw/mchp/gen/atsame51j20a/wdt_u2251.h
++++ b/include/hw/mchp/gen/atsame51j20a/wdt_u2251.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/wdt_u2251.yaml (sha1 fce913b2a1aa)
++ * Overlay: overlays/wdt_u2251.yaml (sha1 9746212639a2)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/wdt_u2251.h b/include/hw/mchp/gen/pic32cm1216mc00048/wdt_u2251.h
+index b0b7822..ffa965d 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/wdt_u2251.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/wdt_u2251.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/wdt_u2251.yaml (sha1 fce913b2a1aa)
++ * Overlay: overlays/wdt_u2251.yaml (sha1 9746212639a2)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/wdt_u2251.h b/include/hw/mchp/gen/pic32cm5164jh01100/wdt_u2251.h
+index 9b3d8d9..78e74e5 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/wdt_u2251.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/wdt_u2251.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/wdt_u2251.yaml (sha1 fce913b2a1aa)
++ * Overlay: overlays/wdt_u2251.yaml (sha1 9746212639a2)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/wdt_u2251.h b/include/hw/mchp/gen/wdt_u2251.h
+index cdc5a1c..175ff8a 100644
+--- a/include/hw/mchp/gen/wdt_u2251.h
++++ b/include/hw/mchp/gen/wdt_u2251.h
+@@ -10,7 +10,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * Overlay: overlays/wdt_u2251.yaml (sha1 fce913b2a1aa)
++ * Overlay: overlays/wdt_u2251.yaml (sha1 9746212639a2)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/misc/mchp_sysctrl.h b/include/hw/misc/mchp_sysctrl.h
+index ab44bc4..2230960 100644
+--- a/include/hw/misc/mchp_sysctrl.h
++++ b/include/hw/misc/mchp_sysctrl.h
+@@ -56,8 +56,10 @@
+ #define MCHP_RSTC_RESET_CAUSE "reset-cause"
+ 
+ /*
+- * WDT U2251. Named GPIO output "system-reset", pulsed when software writes
+- * a wrong CLEAR key to an enabled watchdog. No timeout in v0.
++ * WDT U2251: time-out, window mode and early warning on a 1.024 kHz
++ * clock, with the PIC32CM MC00's synchronization delays. Named GPIO output
++ * "system-reset", pulsed at a time-out, a wrong CLEAR key or a clear in the
++ * closed window.
+  */
+ #define TYPE_MCHP_WDT "mchp-wdt"
+ #define MCHP_WDT_SYSTEM_RESET "system-reset"
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index f4659ac..f5d9dfa 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -253,7 +253,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-dmac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-click-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-wdt-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-dmac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-click-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-jh-test.c b/tests/qtest/pic32cm-jh-test.c
+index 4675333..5296f73 100644
+--- a/tests/qtest/pic32cm-jh-test.c
++++ b/tests/qtest/pic32cm-jh-test.c
+@@ -133,9 +133,13 @@ static void test_rcause(void)
+     g_assert_cmphex(qtest_readb(qts, RSTC), ==, RCAUSE_SYST);
+     g_assert_cmphex(qtest_readl(qts, SRAM + 0x100), ==, 0xC0FFEE00);
+ 
+-    /* A wrong WDT.CLEAR key with the watchdog on: RCAUSE.WDT */
++    /*
++     * A wrong WDT.CLEAR key with the watchdog on: RCAUSE.WDT, when the
++     * CLEAR synchronization completes (three 1.024 kHz clocks)
++     */
+     qtest_writeb(qts, WDT + 0x00, 0x02);             /* CTRLA.ENABLE */
+     qtest_writeb(qts, WDT + 0x0C, 0x5A);
++    qtest_clock_step(qts, 4000000);
+     qtest_qmp_eventwait(qts, "RESET");
+     g_assert_cmphex(qtest_readb(qts, RSTC), ==, RCAUSE_WDT);
+     g_assert_cmphex(qtest_readb(qts, WDT + 0x00), ==, 0);
+diff --git a/tests/qtest/pic32cm-wdt-test.c b/tests/qtest/pic32cm-wdt-test.c
+new file mode 100644
+index 0000000..3d8de8b
+--- /dev/null
++++ b/tests/qtest/pic32cm-wdt-test.c
+@@ -0,0 +1,240 @@
++/*
++ * QTest for the watchdog of the PIC32CM MC00 (pic32cm-mc00-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The WDT model's edges on stepped virtual time, and what firmware cannot
++ * reach in reasonable time or at all: reserved values (16384 clocks) and
++ * ALWAYSON. firmware/hello APP=wdt checks the rest against silicon.
++ *
++ * The WDT clock has an edge every 1/1024 s from time 0. A CTRLA write at
++ * time 0 completes at edge 3 and starts the count at edge 2; a CLEAR write
++ * completes at the third edge after it.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++
++#define MACHINE         "-M pic32cm-mc00-cpro"
++
++#define RSTC_RCAUSE     0x40000C00
++#define WDT             0x40002000
++#define R_CTRLA         0x00
++#define R_CONFIG        0x01
++#define R_EWCTRL        0x02
++#define R_INTFLAG       0x06
++#define R_SYNCBUSY      0x08
++#define R_CLEAR         0x0C
++
++#define ENABLE          0x02
++#define WEN             0x04
++#define ALWAYSON        0x80
++#define EW              0x01
++#define SB_ENABLE       0x02
++#define SB_CLEAR        0x10
++#define KEY             0xA5
++#define RCAUSE_WDT      0x20
++#define USER_CONFIG     0xBB        /* the twin's default user row */
++
++typedef struct {
++    QTestState *qts;
++    int64_t now;
++} Wdt;
++
++static int64_t edge(int64_t n)
++{
++    return n * 1000000000LL / 1024;
++}
++
++static Wdt wdt_init(void)
++{
++    return (Wdt) { .qts = qtest_init(MACHINE), .now = 0 };
++}
++
++static void step_to(Wdt *w, int64_t ns)
++{
++    g_assert_cmpint(ns, >=, w->now);
++    if (ns > w->now) {
++        qtest_clock_step(w->qts, ns - w->now);
++    }
++    w->now = ns;
++}
++
++static uint8_t rd(Wdt *w, unsigned off)
++{
++    return qtest_readb(w->qts, WDT + off);
++}
++
++static void wr(Wdt *w, unsigned off, uint8_t v)
++{
++    qtest_writeb(w->qts, WDT + off, v);
++}
++
++/* A system reset reloads CONFIG from the user row */
++static bool was_reset(Wdt *w)
++{
++    return rd(w, R_CONFIG) == USER_CONFIG &&
++           qtest_readb(w->qts, RSTC_RCAUSE) == RCAUSE_WDT;
++}
++
++/* Reset exactly at @ns: not one nanosecond earlier */
++static void expect_reset_at(Wdt *w, int64_t ns)
++{
++    step_to(w, ns - 1);
++    g_assert_false(was_reset(w));
++    step_to(w, ns);
++    g_assert_true(was_reset(w));
++}
++
++static void test_timeout(void)
++{
++    Wdt w = wdt_init();
++
++    wr(&w, R_CONFIG, 0x02);                 /* PER 32 */
++    wr(&w, R_EWCTRL, 0x01);                 /* EWOFFSET 16 */
++    wr(&w, R_CTRLA, ENABLE);
++    g_assert_cmphex(rd(&w, R_SYNCBUSY), ==, SB_ENABLE);
++    g_assert_cmphex(rd(&w, R_CTRLA), ==, ENABLE);
++    step_to(&w, edge(3) - 1);
++    g_assert_cmphex(rd(&w, R_SYNCBUSY), ==, SB_ENABLE);
++    step_to(&w, edge(3));
++    g_assert_cmphex(rd(&w, R_SYNCBUSY), ==, 0);
++    step_to(&w, edge(2 + 16) - 1);
++    g_assert_cmphex(rd(&w, R_INTFLAG), ==, 0);
++    step_to(&w, edge(2 + 16));
++    g_assert_cmphex(rd(&w, R_INTFLAG), ==, EW);
++    expect_reset_at(&w, edge(2 + 32));
++    g_assert_cmphex(rd(&w, R_CTRLA), ==, 0);
++    g_assert_cmphex(rd(&w, R_INTFLAG), ==, 0);
++    qtest_quit(w.qts);
++}
++
++/* A clear with the key restarts the count when its sync completes */
++static void test_clear(void)
++{
++    Wdt w = wdt_init();
++
++    wr(&w, R_CONFIG, 0x02);                 /* PER 32 */
++    wr(&w, R_EWCTRL, 0x01);                 /* EWOFFSET 16 */
++    wr(&w, R_CTRLA, ENABLE);
++    step_to(&w, edge(20));
++    wr(&w, R_INTFLAG, EW);
++    wr(&w, R_CLEAR, KEY);
++    g_assert_cmphex(rd(&w, R_SYNCBUSY), ==, SB_CLEAR);
++    g_assert_cmphex(rd(&w, R_CLEAR), ==, 0);
++    step_to(&w, edge(23) - 1);
++    g_assert_cmphex(rd(&w, R_SYNCBUSY), ==, SB_CLEAR);
++    step_to(&w, edge(34));                  /* the old time-out */
++    g_assert_false(was_reset(&w));
++    g_assert_cmphex(rd(&w, R_INTFLAG), ==, 0);
++    step_to(&w, edge(23 + 16));
++    g_assert_cmphex(rd(&w, R_INTFLAG), ==, EW);
++    expect_reset_at(&w, edge(23 + 32));
++    qtest_quit(w.qts);
++}
++
++/* A wrong key resets when its sync completes, one edge later if disabled */
++static void test_wrong_key(void)
++{
++    Wdt w = wdt_init();
++
++    wr(&w, R_CONFIG, 0x05);
++    wr(&w, R_CLEAR, 0x5A);
++    expect_reset_at(&w, edge(4));
++    qtest_quit(w.qts);
++
++    w = wdt_init();
++    wr(&w, R_CONFIG, 0x0B);
++    wr(&w, R_CTRLA, ENABLE);
++    step_to(&w, edge(10));
++    wr(&w, R_CLEAR, 0x5A);
++    expect_reset_at(&w, edge(13));
++    qtest_quit(w.qts);
++}
++
++static void test_window(void)
++{
++    Wdt w = wdt_init();
++
++    /* Closed 16, open 16: a clear completing at edge 13 is too early */
++    wr(&w, R_CONFIG, 0x11);
++    wr(&w, R_CTRLA, ENABLE | WEN);
++    step_to(&w, edge(10));
++    wr(&w, R_CLEAR, KEY);
++    expect_reset_at(&w, edge(13));
++    qtest_quit(w.qts);
++
++    /* In the open window: the closed window starts again at edge 23 */
++    w = wdt_init();
++    wr(&w, R_CONFIG, 0x11);
++    wr(&w, R_EWCTRL, 0x00);                 /* ignored in window mode */
++    wr(&w, R_CTRLA, ENABLE | WEN);
++    step_to(&w, edge(2 + 16) - 1);
++    g_assert_cmphex(rd(&w, R_INTFLAG), ==, 0);
++    step_to(&w, edge(2 + 16));
++    g_assert_cmphex(rd(&w, R_INTFLAG), ==, EW);
++    wr(&w, R_INTFLAG, EW);
++    step_to(&w, edge(20));
++    wr(&w, R_CLEAR, KEY);
++    step_to(&w, edge(23 + 16) - 1);
++    g_assert_cmphex(rd(&w, R_INTFLAG), ==, 0);
++    step_to(&w, edge(23 + 16));
++    g_assert_cmphex(rd(&w, R_INTFLAG), ==, EW);
++    expect_reset_at(&w, edge(23 + 32));
++    qtest_quit(w.qts);
++}
++
++/* Reserved PER counts as 0xB; an EWOFFSET not below PER never warns */
++static void test_reserved(void)
++{
++    Wdt w = wdt_init();
++
++    wr(&w, R_CONFIG, 0x0C);
++    wr(&w, R_EWCTRL, 0x0F);
++    g_assert_cmphex(rd(&w, R_CONFIG), ==, 0x0C);
++    g_assert_cmphex(rd(&w, R_EWCTRL), ==, 0x0F);
++    wr(&w, R_CTRLA, ENABLE);
++    step_to(&w, edge(2 + 16384) - 1);
++    g_assert_cmphex(rd(&w, R_INTFLAG), ==, 0);
++    expect_reset_at(&w, edge(2 + 16384));
++    qtest_quit(w.qts);
++}
++
++/*
++ * ALWAYSON runs the WDT without ENABLE, holds through a system reset,
++ * locks ENABLE, CONFIG and EWCTRL, and leaves WEN writable.
++ */
++static void test_alwayson(void)
++{
++    Wdt w = wdt_init();
++
++    wr(&w, R_CONFIG, 0x02);                 /* PER 32 */
++    wr(&w, R_CTRLA, ALWAYSON);
++    step_to(&w, edge(3));
++    wr(&w, R_CTRLA, 0);
++    g_assert_cmphex(rd(&w, R_CTRLA), ==, ALWAYSON);
++    wr(&w, R_CONFIG, 0x05);
++    g_assert_cmphex(rd(&w, R_CONFIG), ==, 0x02);
++    expect_reset_at(&w, edge(2 + 32));
++    /* Still on after the reset, counting from it with the user row's PER */
++    g_assert_cmphex(rd(&w, R_CTRLA), ==, ALWAYSON);
++    wr(&w, R_CTRLA, ALWAYSON | WEN);
++    g_assert_cmphex(rd(&w, R_CTRLA), ==, ALWAYSON | WEN);
++    qtest_quit(w.qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++    qtest_add_func("pic32cm-wdt/timeout", test_timeout);
++    qtest_add_func("pic32cm-wdt/clear", test_clear);
++    qtest_add_func("pic32cm-wdt/wrong-key", test_wrong_key);
++    qtest_add_func("pic32cm-wdt/window", test_window);
++    qtest_add_func("pic32cm-wdt/reserved", test_reserved);
++    qtest_add_func("pic32cm-wdt/alwayson", test_alwayson);
++    return g_test_run();
++}
+-- 
+2.53.0.windows.2
+

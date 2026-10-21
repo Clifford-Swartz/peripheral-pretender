@@ -175,7 +175,7 @@ from the R4 Gerbers; LED0 (PC05) and SW0 (PB19) work (`tests/web`). Microchip's 
 PIC32CM-JH_DFP 1.5.236 and CMSIS 5.9.0, fetched into `~/.mchp_packs`). On the twin, port, EIC,
 EVSYS, SysTick, TC timer, clock, DIVAS, USART echo, PM/EIC wake-up and RSTC external reset
 behave as the code says. Gaps they show on the JH01: RTC (`rtc_03608`, no overlay; the MC00's
-RTC is `rtc_u2250`), WDT time-out, DMAC, DSU CRC32, NVMCTRL programming, MCRAMC/SMBIST, FREQM,
+RTC is `rtc_u2250`), DMAC, DSU CRC32, NVMCTRL programming, MCRAMC/SMBIST, FREQM,
 ADC, AC, DAC, CCL, CAN, TC capture, TCC dead time, SERCOM I2C client and LIN. Not checked on
 silicon (no board on the desk).
 
@@ -218,7 +218,6 @@ still need checking against DS60001632H):
   Plan: an opt-in `rx-overrun` mode paced by the baud rate (2-deep FIFO + shift register).
 - SERCOM TX is instant unless `pace-tx=on`: TXC is already set when a DATA write returns.
 - SERCOM DRE is gated on CTRLB.TXEN; RXS is set once per chardev batch; DATA reads 0 when empty.
-- WDT CTRLA.ALWAYSON is cleared by warm resets (SYST, WDT); silicon clears it only at power-on.
 - GCLK PCHCTRL.WRTLOCK does not also lock the generator the channel uses.
 - Oscillators with ONDEMAND=1 report ready without a clock request, so firmware that would hang on
   silicon boots on the twin.

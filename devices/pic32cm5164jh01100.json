@@ -53735,7 +53735,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/wdt_u2251.yaml",
-    "sha1": "fce913b2a1aa2c2918ca3615801e8282bd347d2e",
+    "sha1": "9746212639a2fc20bb1a42c2ac32864f921a232d",
     "status": "applied",
     "versions": [
      "1.0.1",

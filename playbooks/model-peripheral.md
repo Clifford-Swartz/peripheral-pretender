@@ -157,7 +157,9 @@ py -m tools.periph qtest pic32cm-<name>-test
 4. Commit the repository and push.
 5. Engine code changed, so the VS Code extension's bundled QEMU is stale. Bump
    `vscode/package.json`, build the VSIX (`py scripts/build_vsix.py --qemu C:/pp/pp-qemu`),
-   run `cd vscode && npm test`, update the version in `SETUP.md`, and publish a release.
+   run `cd vscode && npm test`, update the version in `SETUP.md`, and publish a release. When
+   several peripherals go through the process in one session, one release after the last of
+   them will do, but never report the batch to the owner before it exists.
 
 **Gate:** the gate passes; the commit is pushed; the release exists.
 
@@ -180,5 +182,13 @@ These cost a probe run each to learn. Check new probes against them.
   `xosc32k=off`), the 12 MHz XOSC runs, and VCC is about 4.89 V (machine option `vcc=4890`).
 - **Integer-Hz clocks round.** Generators are period-based (`mchp_regblock_set_clock_period`):
   an integer-Hz divider chain gave FREQM 0xFE4B3E where silicon gave 0xFE0000.
+- **Probes that reset the part** keep their state in `keep_area()` (`check.h`), arm before the
+  write that should reset, and finish the line on the next boot (`wdtprobe.c`, `wdt.c`). Arm
+  every experiment that might reset, not only those expected to: the WDT reset on a wrong key
+  while disabled, the unarmed probe started over, and looped until the run timed out.
+- **Line endings in pp-qemu.** pp-qemu keeps bytes as they are (no autocrlf), and Python's
+  `write_text()` writes CRLF on Windows: read and write bytes in edit scripts. `export` refuses
+  a commit that adds CRLF lines. Git Bash heredocs also mangle backslashes in C strings: write
+  scripts with the Write tool, or edit with the Edit tool.
 - **Twin runs use icount.** `twin` and the golden tests use `--icount 5`, so the twin's timing
   is deterministic. Leave timing checks a margin for the board's clock error anyway.

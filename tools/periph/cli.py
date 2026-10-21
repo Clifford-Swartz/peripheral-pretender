@@ -377,7 +377,10 @@ def cmd_qtest(names: list[str]) -> bool:
 
 
 def cmd_gate() -> None:
-    stop_qemu()
+    # The suite runs whatever binaries exist: build them first
+    cmd_qemu(False)
+    if (qemu_src() / "build-avr" / "build.ninja").is_file():
+        cmd_qemu(True)
     rc = subprocess.call([sys.executable, "-m", "pytest", "tests",
                           "harness/tests", "-q"], cwd=ROOT, env=run_env())
     qt = cmd_qtest(pp_qtests())
@@ -396,6 +399,14 @@ def cmd_export() -> None:
         raise PeriphError("pp-qemu has uncommitted changes: commit first")
     head = subprocess.run(["git", "-C", str(src), "rev-parse", "HEAD"],
                           capture_output=True, text=True).stdout.strip()
+    # Python's write_text() writes CRLF on Windows, and pp-qemu keeps bytes
+    show = subprocess.run(["git", "-C", str(src), "show", "--format=",
+                           "HEAD"], capture_output=True).stdout
+    crlf = [line for line in show.split(b"\n")
+            if line.startswith(b"+") and line.endswith(b"\r")]
+    if crlf:
+        raise PeriphError(f"HEAD adds {len(crlf)} CRLF lines: convert the "
+                          "files to LF and amend")
     existing = sorted(patches.glob("[0-9][0-9][0-9][0-9]-*.patch"))
     if existing and existing[-1].read_text(encoding="utf-8",
                                            errors="replace") \

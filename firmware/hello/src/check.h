@@ -24,6 +24,7 @@
 #include "util.h"
 
 static uint32_t check_wraps;
+static unsigned int check_seen;
 
 /* " NAME=0x<value>", counting a failure outside @lo..@hi */
 static inline void put_range(const char *name, uint32_t value, uint32_t lo,
@@ -64,13 +65,36 @@ static inline void put_near(const char *name, int32_t value, int32_t expect,
     }
 }
 
+/* " NAME=<v>" in decimal, counting a failure outside @lo..@hi */
+static inline void put_dec_range(const char *name, uint32_t value,
+                                 uint32_t lo, uint32_t hi)
+{
+    console_putc(' ');
+    console_puts(name);
+    console_putc('=');
+    console_put_dec(value);
+    if (value < lo || value > hi) {
+        console_puts("(expected ");
+        console_put_dec(lo);
+        console_puts("..");
+        console_put_dec(hi);
+        console_putc(')');
+        failures++;
+    }
+}
+
 /* " ok", or " FAIL" when a check since the last end_line() failed */
 static inline void end_line(void)
 {
-    static unsigned int seen;
+    console_puts(failures == check_seen ? " ok\r\n" : " FAIL\r\n");
+    check_seen = failures;
+}
 
-    console_puts(failures == seen ? " ok\r\n" : " FAIL\r\n");
-    seen = failures;
+/* The failure count carried across a reset (in keep_area()) */
+static inline void check_restore(unsigned int n)
+{
+    failures = n;
+    check_seen = n;
 }
 
 /* Microseconds from SysTick (needs systick_start()), counting wraps */
@@ -112,13 +136,13 @@ extern char _end[], _ram_end_[];
 
 static inline volatile void *keep_area(void)
 {
-    char *keep = _ram_end_ + 1 - KEEP_SIZE;
+    uintptr_t keep = (uintptr_t)_ram_end_ + 1U - KEEP_SIZE;
 
-    if (_end > keep) {
+    if ((uintptr_t)_end > keep) {
         console_puts("keep_area: the image reaches the top of RAM FAIL\r\n");
         test_exit();
     }
-    return keep;
+    return (volatile void *)keep;
 }
 
 /* A short pause (some hundred cycles) for a transfer to land */
