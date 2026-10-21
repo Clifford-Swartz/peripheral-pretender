@@ -531,14 +531,14 @@ U2503 engine's design behind a CHID-banked front end in its own file. For PDEC a
 the need for a pad-input path, and for FREQM a second GCLK input. PAC write protection is not
 modelled anywhere.
 
-**AC (U2245): done** (patch 0059). The way each block is done:
+**The process** (2026-10-21): `playbooks/model-peripheral.md`, with `py -m tools.periph` doing
+the mechanical steps (scaffold, probe on silicon and twin with a field diff, checked app and
+golden, qtest, gate, patch export). In short: probe silicon, model to match, diff until only
+part-to-part differences remain, a checked app that passes on both (its silicon transcript is
+the golden, which `tests/golden` runs on the twin), a qtest, then hand-back.
 
-1. Write a probe app (`acprobe`, `acprobe2`) that prints raw behaviour on silicon.
-2. Write the model to match it.
-3. Diff the probes on the twin until they agree, apart from analog noise.
-4. Write a checked app (`APP=ac`) that passes on both. Its silicon transcript is
-   `golden/.../ac-silicon.txt`, and `test_analog_checks_pass` runs it with icount.
-5. Add a qtest for the board side.
+**AC (U2245): done** (patch 0059), before the process existed (`acprobe`, `acprobe2`,
+`APP=ac`).
 
 The silicon answers are in section 7 of `docs/research/peripherals/ac-u2245.md`. Changes the AC
 pulled in along the way:
@@ -572,11 +572,27 @@ register read and made a fetch look late), and a RESUME *event* only acted on si
 channel had a request pending from its peripheral trigger (five cases; a hypothesis, documented).
 TC and SERCOM triggers are wired; ADC, DAC, TCC, SDADC and TSENS DMA triggers are next.
 
-Next on the MC00, in order:
+**WDT (U2251): done** (patch 0064), the first block through the process. A wrong CLEAR key
+resets even while the WDT is disabled; syncs take about 3 ms; the count starts one WDT clock
+before the enable completes. Probes that reset the part keep state in `keep_area()` (`check.h`).
+Answers in `docs/research/peripherals/wdt-u2251.md`.
 
-1. **PDEC and CCL** (after a generic pad-to-peripheral input path).
-2. **MTB** register fixes.
-3. The remaining DMA triggers (ADC, DAC, TCC, SDADC, TSENS).
+**NVMCTRL (03929): done** (patch 0065; also the JH01). Flash and data flash programming, with the
+arrays as ROM devices and `hw/core/loader.c` writing images into them once. Silicon differs from
+the data sheet: ADDR is array-relative and 16 bits, 16-bit page buffer writes work, 8-bit writes
+fault but still load. A sticky NVMCTRL error once broke programming the board; `hw_run` now resets
+and halts first. Answers in `docs/research/peripherals/nvmctrl-03929.md`. VS Code extension 0.4.4
+carries both.
+
+Next on the MC00, in order (the owner's list of 2026-10-21):
+
+1. **TC/TCC on pins** (waveform outputs, capture) and the TCC motor-control features (dead time,
+   faults, pattern generation, dithering).
+2. **ADC events and sequencing**, and the remaining DMA triggers (ADC, DAC, TCC, SDADC, TSENS).
+3. **Sleep and standby** (PM).
+4. A generic **pad-to-peripheral input path**, then **PDEC** and **CCL**.
+5. The long tail: MTB, PAC protection, DSU CRC32, SERCOM client modes, clock failure detection,
+   BOD, RTC tamper, PORT sampling, MCLK gating.
 
 The JH01, SAM E51 and AVR blocks wait for their boards to be plugged in, so they can be checked
 the same way.
