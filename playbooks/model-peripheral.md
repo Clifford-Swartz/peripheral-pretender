@@ -205,6 +205,10 @@ These cost a probe run each to learn. Check new probes against them.
   an EIC pin's pull resistor turned by PORT.OUT makes clean pulses (a pin muxed to a TC or TCC
   loses its pull: released, it is pulled down whatever PORT.OUT says). Silicon often starts
   outputs a clock tick after the enable: check periods and widths, not absolute times.
+- **Read the notes of every block a probe touches.** An ADC DMA probe failed for an hour on a
+  trigger number the DMAC note had already found wrong in the DFP header.
+- **A test that leaves state behind breaks the next one on silicon only**: an unread ADC result
+  was moved at once by silicon's DMA (the twin waits). End each case clean.
 - **Schedule probe actions by absolute time.** A loop that waits 1 us per step and acts on some
   steps runs slower than 1 us per step and drifts by tens of microseconds. Put the stimuli and
   reads in a time-ordered list and wait for each one's time from the same reference

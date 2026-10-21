@@ -3008,7 +3008,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/adc_u2247.yaml",
-    "sha1": "ac169f8454b20fbb0cc522d1b39dbd0cf2cad253",
+    "sha1": "735cd5bbdd95099a668f610ae74631c909ac3fac",
     "status": "applied",
     "versions": [
      "2.2.0",
@@ -3292,11 +3292,13 @@
        "w1c": 0,
        "ro": 0,
        "rdz": 0,
-       "enprot": 0,
+       "enprot": 63,
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "PAC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Event Control",
@@ -3351,7 +3353,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "enprot",
+         "overlay",
+         "all = 0x3F"
+        ]
+       ]
       },
       {
        "name": "INTENCLR",
@@ -4242,10 +4250,11 @@
        "sync_register": "SYNCBUSY",
        "sync_per_element": false,
        "flags": [
+        "HOOK_PRE_READ",
         "HOOK_POST_WRITE"
        ],
        "alias_of": null,
-       "read_side_effect": false,
+       "read_side_effect": true,
        "caption": "Software Trigger",
        "note": "",
        "fields": [
@@ -4267,6 +4276,11 @@
         }
        ],
        "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "pre_read"
+        ],
         [
          "hooks",
          "overlay",

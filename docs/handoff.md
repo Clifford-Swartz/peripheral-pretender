@@ -604,9 +604,16 @@ ERR, PPW/PWP, the dual-slope MSB, circular PER/CC buffers, from `tccprobe10`..`1
 `tcccapt`. Buffers written before the enable now wait for the first update (the model used to
 copy them at the enable). That completes step 2 (TC/TCC on pins and the motor-control features).
 
+**ADC timing, sequences, events, DMA and the client ADC** (patch 0070): conversions now take
+silicon's time (N x (sampling + bits) + 1 CLK_ADC plus a start, none within 10 us of the enable),
+with free running, sequences and SEQSTATUS, the START/SYNC events, RESRDY/WINMON event outputs,
+the RESRDY DMA trigger (36, as the ATDF says; dmac.h's 0x2A is wrong) and ADC1 as ADC0's client,
+from `adcprobe`..`adcprobe5`, checked by `adcseq`. Note `adc-u2247.md`.
+
 Next on the MC00, in order (the owner's list of 2026-10-21):
 
-1. **ADC events and sequencing**, and the remaining DMA triggers (ADC, DAC, TCC, SDADC, TSENS).
+1. **The remaining DMA triggers** (DAC EMPTY, TCC, SDADC, TSENS RESRDY), and the DMAC reacting
+   at once to a request already set when a channel is enabled.
 2. **Sleep and standby** (PM).
 3. A generic **pad-to-peripheral input path**, then **PDEC** and **CCL**.
 4. The long tail: MTB, PAC protection, DSU CRC32, SERCOM client modes, clock failure detection,

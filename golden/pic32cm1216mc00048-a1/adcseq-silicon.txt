@@ -1,0 +1,8 @@
+PP adcseq: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+timing conv12=474 startup=530 less_8b=96 more_s15=480 more_offcomp=96 more_avg16=6256 ok
+freerun period=418 ok
+sequence seqstatus1=0x9A seqstatus2=0x1B core_below_ana=0x01 apart=421 ended=0x00 unread_flags=0x03 unread_seqstatus=0x1B last_is_ana=0x01 repeat_busy=0x01 repeat_turns=0x01 ok
+events start=510 start_inv=508 flush_gap=503 after_flush=427 resrdy_event=0x01 ok
+dma tcmpl=0x02 turns=0x01 steady=0x01 ok
+dual both=0x03 interleave=0x99 ok
+PP:EXIT 0

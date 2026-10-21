@@ -1,0 +1,1240 @@
+From 839100f1b06e60b9dc6ad9faece125bdbd0d20c7 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 21 Oct 2026 12:21:01 -0700
+Subject: [PATCH] hw/adc: U2247 conversion time, sequences, events, DMA and
+ client ADC
+
+The PIC32CM ADC now converts on a timer in the time PIC32CM MC00 silicon
+takes (firmware/hello APP=adcprobe..adcprobe5, checked by adcseq): N x
+(SAMPLEN + 1, or 4 with OFFCOMP, + the resolution's bits) + 1 CLK_ADC
+cycles, N the averaged samples, after a start of 36 GCLK_ADC cycles; no
+conversion starts within 10 us of the enable. SWTRIG.START reads 1
+until the conversion starts. Free running converts back to back from
+the enable; a sequence (SEQCTRL) converts its inputs from the lowest
+with SEQSTATUS (SEQBUSY and the last input), repeating with FREERUN.
+
+The START and SYNC (flush) event inputs act on their rising edge
+(falling with STARTINV/FLUSHINV); a flush aborts the conversion in
+progress and, free running or in a sequence, starts it again. RESRDY
+and WINMON pulse their event outputs. RESRDY is a DMA request: the SoC
+wires the ADC's DMAC_ID_RESRDY as a level trigger on INTFLAG, and the
+ADC kicks the DMAC (new mchp_dmac_u2223_kick) so that a waiting channel
+moves each result. ADC1 with CTRLA.SLAVEEN is ADC0's client: ADC0's
+enable, starts and prescaler drive it, both converting at once
+(DUALSEL BOTH) or in turn (INTERLEAVE).
+
+Event input levels survive a SWRST in the ADC and the TCC: they are
+lines, not registers.
+
+qtest pic32cm-adc-test: timing, start-up, averaging, free running,
+sequences, events, the client ADC.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst         |  18 +-
+ hw/adc/mchp_adc_u2247.c                       | 508 +++++++++++++++---
+ hw/arm/pic32cm_soc.c                          |  15 +-
+ hw/dma/mchp_dmac.c                            |   4 +
+ hw/dma/mchp_dmac_u2223.c                      |  11 +
+ hw/timer/mchp_tcc.c                           |   1 -
+ include/hw/dma/mchp_dmac.h                    |   1 +
+ include/hw/mchp/gen/adc_u2247.h               |   2 +-
+ .../mchp/gen/pic32cm1216mc00048/adc_u2247.h   |   8 +-
+ .../mchp/gen/pic32cm5164jh01100/adc_u2247.h   |   8 +-
+ tests/qtest/meson.build                       |   2 +-
+ tests/qtest/pic32cm-adc-test.c                | 274 ++++++++++
+ 12 files changed, 763 insertions(+), 89 deletions(-)
+ create mode 100644 tests/qtest/pic32cm-adc-test.c
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index c50a4cc..f071c98 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -120,9 +120,14 @@ Supported devices
+ - EVSYS: channels on the three paths, software events, the users that
+   select them, CHSTATUS and the OVR/EVD flags as on silicon. Generators
+   and users are wired from the device's event table.
+-- ADC (U2247): conversions completed at once against the selected
+-  reference, with resolution, averaging, offset and gain correction, the
+-  window monitor and the RESRDY/OVERRUN/WINMON flags. Pad voltages come
++- ADC (U2247): conversions against the selected reference, with
++  resolution, averaging, offset and gain correction, the window monitor
++  and the RESRDY/OVERRUN/WINMON flags, taking the time PIC32CM MC00
++  silicon takes (prescaler, resolution, sampling, averaging, the start-up
++  after the enable); free running, automatic sequences (SEQCTRL,
++  SEQSTATUS), the START and SYNC (flush) event inputs, the RESRDY and
++  WINMON event outputs, the RESRDY DMA request, and ADC1 as ADC0's client
++  (CTRLA.SLAVEEN, both at once or interleaved). Pad voltages come
+   from the ADC's ``ain`` property (``"channel=millivolts,..."``), or are
+   VDDANA or 0 while the PORT drives the pad; INTREF, the scaled supplies
+   and the DAC are internal inputs. DAC (U2214): the 10-bit output on VOUT
+@@ -147,8 +152,8 @@ Supported devices
+   and bus errors, the software trigger, arbitration by level with
+   static or round-robin priority, the CRC-16/CRC-32 engine (I/O and
+   channel modes), event inputs and outputs, INTPEND and ACTIVE, as
+-  measured on PIC32CM MC00 silicon. SERCOM and TC triggers are wired;
+-  ADC, DAC, TCC, SDADC and TSENS triggers are not yet.
++  measured on PIC32CM MC00 silicon. SERCOM, TC and ADC triggers are
++  wired; DAC, TCC, SDADC and TSENS triggers are not yet.
+ - LED0 (PC05, active low) is a QEMU LED device; its state changes show
+   in the ``led_set_intensity`` trace event. SW0 (PB19, to ground) is the
+   machine property ``sw0-pressed``.
+@@ -172,8 +177,7 @@ Missing devices
+   RAMP2CS, CTRLBSET.IDXCMD, the outputs' start latency and the STATUS
+   read lag.
+ - PAC write protection, DSU CRC32 and chip erase, sleep modes and every other
+-  peripheral behaviour (CCL, PDEC, CAN, ...). ADC
+-  sequencing and event inputs, DAC START events.
++  peripheral behaviour (CCL, PDEC, CAN, ...). DAC START events.
+ 
+ Board and SoC properties
+ """"""""""""""""""""""""
+diff --git a/hw/adc/mchp_adc_u2247.c b/hw/adc/mchp_adc_u2247.c
+index 5b99364..bd974db 100644
+--- a/hw/adc/mchp_adc_u2247.c
++++ b/hw/adc/mchp_adc_u2247.c
+@@ -5,16 +5,15 @@
+  * not for submission to upstream QEMU.
+  *
+  * Conversions as in the PIC32CM MC00 data sheet ("Low-Power, 32-bit
+- * Cortex-M0+ MCU with Advanced Analog and PWM", ADC chapter), completed at
+- * once: a start (SWTRIG.START, a CTRLC write with FREERUN, or each RESULT
+- * read in free-running mode) converts INPUTCTRL.MUXPOS (minus MUXNEG in
+- * differential mode) against REFCTRL.REFSEL into RESULT with the
+- * resolution of CTRLC.RESSEL, the accumulation and right shift of AVGCTRL
+- * (16-bit mode), offset and gain correction (CTRLC.CORREN: (code -
+- * OFFSETCORR) * GAINCORR / 2048) and CTRLC.LEFTADJ, then compares it with
+- * the window (CTRLC.WINMODE: INTFLAG.WINMON) and sets INTFLAG.RESRDY
+- * (cleared by reading RESULT; OVERRUN when a result replaces an unread
+- * one). Inputs:
++ * Cortex-M0+ MCU with Advanced Analog and PWM", ADC chapter): a start
++ * (SWTRIG.START, the START event, the enable or a CTRLC write with
++ * FREERUN) converts INPUTCTRL.MUXPOS (minus MUXNEG in differential mode)
++ * against REFCTRL.REFSEL into RESULT with the resolution of CTRLC.RESSEL,
++ * the accumulation and right shift of AVGCTRL (16-bit mode), offset and
++ * gain correction (CTRLC.CORREN: (code - OFFSETCORR) * GAINCORR / 2048)
++ * and CTRLC.LEFTADJ, then compares it with the window (CTRLC.WINMODE:
++ * INTFLAG.WINMON) and sets INTFLAG.RESRDY (cleared by reading RESULT;
++ * OVERRUN when a result replaces an unread one). Inputs:
+  *
+  * - AIN0..AIN11: VDDANA or 0 while the PORT drives the pad (a GPIO output;
+  *   silicon, APP=acprobe: 0xFFA), else the "ain" property
+@@ -34,9 +33,28 @@
+  * INTREF 1.024 V, INTVCC0 VDDANA / 1.6 (the data sheet's table says
+  * 1 / 1.48; the DFP and silicon say 1 / 1.6), VDDCORE 1.2 V, the INTREF
+  * stall without VREFOE, and REFCTRL ignoring writes while enabled (the
+- * overlay makes it enable-protected). Not modelled: sequencing
+- * (SEQCTRL, logged), the master/slave pair (CTRLA.SLAVEEN), event inputs,
+- * the conversion time.
++ * overlay makes it enable-protected).
++ *
++ * Timing as on a PIC32CM MC00 (firmware/hello APP=adcprobe..adcprobe4):
++ * CLK_ADC is GCLK_ADC / 2^(1 + CTRLB.PRESCALER). A conversion takes
++ * (SAMPCTRL.SAMPLEN + 1, or 4 with OFFCOMP) + the resolution's bits
++ * CLK_ADC cycles, 2^SAMPLENUM times when averaging; a start adds 36
++ * GCLK_ADC cycles and one CLK_ADC, and none starts before 10 us after the
++ * enable (the analog start-up). SWTRIG.START reads 1 until the conversion
++ * starts. Free
++ * running and sequences convert back to back. A sequence (SEQCTRL)
++ * converts the enabled inputs from the lowest, SEQSTATUS showing SEQBUSY
++ * and the last input converted; with FREERUN it repeats. The START and
++ * SYNC (flush) event inputs act on their rising edge (falling with
++ * STARTINV/FLUSHINV); a flush aborts the conversion in progress and, free
++ * running or in a sequence, starts it again. RESRDY and WINMON pulse
++ * their event outputs (RESRDYEO, WINMONEO); RESRDY is the DMA request
++ * (wired by the SoC as a level trigger on INTFLAG). ADC1 with
++ * CTRLA.SLAVEEN is ADC0's client: ADC0's enable, starts and prescaler
++ * drive it, both converting at once (CTRLC.DUALSEL BOTH) or in turn
++ * (INTERLEAVE). Registers act at once, not at the next conversion. Not
++ * modelled: the analog clock limits (silicon reads 0 with CLK_ADC above
++ * 16 MHz), sleep.
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -46,7 +64,11 @@
+ #include "qapi/visitor.h"
+ #include "qemu/cutils.h"
+ #include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/core/clock.h"
++#include "hw/core/irq.h"
+ #include "hw/adc/mchp_adc.h"
++#include "hw/dma/mchp_dmac.h"
+ #include "hw/gpio/mchp_port.h"
+ #include "hw/misc/mchp_sysctrl.h"
+ #include "hw/misc/mchp_dac.h"
+@@ -61,6 +83,13 @@
+ #define SUPC_VREF_VREFOE    (1U << 2)
+ #define SUPC_VREF_SEL(v)    extract32(v, 16, 4)
+ 
++/*
++ * Silicon's start: synchronization, then one CLK_ADC; ready 10 us after
++ * the enable
++ */
++#define ADC_START_GCLK      36
++#define ADC_STARTUP_NS      10000
++
+ OBJECT_DECLARE_SIMPLE_TYPE(MchpAdcU2247State, MCHP_ADC_U2247)
+ 
+ struct MchpAdcU2247State {
+@@ -76,6 +105,22 @@ struct MchpAdcU2247State {
+     MchpRegBlock *supc;         /* the SUPC, for VREF (found on first use) */
+     DeviceState *dac;           /* the DAC: VOUT on ADC0 AIN0, DAC ref */
+     bool dac_looked;
++
++    QEMUTimer *timer;           /* the conversion in progress ends */
++    bool converting;
++    int64_t start_clear_at;     /* SWTRIG.START reads 0 from, ns */
++    int64_t ready_at;           /* the analog start-up ends, ns */
++    unsigned mux;               /* the input being converted */
++    uint32_t seq_left;          /* inputs of the sequence still to convert */
++    bool ev_level[2];           /* START, SYNC (flush) event inputs */
++    bool turn_client;           /* INTERLEAVE: the client's start next */
++    qemu_irq resrdy_event;
++    qemu_irq winmon_event;
++    MchpAdcU2247State *host;    /* ADC0, for ADC1 (found on first use) */
++    MchpAdcU2247State *client;  /* ADC1, for ADC0 */
++    bool peers_looked;
++    DeviceState *dmac;          /* to kick at RESRDY (found on first use) */
++    bool dmac_looked;
+ };
+ 
+ static uint32_t adc_reg(MchpAdcU2247State *s, hwaddr off, unsigned size)
+@@ -95,6 +140,72 @@ static void adc_flag(MchpAdcU2247State *s, uint8_t mask)
+             mask);
+ }
+ 
++static bool adc_enabled(MchpAdcU2247State *s)
++{
++    return FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLA, 1), MCHP_ADC_CTRLA,
++                      ENABLE);
++}
++
++static bool adc_is_client(MchpAdcU2247State *s)
++{
++    return FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLA, 1), MCHP_ADC_CTRLA,
++                      SLAVEEN);
++}
++
++static bool adc_freerun(MchpAdcU2247State *s)
++{
++    return FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLC, 2), MCHP_ADC_CTRLC,
++                      FREERUN);
++}
++
++static int adc_peer_cb(Object *child, void *opaque)
++{
++    MchpAdcU2247State **found = opaque;
++
++    if (object_dynamic_cast(child, TYPE_MCHP_ADC_U2247)) {
++        const char *name = MCHP_REGBLOCK(child)->name;
++
++        if (!strcmp(name, "adc0")) {
++            found[0] = MCHP_ADC_U2247(child);
++        } else if (!strcmp(name, "adc1")) {
++            found[1] = MCHP_ADC_U2247(child);
++        }
++    }
++    return 0;
++}
++
++/* ADC0 and ADC1, the host and its client: siblings named adc0 and adc1 */
++static void adc_find_peers(MchpAdcU2247State *s)
++{
++    MchpAdcU2247State *found[2] = { NULL, NULL };
++    Object *parent = OBJECT(s)->parent;
++
++    if (s->peers_looked || !parent) {
++        return;
++    }
++    s->peers_looked = true;
++    object_child_foreach(parent, adc_peer_cb, found);
++    if (found[0] == s) {
++        s->client = found[1];
++    } else if (found[1] == s) {
++        s->host = found[0];
++    }
++}
++
++/* The ADC whose enable, prescaler and starts drive this one */
++static MchpAdcU2247State *adc_driver(MchpAdcU2247State *s)
++{
++    adc_find_peers(s);
++    return adc_is_client(s) && s->host ? s->host : s;
++}
++
++/* ADC0's client, when ADC1 has SLAVEEN set */
++static MchpAdcU2247State *adc_client(MchpAdcU2247State *s)
++{
++    adc_find_peers(s);
++    return s->client && adc_is_client(s->client) ? s->client : NULL;
++}
++
+ /* The SUPC's VREF register (0 when there is no SUPC: VREF at reset) */
+ static uint32_t adc_supc_vref(MchpAdcU2247State *s)
+ {
+@@ -203,13 +314,12 @@ static int64_t adc_ref_uv(MchpAdcU2247State *s)
+ }
+ 
+ /* INTFLAG.WINMON: RESULT against WINLT/WINUT as CTRLC.WINMODE says */
+-static void adc_window(MchpAdcU2247State *s, int32_t code, bool diff)
++static bool adc_window(MchpAdcU2247State *s, int32_t code, bool diff)
+ {
+     unsigned mode = FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLC, 2),
+                                MCHP_ADC_CTRLC, WINMODE);
+     int32_t lt = adc_reg(s, A_MCHP_ADC_WINLT, 2);
+     int32_t ut = adc_reg(s, A_MCHP_ADC_WINUT, 2);
+-    bool hit;
+ 
+     if (diff) {
+         lt = (int16_t)lt;
+@@ -217,54 +327,42 @@ static void adc_window(MchpAdcU2247State *s, int32_t code, bool diff)
+     }
+     switch (mode) {
+     case 1:
+-        hit = code > lt;
+-        break;
++        return code > lt;
+     case 2:
+-        hit = code < ut;
+-        break;
++        return code < ut;
+     case 3:
+-        hit = code > lt && code < ut;
+-        break;
++        return code > lt && code < ut;
+     case 4:
+-        hit = !(code >= lt && code <= ut);
+-        break;
++        return !(code >= lt && code <= ut);
+     default:
+-        return;
+-    }
+-    if (hit) {
+-        adc_flag(s, R_MCHP_ADC_INTFLAG_WINMON_MASK);
++        return false;
+     }
+ }
+ 
+-/* Convert; false when the conversion cannot complete (see INTREF) */
+-static bool adc_convert(MchpAdcU2247State *s)
++/* INTREF is not routed to the input without VREF.VREFOE: no conversion */
++static bool adc_can_convert(MchpAdcU2247State *s, unsigned mux)
++{
++    return mux != MCHP_ADC_INPUTCTRL_MUXPOS_INTREF ||
++           (adc_supc_vref(s) & SUPC_VREF_VREFOE);
++}
++
++/* The result of converting @mux: RESULT, RESRDY, OVERRUN, WINMON, events */
++static void adc_result(MchpAdcU2247State *s, unsigned mux)
+ {
+     MchpRegBlock *rb = MCHP_REGBLOCK(s);
+     uint32_t in = adc_reg(s, A_MCHP_ADC_INPUTCTRL, 2);
+     uint32_t ctrlc = adc_reg(s, A_MCHP_ADC_CTRLC, 2);
+     uint32_t avg = adc_reg(s, A_MCHP_ADC_AVGCTRL, 1);
++    uint32_t ev = adc_reg(s, A_MCHP_ADC_EVCTRL, 1);
+     unsigned res = FIELD_EX32(ctrlc, MCHP_ADC_CTRLC, RESSEL);
+     unsigned bits = res == 2 ? 10 : res == 3 ? 8 : 12;
+     unsigned n = FIELD_EX32(avg, MCHP_ADC_AVGCTRL, SAMPLENUM);
+     unsigned adj = FIELD_EX32(avg, MCHP_ADC_AVGCTRL, ADJRES);
+-    bool diff = FIELD_EX32(ctrlc, MCHP_ADC_CTRLC, DIFFMODE);
++    bool diff = FIELD_EX32(ctrlc, MCHP_ADC_CTRLC, DIFFMODE), win;
+     int64_t full = (1 << bits) - 1, vref = adc_ref_uv(s);
+-    int64_t uv = adc_input_mv(s, FIELD_EX32(in, MCHP_ADC_INPUTCTRL,
+-                                            MUXPOS)) * 1000LL;
++    int64_t uv = adc_input_mv(s, mux) * 1000LL;
+     int64_t code;
+ 
+-    if (!FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLA, 1), MCHP_ADC_CTRLA,
+-                    ENABLE)) {
+-        return true;
+-    }
+-    if (FIELD_EX32(in, MCHP_ADC_INPUTCTRL, MUXPOS) ==
+-        MCHP_ADC_INPUTCTRL_MUXPOS_INTREF &&
+-        !(adc_supc_vref(s) & SUPC_VREF_VREFOE)) {
+-        return false;           /* INTREF is not routed to the input */
+-    }
+-    if (adc_reg(s, A_MCHP_ADC_SEQCTRL, 4)) {
+-        qemu_log_mask(LOG_UNIMP, "%s: sequencing not modelled\n", rb->name);
+-    }
+     if (diff) {
+         unsigned neg = FIELD_EX32(in, MCHP_ADC_INPUTCTRL, MUXNEG);
+ 
+@@ -286,7 +384,10 @@ static bool adc_convert(MchpAdcU2247State *s)
+         code = diff ? MIN(MAX(code, -32768), 32767) : MIN(MAX(code, 0),
+                                                           65535);
+     }
+-    adc_window(s, code, diff);
++    win = adc_window(s, code, diff);
++    if (win) {
++        adc_flag(s, R_MCHP_ADC_INTFLAG_WINMON_MASK);
++    }
+     if (FIELD_EX32(ctrlc, MCHP_ADC_CTRLC, LEFTADJ)) {
+         code <<= 16 - (res == 1 ? 16 : bits);
+     }
+@@ -296,24 +397,199 @@ static bool adc_convert(MchpAdcU2247State *s)
+     adc_set(s, A_MCHP_ADC_RESULT, 2, (uint16_t)code);
+     adc_flag(s, R_MCHP_ADC_INTFLAG_RESRDY_MASK);
+     s->unread = true;
++    /* RESRDY is a DMA request: let a waiting channel see it now */
++    if (!s->dmac_looked) {
++        Object *o = object_resolve_path_type("", TYPE_MCHP_DMAC_U2223, NULL);
++
++        s->dmac = o ? DEVICE(o) : NULL;
++        s->dmac_looked = true;
++    }
++    if (s->dmac) {
++        mchp_dmac_kick(s->dmac);
++    }
++    if (ev & R_MCHP_ADC_EVCTRL_RESRDYEO_MASK) {
++        qemu_irq_pulse(s->resrdy_event);
++    }
++    if (win && (ev & R_MCHP_ADC_EVCTRL_WINMONEO_MASK)) {
++        qemu_irq_pulse(s->winmon_event);
++    }
+     mchp_regblock_update_irq(rb);
+-    return true;
++}
++
++/* The driving ADC's clocks: GCLK_ADC (Hz) and the CLK_ADC divider */
++static Clock *adc_gclk(MchpAdcU2247State *s)
++{
++    return MCHP_REGBLOCK(adc_driver(s))->gclk;
++}
++
++static uint64_t adc_div(MchpAdcU2247State *s)
++{
++    return 2ULL << FIELD_EX32(adc_reg(adc_driver(s), A_MCHP_ADC_CTRLB, 1),
++                              MCHP_ADC_CTRLB, PRESCALER);
++}
++
++/* CLK_ADC cycles of one conversion: sampling and bits, times averaging */
++static uint64_t adc_conv_clocks(MchpAdcU2247State *s)
++{
++    uint32_t samp = adc_reg(s, A_MCHP_ADC_SAMPCTRL, 1);
++    unsigned res = FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLC, 2),
++                              MCHP_ADC_CTRLC, RESSEL);
++    unsigned bits = res == 2 ? 10 : res == 3 ? 8 : 12;
++    unsigned n = res == 1 ? FIELD_EX32(adc_reg(s, A_MCHP_ADC_AVGCTRL, 1),
++                                       MCHP_ADC_AVGCTRL, SAMPLENUM) : 0;
++    unsigned sampling = FIELD_EX32(samp, MCHP_ADC_SAMPCTRL, OFFCOMP) ? 4 :
++                        FIELD_EX32(samp, MCHP_ADC_SAMPCTRL, SAMPLEN) + 1;
++
++    return (uint64_t)(sampling + bits) << MIN(n, 10);
++}
++
++/* The input to convert next: MUXPOS, or the sequence's lowest left */
++static unsigned adc_next_mux(MchpAdcU2247State *s)
++{
++    return s->seq_left ? ctz32(s->seq_left) :
++           FIELD_EX32(adc_reg(s, A_MCHP_ADC_INPUTCTRL, 2), MCHP_ADC_INPUTCTRL,
++                      MUXPOS);
++}
++
++/* Convert @mux, ending @clocks CLK_ADC cycles after @t (ns) */
++static void adc_schedule(MchpAdcU2247State *s, int64_t t, uint64_t clocks)
++{
++    Clock *gclk = adc_gclk(s);
++
++    s->mux = adc_next_mux(s);
++    if (!adc_can_convert(s, s->mux) || !clock_is_enabled(gclk)) {
++        /* Never starts: START stays set (silicon) */
++        s->converting = false;
++        s->start_clear_at = INT64_MAX;
++        return;
++    }
++    s->converting = true;
++    timer_mod(s->timer, t + clock_ticks_to_ns(gclk, clocks * adc_div(s)));
++}
++
++/* A start at @now (SWTRIG.START, an event, free running's first) */
++static void adc_start_one(MchpAdcU2247State *s, int64_t now)
++{
++    Clock *gclk = adc_gclk(s);
++    int64_t t;
++
++    if (s->converting || !adc_enabled(adc_driver(s))) {
++        return;                 /* START while converting: no effect */
++    }
++    if (!s->seq_left) {
++        s->seq_left = adc_reg(s, A_MCHP_ADC_SEQCTRL, 4);
++    }
++    t = MAX(now + (int64_t)clock_ticks_to_ns(gclk, ADC_START_GCLK),
++            adc_driver(s)->ready_at);
++    s->start_clear_at = t + clock_ticks_to_ns(gclk, adc_div(s));
++    if (s->seq_left) {
++        adc_set(s, A_MCHP_ADC_SEQSTATUS, 1,
++                (adc_reg(s, A_MCHP_ADC_SEQSTATUS, 1) &
++                 R_MCHP_ADC_SEQSTATUS_SEQSTATE_MASK) |
++                R_MCHP_ADC_SEQSTATUS_SEQBUSY_MASK);
++    }
++    adc_schedule(s, t, 1 + adc_conv_clocks(s));
++}
++
++/* A start of the host: itself and its client (BOTH) or in turn */
++static void adc_start(MchpAdcU2247State *s, int64_t now)
++{
++    MchpAdcU2247State *client = adc_client(s);
++
++    if (adc_is_client(s)) {
++        return;                 /* the host starts a client */
++    }
++    if (client && FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLC, 2),
++                             MCHP_ADC_CTRLC, DUALSEL) ==
++                  MCHP_ADC_CTRLC_DUALSEL_INTERLEAVE) {
++        if (s->turn_client) {
++            adc_start_one(client, now);
++        } else {
++            adc_start_one(s, now);
++        }
++        s->turn_client = !s->turn_client;
++        return;
++    }
++    adc_start_one(s, now);
++    if (client) {
++        adc_start_one(client, now);
++    }
++}
++
++/* The conversion in progress ended */
++static void adc_timer_cb(void *opaque)
++{
++    MchpAdcU2247State *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    bool seq = s->seq_left != 0;
++
++    s->converting = false;
++    if (!adc_enabled(adc_driver(s))) {
++        return;
++    }
++    adc_result(s, s->mux);
++    if (seq) {
++        s->seq_left &= ~BIT(s->mux);
++        if (!s->seq_left && adc_freerun(s)) {
++            s->seq_left = adc_reg(s, A_MCHP_ADC_SEQCTRL, 4);
++        }
++        adc_set(s, A_MCHP_ADC_SEQSTATUS, 1, s->mux |
++                (s->seq_left ? R_MCHP_ADC_SEQSTATUS_SEQBUSY_MASK : 0));
++    }
++    /* Free running or the sequence's next: back to back */
++    if (s->seq_left || (adc_freerun(s) && !adc_is_client(s))) {
++        MchpAdcU2247State *client = adc_client(s);
++
++        adc_schedule(s, now, adc_conv_clocks(s));
++        /* A free-running host takes its client along (BOTH) */
++        if (!seq && client && !client->converting &&
++            FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLC, 2), MCHP_ADC_CTRLC,
++                       DUALSEL) == MCHP_ADC_CTRLC_DUALSEL_BOTH) {
++            adc_schedule(client, now, adc_conv_clocks(client));
++        }
++    }
++}
++
++/* FLUSH: drop the conversion in progress; free running or a sequence go on */
++static void adc_flush(MchpAdcU2247State *s, int64_t now)
++{
++    bool again = s->converting && (adc_freerun(s) || s->seq_left);
++
++    timer_del(s->timer);
++    s->converting = false;
++    s->unread = false;
++    s->start_clear_at = 0;
++    if (again) {
++        adc_start_one(s, now);
++    }
++}
++
++/* Stop: disabled, reset, or no clock */
++static void adc_stop(MchpAdcU2247State *s)
++{
++    timer_del(s->timer);
++    s->converting = false;
++    s->start_clear_at = 0;
++    s->seq_left = 0;
++    s->turn_client = false;
++    adc_set(s, A_MCHP_ADC_SEQSTATUS, 1, 0);
+ }
+ 
+ static uint32_t adc_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
+                              unsigned idx, uint32_t stored, bool side_effects)
+ {
+     MchpAdcU2247State *s = MCHP_ADC_U2247(rf->opaque);
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+ 
++    if (ri->offset == A_MCHP_ADC_SWTRIG) {
++        /* START reads 1 until the conversion starts (silicon) */
++        return now < s->start_clear_at ? R_MCHP_ADC_SWTRIG_START_MASK : 0;
++    }
+     if (ri->offset == A_MCHP_ADC_RESULT && side_effects) {
+         s->unread = false;
+         adc_set(s, A_MCHP_ADC_INTFLAG, 1, adc_reg(s, A_MCHP_ADC_INTFLAG, 1) &
+                 ~R_MCHP_ADC_INTFLAG_RESRDY_MASK);
+         mchp_regblock_update_irq(MCHP_REGBLOCK(s));
+-        if (FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLC, 2), MCHP_ADC_CTRLC,
+-                       FREERUN)) {
+-            adc_convert(s);     /* the next conversion is ready */
+-        }
+     }
+     return stored;              /* SYNCBUSY: idle, writes are instant */
+ }
+@@ -323,30 +599,86 @@ static void adc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+                            uint32_t we)
+ {
+     MchpAdcU2247State *s = MCHP_ADC_U2247(rf->opaque);
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    MchpAdcU2247State *client;
+ 
+-    if (ri->offset == A_MCHP_ADC_SWTRIG) {
++    switch (ri->offset) {
++    case A_MCHP_ADC_SWTRIG:
++        adc_set(s, A_MCHP_ADC_SWTRIG, 1, 0);
++        if (adc_is_client(s)) {
++            break;              /* a client's SWTRIG does nothing */
++        }
+         if (written & we & R_MCHP_ADC_SWTRIG_FLUSH_MASK) {
+-            s->unread = false;
++            adc_flush(s, now);
++            client = adc_client(s);
++            if (client) {
++                adc_flush(client, now);
++            }
+         }
+-        adc_set(s, A_MCHP_ADC_SWTRIG, 1, 0);
+-        if ((written & we & R_MCHP_ADC_SWTRIG_START_MASK) &&
+-            !adc_convert(s)) {
+-            /* Never starts: START stays set (silicon) */
+-            adc_set(s, A_MCHP_ADC_SWTRIG, 1, R_MCHP_ADC_SWTRIG_START_MASK);
++        if (written & we & R_MCHP_ADC_SWTRIG_START_MASK) {
++            adc_start(s, now);
+         }
+-    } else if (ri->offset == A_MCHP_ADC_CTRLC &&
+-               FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLC, 2), MCHP_ADC_CTRLC,
+-                          FREERUN)) {
+-        adc_convert(s);
+-    } else if (ri->offset == A_MCHP_ADC_CTRLA &&
+-               FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLA, 1), MCHP_ADC_CTRLA,
+-                          ENABLE) &&
+-               FIELD_EX32(adc_reg(s, A_MCHP_ADC_CTRLC, 2), MCHP_ADC_CTRLC,
+-                          FREERUN)) {
+-        adc_convert(s);         /* enabled in free-running mode */
++        break;
++    case A_MCHP_ADC_CTRLC:
++        if (adc_freerun(s) && adc_enabled(s)) {
++            adc_start(s, now);  /* free running needs no trigger */
++        }
++        break;
++    case A_MCHP_ADC_CTRLA:
++        client = adc_client(s);
++        if (!adc_enabled(s)) {
++            adc_stop(s);
++            if (client) {
++                adc_stop(client);
++            }
++        } else if (!(old & R_MCHP_ADC_CTRLA_ENABLE_MASK)) {
++            s->ready_at = now + ADC_STARTUP_NS;
++            if (adc_freerun(s)) {
++                adc_start(s, now);      /* enabled in free-running mode */
++            }
++        }
++        break;
++    }
++}
++
++/* "start-event-in" (0) and "sync-event-in" (1, the flush) */
++static void adc_set_event(MchpAdcU2247State *s, int n, int level)
++{
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    uint32_t ev = adc_reg(s, A_MCHP_ADC_EVCTRL, 1);
++    bool inv = ev & (n ? R_MCHP_ADC_EVCTRL_FLUSHINV_MASK :
++                         R_MCHP_ADC_EVCTRL_STARTINV_MASK);
++    bool on = ev & (n ? R_MCHP_ADC_EVCTRL_FLUSHEI_MASK :
++                        R_MCHP_ADC_EVCTRL_STARTEI_MASK);
++    bool was = s->ev_level[n] ^ inv;
++    MchpAdcU2247State *client;
++
++    s->ev_level[n] = level > 0;
++    if (!on || adc_is_client(s) || !adc_enabled(s) ||
++        was || !(s->ev_level[n] ^ inv)) {
++        return;                 /* the rising edge (after the invert) */
++    }
++    if (n) {
++        adc_flush(s, now);
++        client = adc_client(s);
++        if (client) {
++            adc_flush(client, now);
++        }
++    } else {
++        adc_start(s, now);
+     }
+ }
+ 
++static void adc_start_event(void *opaque, int n, int level)
++{
++    adc_set_event(opaque, 0, level);
++}
++
++static void adc_sync_event(void *opaque, int n, int level)
++{
++    adc_set_event(opaque, 1, level);
++}
++
+ /* One line: RESRDY, OVERRUN, WINMON */
+ static uint32_t adc_irq_lines(MchpRegBlock *rb)
+ {
+@@ -356,7 +688,19 @@ static uint32_t adc_irq_lines(MchpRegBlock *rb)
+ 
+ static void adc_reset_hold(MchpRegBlock *rb)
+ {
+-    MCHP_ADC_U2247(rb)->unread = false;
++    MchpAdcU2247State *s = MCHP_ADC_U2247(rb);
++
++    s->unread = false;
++    adc_stop(s);
++    /* The event inputs are lines, not registers: a reset keeps them */
++}
++
++static bool adc_realize(MchpRegBlock *rb, Error **errp)
++{
++    MchpAdcU2247State *s = MCHP_ADC_U2247(rb);
++
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, adc_timer_cb, s);
++    return true;
+ }
+ 
+ /* "ain": "channel=mV,channel=mV" (a channel=-1 unsets it) */
+@@ -439,6 +783,7 @@ static void adc_set_pads(Object *obj, const char *value, Error **errp)
+ static void adc_init(Object *obj)
+ {
+     MchpAdcU2247State *s = MCHP_ADC_U2247(obj);
++    DeviceState *dev = DEVICE(obj);
+ 
+     for (unsigned i = 0; i < ADC_NAIN; i++) {
+         s->ain_mv[i] = -1;
+@@ -454,12 +799,25 @@ static void adc_init(Object *obj)
+                         &s->vdd_mv);
+     object_property_add(obj, "vrefa", "int32", adc_get_i32, adc_set_i32,
+                         NULL, &s->vrefa_mv);
++    qdev_init_gpio_in_named(dev, adc_start_event, "start-event-in", 1);
++    qdev_init_gpio_in_named(dev, adc_sync_event, "sync-event-in", 1);
++    qdev_init_gpio_out_named(dev, &s->resrdy_event, "resrdy-event", 1);
++    qdev_init_gpio_out_named(dev, &s->winmon_event, "winmon-event", 1);
++}
++
++static void adc_finalize(Object *obj)
++{
++    MchpAdcU2247State *s = MCHP_ADC_U2247(obj);
++
++    if (s->timer) {
++        timer_free(s->timer);
++    }
+ }
+ 
+ static const VMStateDescription vmstate_mchp_adc_u2247 = {
+     .name = TYPE_MCHP_ADC_U2247,
+-    .version_id = 1,
+-    .minimum_version_id = 1,
++    .version_id = 2,
++    .minimum_version_id = 2,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpAdcU2247State, 1,
+                        vmstate_mchp_regblock, MchpRegBlock),
+@@ -468,6 +826,14 @@ static const VMStateDescription vmstate_mchp_adc_u2247 = {
+         VMSTATE_INT32(vdd_mv, MchpAdcU2247State),
+         VMSTATE_INT32(vrefa_mv, MchpAdcU2247State),
+         VMSTATE_BOOL(unread, MchpAdcU2247State),
++        VMSTATE_TIMER_PTR(timer, MchpAdcU2247State),
++        VMSTATE_BOOL(converting, MchpAdcU2247State),
++        VMSTATE_INT64(start_clear_at, MchpAdcU2247State),
++        VMSTATE_INT64(ready_at, MchpAdcU2247State),
++        VMSTATE_UINT32(mux, MchpAdcU2247State),
++        VMSTATE_UINT32(seq_left, MchpAdcU2247State),
++        VMSTATE_BOOL_ARRAY(ev_level, MchpAdcU2247State, 2),
++        VMSTATE_BOOL(turn_client, MchpAdcU2247State),
+         VMSTATE_END_OF_LIST()
+     },
+ };
+@@ -480,6 +846,7 @@ static void adc_class_init(ObjectClass *klass, const void *data)
+     c->pre_read = adc_pre_read;
+     c->post_write = adc_post_write;
+     c->reset_hold = adc_reset_hold;
++    c->realize = adc_realize;
+     c->irq_lines = adc_irq_lines;
+     c->log_writes = false;
+ }
+@@ -490,6 +857,7 @@ static const TypeInfo mchp_adc_u2247_types[] = {
+         .parent = TYPE_MCHP_REGBLOCK,
+         .instance_size = sizeof(MchpAdcU2247State),
+         .instance_init = adc_init,
++        .instance_finalize = adc_finalize,
+         .class_init = adc_class_init,
+     },
+ };
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index 89b7e02..8f8223c 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -652,7 +652,9 @@ static void pic32cm_map_qspi(Pic32cmSocState *s, SysBusDevice *sbd)
+ 
+ /*
+  * DMAC triggers the model can pace: SERCOM TX while INTFLAG.DRE is set, RX
+- * while INTFLAG.RXC is (INTFLAG at 0x18 in every SERCOM mode)
++ * while INTFLAG.RXC is (INTFLAG at 0x18 in every SERCOM mode); the PIC32CM
++ * ADC's (U2247) RESRDY while its INTFLAG.RESRDY is (0x06; reading RESULT
++ * clears it)
+  */
+ static void pic32cm_dmac_triggers(Pic32cmSocState *s, DeviceState *dmac)
+ {
+@@ -660,8 +662,15 @@ static void pic32cm_dmac_triggers(Pic32cmSocState *s, DeviceState *dmac)
+         const MchpPeriphRef *ref = &s->dev->dmac_triggers[i];
+         const MchpInstanceInfo *info = pic32cm_info(s, ref->instance);
+ 
+-        if (ref->id >= MCHP_DMAC_MAX_TRIGGERS ||
+-            strcmp(info->module, "SERCOM")) {
++        if (ref->id >= MCHP_DMAC_MAX_TRIGGERS) {
++            continue;
++        }
++        if (!strcmp(info->module, "ADC") && !strcmp(info->ip_id, "U2247") &&
++            !strcmp(ref->param, "DMAC_ID_RESRDY")) {
++            mchp_dmac_set_trigger(dmac, ref->id, info->base + 0x06, 0x01);
++            continue;
++        }
++        if (strcmp(info->module, "SERCOM")) {
+             continue;
+         }
+         if (!strcmp(ref->param, "DMAC_ID_TX")) {
+diff --git a/hw/dma/mchp_dmac.c b/hw/dma/mchp_dmac.c
+index bb1fe81..fe405f2 100644
+--- a/hw/dma/mchp_dmac.c
++++ b/hw/dma/mchp_dmac.c
+@@ -408,6 +408,10 @@ static void dmac_trigger_in(void *opaque, int id, int level)
+ 
+ void mchp_dmac_kick(DeviceState *dev)
+ {
++    if (object_dynamic_cast(OBJECT(dev), TYPE_MCHP_DMAC_U2223)) {
++        mchp_dmac_u2223_kick(dev);
++        return;
++    }
+     dmac_schedule(MCHP_DMAC(dev));
+ }
+ 
+diff --git a/hw/dma/mchp_dmac_u2223.c b/hw/dma/mchp_dmac_u2223.c
+index 50a2d9f..401019c 100644
+--- a/hw/dma/mchp_dmac_u2223.c
++++ b/hw/dma/mchp_dmac_u2223.c
+@@ -693,6 +693,17 @@ static void event_in(void *opaque, int ch, int level)
+     run(s);
+ }
+ 
++/* A peripheral set its level trigger: run the channels now */
++void mchp_dmac_u2223_kick(DeviceState *dev)
++{
++    MchpDmacU2223State *s = MCHP_DMAC_U2223(dev);
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    if (!timer_pending(s->timer) || timer_expire_time_ns(s->timer) > now) {
++        timer_mod(s->timer, now);
++    }
++}
++
+ void mchp_dmac_u2223_set_trigger(DeviceState *dev, unsigned id,
+                                  hwaddr flag_addr, uint8_t mask)
+ {
+diff --git a/hw/timer/mchp_tcc.c b/hw/timer/mchp_tcc.c
+index e80976f..7b4ee54 100644
+--- a/hw/timer/mchp_tcc.c
++++ b/hw/timer/mchp_tcc.c
+@@ -2060,7 +2060,6 @@ static void tcc_reset_hold(MchpRegBlock *rb)
+     s->ramp_idx = false;
+     s->dith_cycle = 0;
+     tcc_fault_reset(s);
+-    s->mc_level = 0;
+     timer_del(s->capt_timer);
+     for (unsigned ch = 0; ch < MCHP_TCC_CHANNELS; ch++) {
+         s->refill_at[ch] = INT64_MAX;
+diff --git a/include/hw/dma/mchp_dmac.h b/include/hw/dma/mchp_dmac.h
+index 6d7708f..3560584 100644
+--- a/include/hw/dma/mchp_dmac.h
++++ b/include/hw/dma/mchp_dmac.h
+@@ -45,6 +45,7 @@ void mchp_dmac_set_trigger(DeviceState *dmac, unsigned id, hwaddr flag_addr,
+ 
+ void mchp_dmac_u2223_set_trigger(DeviceState *dmac, unsigned id,
+                                  hwaddr flag_addr, uint8_t mask);
++void mchp_dmac_u2223_kick(DeviceState *dmac);
+ 
+ /* Look again at the triggers (a peripheral's flags may have changed). */
+ void mchp_dmac_kick(DeviceState *dmac);
+diff --git a/include/hw/mchp/gen/adc_u2247.h b/include/hw/mchp/gen/adc_u2247.h
+index 4bd97df..cbf72e6 100644
+--- a/include/hw/mchp/gen/adc_u2247.h
++++ b/include/hw/mchp/gen/adc_u2247.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/adc_u2247.yaml (sha1 ac169f8454b2)
++ * Overlay: overlays/adc_u2247.yaml (sha1 735cd5bbdd95)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h b/include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h
+index 7d5eec1..9e88dae 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/adc_u2247.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/adc_u2247.yaml (sha1 ac169f8454b2)
++ * Overlay: overlays/adc_u2247.yaml (sha1 735cd5bbdd95)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -37,7 +37,8 @@ static const MchpRegInfo pic32cm1216mc00048_adc_regs[] = {
+     },
+     {
+         .name = "EVCTRL", .offset = 0x03, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x3F, .wmask = 0x3F, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x3F, .wmask = 0x3F,
++        .enprot = 0x3F, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
+@@ -103,7 +104,8 @@ static const MchpRegInfo pic32cm1216mc00048_adc_regs[] = {
+     {
+         .name = "SWTRIG", .offset = 0x18, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .syncbusy = 0x00000400 /* SYNCBUSY */, .flags = MCHP_F_HOOK_POST_WRITE,
++        .syncbusy = 0x00000400 /* SYNCBUSY */,
++        .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x1C, .size = 1, .count = 1, .stride = 1,
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h b/include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h
+index 0abb8af..0734870 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/adc_u2247.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/adc_u2247.yaml (sha1 ac169f8454b2)
++ * Overlay: overlays/adc_u2247.yaml (sha1 735cd5bbdd95)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -37,7 +37,8 @@ static const MchpRegInfo pic32cm5164jh01100_adc_regs[] = {
+     },
+     {
+         .name = "EVCTRL", .offset = 0x03, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x3F, .wmask = 0x3F, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x3F, .wmask = 0x3F,
++        .enprot = 0x3F, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
+@@ -103,7 +104,8 @@ static const MchpRegInfo pic32cm5164jh01100_adc_regs[] = {
+     {
+         .name = "SWTRIG", .offset = 0x18, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x03, .wmask = 0x03,
+-        .syncbusy = 0x00000400 /* SYNCBUSY */, .flags = MCHP_F_HOOK_POST_WRITE,
++        .syncbusy = 0x00000400 /* SYNCBUSY */,
++        .flags = MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x1C, .size = 1, .count = 1, .stride = 1,
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index 21f9eaa..ddc053a 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -253,7 +253,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-nvmctrl-test', 'pic32cm-wdt-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-dmac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-click-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-nvmctrl-test', 'pic32cm-wdt-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-dmac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-adc-test', 'pic32cm-click-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-adc-test.c b/tests/qtest/pic32cm-adc-test.c
+new file mode 100644
+index 0000000..3958a9b
+--- /dev/null
++++ b/tests/qtest/pic32cm-adc-test.c
+@@ -0,0 +1,274 @@
++/*
++ * QTest for the ADC of the PIC32CM MC00 (pic32cm-mc00-cpro, ADC U2247)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * GCLK0 runs at 4 MHz out of reset; PRESCALER DIV2 makes CLK_ADC 2 MHz.
++ * A 12-bit conversion with SAMPLEN 0 takes 14 CLK_ADC cycles (7 us) after
++ * a start's 36 GCLK cycles (9 us), and none starts within 10 us of the
++ * enable, as on PIC32CM MC00 silicon (firmware/hello/tests/adcprobe.c to
++ * adcprobe4.c, checked by adcseq.c). Virtual time is stepped explicitly.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++
++#define MACHINE         "-M pic32cm-mc00-cpro "
++
++#define GCLK_PCHCTRL    0x40001C80
++#define ADC0            0x42004400
++#define ADC1            0x42004800
++#define ADC0_GCLK_ID    28
++#define ADC1_GCLK_ID    29
++#define ADC0_PATH       "/machine/soc/adc0"
++
++#define R_CTRLA         0x00
++#define R_CTRLB         0x01
++#define R_REFCTRL       0x02
++#define R_EVCTRL        0x03
++#define R_INTFLAG       0x06
++#define R_SEQSTATUS     0x07
++#define R_INPUTCTRL     0x08
++#define R_CTRLC         0x0A
++#define R_AVGCTRL       0x0C
++#define R_SWTRIG        0x18
++#define R_RESULT        0x24
++#define R_SEQCTRL       0x28
++
++#define ENABLE          BIT(1)
++#define SLAVEEN         BIT(5)
++#define INTVCC2         5
++#define FLUSHEI         BIT(0)
++#define STARTEI         BIT(1)
++#define STARTINV        BIT(3)
++#define RESRDY          BIT(0)
++#define OVERRUN         BIT(1)
++#define SEQBUSY         BIT(7)
++#define FREERUN         BIT(2)
++#define RESSEL_16BIT    (1 << 4)
++#define DUALSEL_INTERLEAVE (1 << 12)
++#define SAMPLENUM_16    4
++#define FLUSH           BIT(0)
++#define START           BIT(1)
++#define CORE            0x1A        /* SCALEDVDDCORE: 300 mV */
++#define ANA             0x1B        /* SCALEDVDDANA */
++
++#define US              1000
++
++static int64_t now_ns;
++
++/* Step to @us microseconds after the enable */
++static void at_us(QTestState *qts, double us)
++{
++    int64_t t = (int64_t)(us * US);
++
++    g_assert_cmpint(t, >, now_ns);
++    qtest_clock_step(qts, t - now_ns);
++    now_ns = t;
++}
++
++static QTestState *adc_init(uint8_t ctrlc_lo, uint32_t seq, uint8_t evctrl)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, GCLK_PCHCTRL + 4 * ADC0_GCLK_ID, 0x40);
++    qtest_writel(qts, GCLK_PCHCTRL + 4 * ADC1_GCLK_ID, 0x40);
++    qtest_writeb(qts, ADC0 + R_CTRLB, 0);               /* DIV2 */
++    qtest_writeb(qts, ADC0 + R_REFCTRL, INTVCC2);
++    qtest_writew(qts, ADC0 + R_INPUTCTRL, CORE);
++    qtest_writel(qts, ADC0 + R_SEQCTRL, seq);
++    qtest_writeb(qts, ADC0 + R_EVCTRL, evctrl);
++    qtest_writew(qts, ADC0 + R_CTRLC, ctrlc_lo);
++    qtest_writeb(qts, ADC0 + R_CTRLA, ENABLE);
++    now_ns = 0;
++    return qts;
++}
++
++static bool resrdy(QTestState *qts, uint32_t adc)
++{
++    return qtest_readb(qts, adc + R_INTFLAG) & RESRDY;
++}
++
++/*
++ * A start at 20 us (past the start-up): SWTRIG.START reads 1 until the
++ * conversion starts at 29 us, RESRDY at 36 us
++ */
++static void test_timing(void)
++{
++    QTestState *qts = adc_init(0, 0, 0);
++
++    at_us(qts, 20);
++    qtest_writeb(qts, ADC0 + R_SWTRIG, START);
++    at_us(qts, 29);
++    g_assert_cmphex(qtest_readb(qts, ADC0 + R_SWTRIG), ==, START);
++    at_us(qts, 30);
++    g_assert_cmphex(qtest_readb(qts, ADC0 + R_SWTRIG), ==, 0);
++    at_us(qts, 35.9);
++    g_assert_false(resrdy(qts, ADC0));
++    at_us(qts, 36.1);
++    g_assert_true(resrdy(qts, ADC0));
++    g_assert_cmpuint(qtest_readw(qts, ADC0 + R_RESULT), ==, 372);
++    g_assert_false(resrdy(qts, ADC0));          /* reading cleared it */
++    qtest_quit(qts);
++
++    /* Right after the enable: no start before 10 us, RESRDY at 17 us */
++    qts = adc_init(0, 0, 0);
++    qtest_writeb(qts, ADC0 + R_SWTRIG, START);
++    at_us(qts, 16.9);
++    g_assert_false(resrdy(qts, ADC0));
++    at_us(qts, 17.1);
++    g_assert_true(resrdy(qts, ADC0));
++    qtest_quit(qts);
++
++    /* 16 samples averaged: 16 x 13 + 1 CLK_ADC cycles */
++    qts = adc_init(RESSEL_16BIT, 0, 0);
++    qtest_writeb(qts, ADC0 + R_AVGCTRL, SAMPLENUM_16);
++    at_us(qts, 20);
++    qtest_writeb(qts, ADC0 + R_SWTRIG, START);
++    at_us(qts, 20 + 9 + 104.4);
++    g_assert_false(resrdy(qts, ADC0));
++    at_us(qts, 20 + 9 + 104.6);
++    g_assert_true(resrdy(qts, ADC0));
++    qtest_quit(qts);
++}
++
++/* Free running: back to back every 13 CLK_ADC cycles, OVERRUN unread */
++static void test_freerun(void)
++{
++    QTestState *qts = adc_init(FREERUN, 0, 0);
++
++    at_us(qts, 17.1);                           /* started at the enable */
++    g_assert_true(resrdy(qts, ADC0));
++    qtest_readw(qts, ADC0 + R_RESULT);
++    at_us(qts, 23.4);
++    g_assert_false(resrdy(qts, ADC0));
++    at_us(qts, 23.6);
++    g_assert_true(resrdy(qts, ADC0));
++    at_us(qts, 30.2);                           /* not read */
++    g_assert_cmphex(qtest_readb(qts, ADC0 + R_INTFLAG) & OVERRUN, ==,
++                    OVERRUN);
++    qtest_quit(qts);
++}
++
++/* A sequence of 0x1A and 0x1B: SEQSTATUS busy then the last input */
++static void test_sequence(void)
++{
++    QTestState *qts = adc_init(0, BIT(CORE) | BIT(ANA), 0);
++
++    at_us(qts, 20);
++    qtest_writeb(qts, ADC0 + R_SWTRIG, START);
++    g_assert_cmphex(qtest_readb(qts, ADC0 + R_SEQSTATUS) & SEQBUSY, ==,
++                    SEQBUSY);
++    at_us(qts, 36.1);
++    g_assert_cmphex(qtest_readb(qts, ADC0 + R_SEQSTATUS), ==, SEQBUSY | CORE);
++    g_assert_cmpuint(qtest_readw(qts, ADC0 + R_RESULT), ==, 372);
++    at_us(qts, 42.6);
++    g_assert_cmphex(qtest_readb(qts, ADC0 + R_SEQSTATUS), ==, ANA);
++    g_assert_cmpuint(qtest_readw(qts, ADC0 + R_RESULT), ==, 1024);
++    at_us(qts, 60);
++    g_assert_false(resrdy(qts, ADC0));          /* the sequence ended */
++    qtest_quit(qts);
++
++    /* With FREERUN it repeats, SEQBUSY staying set */
++    qts = adc_init(FREERUN, BIT(CORE) | BIT(ANA), 0);
++    at_us(qts, 23.6);
++    g_assert_cmphex(qtest_readb(qts, ADC0 + R_SEQSTATUS), ==, SEQBUSY | ANA);
++    at_us(qts, 30.1);
++    g_assert_cmphex(qtest_readb(qts, ADC0 + R_SEQSTATUS), ==,
++                    SEQBUSY | CORE);
++    qtest_quit(qts);
++}
++
++/*
++ * The START event's rising edge starts (its falling edge with STARTINV);
++ * the SYNC event flushes a free-running conversion, which starts again
++ */
++static void test_events(void)
++{
++    QTestState *qts = adc_init(0, 0, STARTEI);
++
++    at_us(qts, 20);
++    qtest_set_irq_in(qts, ADC0_PATH, "start-event-in", 0, 1);
++    at_us(qts, 36.1);
++    g_assert_true(resrdy(qts, ADC0));
++    qtest_quit(qts);
++
++    qts = adc_init(0, 0, STARTEI | STARTINV);
++    at_us(qts, 20);
++    qtest_set_irq_in(qts, ADC0_PATH, "start-event-in", 0, 1);
++    at_us(qts, 40);
++    g_assert_false(resrdy(qts, ADC0));
++    qtest_set_irq_in(qts, ADC0_PATH, "start-event-in", 0, 0);
++    at_us(qts, 56.1);
++    g_assert_true(resrdy(qts, ADC0));
++    qtest_quit(qts);
++
++    /* Flushed at 20 us, 3 us into a conversion: the next ends at 36 us */
++    qts = adc_init(FREERUN, 0, FLUSHEI);
++    at_us(qts, 17.1);
++    qtest_readw(qts, ADC0 + R_RESULT);
++    at_us(qts, 20);
++    qtest_set_irq_in(qts, ADC0_PATH, "sync-event-in", 0, 1);
++    at_us(qts, 35.9);
++    g_assert_false(resrdy(qts, ADC0));
++    at_us(qts, 36.1);
++    g_assert_true(resrdy(qts, ADC0));
++    qtest_quit(qts);
++}
++
++/* ADC1 as ADC0's client: both convert at once, or in turn (INTERLEAVE) */
++static void test_dual(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, GCLK_PCHCTRL + 4 * ADC0_GCLK_ID, 0x40);
++    qtest_writel(qts, GCLK_PCHCTRL + 4 * ADC1_GCLK_ID, 0x40);
++    qtest_writeb(qts, ADC1 + R_REFCTRL, INTVCC2);
++    qtest_writew(qts, ADC1 + R_INPUTCTRL, ANA);
++    qtest_writeb(qts, ADC1 + R_CTRLA, SLAVEEN);
++    qtest_writeb(qts, ADC0 + R_REFCTRL, INTVCC2);
++    qtest_writew(qts, ADC0 + R_INPUTCTRL, CORE);
++    qtest_writeb(qts, ADC0 + R_CTRLA, ENABLE);
++    now_ns = 0;
++    at_us(qts, 20);
++    qtest_writeb(qts, ADC1 + R_SWTRIG, START);  /* a client's: nothing */
++    at_us(qts, 40);
++    g_assert_false(resrdy(qts, ADC1));
++    qtest_writeb(qts, ADC0 + R_SWTRIG, START);
++    at_us(qts, 60);
++    g_assert_true(resrdy(qts, ADC0));
++    g_assert_true(resrdy(qts, ADC1));
++    g_assert_cmpuint(qtest_readw(qts, ADC1 + R_RESULT), ==, 1024);
++    qtest_readw(qts, ADC0 + R_RESULT);
++
++    qtest_writeb(qts, ADC0 + R_CTRLA, 0);
++    qtest_writew(qts, ADC0 + R_CTRLC, DUALSEL_INTERLEAVE);
++    qtest_writeb(qts, ADC0 + R_CTRLA, ENABLE);
++    for (unsigned k = 0; k < 4; k++) {
++        at_us(qts, 100 + 40 * k);
++        qtest_writeb(qts, ADC0 + R_SWTRIG, START);
++        at_us(qts, 130 + 40 * k);
++        g_assert_cmpint(resrdy(qts, ADC0), ==, !(k & 1));
++        g_assert_cmpint(resrdy(qts, ADC1), ==, k & 1);
++        qtest_readw(qts, ADC0 + R_RESULT);
++        qtest_readw(qts, ADC1 + R_RESULT);
++    }
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++
++    qtest_add_func("pic32cm-adc/timing", test_timing);
++    qtest_add_func("pic32cm-adc/freerun", test_freerun);
++    qtest_add_func("pic32cm-adc/sequence", test_sequence);
++    qtest_add_func("pic32cm-adc/events", test_events);
++    qtest_add_func("pic32cm-adc/dual", test_dual);
++
++    return g_test_run();
++}
+-- 
+2.53.0.windows.2
+

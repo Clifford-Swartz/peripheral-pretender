@@ -1,14 +1,16 @@
 # Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
 #
 # Behavior overlay for ADC U2247 (PIC32CM MC00 and JH01, two instances,
-# one IRQ line each). The mchp-adc-u2247 model converts at once on
-# SWTRIG.START, or on enable and each RESULT read in free-running mode.
+# one IRQ line each). The mchp-adc-u2247 model converts in silicon's time
+# on SWTRIG.START, the START event, or free running; sequences, the flush,
+# event outputs, the RESRDY DMA request and ADC1 as ADC0's client.
 ip: ADC
 id: U2247
 versions: ["2.2.0", "2.4.0"]
 references:
   - "PIC32CM MC00 data sheet (Low-Power, 32-bit Cortex-M0+ MCU with Advanced Analog and PWM), ADC chapter"
   - "PIC32CM MC00 silicon, firmware/hello APP=adc (2026-10-15)"
+  - "PIC32CM MC00 silicon, firmware/hello APP=adcprobe..adcprobe4 (2026-10-21)"
 registers:
   CTRLA:
     pac_protected: true
@@ -18,11 +20,12 @@ registers:
   # Silicon (MC00): a REFCTRL write while ENABLE is set is ignored
   REFCTRL: {pac_protected: true, enable_protected: all}
   CTRLC: {pac_protected: true, hooks: [post_write]}   # FREERUN starts
+  EVCTRL: {pac_protected: true, enable_protected: all}
   INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
   INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
   INTFLAG:
     w1c: all
     irq_source: {enable: INTENSET}
-  SWTRIG: {hooks: [post_write]}   # START converts, FLUSH drops
+  SWTRIG: {hooks: [pre_read, post_write]}   # START reads 1 until it starts
   SYNCBUSY: {dynamic: true}       # instant synchronization
   RESULT: {hooks: [pre_read]}     # reading clears RESRDY
