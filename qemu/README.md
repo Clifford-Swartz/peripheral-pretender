@@ -81,6 +81,7 @@ upstream, because QEMU declines AI-generated contributions (`docs/devel/code-pro
 | 0072 | DAC (U2214) data buffer from `dacprobe`..`dacprobe3`: DATABUF moved by the START event (INVEI), EMPTY at every enable and per START, UNDERRUN, SYNCBUSY.DATA/DATABUF held until a START (writes meanwhile dropped), dithering (EMPTY every 16th START), the EMPTY event and DMA trigger; qtest |
 | 0073 | Standby from `sleepprobe`/`sleepprobe2`: a WFI with PM.SLEEPCFG = STANDBY gates every GCLK channel no enabled RUNSTDBY peripheral asks for (sources and generators run on demand) and stops the CPU clock; `ARMCPU.sleep_hook` in target/arm, `MchpInstanceInfo.standby_*` from the ATDF, SysTick holds its count at 0 Hz, TC/TCC resume where their clock stopped; qtest |
 | 0074 | PORT "func-in" and `pic32cm_connect_pad_inputs()`: a pad muxed to a function reaches the model input "pad-<group>-in"; CCL (U2225) from `cclprobe`/`cclprobe2`: LUTs on every INSEL source (TC/TCC/AC tapped without pads), SYNCH/FILTER edges, EDGESEL, DFF/JK/LATCH/RS sequencers, OUT pads and LUTOUT events, silicon's LUTCTRL protection; qtest |
+| 0075 | PDEC (U2263) from `pdecprobe`/`pdecprobe2`: QDEC X4/X2 on pads or events with silicon's DIR, VLC and QERR rules, angular/revolution counters, MC0/MC1 on arrival, START/STOP/RETRIGGER, COUNTER mode, HALL codes, the CC buffer; the index not modelled; qtest |
 
 ## Setting it up
 

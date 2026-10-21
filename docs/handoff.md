@@ -634,10 +634,15 @@ TC/TCC/AC taps) follows `cclprobe` and `cclprobe2` on silicon, checked by `ccl` 
 `pic32cm-ccl-test`. Silicon's LUTCTRL protection is stricter than the data sheet says. Note
 `ccl-u2225.md` sections 8-9, playbook `peripherals/ccl.md`.
 
+**PDEC** (patch 0075): QDEC X4 and X2 with silicon's direction, VLC and QERR rules, the
+angular/revolution counters, MC0/MC1 on a count arriving at CCx, the commands, COUNTER mode, HALL
+codes and the CC buffer, from `pdecprobe` and `pdecprobe2`, checked by `pdec` and qtest
+`pic32cm-pdec-test`. The index (and X4S) behaved unlike the data sheet and is not modelled yet.
+Note `pdec-u2263.md` sections 8-9, playbook `peripherals/pdec.md`.
+
 Next on the MC00, in order (the owner's list of 2026-10-21):
 
-1. **PDEC** (the pad input path is ready for its QDI pins).
-2. The long tail: MTB, PAC protection, DSU CRC32, SERCOM client modes, clock failure detection,
+1. The long tail: MTB, PAC protection, DSU CRC32, SERCOM client modes, clock failure detection,
    BOD, RTC tamper, PORT sampling, MCLK gating.
 
 The JH01, SAM E51 and AVR blocks wait for their boards to be plugged in, so they can be checked

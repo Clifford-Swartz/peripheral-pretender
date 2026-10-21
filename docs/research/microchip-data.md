@@ -197,6 +197,10 @@ I examined PIC32CM-JH DFP 1.3.221 (about 91 MB, 24 parts). For each part it ship
      LUTCTRLn.ENABLE = 1 (true only with the CCL off); FEEDBACK reads 0 without a sequencer; the
      SERCOM input reads 1 even with the SERCOM off; TCC1/TCC2 feed CC0's output to IN2
      (`ccl-u2225.md` section 8).
+   - PDEC: CC0/CC1 are 16 bits (Harmony's HALL `<< 16` window writes land nowhere); RETRIGGER
+     loads 0 also counting down (42.6.2.6.1 suggests TOP); COUNTER runs from the enable without
+     START; MC0/MC1 flag a count arriving at CCx only; a second CCBUFx write before the copy is
+     dropped; the index did not behave as 42.6.2.6.1 describes (`pdec-u2263.md` section 8).
 
 ## Table: DFP inventory
 | folder / file | contents | approx size | contribution to a QEMU twin |

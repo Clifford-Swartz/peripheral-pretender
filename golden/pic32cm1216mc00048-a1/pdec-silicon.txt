@@ -1,0 +1,14 @@
+PP pdec: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+registers ctrla=0x00000000 status=0x0040 ctrla_mask=0xF777CF4C evctrl_mask=0x3FFF cc0_16_bits=0x0000FFFF presc_mask=0x0F filter_mask=0xFF ok
+start bad=0x00 ok
+direction bad=0x00 swap_pinven_bad=0x00 ok
+readsync without=0x00000000 with=0x00000005 written=0x00000100 counts_on=0x00000101 ok
+angular bad=0x00 wrap16_bad=0x00 ok
+compare bad=0x00 ok
+commands bad=0x00 ok
+qerr bad=0x00 ok
+x2 bad=0x00 ok
+counter no_start_10ms=468 status=0x0000 ovf_ms=100 mc0_ms=100 mc1_ms=22 ok
+hall wrong=0x0000 herr_code0=0x01 ok
+buffers cc0_shows_buf=0x00000200 ccbufv0=0x1000 still_valid=0x1000 cc0_updated=0x00000200 valid_cleared=0x0000 ok
+PP:EXIT 0

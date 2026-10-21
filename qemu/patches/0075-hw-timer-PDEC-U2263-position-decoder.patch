@@ -1,0 +1,1472 @@
+From 82a4655911824e962a19ae04ff1d67b5fcb3e9ff Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 21 Oct 2026 14:07:24 -0700
+Subject: [PATCH] hw/timer: PDEC (U2263) position decoder
+
+The PDEC as PIC32CM MC00 silicon showed it (firmware/hello
+APP=pdecprobe and pdecprobe2, checked by pdec):
+
+- Inputs from the PDEC pads (the generic pad input path, "pad-qdi-in")
+  or events EVU0-2, with PINVEN/EVINV and SWAP. Input changes in one
+  instant are decoded together, so one event into two inputs is a
+  simultaneous change.
+- QDEC and HALL wait for START after every enable; COUNTER runs from
+  the enable. STOP keeps COUNT; RETRIGGER loads 0 in either direction.
+- X4: the S0-leading order counts up, 4 per cycle; a reversal sets
+  STATUS.DIR at its first edge and INTFLAG.DIR with VLC at the second;
+  a simultaneous S0/S1 change sets QERR and ERR without counting,
+  except the first transition after START. X2: S0 edges count, down
+  while S1 is 1.
+- COUNT's angular and revolution parts wrap at their TOPs (all ones or
+  CC0's parts with PEREN); an angular wrap moves the revolution count
+  silently, a full wrap raises OVF. MC0/MC1 flag COUNT arriving at
+  CC0/CC1, and a match at START and RETRIGGER.
+- COUNTER counts GCLK_PDEC / 2^PRESC up to 0xFFFF or CC0.
+- HALL: the code in COUNT[2:0], direction by the 1-3-2-6-4-5 order,
+  HERR on 0 and 7.
+- COUNT reads the READSYNC copy; CCx reads CCBUFx while valid, a second
+  CCBUFx write meanwhile is dropped; UPDATE and an overflow (unless
+  LUPD) copy the buffers.
+
+Not modelled: the index and the X4S/X2S index checks (silicon did not
+follow the data sheet there), AUTOC, the HALL window and delay
+counters, the input filter, COUNTER event actions.
+
+qtest pic32cm-pdec-test: X4, X2, COUNTER, the CC buffer.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst         |   8 +-
+ hw/arm/pic32cm_soc.c                          |   2 +
+ hw/timer/mchp_pdec.c                          | 746 ++++++++++++++++++
+ hw/timer/meson.build                          |   3 +-
+ include/hw/mchp/gen/atsame51j20a/pdec_u2263.h |  41 +-
+ include/hw/mchp/gen/pdec_u2263.h              |   2 +-
+ .../mchp/gen/pic32cm1216mc00048/pdec_u2263.h  |  43 +-
+ .../mchp/gen/pic32cm5164jh01100/pdec_u2263.h  |  43 +-
+ include/hw/timer/mchp_pdec.h                  |  25 +
+ tests/qtest/meson.build                       |   2 +-
+ tests/qtest/pic32cm-pdec-test.c               | 173 ++++
+ 11 files changed, 1031 insertions(+), 57 deletions(-)
+ create mode 100644 hw/timer/mchp_pdec.c
+ create mode 100644 include/hw/timer/mchp_pdec.h
+ create mode 100644 tests/qtest/pic32cm-pdec-test.c
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index 1a49ab1..b0bd6f7 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -99,6 +99,12 @@ Supported devices
+   latch and RS sequencers, OUT pads and LUTOUT events, and the LUTCTRL
+   protection a PIC32CM MC00 applies (only ENABLE takes while the CCL or
+   the LUT is on).
++- PDEC (U2263): QDEC X4 and X2 from the PDEC pads or events (swap,
++  inversion), the angular and revolution counters with PEREN, OVF and
++  MC0/MC1 (on a count arriving at CCx), STATUS.DIR, the DIR flag and VLC
++  as a PIC32CM MC00 raises them, QERR, the commands, COUNTER mode, HALL
++  codes and direction, and the CC/PRESC/FILTER buffers. Not modelled:
++  the index and the X4S/X2S checks, AUTOC, the HALL window counters.
+ - EIC: edge and level detection on the EXTINT inputs that PORT routes to
+   it (pins muxed to function A) and NMI, synchronous edges only with the
+   EIC clock, event outputs.
+@@ -195,7 +201,7 @@ Missing devices
+   RAMP2CS, CTRLBSET.IDXCMD, the outputs' start latency and the STATUS
+   read lag.
+ - PAC write protection, DSU CRC32 and chip erase, SLEEPONEXIT and
+-  STDBYCFG, and every other peripheral behaviour (PDEC, CAN, ...).
++  STDBYCFG, and every other peripheral behaviour (CAN, ...).
+ 
+ Board and SoC properties
+ """"""""""""""""""""""""
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index cb880da..544c9dc 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -32,6 +32,7 @@
+ #include "hw/rtc/mchp_rtc.h"
+ #include "hw/timer/mchp_tc.h"
+ #include "hw/timer/mchp_tcc.h"
++#include "hw/timer/mchp_pdec.h"
+ #include "hw/mchp/gen/rstc_u2239.h"
+ #include "hw/misc/mchp_sysctrl.h"
+ #include "hw/adc/mchp_adc.h"
+@@ -62,6 +63,7 @@ static const struct {
+     { "DAC", TYPE_MCHP_DAC, "U2502" },
+     { "DAC", TYPE_MCHP_DAC_U2214, "U2214" },
+     { "CCL", TYPE_MCHP_CCL, "U2225" },
++    { "PDEC", TYPE_MCHP_PDEC, "U2263" },
+     { "DIVAS", TYPE_MCHP_DIVAS },
+     { "DMAC", TYPE_MCHP_DMAC, "U2503" },
+     { "DMAC", TYPE_MCHP_DMAC_U2223, "U2223" },
+diff --git a/hw/timer/mchp_pdec.c b/hw/timer/mchp_pdec.c
+new file mode 100644
+index 0000000..bbbb851
+--- /dev/null
++++ b/hw/timer/mchp_pdec.c
+@@ -0,0 +1,746 @@
++/*
++ * Microchip position decoder (PDEC U2263)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * QDEC, HALL and COUNTER modes as PIC32CM MC00 silicon showed them
++ * (firmware/hello APP=pdecprobe and pdecprobe2, checked by pdec;
++ * docs/research/peripherals/pdec-u2263.md):
++ *
++ *   - Inputs S0-S2: the pad PDEC[n] ("pad-qdi-in", CTRLA.PINENn, inverted
++ *     by PINVENn) or the event EVUn ("evu-event-in", EVCTRL.EVEIn,
++ *     EVINVn); CTRLA.SWAP swaps S0 and S1 in QDEC and HALL.
++ *   - The enable leaves QDEC and HALL stopped (STATUS.STOP) until a START
++ *     command; COUNTER counts from the enable. STOP keeps COUNT; RETRIGGER
++ *     loads 0 in either direction; a re-enable stops again.
++ *   - QDEC X4 (CONF X4, and X4S/AUTOC without their extras): every S0/S1
++ *     transition counts, the S0-leading order up. A reversal sets
++ *     STATUS.DIR at its first edge and INTFLAG.DIR at the second; every
++ *     transition but that first one raises VLC. A simultaneous S0/S1
++ *     change sets STATUS.QERR and ERR and does not count, except the first
++ *     transition after START. X2 (and X2S): each S0 edge counts, down
++ *     while S1 is 1; STATUS.DIR follows S1, INTFLAG.DIR flags a count in
++ *     the other direction than the last.
++ *   - COUNT holds the angular count in its ANGULAR + 9 low bits and the
++ *     revolution count above. Each part wraps at its TOP (all ones, or
++ *     the part of CC0 with PEREN); an angular wrap moves the revolution
++ *     count without a flag, a wrap of both raises OVF.
++ *   - COUNTER counts GCLK_PDEC / 2^PRESC up to TOP (0xFFFF, or CC0 with
++ *     PEREN), then wraps with OVF.
++ *   - MC0 and MC1 flag COUNT becoming CC0, CC1 (a count that stays on
++ *     the value flags nothing), and a match at START and RETRIGGER.
++ *   - Input changes in the same instant are one transition (one event
++ *     into EVU0 and EVU1 is a simultaneous S0/S1 change, as on silicon).
++ *   - HALL: the code S2 S1 S0 lands in COUNT[2:0]; 0 and 7 set HERR and
++ *     ERR; the 1-3-2-6-4-5 order clears STATUS.DIR, the reverse sets it.
++ *   - COUNT reads the copy READSYNC (or a COUNT write) left. CCBUFx,
++ *     PRESCBUF and FILTERBUF set their STATUS valid bit; CCx reads show
++ *     CCBUFx while it is valid, and a CCBUFx write meanwhile is dropped
++ *     (silicon kept the first of two); the UPDATE command, and an
++ *     overflow unless CTRLB.LUPD, copies them.
++ *   - Events: OVF, ERR, VLC, MC0, MC1 pulse their outputs (with their
++ *     EVCTRL ...EO), DIR gives STATUS.DIR as a level.
++ *
++ * Not modelled: the index (X4/X2 revolution counting on an index, the X4S
++ * and X2S index checks), AUTOC's correction, the HALL window and delay
++ * counters and their flags, the input filter (FILTER), COUNTER's event
++ * actions, standby.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-clock.h"
++#include "hw/timer/mchp_pdec.h"
++#include "hw/mchp/gen/pdec_u2263.h"
++#include "migration/vmstate.h"
++
++#define A_CTRLA         A_MCHP_PDEC_CTRLA
++#define A_CTRLBSET      A_MCHP_PDEC_CTRLBSET
++#define A_EVCTRL        A_MCHP_PDEC_EVCTRL
++#define A_INTFLAG       A_MCHP_PDEC_INTFLAG
++#define A_STATUS        A_MCHP_PDEC_STATUS
++#define A_PRESC         A_MCHP_PDEC_PRESC
++#define A_FILTER        A_MCHP_PDEC_FILTER
++#define A_PRESCBUF      A_MCHP_PDEC_PRESCBUF
++#define A_FILTERBUF     A_MCHP_PDEC_FILTERBUF
++#define A_COUNT         A_MCHP_PDEC_COUNT
++#define A_CC            A_MCHP_PDEC_CC
++#define A_CCBUF         A_MCHP_PDEC_CCBUF
++#define F(reg, field)   R_MCHP_PDEC_##reg##_##field##_MASK
++
++enum { MODE_QDEC, MODE_HALL, MODE_COUNTER };
++enum { CONF_X4, CONF_X4S, CONF_X2, CONF_X2S, CONF_AUTOC };
++enum { CMD_RETRIGGER = 1, CMD_UPDATE, CMD_READSYNC, CMD_START, CMD_STOP };
++
++#define FLAG_OVF        0x01
++#define FLAG_ERR        0x02
++#define FLAG_DIR        0x04
++#define FLAG_VLC        0x08
++#define FLAG_MC0        0x10
++#define FLAG_MC1        0x20
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpPdecState, MCHP_PDEC)
++
++struct MchpPdecState {
++    MchpRegBlock parent_obj;
++
++    qemu_irq ovf_event, err_event, dir_event, vlc_event;
++    qemu_irq mc_event[2];
++    QEMUTimer *timer;           /* COUNTER mode's next match or wrap */
++    QEMUTimer *in_timer;        /* decodes this instant's input changes */
++
++    uint8_t pad;                /* "pad-qdi-in" levels */
++    uint8_t evu;                /* "evu-event-in" levels */
++    uint8_t in;                 /* S0-S2 as the decoder last saw them */
++    uint16_t count;
++    bool reversing;             /* one edge seen against STATUS.DIR */
++    bool last_down;             /* X2: the last count's direction */
++    bool started;               /* a transition since START (QERR) */
++    bool dir_level;             /* the DIR event output */
++    bool warned;
++    int64_t t_base;             /* COUNTER: the instant of the last tick */
++};
++
++static uint32_t pdec_reg(MchpPdecState *s, hwaddr off, unsigned size)
++{
++    return mchp_regfile_peek(&MCHP_REGBLOCK(s)->rf, off, size);
++}
++
++static void pdec_set(MchpPdecState *s, hwaddr off, unsigned size, uint32_t v)
++{
++    mchp_regfile_poke(&MCHP_REGBLOCK(s)->rf, off, size, v);
++}
++
++static void pdec_status(MchpPdecState *s, uint16_t clear, uint16_t set)
++{
++    pdec_set(s, A_STATUS, 2, (pdec_reg(s, A_STATUS, 2) & ~clear) | set);
++}
++
++static uint32_t pdec_ctrla(MchpPdecState *s)
++{
++    return pdec_reg(s, A_CTRLA, 4);
++}
++
++static unsigned pdec_mode(MchpPdecState *s)
++{
++    return FIELD_EX32(pdec_ctrla(s), MCHP_PDEC_CTRLA, MODE);
++}
++
++static bool pdec_enabled(MchpPdecState *s)
++{
++    return FIELD_EX32(pdec_ctrla(s), MCHP_PDEC_CTRLA, ENABLE);
++}
++
++static bool pdec_stopped(MchpPdecState *s)
++{
++    return pdec_reg(s, A_STATUS, 2) & F(STATUS, STOP);
++}
++
++static bool pdec_down(MchpPdecState *s)
++{
++    return pdec_reg(s, A_STATUS, 2) & F(STATUS, DIR);
++}
++
++static void pdec_dir_event(MchpPdecState *s)
++{
++    bool level = pdec_down(s) &&
++                 FIELD_EX32(pdec_reg(s, A_EVCTRL, 2), MCHP_PDEC_EVCTRL, DIREO);
++
++    if (level != s->dir_level) {
++        s->dir_level = level;
++        qemu_set_irq(s->dir_event, level);
++    }
++}
++
++/* Raise @flags, pulse their events */
++static void pdec_flag(MchpPdecState *s, uint8_t flags)
++{
++    uint16_t ev = pdec_reg(s, A_EVCTRL, 2);
++
++    if (!flags) {
++        return;
++    }
++    pdec_set(s, A_INTFLAG, 1, pdec_reg(s, A_INTFLAG, 1) | flags);
++    if ((flags & FLAG_OVF) && FIELD_EX32(ev, MCHP_PDEC_EVCTRL, OVFEO)) {
++        qemu_irq_pulse(s->ovf_event);
++    }
++    if ((flags & FLAG_ERR) && FIELD_EX32(ev, MCHP_PDEC_EVCTRL, ERREO)) {
++        qemu_irq_pulse(s->err_event);
++    }
++    if ((flags & FLAG_VLC) && FIELD_EX32(ev, MCHP_PDEC_EVCTRL, VLCEO)) {
++        qemu_irq_pulse(s->vlc_event);
++    }
++    for (unsigned n = 0; n < 2; n++) {
++        if ((flags & (FLAG_MC0 << n)) &&
++            extract32(ev, R_MCHP_PDEC_EVCTRL_MCEO0_SHIFT + n, 1)) {
++            qemu_irq_pulse(s->mc_event[n]);
++        }
++    }
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
++/* CCx as compared: the register (CCBUFx waits for an update) */
++static uint16_t pdec_cc(MchpPdecState *s, unsigned n)
++{
++    return pdec_reg(s, A_CC + 4 * n, 4);
++}
++
++/* MC0/MC1 when COUNT matches CC0/CC1 */
++static uint8_t pdec_matches(MchpPdecState *s)
++{
++    return (s->count == pdec_cc(s, 0) ? FLAG_MC0 : 0) |
++           (s->count == pdec_cc(s, 1) ? FLAG_MC1 : 0);
++}
++
++/* Copy the valid buffers into their registers */
++static void pdec_update(MchpPdecState *s)
++{
++    uint16_t st = pdec_reg(s, A_STATUS, 2);
++
++    for (unsigned n = 0; n < 2; n++) {
++        if (st & (F(STATUS, CCBUFV0) << n)) {
++            pdec_set(s, A_CC + 4 * n, 4, pdec_reg(s, A_CCBUF + 4 * n, 4));
++        }
++    }
++    if (st & F(STATUS, PRESCBUFV)) {
++        pdec_set(s, A_PRESC, 1, pdec_reg(s, A_PRESCBUF, 1));
++    }
++    if (st & F(STATUS, FILTERBUFV)) {
++        pdec_set(s, A_FILTER, 1, pdec_reg(s, A_FILTERBUF, 1));
++    }
++    pdec_status(s, F(STATUS, CCBUFV0) | F(STATUS, CCBUFV1) |
++                F(STATUS, PRESCBUFV) | F(STATUS, FILTERBUFV), 0);
++}
++
++static void pdec_overflow(MchpPdecState *s)
++{
++    if (!(pdec_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, LUPD))) {
++        pdec_update(s);
++    }
++}
++
++/* One QDEC count up or down: the angular and revolution parts */
++static uint8_t pdec_count_step(MchpPdecState *s, bool down)
++{
++    uint32_t ctrla = pdec_ctrla(s);
++    unsigned abits = MIN(FIELD_EX32(ctrla, MCHP_PDEC_CTRLA, ANGULAR) + 9, 16);
++    uint32_t amask = MAKE_64BIT_MASK(0, abits), rmask = 0xFFFF >> abits;
++    uint32_t ang = s->count & amask, rev = (s->count >> abits) & rmask;
++    uint32_t atop = amask, rtop = rmask;
++    uint8_t flags = 0;
++
++    if (FIELD_EX32(ctrla, MCHP_PDEC_CTRLA, PEREN)) {
++        atop = pdec_cc(s, 0) & amask;
++        rtop = (pdec_cc(s, 0) >> abits) & rmask;
++    }
++    if (!down) {
++        if (ang >= atop) {
++            ang = 0;
++            if (rev >= rtop) {
++                rev = 0;
++                flags |= FLAG_OVF;
++            } else {
++                rev++;
++            }
++        } else {
++            ang++;
++        }
++    } else {
++        if (ang == 0) {
++            ang = atop;
++            if (rev == 0) {
++                rev = rtop;
++                flags |= FLAG_OVF;
++            } else {
++                rev--;
++            }
++        } else {
++            ang--;
++        }
++    }
++    if (((rev << abits) | ang) == s->count) {
++        return flags;           /* a match flags only on the way in */
++    }
++    s->count = (rev << abits) | ang;
++    if (flags & FLAG_OVF) {
++        pdec_overflow(s);
++    }
++    return flags | pdec_matches(s);
++}
++
++/* Position of an S0/S1 state in the S0-leading order 00 10 11 01 */
++static int pdec_quad_pos(uint8_t v)
++{
++    static const int8_t pos[4] = { 0, 1, 3, 2 };
++
++    return pos[v & 3];
++}
++
++static void pdec_qdec(MchpPdecState *s, uint8_t old, uint8_t new)
++{
++    unsigned conf = FIELD_EX32(pdec_ctrla(s), MCHP_PDEC_CTRLA, CONF);
++    uint8_t changed = (old ^ new) & 3;
++    uint8_t flags = 0;
++    bool down;
++
++    if (!changed) {
++        if ((old ^ new) & 4 && !s->warned) {
++            qemu_log_mask(LOG_UNIMP, "%s: the index is not modelled\n",
++                          MCHP_REGBLOCK(s)->name);
++            s->warned = true;
++        }
++        return;
++    }
++    if (conf == CONF_X2 || conf == CONF_X2S) {
++        down = new & 2;
++        pdec_status(s, F(STATUS, DIR), down ? F(STATUS, DIR) : 0);
++        if (changed & 1) {
++            flags = FLAG_VLC | pdec_count_step(s, down);
++            if (down != s->last_down) {
++                flags |= FLAG_DIR;
++            }
++            s->last_down = down;
++        }
++        pdec_dir_event(s);
++        pdec_flag(s, flags);
++        return;
++    }
++    if (changed == 3) {
++        if (s->started) {
++            pdec_status(s, 0, F(STATUS, QERR));
++            flags |= FLAG_ERR;
++        }
++        s->started = true;
++        pdec_flag(s, flags);
++        return;
++    }
++    s->started = true;
++    down = pdec_quad_pos(new) != (pdec_quad_pos(old) + 1) % 4;
++    if (down != pdec_down(s)) {
++        pdec_status(s, F(STATUS, DIR), down ? F(STATUS, DIR) : 0);
++        s->reversing = true;
++    } else if (s->reversing) {
++        s->reversing = false;
++        flags |= FLAG_DIR | FLAG_VLC;
++    } else {
++        flags |= FLAG_VLC;
++    }
++    flags |= pdec_count_step(s, down);
++    pdec_dir_event(s);
++    pdec_flag(s, flags);
++}
++
++/* Position of a hall code in the 1-3-2-6-4-5 order, -1 if invalid */
++static int pdec_hall_pos(uint8_t code)
++{
++    static const int8_t pos[8] = { -1, 0, 2, 1, 4, 5, 3, -1 };
++
++    return pos[code & 7];
++}
++
++static void pdec_hall(MchpPdecState *s, uint8_t old, uint8_t new)
++{
++    int po = pdec_hall_pos(old), pn = pdec_hall_pos(new);
++    uint8_t flags = 0;
++
++    if (!s->warned) {
++        qemu_log_mask(LOG_UNIMP, "%s: the HALL window and delay counters are "
++                      "not modelled\n", MCHP_REGBLOCK(s)->name);
++        s->warned = true;
++    }
++    s->count = (s->count & ~7) | (new & 7);
++    if (pn < 0) {
++        pdec_status(s, 0, F(STATUS, HERR));
++        flags |= FLAG_ERR;
++    } else if (po >= 0 && pn != po) {
++        bool down = pn != (po + 1) % 6;
++
++        if (down != pdec_down(s)) {
++            flags |= FLAG_DIR;
++        }
++        pdec_status(s, F(STATUS, DIR), down ? F(STATUS, DIR) : 0);
++        flags |= FLAG_VLC;
++    }
++    pdec_dir_event(s);
++    pdec_flag(s, flags);
++}
++
++/* S0-S2 from the pads or events, inverted, swapped */
++static uint8_t pdec_inputs(MchpPdecState *s)
++{
++    uint32_t ctrla = pdec_ctrla(s);
++    uint16_t ev = pdec_reg(s, A_EVCTRL, 2);
++    uint8_t in = 0;
++
++    for (unsigned n = 0; n < 3; n++) {
++        bool v = false;
++
++        if (extract32(ctrla, R_MCHP_PDEC_CTRLA_PINEN0_SHIFT + n, 1)) {
++            v = extract32(s->pad, n, 1) ^
++                extract32(ctrla, R_MCHP_PDEC_CTRLA_PINVEN0_SHIFT + n, 1);
++        } else if (extract32(ev, R_MCHP_PDEC_EVCTRL_EVEI_SHIFT + n, 1)) {
++            v = extract32(s->evu, n, 1) ^
++                extract32(ev, R_MCHP_PDEC_EVCTRL_EVINV_SHIFT + n, 1);
++        }
++        in |= v << n;
++    }
++    if (FIELD_EX32(ctrla, MCHP_PDEC_CTRLA, SWAP) &&
++        pdec_mode(s) != MODE_COUNTER) {
++        in = (in & 4) | ((in & 1) << 1) | ((in >> 1) & 1);
++    }
++    return in;
++}
++
++/* The inputs as they settled this instant */
++static void pdec_decode(void *opaque)
++{
++    MchpPdecState *s = opaque;
++    uint8_t old = s->in, new = pdec_inputs(s);
++
++    s->in = new;
++    if (old == new || !pdec_enabled(s) || pdec_stopped(s)) {
++        return;
++    }
++    switch (pdec_mode(s)) {
++    case MODE_QDEC:
++        pdec_qdec(s, old, new);
++        break;
++    case MODE_HALL:
++        pdec_hall(s, old, new);
++        break;
++    default:
++        break;
++    }
++}
++
++/* COUNTER mode: the length of a counter tick in ns, 0 while stopped */
++static int64_t pdec_tick_ns(MchpPdecState *s)
++{
++    Clock *clk = MCHP_REGBLOCK(s)->gclk;
++    unsigned presc = FIELD_EX32(pdec_reg(s, A_PRESC, 1), MCHP_PDEC_PRESC,
++                                PRESC);
++
++    if (!clock_is_enabled(clk) || pdec_mode(s) != MODE_COUNTER ||
++        !pdec_enabled(s) || pdec_stopped(s) || presc > 10) {
++        return 0;
++    }
++    return MAX(clock_ticks_to_ns(clk, 1ULL << presc), 1);
++}
++
++static uint16_t pdec_top(MchpPdecState *s)
++{
++    return FIELD_EX32(pdec_ctrla(s), MCHP_PDEC_CTRLA, PEREN) ?
++           pdec_cc(s, 0) : 0xFFFF;
++}
++
++/* Ticks from COUNT to the next match or wrap */
++static uint32_t pdec_next_event(MchpPdecState *s)
++{
++    uint16_t top = pdec_top(s);
++    uint32_t next = (uint32_t)(top - MIN(s->count, top)) + 1;  /* wrap */
++
++    for (unsigned n = 0; n < 2; n++) {
++        uint16_t cc = pdec_cc(s, n);
++
++        if (cc > s->count && cc <= top) {
++            next = MIN(next, (uint32_t)(cc - s->count));
++        }
++    }
++    return next;
++}
++
++static void pdec_counter_advance(MchpPdecState *s, int64_t now)
++{
++    int64_t tick = pdec_tick_ns(s);
++
++    if (!tick) {
++        timer_del(s->timer);
++        return;
++    }
++    for (;;) {
++        uint32_t n = pdec_next_event(s);
++        uint16_t top = pdec_top(s);
++        uint64_t elapsed = now > s->t_base ? (now - s->t_base) / tick : 0;
++
++        if (elapsed < n) {
++            s->count += elapsed;
++            s->t_base += elapsed * tick;
++            timer_mod(s->timer, s->t_base + (n - elapsed) * tick);
++            return;
++        }
++        s->t_base += (int64_t)n * tick;
++        if ((uint32_t)s->count + n > top) {
++            s->count = 0;
++            pdec_overflow(s);
++            pdec_flag(s, FLAG_OVF | pdec_matches(s));
++        } else {
++            s->count += n;
++            pdec_flag(s, pdec_matches(s));
++        }
++    }
++}
++
++static void pdec_tick(void *opaque)
++{
++    MchpPdecState *s = opaque;
++
++    pdec_counter_advance(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
++}
++
++static void pdec_sync(MchpPdecState *s)
++{
++    pdec_counter_advance(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
++}
++
++static void pdec_restart_base(MchpPdecState *s)
++{
++    s->t_base = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    pdec_sync(s);
++}
++
++static void pdec_command(MchpPdecState *s, unsigned cmd)
++{
++    pdec_sync(s);
++    switch (cmd) {
++    case CMD_RETRIGGER:
++        s->count = 0;
++        s->reversing = false;
++        pdec_flag(s, pdec_matches(s));
++        break;
++    case CMD_UPDATE:
++        pdec_update(s);
++        break;
++    case CMD_READSYNC:
++        pdec_set(s, A_COUNT, 4, s->count);
++        break;
++    case CMD_START:
++        if (pdec_enabled(s) && pdec_stopped(s)) {
++            pdec_status(s, F(STATUS, STOP), 0);
++            s->started = false;
++            s->reversing = false;
++            s->in = pdec_inputs(s);
++            pdec_flag(s, pdec_matches(s));
++        }
++        break;
++    case CMD_STOP:
++        pdec_status(s, 0, F(STATUS, STOP));
++        break;
++    default:
++        return;
++    }
++    pdec_restart_base(s);
++}
++
++static uint32_t pdec_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                              unsigned idx, uint32_t stored, bool side_effects)
++{
++    MchpPdecState *s = MCHP_PDEC(rf->opaque);
++
++    if (ri->offset == A_CC &&
++        (pdec_reg(s, A_STATUS, 2) & (F(STATUS, CCBUFV0) << idx))) {
++        return pdec_reg(s, A_CCBUF + 4 * idx, 4);
++    }
++    if (side_effects) {
++        pdec_sync(s);
++    }
++    return stored;
++}
++
++static void pdec_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
++                            unsigned idx, uint32_t old, uint32_t written,
++                            uint32_t we)
++{
++    MchpPdecState *s = MCHP_PDEC(rf->opaque);
++    uint32_t val = mchp_regfile_get(rf, ri, idx);
++
++    switch (ri->offset) {
++    case A_CTRLA:
++        if (written & we & F(CTRLA, SWRST)) {
++            return;             /* mchp-regblock resets the PDEC next */
++        }
++        if (!(old & F(CTRLA, ENABLE)) && (val & F(CTRLA, ENABLE))) {
++            /* QDEC and HALL wait for START; COUNTER runs */
++            pdec_status(s, F(STATUS, STOP),
++                        pdec_mode(s) == MODE_COUNTER ? 0 : F(STATUS, STOP));
++            s->in = pdec_inputs(s);
++            s->started = false;
++            s->reversing = false;
++            if (pdec_mode(s) == MODE_COUNTER &&
++                FIELD_EX32(pdec_reg(s, A_EVCTRL, 2), MCHP_PDEC_EVCTRL,
++                           EVACT)) {
++                qemu_log_mask(LOG_UNIMP, "%s: COUNTER event actions are not "
++                              "modelled\n", MCHP_REGBLOCK(s)->name);
++            }
++        } else if ((old & F(CTRLA, ENABLE)) && !(val & F(CTRLA, ENABLE))) {
++            pdec_sync(s);
++            pdec_status(s, 0, F(STATUS, STOP));
++        }
++        pdec_restart_base(s);
++        break;
++    case A_MCHP_PDEC_CTRLBCLR:
++    case A_CTRLBSET: {
++        unsigned cmd = FIELD_EX32(written & we, MCHP_PDEC_CTRLBSET, CMD);
++
++        /* CMD reads back 0 once done */
++        pdec_set(s, A_CTRLBSET, 1,
++                 pdec_reg(s, A_CTRLBSET, 1) & ~F(CTRLBSET, CMD));
++        if (ri->offset == A_CTRLBSET && cmd) {
++            pdec_command(s, cmd);
++        }
++        break;
++    }
++    case A_COUNT:
++        pdec_sync(s);
++        s->count = val;
++        pdec_restart_base(s);
++        break;
++    case A_CC:
++        pdec_sync(s);
++        pdec_restart_base(s);
++        break;
++    case A_CCBUF:
++        if (pdec_reg(s, A_STATUS, 2) & (F(STATUS, CCBUFV0) << idx)) {
++            pdec_set(s, A_CCBUF + 4 * idx, 4, old);     /* dropped */
++        }
++        pdec_status(s, 0, F(STATUS, CCBUFV0) << idx);
++        break;
++    case A_PRESCBUF:
++        pdec_status(s, 0, F(STATUS, PRESCBUFV));
++        break;
++    case A_FILTERBUF:
++        pdec_status(s, 0, F(STATUS, FILTERBUFV));
++        break;
++    case A_PRESC:
++        pdec_sync(s);
++        pdec_restart_base(s);
++        break;
++    default:
++        break;
++    }
++}
++
++static void pdec_input_changed(MchpPdecState *s)
++{
++    timer_mod(s->in_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
++}
++
++static void pdec_pad_in(void *opaque, int n, int level)
++{
++    MchpPdecState *s = opaque;
++
++    s->pad = deposit32(s->pad, n, 1, level > 0);
++    pdec_input_changed(s);
++}
++
++static void pdec_evu_in(void *opaque, int n, int level)
++{
++    MchpPdecState *s = opaque;
++
++    s->evu = deposit32(s->evu, n, 1, level > 0);
++    pdec_input_changed(s);
++}
++
++static void pdec_gclk_update(MchpRegBlock *rb, ClockEvent event)
++{
++    MchpPdecState *s = MCHP_PDEC(rb);
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    if (event == ClockPreUpdate) {
++        if (pdec_tick_ns(s)) {
++            pdec_counter_advance(s, now);
++        } else {
++            s->t_base = now;
++        }
++        return;
++    }
++    pdec_counter_advance(s, now);
++}
++
++static void pdec_reset_hold(MchpRegBlock *rb)
++{
++    MchpPdecState *s = MCHP_PDEC(rb);
++
++    timer_del(s->timer);
++    timer_del(s->in_timer);
++    s->count = 0;
++    s->reversing = s->last_down = s->started = false;
++    s->in = 0;
++    if (s->dir_level) {
++        s->dir_level = false;
++        qemu_set_irq(s->dir_event, 0);
++    }
++}
++
++static void pdec_init(Object *obj)
++{
++    MchpPdecState *s = MCHP_PDEC(obj);
++    DeviceState *dev = DEVICE(obj);
++
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, pdec_tick, s);
++    s->in_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, pdec_decode, s);
++    qdev_init_gpio_in_named(dev, pdec_pad_in, MCHP_PDEC_PAD_QDI_IN, 3);
++    qdev_init_gpio_in_named(dev, pdec_evu_in, MCHP_PDEC_EVU_EVENT_IN, 3);
++    qdev_init_gpio_out_named(dev, &s->ovf_event, "ovf-event", 1);
++    qdev_init_gpio_out_named(dev, &s->err_event, "err-event", 1);
++    qdev_init_gpio_out_named(dev, &s->dir_event, "dir-event", 1);
++    qdev_init_gpio_out_named(dev, &s->vlc_event, "vlc-event", 1);
++    qdev_init_gpio_out_named(dev, s->mc_event, "mc-event", 2);
++}
++
++static void pdec_finalize(Object *obj)
++{
++    timer_free(MCHP_PDEC(obj)->timer);
++    timer_free(MCHP_PDEC(obj)->in_timer);
++}
++
++static const VMStateDescription vmstate_mchp_pdec = {
++    .name = TYPE_MCHP_PDEC,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpPdecState, 1, vmstate_mchp_regblock,
++                       MchpRegBlock),
++        VMSTATE_TIMER_PTR(timer, MchpPdecState),
++        VMSTATE_TIMER_PTR(in_timer, MchpPdecState),
++        VMSTATE_UINT8(pad, MchpPdecState),
++        VMSTATE_UINT8(evu, MchpPdecState),
++        VMSTATE_UINT8(in, MchpPdecState),
++        VMSTATE_UINT16(count, MchpPdecState),
++        VMSTATE_BOOL(reversing, MchpPdecState),
++        VMSTATE_BOOL(last_down, MchpPdecState),
++        VMSTATE_BOOL(started, MchpPdecState),
++        VMSTATE_BOOL(dir_level, MchpPdecState),
++        VMSTATE_INT64(t_base, MchpPdecState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void pdec_class_init(ObjectClass *klass, const void *data)
++{
++    MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
++
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_pdec;
++    c->pre_read = pdec_pre_read;
++    c->post_write = pdec_post_write;
++    c->reset_hold = pdec_reset_hold;
++    c->gclk_update = pdec_gclk_update;
++    c->log_writes = false;
++}
++
++static const TypeInfo mchp_pdec_types[] = {
++    {
++        .name = TYPE_MCHP_PDEC,
++        .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpPdecState),
++        .instance_init = pdec_init,
++        .instance_finalize = pdec_finalize,
++        .class_init = pdec_class_init,
++    },
++};
++
++DEFINE_TYPES(mchp_pdec_types)
+diff --git a/hw/timer/meson.build b/hw/timer/meson.build
+index ad9eeb9..47acb12 100644
+--- a/hw/timer/meson.build
++++ b/hw/timer/meson.build
+@@ -21,7 +21,8 @@ system_ss.add(when: 'CONFIG_MIPS_CPS', if_true: files('mips_gictimer.c'))
+ system_ss.add(when: 'CONFIG_MSF2', if_true: files('mss-timer.c'))
+ system_ss.add(when: 'CONFIG_NPCM7XX', if_true: files('npcm7xx_timer.c'))
+ system_ss.add(when: 'CONFIG_NRF51_SOC', if_true: files('nrf51_timer.c'))
+-system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_tc.c', 'mchp_tcc.c'))
++system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files('mchp_tc.c', 'mchp_tcc.c',
++                                                                   'mchp_pdec.c'))
+ system_ss.add(when: 'CONFIG_PXA2XX_TIMER', if_true: files('pxa2xx_timer.c'))
+ system_ss.add(when: 'CONFIG_RASPI', if_true: files('bcm2835_systmr.c'))
+ system_ss.add(when: 'CONFIG_SH_TIMER', if_true: files('sh_timer.c'))
+diff --git a/include/hw/mchp/gen/atsame51j20a/pdec_u2263.h b/include/hw/mchp/gen/atsame51j20a/pdec_u2263.h
+index 9ece6a6..4c66367 100644
+--- a/include/hw/mchp/gen/atsame51j20a/pdec_u2263.h
++++ b/include/hw/mchp/gen/atsame51j20a/pdec_u2263.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/pdec_u2263.yaml (sha1 084d82c13aba)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,34 +23,35 @@ static const MchpRegInfo atsame51j20a_pdec_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xF777CF4F,
+-        .wmask = 0xF777CF4F, .rdz = 0x00000001, .flags = 0,
++        .wmask = 0xF777CF4F, .rdz = 0x00000001, .enprot = 0xF777CF4C,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLBCLR", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 2 /* CTRLBSET */, .reset = 0x00, .impl = 0xE2,
+         .wmask = 0xE2, .rdz = 0xE0, .syncbusy = 0x00000004 /* SYNCBUSY */,
+-        .flags = MCHP_F_ALIAS_CLEAR,
++        .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLBSET", .offset = 0x05, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 2 /* CTRLBSET */, .reset = 0x00, .impl = 0xE2,
+         .wmask = 0xE2, .rdz = 0xE0, .syncbusy = 0x00000004 /* SYNCBUSY */,
+-        .flags = MCHP_F_ALIAS_SET,
++        .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x06, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x3FFF, .wmask = 0x3FFF,
+-        .flags = 0,
++        .enprot = 0x3FFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x08, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 5 /* INTENSET */, .reset = 0x00, .impl = 0x3F,
+-        .wmask = 0x3F, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x3F, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x09, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 5 /* INTENSET */, .reset = 0x00, .impl = 0x3F,
+-        .wmask = 0x3F, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x3F, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x0A, .size = 1, .count = 1, .stride = 1,
+@@ -59,12 +60,13 @@ static const MchpRegInfo atsame51j20a_pdec_regs[] = {
+     },
+     {
+         .name = "STATUS", .offset = 0x0C, .size = 2, .count = 1, .stride = 2,
+-        .alias_of = -1, .reset = 0x0040, .impl = 0x33F7, .wmask = 0x33F7,
+-        .syncbusy = 0x00000008 /* SYNCBUSY */, .flags = 0,
++        .alias_of = -1, .reset = 0x0040, .impl = 0x33F7, .wmask = 0x0000,
++        .w1c = 0x0037, .syncbusy = 0x00000008 /* SYNCBUSY */, .flags = 0,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x0F, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+@@ -74,36 +76,41 @@ static const MchpRegInfo atsame51j20a_pdec_regs[] = {
+     {
+         .name = "PRESC", .offset = 0x14, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .syncbusy = 0x00000010 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000010 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "FILTER", .offset = 0x15, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
+-        .syncbusy = 0x00000020 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000020 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "PRESCBUF", .offset = 0x18, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "FILTERBUF", .offset = 0x19, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "COUNT", .offset = 0x1C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x0000FFFF, .syncbusy = 0x00000040 /* SYNCBUSY */, .flags = 0,
++        .wmask = 0x0000FFFF, .syncbusy = 0x00000040 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CC", .offset = 0x20, .size = 4, .count = 2, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+         .wmask = 0x0000FFFF, .syncbusy = 0x00000080 /* SYNCBUSY, << element */,
+-        .flags = 0,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CCBUF", .offset = 0x30, .size = 4, .count = 2, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x0000FFFF, .flags = 0,
++        .wmask = 0x0000FFFF, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+ };
+ #define ATSAME51J20A_PDEC_NREGS 17
+diff --git a/include/hw/mchp/gen/pdec_u2263.h b/include/hw/mchp/gen/pdec_u2263.h
+index 778d064..8c012f4 100644
+--- a/include/hw/mchp/gen/pdec_u2263.h
++++ b/include/hw/mchp/gen/pdec_u2263.h
+@@ -10,7 +10,7 @@
+  * ATSAME51J20A.atdf (SAME51_DFP 3.9.267)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/pdec_u2263.yaml (sha1 084d82c13aba)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/pdec_u2263.h b/include/hw/mchp/gen/pic32cm1216mc00048/pdec_u2263.h
+index d207f4b..80ce250 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/pdec_u2263.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/pdec_u2263.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/pdec_u2263.yaml (sha1 084d82c13aba)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,35 +23,36 @@ static const MchpRegInfo pic32cm1216mc00048_pdec_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xF777CF4F,
+-        .wmask = 0xF777CF4F, .rdz = 0x00000001,
+-        .syncbusy = 0x00000003 /* SYNCBUSY */, .flags = 0,
++        .wmask = 0xF777CF4F, .rdz = 0x00000001, .enprot = 0xF777CF4C,
++        .syncbusy = 0x00000003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLBCLR", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 2 /* CTRLBSET */, .reset = 0x00, .impl = 0xE2,
+         .wmask = 0xE2, .rdz = 0xE0, .syncbusy = 0x00000004 /* SYNCBUSY */,
+-        .flags = MCHP_F_ALIAS_CLEAR,
++        .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLBSET", .offset = 0x05, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 2 /* CTRLBSET */, .reset = 0x00, .impl = 0xE2,
+         .wmask = 0xE2, .rdz = 0xE0, .syncbusy = 0x00000004 /* SYNCBUSY */,
+-        .flags = MCHP_F_ALIAS_SET,
++        .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x06, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x3FFF, .wmask = 0x3FFF,
+-        .flags = 0,
++        .enprot = 0x3FFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x08, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 5 /* INTENSET */, .reset = 0x00, .impl = 0x3F,
+-        .wmask = 0x3F, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x3F, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x09, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 5 /* INTENSET */, .reset = 0x00, .impl = 0x3F,
+-        .wmask = 0x3F, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x3F, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x0A, .size = 1, .count = 1, .stride = 1,
+@@ -60,12 +61,13 @@ static const MchpRegInfo pic32cm1216mc00048_pdec_regs[] = {
+     },
+     {
+         .name = "STATUS", .offset = 0x0C, .size = 2, .count = 1, .stride = 2,
+-        .alias_of = -1, .reset = 0x0040, .impl = 0x33F7, .wmask = 0x33F7,
+-        .syncbusy = 0x00000008 /* SYNCBUSY */, .flags = 0,
++        .alias_of = -1, .reset = 0x0040, .impl = 0x33F7, .wmask = 0x0000,
++        .w1c = 0x0037, .syncbusy = 0x00000008 /* SYNCBUSY */, .flags = 0,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x0F, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+@@ -75,36 +77,41 @@ static const MchpRegInfo pic32cm1216mc00048_pdec_regs[] = {
+     {
+         .name = "PRESC", .offset = 0x14, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .syncbusy = 0x00000010 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000010 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "FILTER", .offset = 0x15, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
+-        .syncbusy = 0x00000020 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000020 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "PRESCBUF", .offset = 0x18, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "FILTERBUF", .offset = 0x19, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "COUNT", .offset = 0x1C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x0000FFFF, .syncbusy = 0x00000040 /* SYNCBUSY */, .flags = 0,
++        .wmask = 0x0000FFFF, .syncbusy = 0x00000040 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CC", .offset = 0x20, .size = 4, .count = 2, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+         .wmask = 0x0000FFFF, .syncbusy = 0x00000080 /* SYNCBUSY, << element */,
+-        .flags = 0,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CCBUF", .offset = 0x30, .size = 4, .count = 2, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x0000FFFF, .flags = 0,
++        .wmask = 0x0000FFFF, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+ };
+ #define PIC32CM1216MC00048_PDEC_NREGS 17
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/pdec_u2263.h b/include/hw/mchp/gen/pic32cm5164jh01100/pdec_u2263.h
+index 3f18867..09bd84e 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/pdec_u2263.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/pdec_u2263.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * No overlay: ATDF facts and heuristics only
++ * Overlay: overlays/pdec_u2263.yaml (sha1 084d82c13aba)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -23,35 +23,36 @@ static const MchpRegInfo pic32cm5164jh01100_pdec_regs[] = {
+     {
+         .name = "CTRLA", .offset = 0x00, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0xF777CF4F,
+-        .wmask = 0xF777CF4F, .rdz = 0x00000001,
+-        .syncbusy = 0x00000003 /* SYNCBUSY */, .flags = 0,
++        .wmask = 0xF777CF4F, .rdz = 0x00000001, .enprot = 0xF777CF4C,
++        .syncbusy = 0x00000003 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLBCLR", .offset = 0x04, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 2 /* CTRLBSET */, .reset = 0x00, .impl = 0xE2,
+         .wmask = 0xE2, .rdz = 0xE0, .syncbusy = 0x00000004 /* SYNCBUSY */,
+-        .flags = MCHP_F_ALIAS_CLEAR,
++        .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CTRLBSET", .offset = 0x05, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 2 /* CTRLBSET */, .reset = 0x00, .impl = 0xE2,
+         .wmask = 0xE2, .rdz = 0xE0, .syncbusy = 0x00000004 /* SYNCBUSY */,
+-        .flags = MCHP_F_ALIAS_SET,
++        .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "EVCTRL", .offset = 0x06, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x3FFF, .wmask = 0x3FFF,
+-        .flags = 0,
++        .enprot = 0x3FFF, .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "INTENCLR", .offset = 0x08, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 5 /* INTENSET */, .reset = 0x00, .impl = 0x3F,
+-        .wmask = 0x3F, .flags = MCHP_F_ALIAS_CLEAR,
++        .wmask = 0x3F, .flags = MCHP_F_PAC | MCHP_F_ALIAS_CLEAR,
+     },
+     {
+         .name = "INTENSET", .offset = 0x09, .size = 1, .count = 1, .stride = 1,
+         .alias_of = 5 /* INTENSET */, .reset = 0x00, .impl = 0x3F,
+-        .wmask = 0x3F, .flags = MCHP_F_ALIAS_SET,
++        .wmask = 0x3F, .flags = MCHP_F_PAC | MCHP_F_ALIAS_SET,
+     },
+     {
+         .name = "INTFLAG", .offset = 0x0A, .size = 1, .count = 1, .stride = 1,
+@@ -60,12 +61,13 @@ static const MchpRegInfo pic32cm5164jh01100_pdec_regs[] = {
+     },
+     {
+         .name = "STATUS", .offset = 0x0C, .size = 2, .count = 1, .stride = 2,
+-        .alias_of = -1, .reset = 0x0040, .impl = 0x33F7, .wmask = 0x33F7,
+-        .syncbusy = 0x00000008 /* SYNCBUSY */, .flags = 0,
++        .alias_of = -1, .reset = 0x0040, .impl = 0x33F7, .wmask = 0x0000,
++        .w1c = 0x0037, .syncbusy = 0x00000008 /* SYNCBUSY */, .flags = 0,
+     },
+     {
+         .name = "DBGCTRL", .offset = 0x0F, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x01, .wmask = 0x01,
++        .flags = MCHP_F_PAC,
+     },
+     {
+         .name = "SYNCBUSY", .offset = 0x10, .size = 4, .count = 1, .stride = 4,
+@@ -75,36 +77,41 @@ static const MchpRegInfo pic32cm5164jh01100_pdec_regs[] = {
+     {
+         .name = "PRESC", .offset = 0x14, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
+-        .syncbusy = 0x00000010 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000010 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "FILTER", .offset = 0x15, .size = 1, .count = 1, .stride = 1,
+         .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
+-        .syncbusy = 0x00000020 /* SYNCBUSY */, .flags = 0,
++        .syncbusy = 0x00000020 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "PRESCBUF", .offset = 0x18, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0x0F, .wmask = 0x0F,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "FILTERBUF", .offset = 0x19, .size = 1, .count = 1, .stride = 1,
+-        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF, .flags = 0,
++        .alias_of = -1, .reset = 0x00, .impl = 0xFF, .wmask = 0xFF,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "COUNT", .offset = 0x1C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x0000FFFF, .syncbusy = 0x00000040 /* SYNCBUSY */, .flags = 0,
++        .wmask = 0x0000FFFF, .syncbusy = 0x00000040 /* SYNCBUSY */,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CC", .offset = 0x20, .size = 4, .count = 2, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+         .wmask = 0x0000FFFF, .syncbusy = 0x00000080 /* SYNCBUSY, << element */,
+-        .flags = 0,
++        .flags = MCHP_F_PAC | MCHP_F_HOOK_PRE_READ | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "CCBUF", .offset = 0x30, .size = 4, .count = 2, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x0000FFFF,
+-        .wmask = 0x0000FFFF, .flags = 0,
++        .wmask = 0x0000FFFF, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+ };
+ #define PIC32CM5164JH01100_PDEC_NREGS 17
+diff --git a/include/hw/timer/mchp_pdec.h b/include/hw/timer/mchp_pdec.h
+new file mode 100644
+index 0000000..4926cdf
+--- /dev/null
++++ b/include/hw/timer/mchp_pdec.h
+@@ -0,0 +1,25 @@
++/*
++ * Microchip position decoder (PDEC U2263)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * An mchp-regblock (see mchp_pdec.c). GPIO inputs "pad-qdi-in"[3] (the
++ * PDEC[n] pads while muxed to the PDEC) and "evu-event-in"[3] (EVSYS
++ * users EVU0-2); outputs "ovf-event", "err-event", "vlc-event",
++ * "mc-event"[2] (pulses) and "dir-event" (STATUS.DIR as a level).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_TIMER_MCHP_PDEC_H
++#define HW_TIMER_MCHP_PDEC_H
++
++#include "hw/misc/mchp_regblock.h"
++
++#define TYPE_MCHP_PDEC "mchp-pdec"
++
++#define MCHP_PDEC_PAD_QDI_IN "pad-qdi-in"
++#define MCHP_PDEC_EVU_EVENT_IN "evu-event-in"
++
++#endif /* HW_TIMER_MCHP_PDEC_H */
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index e3d3649..d950f94 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -253,7 +253,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-nvmctrl-test', 'pic32cm-wdt-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-dmac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-adc-test', 'pic32cm-dac-test', 'pic32cm-pm-test', 'pic32cm-ccl-test', 'pic32cm-click-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-nvmctrl-test', 'pic32cm-wdt-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-dmac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-adc-test', 'pic32cm-dac-test', 'pic32cm-pm-test', 'pic32cm-ccl-test', 'pic32cm-pdec-test', 'pic32cm-click-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-pdec-test.c b/tests/qtest/pic32cm-pdec-test.c
+new file mode 100644
+index 0000000..467bd3c
+--- /dev/null
++++ b/tests/qtest/pic32cm-pdec-test.c
+@@ -0,0 +1,173 @@
++/*
++ * QTest for the PDEC of the PIC32CM MC00 (pic32cm-mc00-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The mchp-pdec model through its input lines: X4 counting and a
++ * reversal, X2, COUNTER timing and the CC buffer. firmware/hello APP=pdec
++ * checks the same against silicon, and QERR (one event into two inputs:
++ * two qtest commands are never one instant).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++
++#define MACHINE         "-M pic32cm-mc00-cpro"
++#define PDEC            0x42006800
++#define PDEC_PATH       "/machine/soc/pdec"
++#define GCLK_PCHCTRL    0x40001C80
++#define PDEC_GCLK_ID    34
++#define R_CTRLA         0x00
++#define R_CTRLBSET      0x05
++#define R_INTFLAG       0x0A
++#define R_STATUS        0x0C
++#define R_PRESC         0x14
++#define R_COUNT         0x1C
++#define R_CC(n)         (0x20 + 4 * (n))
++#define R_CCBUF(n)      (0x30 + 4 * (n))
++#define ENABLE          BIT(1)
++#define MODE_COUNTER    (2 << 2)
++#define CONF_X2         (2 << 8)
++#define PEREN           BIT(15)
++#define AB              (BIT(16) | BIT(17))
++#define CMD_UPDATE      (2 << 5)
++#define CMD_READSYNC    (3 << 5)
++#define CMD_START       (4 << 5)
++#define OVF             BIT(0)
++#define DIRF            BIT(2)
++#define VLC             BIT(3)
++#define MC0             BIT(4)
++#define MC1             BIT(5)
++#define STOP            BIT(6)
++#define DIR             BIT(7)
++#define CCBUFV0         BIT(12)
++
++static QTestState *pdec_init(uint32_t ctrla, int start)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, GCLK_PCHCTRL + 4 * PDEC_GCLK_ID, 0x40);
++    qtest_writel(qts, PDEC + R_CTRLA, ctrla);
++    qtest_writel(qts, PDEC + R_CTRLA, ctrla | ENABLE);
++    if (start) {
++        qtest_writeb(qts, PDEC + R_CTRLBSET, CMD_START);
++    }
++    qtest_writeb(qts, PDEC + R_INTFLAG, 0xFF);
++    return qts;
++}
++
++/* Pads A and B to bits 0 and 1 of @ab, in one instant */
++static void ab(QTestState *qts, unsigned v)
++{
++    qtest_set_irq_in(qts, PDEC_PATH, "pad-qdi-in", 0, v & 1);
++    qtest_set_irq_in(qts, PDEC_PATH, "pad-qdi-in", 1, (v >> 1) & 1);
++    qtest_clock_step(qts, 1000);
++}
++
++static uint32_t count(QTestState *qts)
++{
++    qtest_writeb(qts, PDEC + R_CTRLBSET, CMD_READSYNC);
++    return qtest_readl(qts, PDEC + R_COUNT);
++}
++
++static uint8_t flags(QTestState *qts)
++{
++    uint8_t f = qtest_readb(qts, PDEC + R_INTFLAG);
++
++    qtest_writeb(qts, PDEC + R_INTFLAG, f);
++    return f;
++}
++
++/* X4: up 4 per cycle; reversing sets DIR at once, the DIR flag next */
++static void test_x4(void)
++{
++    static const uint8_t fwd[4] = { 1, 3, 2, 0 };
++    QTestState *qts = pdec_init(AB, 0);
++
++    ab(qts, 1);
++    g_assert_cmpuint(count(qts), ==, 0);        /* stopped until START */
++    g_assert_cmphex(qtest_readw(qts, PDEC + R_STATUS) & STOP, ==, STOP);
++    ab(qts, 0);
++    qtest_writeb(qts, PDEC + R_CTRLBSET, CMD_START);
++    flags(qts);
++    for (unsigned k = 0; k < 4; k++) {
++        ab(qts, fwd[k]);
++    }
++    g_assert_cmpuint(count(qts), ==, 4);
++    g_assert_cmphex(flags(qts), ==, VLC);
++    ab(qts, 2);                                 /* back: 00 -> 01 */
++    g_assert_cmpuint(count(qts), ==, 3);
++    g_assert_cmphex(qtest_readw(qts, PDEC + R_STATUS) & DIR, ==, DIR);
++    g_assert_cmphex(flags(qts), ==, 0);
++    ab(qts, 3);
++    g_assert_cmphex(flags(qts), ==, DIRF | VLC);
++    qtest_quit(qts);
++}
++
++/* X2: S0 edges count, down while S1 is 1 */
++static void test_x2(void)
++{
++    QTestState *qts = pdec_init(AB | CONF_X2, 1);
++
++    ab(qts, 1);
++    ab(qts, 0);
++    g_assert_cmpuint(count(qts), ==, 2);
++    ab(qts, 2);
++    g_assert_cmphex(qtest_readw(qts, PDEC + R_STATUS) & DIR, ==, DIR);
++    ab(qts, 3);
++    ab(qts, 2);
++    g_assert_cmpuint(count(qts), ==, 0);
++    qtest_quit(qts);
++}
++
++/* COUNTER: GCLK0 4 MHz / 4 = 1 us ticks from the enable; CC0 TOP, CC1 */
++static void test_counter(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    qtest_writel(qts, GCLK_PCHCTRL + 4 * PDEC_GCLK_ID, 0x40);
++    qtest_writeb(qts, PDEC + R_PRESC, 2);
++    qtest_writel(qts, PDEC + R_CC(0), 99);
++    qtest_writel(qts, PDEC + R_CC(1), 30);
++    qtest_writel(qts, PDEC + R_CTRLA, MODE_COUNTER | PEREN | ENABLE);
++    flags(qts);
++    qtest_clock_step(qts, 30500);
++    g_assert_cmpuint(count(qts), ==, 30);
++    g_assert_cmphex(flags(qts), ==, MC1);
++    qtest_clock_step(qts, 69000);               /* 99.5 us: CC0 */
++    g_assert_cmphex(flags(qts), ==, MC0);
++    qtest_clock_step(qts, 1000);                /* 100.5 us: wrapped */
++    g_assert_cmpuint(count(qts), ==, 0);
++    g_assert_cmphex(flags(qts), ==, OVF);
++    qtest_quit(qts);
++}
++
++/* CCBUF0 shows in CC0 while valid; a second write is dropped; UPDATE */
++static void test_buffer(void)
++{
++    QTestState *qts = pdec_init(AB | PEREN, 1);
++
++    qtest_writel(qts, PDEC + R_CCBUF(0), 0x200);
++    g_assert_cmphex(qtest_readl(qts, PDEC + R_CC(0)), ==, 0x200);
++    g_assert_cmphex(qtest_readw(qts, PDEC + R_STATUS) & CCBUFV0, ==,
++                    CCBUFV0);
++    qtest_writel(qts, PDEC + R_CCBUF(0), 0x300);
++    qtest_writeb(qts, PDEC + R_CTRLBSET, CMD_UPDATE);
++    g_assert_cmphex(qtest_readl(qts, PDEC + R_CC(0)), ==, 0x200);
++    g_assert_cmphex(qtest_readw(qts, PDEC + R_STATUS) & CCBUFV0, ==, 0);
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++    qtest_add_func("pic32cm-pdec/x4", test_x4);
++    qtest_add_func("pic32cm-pdec/x2", test_x2);
++    qtest_add_func("pic32cm-pdec/counter", test_counter);
++    qtest_add_func("pic32cm-pdec/buffer", test_buffer);
++    return g_test_run();
++}
+-- 
+2.53.0.windows.2
+

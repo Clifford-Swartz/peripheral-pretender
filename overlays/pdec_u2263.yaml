@@ -1,0 +1,44 @@
+# Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+#
+# Behavior overlay for PDEC U2263 (position decoder: QDEC, HALL, COUNTER).
+# The same IP on the PIC32CM MC00, the PIC32CM JH01 and the SAM E51. The
+# mchp-pdec model decodes the inputs, counts and keeps STATUS.STOP/DIR and
+# the buffer-valid bits.
+ip: PDEC
+id: U2263
+versions: ["1.0.0"]
+references:
+  - "PIC32CM MC00 data sheet DS60001638E, chapter 42 (PDEC)"
+  - "PIC32CM MC00 silicon, firmware/hello APP=pdecprobe, pdecprobe2 (2026-10-21)"
+registers:
+  CTRLA:
+    pac_protected: true
+    enable_protected: {all_except: [SWRST, ENABLE]}
+    self_clearing: [SWRST]
+    hooks: [post_write]             # enable: STOP in QDEC/HALL
+  CTRLBCLR:
+    pac_protected: true
+    alias: {storage: CTRLBSET, op: clear}
+    hooks: [post_write]
+  CTRLBSET:
+    pac_protected: true
+    alias: {storage: CTRLBSET, op: set}
+    hooks: [post_write]             # commands, read back 0 when done
+  EVCTRL: {pac_protected: true, enable_protected: all}
+  INTENCLR: {pac_protected: true, alias: {storage: INTENSET, op: clear}}
+  INTENSET: {pac_protected: true, alias: {storage: INTENSET, op: set}}
+  INTFLAG:
+    w1c: all
+    irq_source: {enable: INTENSET}
+  STATUS:
+    w1c: [QERR, IDXERR, MPERR, WINERR, HERR]
+    ro: [STOP, DIR, PRESCBUFV, FILTERBUFV, CCBUFV0, CCBUFV1]
+  DBGCTRL: {pac_protected: true}
+  SYNCBUSY: {dynamic: true}         # instant synchronization
+  PRESC: {pac_protected: true, hooks: [post_write]}
+  FILTER: {pac_protected: true, hooks: [post_write]}
+  PRESCBUF: {pac_protected: true, hooks: [post_write]}
+  FILTERBUF: {pac_protected: true, hooks: [post_write]}
+  COUNT: {pac_protected: true, hooks: [post_write]}   # reads: the last READSYNC
+  CC: {pac_protected: true, hooks: [pre_read, post_write]}   # CCBUF while valid
+  CCBUF: {pac_protected: true, hooks: [post_write]}

@@ -467,3 +467,54 @@ byte for byte, as with the EIC and TCC probes.
 - Until the open points are settled, follow the data sheet where it is clear and log LOG_UNIMP for
   AUTOC correction and the HALL window/delay counters, as `mchp_tcc.c` does for its unmodelled
   features.
+
+## 8. Answers from silicon (2026-10-21)
+
+The desk EV15N46A ran `firmware/hello/tests/pdecprobe.c` (Q0-Q9) and `pdecprobe2.c` (R1-R8), with
+A = PA08 and B = PA09 (function J) moved by their pulls (PA16-PA18 were not used: PA18 sits behind
+the DGI level converter) and a third input from PA02 through EIC EXTINT2 and an asynchronous EVSYS
+channel. `firmware/hello/tests/pdec.c` checks the settled answers on both
+(`golden/pic32cm1216mc00048-a1/pdec-silicon.txt`). Open questions of section 6:
+
+1. **X4 order**: the S0-leading order 00-10-11-01 counts up, 4 per cycle, STATUS.DIR 0; SWAP and
+   PINVEN0 each count it down (Q2, Q3).
+2. **START**: QDEC and HALL count nothing before START (STOP = 1 after the enable); COUNTER counts
+   from the enable (STOP = 0, R6). STOP keeps COUNT and ignores steps; START resumes; RETRIGGER
+   loads 0 counting up **and down** (not TOP); disabling and enabling stops it again (Q8).
+3. **COUNT reads** return the last READSYNC copy (0 before any); a COUNT write reads back at once
+   and counting goes on from it (Q4).
+4. **OVF and MC**: an angular wrap moves the revolution count with no flag; OVF marks the wrap of
+   the whole count (both parts at TOP up, both at 0 down). MC0/MC1 flag COUNT **becoming** CC0/CC1
+   (a count that stays on the value, as with TOP = 0, flags nothing after the first), also at START
+   and RETRIGGER (R1, R3, Q5).
+5. **Direction**: a reversal sets STATUS.DIR at its first edge (no VLC there) and INTFLAG.DIR with
+   VLC at the second (Q2). In X2 STATUS.DIR follows S1, INTFLAG.DIR flags a count in the other
+   direction than the last, and every count sets VLC (R4).
+6. **X2**: each S0 edge counts, up while S1 is 0, down while it is 1 (R4).
+7. **QERR**: a simultaneous S0/S1 change (one event into EVU0 and EVU1) sets STATUS.QERR and ERR
+   without counting, except the first transition after START (Q9).
+8. **CC0 and CC1 are 16 bits** (all-ones writes read 0x0000FFFF), so Harmony's HALL window writes
+   (`CCBUFx = value << 16`) land nowhere. PRESC is 4 bits, FILTER 8, CTRLA's mask 0xF777CF4C,
+   EVCTRL's 0x3FFF (Q0).
+9. **Buffers** (R8): CCx reads show CCBUFx while CCBUFVx is set; a second CCBUFx write before the
+   copy was dropped; the UPDATE command copies and clears CCBUFV; a count step without overflow
+   does not.
+10. **COUNTER** (R6): GCLK / 1024 gave 468 counts in 10 ms; with PEREN and CC0 = 4687 OVF and MC0
+    at 100 ms, MC1 (CC1 = 1000) at 21 ms.
+11. **HALL** (R7): COUNT[2:0] carries the code; the order 1-3-2-6-4-5 leaves STATUS.DIR 0, the
+    reverse sets it; code 0 sets HERR. The bits above carry running window/delay counters, and
+    the MC0/MC1/OVF/ERR flags they raise were set at nearly every step.
+12. **Index, not settled** (Q7, R2, R5): with the index on EVU2 held low, a revolution count went
+    up without the angular count reloading, and a forward step later raised QERR; an index pulse
+    at A = 1 moved the revolution count. In X4S, an index mid-revolution set IDXERR, after which
+    the count stopped moving. These do not match the data sheet's description and need a probe
+    of their own.
+
+## 9. The twin
+
+`hw/timer/mchp_pdec.c` models section 8 items 1-11 (HALL: the code and direction only). Its pad
+inputs come through the generic pad input path ("pad-qdi-in"), its events through EVSYS; input
+changes in one instant are decoded together (a zero-delay timer), so one event into two inputs is
+a simultaneous change as on silicon. Not modelled: the index and the X4S/X2S checks, AUTOC, the
+HALL window and delay counters, the input filter, COUNTER event actions, standby. qtest
+`pic32cm-pdec-test`.
