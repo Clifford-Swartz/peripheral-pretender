@@ -1,0 +1,805 @@
+From 3dad68539827a0e3479b58cc6afb4c6dce904b08 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 21 Oct 2026 11:46:22 -0700
+Subject: [PATCH] hw/timer: TCC capture and circular buffers (U2213)
+
+Capture as a PIC32CM MC00 does it (firmware/hello APP=tccprobe10 and
+tccprobe11, checked by tcccapt). A CPTENx channel captures COUNT on the
+rising edge of its MCx event (EVCTRL.MCEIx), and EV1's PPW and PWP
+actions capture the period (restarting the counter, TRG) and the pulse
+width into CC0 and CC1, on the edges TCINV1 selects. Each capture
+channel is a FIFO: CCx with INTFLAG.MCx, then CCBUFx with
+STATUS.CCBUFVx, then INTFLAG.ERR; reading CCx clears MCx and moves
+CCBUFx up two GCLK_TCC cycles later. In dual slope with TOP below MAX/2
+the capture's MSB marks the down ramp. Fault capture uses the same
+FIFO, and capture channels no longer set compare-match flags.
+
+Circular buffers (WAVE.CIPEREN, CICCENx; tccprobe12): each update swaps
+the register and its buffer, every cycle in single slope, at TOP and
+ZERO for CCx and at ZERO for PER in DSBOTH; the valid flag clears at the
+first update, in RAMP2 and DSBOTH at the first that starts cycle A. PER
+and CCx reads show the buffer while it is valid or circular, and PER or
+CCx writes reach their buffers too, as on silicon.
+
+The enable no longer copies the buffers: silicon waits for the first
+update condition. STATUS.FAULTnIN shows an enabled EVn input whatever
+its action.
+
+qtest: capture FIFO and the dual-slope MSB, PPW/PWP, buffers at the
+enable, circular buffers.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst         |  11 +-
+ hw/timer/mchp_tcc.c                           | 305 ++++++++++++++----
+ include/hw/mchp/gen/atsame51j20a/tcc_u2213.h  |   2 +-
+ .../mchp/gen/pic32cm1216mc00048/tcc_u2213.h   |   2 +-
+ .../mchp/gen/pic32cm5164jh01100/tcc_u2213.h   |   2 +-
+ include/hw/mchp/gen/tcc_u2213.h               |   2 +-
+ tests/qtest/pic32cm-tcc-test.c                | 137 +++++++-
+ 7 files changed, 397 insertions(+), 64 deletions(-)
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index 3d337eb..c50a4cc 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -111,7 +111,10 @@ Supported devices
+   inputs) clamp their channel, with filter, blanking, qualification,
+   keep, restart, hardware and software halt and capture into a CPTENx
+   channel; non-recoverable faults (EV0/EV1, or HALT = NR) hold the
+-  counter in the DRVCTRL state until software clears them.
++  counter in the DRVCTRL state until software clears them. Capture
++  channels (CTRLA.CPTENx) take COUNT from their MCx event or from EV1's
++  PPW and PWP actions through the CCx/CCBUFx FIFO with ERR; circular
++  buffers swap PER and CCx with their buffers at the update conditions.
+ - RTC (U2250, PIC32CM MC00 only): the three modes, periodic flags,
+   calendar with alarm, event outputs; reset only at power-on.
+ - EVSYS: channels on the three paths, software events, the users that
+@@ -165,9 +168,9 @@ Missing devices
+   (XCK), synchronous mode, LIN and auto-baud frames, IrDA, 9-bit characters
+   and receive errors. PORT: the sampling mode (CTRL).
+ - TC capture on pins (COPEN) and CAPTMODE; the JH01 RTC (03608). TCC
+-  capture from events, the fault capture modes but CAPT, the ALTFAULT
+-  source, circular buffers, RAMP2CS, the outputs' start latency and the
+-  STATUS read lag.
++  EVACT0 STAMP, the fault capture modes but CAPT, the ALTFAULT source,
++  RAMP2CS, CTRLBSET.IDXCMD, the outputs' start latency and the STATUS
++  read lag.
+ - PAC write protection, DSU CRC32 and chip erase, sleep modes and every other
+   peripheral behaviour (CCL, PDEC, CAN, ...). ADC
+   sequencing and event inputs, DAC START events.
+diff --git a/hw/timer/mchp_tcc.c b/hw/timer/mchp_tcc.c
+index de3073e..e80976f 100644
+--- a/hw/timer/mchp_tcc.c
++++ b/hw/timer/mchp_tcc.c
+@@ -79,8 +79,26 @@
+  * outputs in the non-recoverable state until software clears its
+  * STATUS.FAULTx with the input gone; counting then goes on from where it
+  * stopped. STATUS reads are immediate (silicon: 5-8 GCLK_TCC cycles late).
+- * Not modelled: the ALTFAULT source, fault capture modes but CAPT, capture
+- * from events, circular buffers, the debug and update faults (DFS, UFS),
++ *
++ * Capture and circular buffers as on a PIC32CM MC00 (tccprobe10.c to
++ * tccprobe12.c). A CPTENx channel captures COUNT on the rising edge of its
++ * MCx event (EVCTRL.MCEIx); EV1's PPW (PWP) action captures the period
++ * into CC0 (CC1) and restarts the counter on the rising edge (falling
++ * with TCINV1), and the pulse width into CC1 (CC0) on the other. Each
++ * capture channel is a FIFO: CCx (INTFLAG.MCx), then CCBUFx
++ * (STATUS.CCBUFVx), then INTFLAG.ERR and the capture is lost; reading CCx
++ * clears MCx and moves CCBUFx up 2 GCLK_TCC cycles later. In dual slope
++ * with TOP below MAX/2 the capture's MSB is set on the down ramp.
++ * Buffers are not copied at the enable, only at update conditions and
++ * commands. With circular buffering (WAVE.CIPEREN, CICCENx) each update
++ * swaps the register and its buffer: every cycle in single slope (RAMP2:
++ * cycle A takes one value, B the other), at TOP and ZERO for CCx and at
++ * ZERO for PER in DSBOTH; the valid flag clears at the first update, in
++ * RAMP2 and DSBOTH at the first that starts cycle A (ZERO). PER and CCx
++ * writes reach their buffers too, and reads show the buffer while it is
++ * valid or circular.
++ * Not modelled: the ALTFAULT source, fault capture modes but CAPT, the
++ * STAMP event action, the debug and update faults (DFS, UFS),
+  * CTRLBSET.IDXCMD, sleep.
+  *
+  * Counting is event driven on QEMU_CLOCK_VIRTUAL: the timer fires at the
+@@ -180,6 +198,8 @@ struct MchpTccState {
+     uint8_t nr_fault;           /* non-recoverable: EV0, EV1, A, B (bits) */
+     bool halted;                /* a fault holds the counter */
+     uint8_t cmp_prev;           /* channels 0, 1 waveform after a tick */
++    QEMUTimer *capt_timer;      /* a capture FIFO moves up */
++    int64_t refill_at[MCHP_TCC_CHANNELS];   /* CCBUFx to CCx at, ns */
+ 
+     bool running;               /* counting (started, not stopped) */
+     bool moved;                 /* ticked since the start */
+@@ -557,28 +577,71 @@ static bool tcc_match_possible(MchpTccState *s, uint32_t c)
+     return c <= MAX(s->top, s->count) && !(s->wavegen == NPWM && c == 0);
+ }
+ 
+-/* Copy the valid buffers into PER/CCx (UPDATE condition or command) */
+-static void tcc_update_buffers(MchpTccState *s)
++/* Circular buffering: bit 0 PER (WAVE.CIPEREN), bits 1-4 CC0-3 (CICCENx) */
++static uint32_t tcc_circular(MchpTccState *s)
+ {
+-    uint32_t status = tcc_reg(s, A_STATUS, 4);
++    uint32_t w = tcc_reg(s, A_WAVE, 4);
+ 
+-    if (status & F(STATUS, PERBUFV)) {
+-        tcc_set_reg(s, A_PER, 4, tcc_reg(s, A_PERBUF, 4));
+-    }
+-    for (unsigned ch = 0; ch < MCHP_TCC_CHANNELS; ch++) {
+-        if (status & (F(STATUS, CCBUFV0) << ch)) {
+-            tcc_set_reg(s, A_CC + 4 * ch, 4, tcc_reg(s, A_CCBUF + 4 * ch, 4));
++    return extract32(w, R_MCHP_TCC_WAVE_CIPEREN_SHIFT, 1) |
++           extract32(w, R_MCHP_TCC_WAVE_CICCEN0_SHIFT, 4) << 1;
++}
++
++/* Channels in capture mode (CTRLA.CPTENx): their CCBUFx is the FIFO */
++static uint32_t tcc_capture_channels(MchpTccState *s)
++{
++    return extract32(tcc_reg(s, A_CTRLA, 4), R_MCHP_TCC_CTRLA_CPTEN0_SHIFT,
++                     MCHP_TCC_CHANNELS);
++}
++
++/*
++ * An update: the valid buffers go into PER, CCx and PATT; circular ones
++ * swap with their register. At @top (DSBOTH) only circular CCx swap. A
++ * circular valid flag stays at @top and at the start of RAMP2's cycle B
++ */
++static void tcc_update_cycle(MchpTccState *s, bool top)
++{
++    uint32_t circ = tcc_circular(s), status = tcc_reg(s, A_STATUS, 4);
++    uint32_t capt = tcc_capture_channels(s);
++    bool keep = top || (s->wavegen == NPWM && tcc_ramp(s) != RAMP1 &&
++                        s->ramp_idx);
++
++    for (unsigned r = 0; r <= MCHP_TCC_CHANNELS; r++) {
++        hwaddr reg = r ? A_CC + 4 * (r - 1) : A_PER;
++        hwaddr buf = r ? A_CCBUF + 4 * (r - 1) : A_PERBUF;
++        uint32_t valid = r ? F(STATUS, CCBUFV0) << (r - 1) : F(STATUS, PERBUFV);
++        uint32_t busy = r ? R_MCHP_TCC_SYNCBUSY_CC0_MASK << (r - 1) :
++                            R_MCHP_TCC_SYNCBUSY_PER_MASK;
++        bool c = circ & BIT(r);
++
++        if ((r && (capt & BIT(r - 1))) || (top && (!r || !c))) {
++            continue;
++        }
++        if (c) {
++            uint32_t a = tcc_reg(s, reg, 4);
++
++            tcc_set_reg(s, reg, 4, tcc_reg(s, buf, 4));
++            tcc_set_reg(s, buf, 4, a);
++        } else if (status & valid) {
++            tcc_set_reg(s, reg, 4, tcc_reg(s, buf, 4));
++        }
++        if (!(c && keep)) {
++            tcc_mod_reg(s, A_STATUS, 4, valid, 0);
++            s->buf_busy &= ~busy;
+         }
+     }
+-    if (status & F(STATUS, PATTBUFV)) {
++    if (!top && (status & F(STATUS, PATTBUFV))) {
+         tcc_set_reg(s, A_PATT, 2, tcc_reg(s, A_PATTBUF, 2));
++        tcc_mod_reg(s, A_STATUS, 4, F(STATUS, PATTBUFV), 0);
+     }
+-    tcc_mod_reg(s, A_STATUS, 4, F(STATUS, PERBUFV) | F(STATUS, PATTBUFV) |
+-                (0xF << 16), 0);
+-    s->buf_busy = 0;
+     tcc_refresh(s);
+ }
+ 
++/* Copy the valid buffers into PER/CCx (UPDATE command, retrigger) */
++static void tcc_update_buffers(MchpTccState *s)
++{
++    tcc_update_cycle(s, false);
++}
++
+ static void tcc_flag(MchpTccState *s, uint32_t flags)
+ {
+     uint32_t ev = tcc_reg(s, A_EVCTRL, 4);
+@@ -677,7 +740,7 @@ static void tcc_jump(MchpTccState *s, uint64_t k)
+ static void tcc_tick(MchpTccState *s, int force_down)
+ {
+     uint32_t a = s->count, b, flags = 0;
+-    bool down, ovf = false, update = false;
++    bool down, ovf = false, update = false, top_update = false;
+ 
+     if (force_down >= 0 && !tcc_ds(s)) {
+         bool save = s->dir;
+@@ -697,12 +760,17 @@ static void tcc_tick(MchpTccState *s, int force_down)
+         ovf = (leave_top && (s->wavegen == DSTOP || s->wavegen == DSBOTH)) ||
+               (leave_zero && s->wavegen != DSTOP);
+         update = leave_zero;
++        /* DSBOTH updates at TOP too for circular CCx (DS 34.6.3.2) */
++        top_update = leave_top && s->wavegen == DSBOTH &&
++                     (tcc_circular(s) & 0x1E);
+     } else {
+         ovf = down ? a == 0 : b == 0 && (a == s->top || a == tcc_max(s));
+         update = ovf;
+     }
+     for (unsigned ch = 0; ch < MCHP_TCC_CHANNELS; ch++) {
+-        if (tcc_match(s, a, b, s->cc[ch])) {
++        /* A capture channel (CTRLA.CPTENx) flags captures, not matches */
++        if (tcc_match(s, a, b, s->cc[ch]) &&
++            !(tcc_capture_channels(s) & BIT(ch))) {
+             flags |= F(INTFLAG, MC0) << ch;
+         }
+         if ((s->wavegen == NFRQ || s->wavegen == MFRQ) && a == s->cc[ch]) {
+@@ -736,8 +804,9 @@ static void tcc_tick(MchpTccState *s, int force_down)
+         tcc_refresh(s);
+         tcc_fault_cycle(s, s->t_base);
+     }
+-    if (update && !(tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, LUPD))) {
+-        tcc_update_buffers(s);
++    if ((update || top_update) &&
++        !(tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, LUPD))) {
++        tcc_update_cycle(s, top_update);
+     }
+     if (ovf && (tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, ONESHOT))) {
+         tcc_stop(s, true);
+@@ -879,7 +948,8 @@ static bool tcc_quiet(MchpTccState *s)
+     uint32_t ev = tcc_reg(s, A_EVCTRL, 4);
+ 
+     for (unsigned ch = 0; ch < MCHP_TCC_CHANNELS; ch++) {
+-        if (tcc_match_possible(s, s->cc[ch])) {
++        if (tcc_match_possible(s, s->cc[ch]) &&
++            !(tcc_capture_channels(s) & BIT(ch))) {
+             want |= F(INTFLAG, MC0) << ch;
+         }
+     }
+@@ -955,13 +1025,16 @@ static uint32_t tcc_start_cnt(MchpTccState *s)
+     return s->cnt_pending ? 0 : tcc_cnt_start(s);
+ }
+ 
+-/* Count on from COUNT; starting is an UPDATE condition */
+-static void tcc_start(MchpTccState *s)
++/*
++ * Count on from COUNT; a retrigger (@update) is an update condition, the
++ * enable and a START event are not (silicon: the buffers wait)
++ */
++static void tcc_start(MchpTccState *s, bool update)
+ {
+     uint32_t flags = tcc_start_cnt(s);
+ 
+     tcc_mod_reg(s, A_STATUS, 4, F(STATUS, STOP), 0);
+-    if (!(tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, LUPD))) {
++    if (update && !(tcc_reg(s, A_CTRLBSET, 1) & F(CTRLBSET, LUPD))) {
+         tcc_update_buffers(s);
+     }
+     s->running = true;
+@@ -988,7 +1061,7 @@ static void tcc_start(MchpTccState *s)
+ static void tcc_retrigger(MchpTccState *s)
+ {
+     if (!s->running) {
+-        tcc_start(s);           /* resume from COUNT */
++        tcc_start(s, true);     /* resume from COUNT */
+         return;
+     }
+     /* The waveform goes on to the first tick (silicon: no glitch) */
+@@ -1040,33 +1113,21 @@ static void tcc_command(MchpTccState *s, unsigned cmd)
+ static void tcc_report_unimp(MchpTccState *s)
+ {
+     MchpRegBlock *rb = MCHP_REGBLOCK(s);
+-    uint32_t ctrla = tcc_reg(s, A_CTRLA, 4);
+-    uint32_t mcei = extract32(tcc_reg(s, A_EVCTRL, 4),
+-                              R_MCHP_TCC_EVCTRL_MCEI0_SHIFT, 4);
+-    uint32_t fsrc = 0;
+-    unsigned ev0 = tcc_evact(s, 0), ev1 = tcc_evact(s, 1);
++    unsigned ev0 = tcc_evact(s, 0);
+ 
+     for (unsigned n = 0; n < 2; n++) {
+         unsigned src = FIELD_EX32(tcc_reg(s, n ? A_FCTRLB : A_FCTRLA, 4),
+                                   MCHP_TCC_FCTRLA, SRC);
+ 
+-        fsrc |= (src != 0) << n;
+         if (src == MCHP_TCC_FCTRLA_SRC_ALTFAULT) {
+             qemu_log_mask(LOG_UNIMP, "%s.FCTRL%c: ALTFAULT not modelled\n",
+                           rb->name, 'A' + n);
+         }
+     }
+-    /* A CPTENx channel taking the MCx event captures (fault inputs aside) */
+-    if (extract32(ctrla, R_MCHP_TCC_CTRLA_CPTEN0_SHIFT, 4) & mcei & ~fsrc) {
+-        qemu_log_mask(LOG_UNIMP, "%s.CTRLA: capture from events not "
+-                      "modelled\n", rb->name);
+-    }
+-    if ((ev0 > MCHP_TCC_EVCTRL_EVACT0_COUNT &&
+-         ev0 != MCHP_TCC_EVCTRL_EVACT0_FAULT) ||
+-        (ev1 > MCHP_TCC_EVCTRL_EVACT1_DEC &&
+-         ev1 != MCHP_TCC_EVCTRL_EVACT1_FAULT)) {
+-        qemu_log_mask(LOG_UNIMP, "%s.EVCTRL: capture event actions not "
+-                      "modelled\n", rb->name);
++    if (ev0 > MCHP_TCC_EVCTRL_EVACT0_COUNT &&
++        ev0 != MCHP_TCC_EVCTRL_EVACT0_FAULT) {
++        qemu_log_mask(LOG_UNIMP, "%s.EVCTRL: EVACT0 STAMP not modelled\n",
++                      rb->name);
+     }
+ }
+ 
+@@ -1079,6 +1140,89 @@ static void tcc_update_busy(MchpTccState *s)
+     }
+ }
+ 
++/* -- Capture ------------------------------------------------------------ */
++
++/* Silicon moves CCBUFx into a read CCx this many GCLK_TCC cycles later */
++#define MCHP_TCC_REFILL 2
++
++/*
++ * COUNT at @now as a capture: in dual slope with TOP below MAX/2 the MSB
++ * says the down ramp (DS 34.6.2.7)
++ */
++static uint32_t tcc_capture_value(MchpTccState *s, int64_t now)
++{
++    unsigned bits = MCHP_REGBLOCK(s)->info->counter_bits ?: 24;
++    bool down;
++    uint32_t v = tcc_after(s, tcc_ticks(s, now), &down) << tcc_dith_bits(s);
++
++    if (tcc_ds(s) && s->top < (tcc_max(s) >> 1) && down) {
++        v |= BIT(bits - 1);
++    }
++    return v;
++}
++
++/* Capture channel @ch's FIFO takes @v: CCx, then CCBUFx, else ERR */
++static void tcc_capture_put(MchpTccState *s, unsigned ch, uint32_t v)
++{
++    if (!(tcc_reg(s, A_INTFLAG, 4) & (F(INTFLAG, MC0) << ch)) &&
++        s->refill_at[ch] == INT64_MAX) {
++        tcc_set_reg(s, A_CC + 4 * ch, 4, v);
++        tcc_flag(s, F(INTFLAG, MC0) << ch);
++    } else if (!(tcc_reg(s, A_STATUS, 4) & (F(STATUS, CCBUFV0) << ch))) {
++        tcc_set_reg(s, A_CCBUF + 4 * ch, 4, v);
++        tcc_mod_reg(s, A_STATUS, 4, 0, F(STATUS, CCBUFV0) << ch);
++    } else {
++        tcc_flag(s, F(INTFLAG, ERR));
++    }
++}
++
++/* Capture COUNT at @now into channel @ch if it is in capture mode */
++static void tcc_capture(MchpTccState *s, unsigned ch, int64_t now)
++{
++    unsigned nch = MCHP_REGBLOCK(s)->info->channels ?: MCHP_TCC_CHANNELS;
++
++    if (ch < nch && (tcc_capture_channels(s) & BIT(ch))) {
++        tcc_capture_put(s, ch, tcc_capture_value(s, now));
++    }
++}
++
++static void tcc_capture_arm(MchpTccState *s)
++{
++    int64_t next = INT64_MAX;
++
++    for (unsigned ch = 0; ch < MCHP_TCC_CHANNELS; ch++) {
++        next = MIN(next, s->refill_at[ch]);
++    }
++    if (next == INT64_MAX) {
++        timer_del(s->capt_timer);
++    } else {
++        timer_mod(s->capt_timer, next);
++    }
++}
++
++/* The FIFOs whose time has come move CCBUFx up into CCx */
++static void tcc_capture_cb(void *opaque)
++{
++    MchpTccState *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    for (unsigned ch = 0; ch < MCHP_TCC_CHANNELS; ch++) {
++        uint32_t valid = F(STATUS, CCBUFV0) << ch;
++
++        if (now < s->refill_at[ch]) {
++            continue;
++        }
++        s->refill_at[ch] = INT64_MAX;
++        if (tcc_reg(s, A_STATUS, 4) & valid) {
++            tcc_set_reg(s, A_CC + 4 * ch, 4, tcc_reg(s, A_CCBUF + 4 * ch, 4));
++            tcc_mod_reg(s, A_STATUS, 4, valid, 0);
++            tcc_flag(s, F(INTFLAG, MC0) << ch);
++        }
++    }
++    tcc_capture_arm(s);
++    mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++}
++
+ /* -- Faults ------------------------------------------------------------- */
+ 
+ #define MCHP_TCC_FAULT_INPUTS 4
+@@ -1205,13 +1349,8 @@ static void tcc_fault_capture(MchpTccState *s, unsigned n, int64_t t)
+                       "modelled\n", MCHP_REGBLOCK(s)->name, 'A' + n, mode);
+         return;
+     }
+-    if (ch < nch && (tcc_reg(s, A_CTRLA, 4) & (F(CTRLA, CPTEN0) << ch))) {
+-        bool down;
+-        uint32_t c = tcc_after(s, tcc_ticks(s, t), &down);
+-
+-        tcc_set_reg(s, A_CC + 4 * ch, 4, c << tcc_dith_bits(s));
+-        tcc_refresh(s);
+-        tcc_flag(s, F(INTFLAG, MC0) << ch);
++    if (ch < nch) {
++        tcc_capture(s, ch, t);
+     }
+ }
+ 
+@@ -1297,6 +1436,12 @@ static void tcc_faults(MchpTccState *s, int64_t t)
+         }
+     }
+     for (unsigned n = 0; n < 2; n++) {
++        /* FAULTnIN shows an enabled EVn whatever its action (silicon) */
++        if (tcc_enabled(s) && tcc_ev_enabled(s, n) && tcc_ev_active(s, n) &&
++            tcc_evact(s, n) != (n ? MCHP_TCC_EVCTRL_EVACT1_FAULT :
++                                    MCHP_TCC_EVCTRL_EVACT0_FAULT)) {
++            in |= F(STATUS, FAULT0IN) << n;
++        }
+         if (!extract32(s->flt_in, 2 + n, 1)) {
+             continue;
+         }
+@@ -1477,6 +1622,12 @@ static void tcc_set_mc_event(void *opaque, int n, int level)
+     }
+     tcc_advance(s, now);
+     s->mc_level = deposit32(s->mc_level, n, 1, level > 0);
++    /* A rising edge captures on a CPTENx channel with MCEIx, not a fault */
++    if (level > 0 && tcc_enabled(s) &&
++        (tcc_reg(s, A_EVCTRL, 4) & (F(EVCTRL, MCEI0) << n)) &&
++        !(n < 2 && FIELD_EX32(tcc_fctrl(s, n), MCHP_TCC_FCTRLA, SRC))) {
++        tcc_capture(s, n, now);
++    }
+     tcc_fault_update(s, now);
+     tcc_advance(s, now);
+     tcc_update_wo(s);
+@@ -1514,7 +1665,7 @@ static void tcc_set_event(void *opaque, int n, int level)
+             break;
+         case MCHP_TCC_EVCTRL_EVACT0_START:
+             if (!was && tcc_ev_active(s, 0) && !s->running) {
+-                tcc_start(s);
++                tcc_start(s, false);
+             }
+             break;
+         case MCHP_TCC_EVCTRL_EVACT0_INC:
+@@ -1565,6 +1716,19 @@ static void tcc_set_event(void *opaque, int n, int level)
+                 tcc_base_set(s, now);
+             }
+             break;
++        case MCHP_TCC_EVCTRL_EVACT1_PPW:
++        case MCHP_TCC_EVCTRL_EVACT1_PWP: {
++            /* The period channel (PPW CC0) and restart, then the width */
++            unsigned per_ch = tcc_evact(s, 1) == MCHP_TCC_EVCTRL_EVACT1_PWP;
++
++            if (!was && tcc_ev_active(s, 1) && s->running) {
++                tcc_capture(s, per_ch, now);
++                tcc_retrigger(s);
++            } else if (was && !tcc_ev_active(s, 1) && s->running) {
++                tcc_capture(s, !per_ch, now);
++            }
++            break;
++        }
+         }
+     }
+     tcc_fault_update(s, now);
+@@ -1709,13 +1873,30 @@ static uint32_t tcc_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
+     case A_COUNT:
+         return stored;          /* the last synchronized value */
+     case A_PER:
+-        /* While PERBUFV is set, PER reads show PERBUF (silicon) */
+-        if (tcc_reg(s, A_STATUS, 4) & F(STATUS, PERBUFV)) {
++        /* While PERBUFV is set or circular, PER reads PERBUF (silicon) */
++        if ((tcc_reg(s, A_STATUS, 4) & F(STATUS, PERBUFV)) ||
++            (tcc_circular(s) & 1)) {
+             return tcc_reg(s, A_PERBUF, 4);
+         }
+         return stored;
+     case A_CC:
+-        if (tcc_reg(s, A_STATUS, 4) & (F(STATUS, CCBUFV0) << idx)) {
++        if (tcc_capture_channels(s) & BIT(idx)) {
++            /* Reading a capture clears MCx; CCBUFx moves up (silicon) */
++            if (side_effects &&
++                (tcc_reg(s, A_INTFLAG, 4) & (F(INTFLAG, MC0) << idx))) {
++                tcc_mod_reg(s, A_INTFLAG, 4, F(INTFLAG, MC0) << idx, 0);
++                if (tcc_reg(s, A_STATUS, 4) & (F(STATUS, CCBUFV0) << idx)) {
++                    s->refill_at[idx] = now + (tcc_hz(s) ?
++                        clock_ticks_to_ns(MCHP_REGBLOCK(s)->gclk,
++                                          MCHP_TCC_REFILL) : 0);
++                    tcc_capture_arm(s);
++                }
++                mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++            }
++            return stored;
++        }
++        if ((tcc_reg(s, A_STATUS, 4) & (F(STATUS, CCBUFV0) << idx)) ||
++            (tcc_circular(s) & BIT(idx + 1))) {
+             return tcc_reg(s, A_CCBUF + 4 * idx, 4);
+         }
+         return stored;
+@@ -1750,6 +1931,12 @@ static void tcc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+         mchp_regfile_set(rf, ri, idx, old);
+         return;
+     }
++    /* A PER or compare CCx write reaches its buffer too (silicon reads) */
++    if (ri->offset == A_PER ||
++        (ri->offset == A_CC && !(tcc_capture_channels(s) & BIT(idx)))) {
++        tcc_set_reg(s, ri->offset == A_PER ? A_PERBUF : A_CCBUF + 4 * idx, 4,
++                    mchp_regfile_get(rf, ri, idx));
++    }
+     switch (ri->offset) {
+     case A_WEXCTRL:
+     case A_DRVCTRL:
+@@ -1778,7 +1965,7 @@ static void tcc_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+             if (ev0 != MCHP_TCC_EVCTRL_EVACT0_RETRIGGER &&
+                 ev0 != MCHP_TCC_EVCTRL_EVACT0_START &&
+                 ev1 != MCHP_TCC_EVCTRL_EVACT1_RETRIGGER) {
+-                tcc_start(s);
++                tcc_start(s, false);
+             }
+             tcc_fault_update(s, now);
+         } else if (old & ~val & F(CTRLA, ENABLE)) {
+@@ -1874,6 +2061,10 @@ static void tcc_reset_hold(MchpRegBlock *rb)
+     s->dith_cycle = 0;
+     tcc_fault_reset(s);
+     s->mc_level = 0;
++    timer_del(s->capt_timer);
++    for (unsigned ch = 0; ch < MCHP_TCC_CHANNELS; ch++) {
++        s->refill_at[ch] = INT64_MAX;
++    }
+     s->toggle = 0;
+     s->count = 0;
+     s->prev = 0;
+@@ -1898,6 +2089,7 @@ static bool tcc_realize(MchpRegBlock *rb, Error **errp)
+     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, tcc_timer_cb, s);
+     s->dti_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, tcc_dti_cb, s);
+     s->fault_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, tcc_fault_cb, s);
++    s->capt_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, tcc_capture_cb, s);
+     return true;
+ }
+ 
+@@ -1928,6 +2120,7 @@ static void tcc_finalize(Object *obj)
+         timer_free(s->timer);
+         timer_free(s->dti_timer);
+         timer_free(s->fault_timer);
++        timer_free(s->capt_timer);
+     }
+ }
+ 
+@@ -1939,8 +2132,8 @@ static int tcc_post_load(void *opaque, int version_id)
+ 
+ static const VMStateDescription vmstate_mchp_tcc = {
+     .name = TYPE_MCHP_TCC,
+-    .version_id = 3,
+-    .minimum_version_id = 3,
++    .version_id = 4,
++    .minimum_version_id = 4,
+     .post_load = tcc_post_load,
+     .fields = (const VMStateField[]) {
+         VMSTATE_STRUCT(parent_obj, MchpTccState, 1, vmstate_mchp_regblock,
+@@ -1973,6 +2166,8 @@ static const VMStateDescription vmstate_mchp_tcc = {
+         VMSTATE_UINT8(nr_fault, MchpTccState),
+         VMSTATE_BOOL(halted, MchpTccState),
+         VMSTATE_UINT8(cmp_prev, MchpTccState),
++        VMSTATE_TIMER_PTR(capt_timer, MchpTccState),
++        VMSTATE_INT64_ARRAY(refill_at, MchpTccState, MCHP_TCC_CHANNELS),
+         VMSTATE_BOOL(down, MchpTccState),
+         VMSTATE_BOOL_ARRAY(ev_level, MchpTccState, 2),
+         VMSTATE_UINT8(toggle, MchpTccState),
+diff --git a/include/hw/mchp/gen/atsame51j20a/tcc_u2213.h b/include/hw/mchp/gen/atsame51j20a/tcc_u2213.h
+index 5c3aab9..880287b 100644
+--- a/include/hw/mchp/gen/atsame51j20a/tcc_u2213.h
++++ b/include/hw/mchp/gen/atsame51j20a/tcc_u2213.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from ATSAME51J20A.atdf
+  * (SAME51_DFP 3.9.267). Do not edit.
+- * Overlay: overlays/tcc_u2213.yaml (sha1 ae0e697bd41b)
++ * Overlay: overlays/tcc_u2213.yaml (sha1 42ec7bd23667)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h b/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
+index a0b7710..2c0251d 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/tcc_u2213.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/tcc_u2213.yaml (sha1 ae0e697bd41b)
++ * Overlay: overlays/tcc_u2213.yaml (sha1 42ec7bd23667)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h b/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
+index ead0c43..6d2997b 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/tcc_u2213.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/tcc_u2213.yaml (sha1 ae0e697bd41b)
++ * Overlay: overlays/tcc_u2213.yaml (sha1 42ec7bd23667)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/tcc_u2213.h b/include/hw/mchp/gen/tcc_u2213.h
+index fb0f7cd..65327dc 100644
+--- a/include/hw/mchp/gen/tcc_u2213.h
++++ b/include/hw/mchp/gen/tcc_u2213.h
+@@ -11,7 +11,7 @@
+  * Do not edit.
+  * Timer Counter for Control Applications
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048, ATSAME51J20A
+- * Overlay: overlays/tcc_u2213.yaml (sha1 ae0e697bd41b)
++ * Overlay: overlays/tcc_u2213.yaml (sha1 42ec7bd23667)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/tests/qtest/pic32cm-tcc-test.c b/tests/qtest/pic32cm-tcc-test.c
+index e472d80..359e67d 100644
+--- a/tests/qtest/pic32cm-tcc-test.c
++++ b/tests/qtest/pic32cm-tcc-test.c
+@@ -62,6 +62,7 @@
+ #define NPWM            2
+ #define DSCRITICAL      4
+ #define DSBOTTOM        5
++#define DSBOTH          6
+ #define DSTOP           7
+ #define RAMP2A          (1 << 4)
+ #define RAMP2           (2 << 4)
+@@ -92,7 +93,15 @@
+ #define FFILTERVAL(n)   ((n) << 24)
+ #define EVACT0_FAULT    7
+ #define TCEI0           BIT(14)
++#define TCEI1           BIT(15)
+ #define MCEI0           BIT(16)
++#define MCEI(n)         BIT(16 + (n))
++#define EVACT1_PPW      (5 << 3)
++#define EVACT1_PWP      (6 << 3)
++#define CIPEREN         BIT(7)
++#define CICCEN(n)       BIT(8 + (n))
++#define ERR             BIT(3)
++#define CCBUFV(n)       BIT(16 + (n))
+ #define CPTEN(n)        BIT(24 + (n))
+ #define FAULTAIN        BIT(8)
+ #define FAULT0IN        BIT(10)
+@@ -874,8 +883,130 @@ static void test_fault_capture(void)
+ 
+     wave_tick(qts, 12);
+     mc_event(qts, 0, 1);
++    g_assert_cmphex(qtest_readl(qts, TCC0 + R_INTFLAG) & MC(2), ==, MC(2));
+     g_assert_cmpuint(qtest_readl(qts, TCC0 + R_CC(2)), ==, 12);
+-    g_assert_cmphex(flags(qts) & MC(2), ==, MC(2));
++    qtest_quit(qts);
++}
++
++/*
++ * Event capture: a CPTEN2 channel with MCEI2 captures COUNT on MC2's
++ * rising edge into CC2, then CCBUF2, then sets ERR; reading CC2 clears
++ * MC2 and moves CCBUF2 up 2 GCLK_TCC cycles later (silicon)
++ */
++static void test_capture_fifo(void)
++{
++    QTestState *qts = fault_init(CPTEN(2), 0, MCEI(2), 0);
++
++    for (unsigned t = 10; t <= 30; t += 10) {
++        wave_tick(qts, t);
++        mc_event(qts, 2, 1);
++        mc_event(qts, 2, 0);
++    }
++    g_assert_cmphex(qtest_readl(qts, TCC0 + R_INTFLAG) & (MC(2) | ERR), ==,
++                    MC(2) | ERR);
++    g_assert_cmphex(tcc_status(qts) & CCBUFV(2), ==, CCBUFV(2));
++    g_assert_cmpuint(qtest_readl(qts, TCC0 + R_CC(2)), ==, 10);
++    g_assert_cmphex(qtest_readl(qts, TCC0 + R_INTFLAG) & MC(2), ==, 0);
++    wave_tick(qts, 33);                     /* 2 cycles later */
++    g_assert_cmphex(qtest_readl(qts, TCC0 + R_INTFLAG) & MC(2), ==, MC(2));
++    g_assert_cmphex(tcc_status(qts) & CCBUFV(2), ==, 0);
++    g_assert_cmpuint(qtest_readl(qts, TCC0 + R_CC(2)), ==, 20);
++    wave_tick(qts, 36);
++    g_assert_cmphex(qtest_readl(qts, TCC0 + R_INTFLAG) & MC(2), ==, 0);
++    qtest_quit(qts);
++
++    /* Dual slope, TOP below MAX/2: the MSB marks the down ramp */
++    qts = wave_init(DSBOTTOM, 0);
++    qtest_writel(qts, TCC0 + R_CTRLA, CPTEN(2));
++    qtest_writel(qts, TCC0 + R_EVCTRL, MCEI(2));
++    wave_enable(qts, CPTEN(2));
++    wave_tick(qts, 130);                    /* down: 99 - 31 */
++    mc_event(qts, 2, 1);
++    g_assert_cmphex(qtest_readl(qts, TCC0 + R_CC(2)), ==, BIT(23) | 68);
++    qtest_quit(qts);
++}
++
++/*
++ * PPW: on EV1's rising edge the period into CC0 and a restart (TRG), on
++ * its falling edge the pulse width into CC1; PWP swaps the channels
++ */
++static void test_capture_ppw(void)
++{
++    static const uint32_t evact[2] = { EVACT1_PPW, EVACT1_PWP };
++
++    for (unsigned k = 0; k < 2; k++) {
++        QTestState *qts = fault_init(CPTEN(0) | CPTEN(1), 0,
++                                     evact[k] | TCEI1, 0);
++
++        wave_tick(qts, 20);
++        ev_event(qts, 1, 1);
++        g_assert_cmphex(flags(qts) & TRG, ==, TRG);
++        wave_tick(qts, 35);
++        ev_event(qts, 1, 0);
++        g_assert_cmpuint(qtest_readl(qts, TCC0 + R_CC(k)), ==, 20);
++        g_assert_cmpuint(qtest_readl(qts, TCC0 + R_CC(!k)), ==, 15);
++        wave_tick(qts, 80);
++        ev_event(qts, 1, 1);
++        g_assert_cmpuint(qtest_readl(qts, TCC0 + R_CC(k)), ==, 60);
++        g_assert_cmpuint(readsync(qts), ==, 0);
++        qtest_quit(qts);
++    }
++}
++
++/* The enable copies no buffer; the first update does (silicon) */
++static void test_buffer_at_enable(void)
++{
++    QTestState *qts = wave_init(NPWM, 0);
++
++    qtest_writel(qts, TCC0 + R_CCBUF(0), 50);
++    wave_enable(qts, 0);
++    wave_tick(qts, 30);
++    g_assert_cmphex(wo(qts) & 1, ==, 0);        /* CC0 20 */
++    wave_tick(qts, 130);
++    g_assert_cmphex(wo(qts) & 1, ==, 1);        /* CC0 50 */
++    qtest_quit(qts);
++}
++
++/*
++ * Circular buffers: each update swaps CC0 and CCBUF0 (single slope: every
++ * cycle; DSBOTH: at TOP and ZERO), PER and PERBUF (DSBOTH: at ZERO)
++ */
++static void test_circular(void)
++{
++    QTestState *qts = wave_init(NPWM | CICCEN(0), 0);
++
++    qtest_writel(qts, TCC0 + R_CCBUF(0), 50);
++    wave_enable(qts, 0);
++    wave_tick(qts, 30);
++    g_assert_cmphex(wo(qts) & 1, ==, 0);        /* 20 */
++    wave_tick(qts, 130);
++    g_assert_cmphex(wo(qts) & 1, ==, 1);        /* 50 */
++    wave_tick(qts, 230);
++    g_assert_cmphex(wo(qts) & 1, ==, 0);        /* 20 again */
++    g_assert_cmpuint(qtest_readl(qts, TCC0 + R_CC(0)), ==, 50);
++    qtest_quit(qts);
++
++    /* DSBOTH PER 49: CC0 10 counting up, CCBUF0 30 counting down */
++    qts = wave_init(DSBOTH | CICCEN(0), 0);
++    qtest_writel(qts, TCC0 + R_PER, 49);
++    qtest_writel(qts, TCC0 + R_CC(0), 10);
++    qtest_writel(qts, TCC0 + R_CCBUF(0), 30);
++    wave_enable(qts, 0);
++    wave_tick(qts, 20);                     /* up, 20 */
++    g_assert_cmphex(cmp(qts) & 1, ==, 1);
++    wave_tick(qts, 73);                     /* down, 25: under 30 */
++    g_assert_cmphex(cmp(qts) & 1, ==, 0);
++    qtest_quit(qts);
++
++    /* DSBOTH: PER 49 for a whole cycle, then PERBUF 29 */
++    qts = wave_init(DSBOTH | CIPEREN, 0);
++    qtest_writel(qts, TCC0 + R_PER, 49);
++    qtest_writel(qts, TCC0 + R_PERBUF, 29);
++    wave_enable(qts, 0);
++    wave_tick(qts, 60);                     /* down from 49: 38 */
++    g_assert_cmpuint(readsync(qts), ==, 38);
++    wave_tick(qts, 130);                    /* top 29 at 127: down, 26 */
++    g_assert_cmpuint(readsync(qts), ==, 26);
+     qtest_quit(qts);
+ }
+ 
+@@ -945,6 +1076,10 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-tcc/fault-capture", test_fault_capture);
+     qtest_add_func("pic32cm-tcc/fault-nonrecoverable",
+                    test_fault_nonrecoverable);
++    qtest_add_func("pic32cm-tcc/capture-fifo", test_capture_fifo);
++    qtest_add_func("pic32cm-tcc/capture-ppw", test_capture_ppw);
++    qtest_add_func("pic32cm-tcc/buffer-at-enable", test_buffer_at_enable);
++    qtest_add_func("pic32cm-tcc/circular", test_circular);
+ 
+     return g_test_run();
+ }
+-- 
+2.53.0.windows.2
+

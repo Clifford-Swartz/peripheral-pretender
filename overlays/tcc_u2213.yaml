@@ -5,15 +5,15 @@
 # commands, one-shot, double buffering, compare-match flags, waveform output
 # state (STATUS.CMPx), events, the waveform extension (output matrix, dead
 # time, swap, pattern, inversion), RAMP2/2A/2C, dithering, the waveform
-# pins and the recoverable and non-recoverable faults; capture (but fault
-# capture into a CPTENx channel) and circular buffers are not modelled.
+# pins, the recoverable and non-recoverable faults, capture (events, PPW,
+# PWP) and the circular buffers.
 ip: TCC
 id: U2213
 versions: ["3.0.0", "3.1.0", "4a0"]   # 3.0.0: MC00; 3.1.0: SAM E51; 4a0: JH01
 references:
   - "DS60001638E 31 (PIC32CM MC00 TCC), via Microchip's MCP server"
   - "silicon, PIC32CM1216MC00048 rev A1, firmware/hello/tests/tccprobe.c, 2026-10-13"
-  - "silicon, PIC32CM1216MC00048 rev A1, firmware/hello/tests/tccprobe2-9.c, 2026-10-21"
+  - "silicon, PIC32CM1216MC00048 rev A1, firmware/hello/tests/tccprobe2-12.c, 2026-10-21"
 registers:
   CTRLA:
     pac_protected: true

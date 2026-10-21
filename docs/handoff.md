@@ -599,14 +599,17 @@ and checked by `tccfault`. The stimulus is an EIC pin's pull resistor through an
 EVSYS channel, recorded with the outputs (`scope_record_stim`). Silicon: a fault needs
 EVCTRL.MCEIx, STATUS shows faults several cycles late, BLANK = START skips the first cycle.
 
+**TCC capture and circular buffers** (patch 0069): event capture through the CCx/CCBUFx FIFO with
+ERR, PPW/PWP, the dual-slope MSB, circular PER/CC buffers, from `tccprobe10`..`12`, checked by
+`tcccapt`. Buffers written before the enable now wait for the first update (the model used to
+copy them at the enable). That completes step 2 (TC/TCC on pins and the motor-control features).
+
 Next on the MC00, in order (the owner's list of 2026-10-21):
 
-1. **TCC capture** (CPTENx with MCEIx, PPW/PWP, the fault capture modes) and circular buffers,
-   then the VS Code extension release for step 2.
-2. **ADC events and sequencing**, and the remaining DMA triggers (ADC, DAC, TCC, SDADC, TSENS).
-3. **Sleep and standby** (PM).
-4. A generic **pad-to-peripheral input path**, then **PDEC** and **CCL**.
-5. The long tail: MTB, PAC protection, DSU CRC32, SERCOM client modes, clock failure detection,
+1. **ADC events and sequencing**, and the remaining DMA triggers (ADC, DAC, TCC, SDADC, TSENS).
+2. **Sleep and standby** (PM).
+3. A generic **pad-to-peripheral input path**, then **PDEC** and **CCL**.
+4. The long tail: MTB, PAC protection, DSU CRC32, SERCOM client modes, clock failure detection,
    BOD, RTC tamper, PORT sampling, MCLK gating.
 
 The JH01, SAM E51 and AVR blocks wait for their boards to be plugged in, so they can be checked

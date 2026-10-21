@@ -177,6 +177,10 @@ I examined PIC32CM-JH DFP 1.3.221 (about 91 MB, 24 parts). For each part it ship
      say; fault capture fills a channel only in capture mode (CTRLA.CPTENx); BLANK = START does
      not blank the first cycle after the enable; STATUS shows a fault 5-8 GCLK cycles late
      (`tcc-u2213.md` section 5).
+   - TCC capture and buffers: a CCBUFx or PERBUF written before the enable waits for the first
+     update condition; a PER or CCx write also writes its buffer; DSBOTH's circular PER swaps
+     only at ZERO while CCx swaps at TOP and ZERO; STATUS.FAULTnIN shows EVn for any event
+     action (`tcc-u2213.md` section 6).
 
 ## Table: DFP inventory
 | folder / file | contents | approx size | contribution to a QEMU twin |

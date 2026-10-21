@@ -1,0 +1,11 @@
+PP tcccapt: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+fifo mc2_err=0x00040008 ccbufv2=0x00040000 first=20 apart=20 refilled_mc2=0x00040000 empty_mc2=0x00000000 empty_ccbufv2=0x00000000 ok
+no_mcei mc2=0x00000000 cc2=0x00000007 ok
+ppw count100=11 period=29 width=14 trg=0x00000002 ok
+pwp count100=11 period=29 width=14 trg=0x00000002 ok
+ppw_inv count100=56 period=44 width=29 trg=0x00000002 ok
+pwp_inv count100=56 period=44 width=29 trg=0x00000002 ok
+ds_msb up_msb=0x00000000 up=30 down_msb=0x00000001 down=68 ok
+buffers ccbuf0=0x0000000A perbuf=0x00000031 first_high=10 second_high=30 ok
+circular npwm_high1=28 npwm_high2=10 npwm_high3=28 npwm_high4=9 dsboth_high1=57 dsboth_high2=58 per_high1=77 per_high2=38 per_high3=78 ok
+PP:EXIT 0

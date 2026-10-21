@@ -72,8 +72,18 @@ match), never per tick.
 - Turn PULLEN on for the output pins: released, they are pulled down, so every run starts from 0
   on silicon as on the twin.
 
+## TCC capture and circular buffers (tccprobe10..12, APP=tcccapt)
+
+- Captures come from the same EIC-pull stimulus (MC_x users for event capture, EV_1 for PPW/PWP).
+  Compare captured values with the input's own edges: the first PPW period is from the enable.
+- Reading CCx of a capture channel has side effects (MCx clears, the FIFO moves up a couple of
+  cycles later): read it once per capture, and leave time before the next read.
+- To see what a circular buffer does, record the waveform; register reads show the buffer, and
+  PER/CCx writes also write their buffers, so readbacks alone mislead.
+- A probe read taken after a print happens at an arbitrary phase: compare such values with care.
+
 ## Not modelled
 
-TCC capture from events, the fault capture modes but CAPT, ALTFAULT, circular buffers, RAMP2CS,
-the outputs' start and restart latency, the STATUS read lag; TC capture on pins (COPEN),
-CAPTMODE (JH01).
+TCC EVACT0 STAMP, the fault capture modes but CAPT, ALTFAULT, RAMP2CS, CTRLBSET.IDXCMD, the
+outputs' start and restart latency, the STATUS read lag; TC capture on pins (COPEN), CAPTMODE
+(JH01).
