@@ -25439,7 +25439,7 @@
    "core": false,
    "overlay": {
     "file": "overlays/nvmctrl_03929.yaml",
-    "sha1": "0d8cc6f98d4c373ba876c7dda8e3ba8a9c1028b2",
+    "sha1": "83a9f3f0d869b7cf384c61e9f219697753bfbfca",
     "status": "applied",
     "versions": [
      "1a0"
@@ -26126,7 +26126,9 @@
        "syncbusy": 0,
        "sync_register": null,
        "sync_per_element": false,
-       "flags": [],
+       "flags": [
+        "DYNAMIC"
+       ],
        "alias_of": null,
        "read_side_effect": false,
        "caption": "Status",
@@ -26191,6 +26193,11 @@
          "ro",
          "overlay",
          "read-only PRM, SB = 0x101"
+        ],
+        [
+         "dynamic",
+         "overlay",
+         "dynamic"
         ]
        ]
       },
@@ -26213,7 +26220,8 @@
        "sync_register": null,
        "sync_per_element": false,
        "flags": [
-        "PAC"
+        "PAC",
+        "HOOK_POST_WRITE"
        ],
        "alias_of": null,
        "read_side_effect": false,
@@ -26229,7 +26237,13 @@
          "values": []
         }
        ],
-       "provenance": []
+       "provenance": [
+        [
+         "hooks",
+         "overlay",
+         "post_write"
+        ]
+       ]
       },
       {
        "name": "LOCK",

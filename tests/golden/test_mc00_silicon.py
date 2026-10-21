@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from tools.periph.cli import fields
 from tools.pp import RunOptions, run
 
 pytestmark = pytest.mark.qemu
@@ -182,3 +183,22 @@ def test_checked_apps_pass(mc00, app):
                             icount_shift=5))
     assert result.firmware_exit == 0, result.uart
     assert "FAIL" not in result.uart, result.uart
+    golden = (GOLDEN / f"{app}-silicon.txt").read_text(encoding="utf-8",
+                                                       errors="replace")
+    assert structure(result.uart) == structure(golden), (
+        f"the golden is from another version of {app}.c: refresh it with "
+        f"py -m tools.periph check mc00 {app}")
+
+
+def structure(text: str) -> list[tuple[str, tuple[str, ...]]]:
+    """Each line's head and field names: what the app checks, not the
+    values, so a golden from an older version of the app shows."""
+    out = []
+    for line in text.replace("\r", "").split("\n"):
+        if not line.strip() or line.startswith(("[pp]", "    ")):
+            continue
+        head, kv = fields(line)
+        out.append((head, tuple(k for k, _ in kv)))
+        if line.startswith("PP:EXIT"):
+            break                       # what follows depends on capture
+    return out

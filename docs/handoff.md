@@ -175,7 +175,7 @@ from the R4 Gerbers; LED0 (PC05) and SW0 (PB19) work (`tests/web`). Microchip's 
 PIC32CM-JH_DFP 1.5.236 and CMSIS 5.9.0, fetched into `~/.mchp_packs`). On the twin, port, EIC,
 EVSYS, SysTick, TC timer, clock, DIVAS, USART echo, PM/EIC wake-up and RSTC external reset
 behave as the code says. Gaps they show on the JH01: RTC (`rtc_03608`, no overlay; the MC00's
-RTC is `rtc_u2250`), DMAC, DSU CRC32, NVMCTRL programming, MCRAMC/SMBIST, FREQM,
+RTC is `rtc_u2250`), DMAC, DSU CRC32, MCRAMC/SMBIST, FREQM,
 ADC, AC, DAC, CCL, CAN, TC capture, TCC dead time, SERCOM I2C client and LIN. Not checked on
 silicon (no board on the desk).
 
@@ -221,7 +221,6 @@ still need checking against DS60001632H):
 - GCLK PCHCTRL.WRTLOCK does not also lock the generator the channel uses.
 - Oscillators with ONDEMAND=1 report ready without a clock request, so firmware that would hang on
   silicon boots on the twin.
-- NVMCTRL accepts undefined command codes without setting STATUS.PROGE.
 - `--icount` is deterministic only for output-only runs: UART input arrives in host time.
 - MPU_TYPE reads 0 on QEMU's `cortex-m0`, because QEMU only creates MPU regions for Armv7 cores.
   Firmware that enables the MPU (Zephyr with `CONFIG_ARM_MPU`) fails until a `cortex-m0plus` type exists.

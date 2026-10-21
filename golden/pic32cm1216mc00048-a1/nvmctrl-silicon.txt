@@ -1,0 +1,12 @@
+PP nvmctrl: PIC32CM1216MC00048 on PIC32CM MC00 Curiosity Pro (EV15N46A)
+keys param=0x04030800 nokey_status=0x0004 nokey_intflag=0x03 nokey_ctrla=0x0000 rsvd_status=0x0004 rsvd_ctrla=0x0000 pbc_ctrla=0x0044 ok
+loads dfer_cyc=36952 addr1=0x00000000 status1=0x0002 pbl_a1=0xFFFFFFFF pbl_a0=0x11111111 pbl_b1=0x22222222 pbl_b0=0x11111111 pbl_c1=0xFFFFFFFF pbl_c0=0x33333333 addr3=0x00000004 rd_before=0xFFFFFFFF dfwp_cyc=6324 status=0x0000 row0=0x11111111 row0=0x22222222 row0=0x33333333 row0=0xFFFFFFFF ok
+buffer random=0xFFFFFFFF random=0x00000002 random=0xFFFFFFFF random=0x00000003 and=0x01010101 and=0x22222222 and=0x33333333 and=0xF0F0F0F0 loaded=0x0002 pbc=0x0000 pbl0_pbc=0xFFFFFFFF after_pbc=0xFFFFFFFF ok
+auto intflag15=0x01 status15=0x0002 intflag16=0x00 auto_cyc=8084 status16=0x0000 w0=0xA0000000 w15=0xA000000F partial_status=0x0002 partial=0xFFFFFFFF ok
+busy intflag_after_cmd=0x00 status_busy_cmd=0x0006 intflag=0x03 pbc_ignored=0x0006 ok
+main er_cyc=37339 addr_load=0x0000FF82 wp_cyc=8213 status=0x0000 test=0xC0DE0000 test=0xC0DE0001 test=0xFFFFFFFF er2_cyc=37342 erased=0xFFFFFFFF ok
+lock lock0=0xFFFF lock_lr=0x7FFF er_status=0x0008 er_intflag=0x03 wp_status=0x000A kept=0x12345678 kept1=0xFFFFFFFF lock_ur=0xFFFF unlocked_erase=0xFFFFFFFF ok
+narrow faults8=0x1 status8=0x0002 pbl8=0xFFFF5A5A faults16=0x0 pbl16=0x1234FFFF row8=0xFFFF5A5A row8=0xFFFFFFFF row8=0x1234FFFF row8=0xFFFFFFFF ok
+misc written=0x5A5A5A5A addr=0x00000200 row4=0xFFFFFFFF addr_ff=0x0000FFFF ok
+exec first=0x1 reprogrammed=0x2 ok
+PP:EXIT 0

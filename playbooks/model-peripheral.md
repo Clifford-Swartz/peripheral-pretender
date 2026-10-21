@@ -186,6 +186,15 @@ These cost a probe run each to learn. Check new probes against them.
   write that should reset, and finish the line on the next boot (`wdtprobe.c`, `wdt.c`). Arm
   every experiment that might reset, not only those expected to: the WDT reset on a wrong key
   while disabled, the unarmed probe started over, and looped until the run timed out.
+- **Code layout changes silicon's answers** when timing or the NVM cache matters: adding a
+  function after `check_busy` in `nvmctrl.c` changed whether a command written while busy set
+  PROGE, and whether PRM read 1. When an unrelated edit makes a check fail on silicon, suspect
+  fetch timing; run the timed sequence from RAM (`__attribute__((section(".ramfunc"),
+  noinline, long_call))`) or leave the value unchecked and say why.
+- **A probe can break the next programming.** `harness/hw_run.py` resets and halts the part
+  before programming, because a sticky NVMCTRL error left by the last firmware made the DFP's
+  flash algorithm fail ("flash erase sector failure (address 0x00000000; result code 0x1)").
+  If programming fails like that, reset the part (pyOCD `reset_and_halt`) and try again.
 - **Line endings in pp-qemu.** pp-qemu keeps bytes as they are (no autocrlf), and Python's
   `write_text()` writes CRLF on Windows: read and write bytes in edit scripts. `export` refuses
   a commit that adds CRLF lines. Git Bash heredocs also mangle backslashes in C strings: write

@@ -1,0 +1,1150 @@
+From 9d341f5bf081b50b49a85d5cebeb3698e0168aef Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Wed, 21 Oct 2026 09:15:42 -0700
+Subject: [PATCH] hw/misc: NVMCTRL 03929 flash and data flash programming
+
+The PIC32CM JH/MC flash controller now programs the arrays, as a
+PIC32CM MC00 does it (firmware/hello APP=nvmctrlprobe and
+nvmctrlprobe2): the 64-byte page buffer loaded through PBLDATA,
+ER/WP/DFER/DFWP with READY low for 777/169/768/130 us, MANW = 0 page
+writes at the last location, LR/UR region locks with LOCKE, the
+BOOTPROT section, PROGE for a missing key, a reserved command or a
+command while busy. ADDR is the halfword address from the start of the
+array and only as wide as the main array needs (16 bits on the MC00).
+16-bit writes load; 8-bit writes load their byte on both lanes and are
+bus errors. STATUS.PRM after SPRM follows what code running from flash
+mostly sees. From the data sheet only: EAR/WAP on the user row, SSB
+and SCEHL.
+
+The SoC maps flash, data flash and the NVM rows as ROM devices whose
+writes go to the NVMCTRL; the model writes through the address space so
+translated code is invalidated. hw/core/loader.c treats ROMD regions as
+ROM (written once), so programmed flash survives a system reset. SAM E5x
+flash writes stay ignored, logged once. qtest pic32cm-nvmctrl-test.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-jh01-cpro.rst         |  12 +-
+ hw/arm/pic32cm_soc.c                          |  90 +++-
+ hw/core/loader.c                              |   9 +-
+ hw/misc/mchp_sysctrl.c                        | 450 +++++++++++++++++-
+ include/hw/arm/pic32cm_soc.h                  |  10 +
+ include/hw/mchp/gen/nvmctrl_03929.h           |   2 +-
+ .../gen/pic32cm1216mc00048/nvmctrl_03929.h    |   6 +-
+ .../gen/pic32cm5164jh01100/nvmctrl_03929.h    |   6 +-
+ include/hw/misc/mchp_sysctrl.h                |  21 +-
+ tests/qtest/meson.build                       |   2 +-
+ tests/qtest/pic32cm-nvmctrl-test.c            | 253 ++++++++++
+ 11 files changed, 818 insertions(+), 43 deletions(-)
+ create mode 100644 tests/qtest/pic32cm-nvmctrl-test.c
+
+diff --git a/docs/system/arm/pic32cm-jh01-cpro.rst b/docs/system/arm/pic32cm-jh01-cpro.rst
+index bd09538..3ea3395 100644
+--- a/docs/system/arm/pic32cm-jh01-cpro.rst
++++ b/docs/system/arm/pic32cm-jh01-cpro.rst
+@@ -37,7 +37,14 @@ Supported devices
+   synchronization is instant. Frequencies propagate through QEMU clocks
+   to the CPU clock (4 MHz after reset, 48 MHz after the usual
+   OSC48MDIV = 0) and to each peripheral's ``gclk`` clock input.
+-- NVMCTRL: PARAM, READY, CTRLB, command keys (PROGE without the key)
++- NVMCTRL: flash and data flash programming with the timings of a PIC32CM
++  MC00: the page buffer and PBLDATA, ER, WP, DFER, DFWP (READY low 777,
++  169, 768 and 130 us), automatic page writes (MANW = 0), region locks (LR,
++  UR, LOCKE), the BOOTPROT section, the command keys and PROGE. 16-bit
++  writes load the page buffer and 8-bit writes are bus errors, as on
++  silicon. From the data sheet: EAR and WAP on the user row, SSB (STATUS.SB
++  until QEMU exits). Programmed flash survives system resets; the image is
++  loaded once. No cache, no ECC.
+ - SUPC: BODVDD loaded from the user row, its ready flags
+ - RSTC: RCAUSE is POR at power-up, SYST after AIRCR.SYSRESETREQ, WDT after
+   a watchdog reset and EXT after any other reset (for example
+@@ -147,8 +154,7 @@ Missing devices
+ - TC capture, waveform outputs on pins; the JH01 RTC (03608). TCC faults,
+   dead time, pattern generation, dithering, capture, circular buffers and
+   the DSCRITICAL waveform.
+-- PAC write protection, flash programming through
+-  NVMCTRL, DSU CRC32 and chip erase, sleep modes and every other
++- PAC write protection, DSU CRC32 and chip erase, sleep modes and every other
+   peripheral behaviour (CCL, PDEC, CAN, ...). ADC
+   sequencing and event inputs, DAC START events.
+ 
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index 6c15e93..89b7e02 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -307,12 +307,58 @@ static bool pic32cm_revision(Pic32cmSocState *s, uint8_t *rev, Error **errp)
+     return false;
+ }
+ 
+-/* Erased flash reads as 0xFF; images are loaded over it at reset. */
+-static bool pic32cm_init_flash(Pic32cmSocState *s, MemoryRegion *mr,
+-                               const char *name, hwaddr base, uint64_t size,
+-                               Error **errp)
++/*
++ * Flash arrays are ROM devices: reads and instruction fetches go straight
++ * to their RAM, writes (page buffer loads) to the NVMCTRL that programs
++ * them. Erased flash reads as 0xFF; images are loaded over it at the first
++ * reset and then stay, like what the guest programs (hw/core/loader.c).
++ */
++static MemTxResult pic32cm_nvm_read(void *opaque, hwaddr addr, uint64_t *val,
++                                    unsigned size, MemTxAttrs attrs)
++{
++    Pic32cmNvmPort *p = opaque;
++
++    /* Only outside ROMD mode, which the arrays never leave */
++    *val = ldn_le_p((uint8_t *)memory_region_get_ram_ptr(p->mr) + addr, size);
++    return MEMTX_OK;
++}
++
++static MemTxResult pic32cm_nvm_write(void *opaque, hwaddr addr, uint64_t val,
++                                     unsigned size, MemTxAttrs attrs)
++{
++    Pic32cmNvmPort *p = opaque;
++
++    if (!p->soc->nvmctrl) {
++        if (!p->warned) {
++            qemu_log_mask(LOG_UNIMP, "%s: writes ignored, from 0x%"
++                          HWADDR_PRIx " (no flash programming)\n",
++                          memory_region_name(p->mr), addr);
++            p->warned = true;
++        }
++        return MEMTX_OK;
++    }
++    return mchp_nvmctrl_load(p->soc->nvmctrl, p->array, addr, val, size);
++}
++
++static const MemoryRegionOps pic32cm_nvm_ops = {
++    .read_with_attrs = pic32cm_nvm_read,
++    .write_with_attrs = pic32cm_nvm_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid.min_access_size = 1,
++    .valid.max_access_size = 4,
++};
++
++static bool pic32cm_init_flash(Pic32cmSocState *s, MchpNvmArray array,
++                               MemoryRegion *mr, const char *name,
++                               hwaddr base, uint64_t size, Error **errp)
+ {
+-    if (!memory_region_init_rom(mr, OBJECT(s), name, size, errp)) {
++    Pic32cmNvmPort *p = &s->nvm_port[array];
++
++    p->soc = s;
++    p->mr = mr;
++    p->array = array;
++    if (!memory_region_init_rom_device(mr, OBJECT(s), &pic32cm_nvm_ops, p,
++                                       name, size, errp)) {
+         return false;
+     }
+     memset(memory_region_get_ram_ptr(mr), 0xFF, size);
+@@ -320,6 +366,24 @@ static bool pic32cm_init_flash(Pic32cmSocState *s, MemoryRegion *mr,
+     return true;
+ }
+ 
++/* NVMCTRL 03929 programs the arrays; the SAM E5x's (U2409) does not yet */
++static void pic32cm_connect_nvm(Pic32cmSocState *s)
++{
++    const MchpDeviceInfo *dev = s->dev;
++    DeviceState *nvm = pic32cm_soc_periph(s, "NVMCTRL");
++
++    if (!nvm || !object_dynamic_cast(OBJECT(nvm), TYPE_MCHP_NVMCTRL)) {
++        return;
++    }
++    s->nvmctrl = nvm;
++    mchp_nvmctrl_attach(nvm, MCHP_NVM_MAIN, &s->flash, dev->flash_base);
++    if (dev->dataflash_size) {
++        mchp_nvmctrl_attach(nvm, MCHP_NVM_DATAFLASH, &s->dataflash,
++                            dev->dataflash_base);
++    }
++    mchp_nvmctrl_attach(nvm, MCHP_NVM_ROWS, &s->nvm_rows, dev->nvmrows_base);
++}
++
+ static bool pic32cm_init_memory(Pic32cmSocState *s, Error **errp)
+ {
+     const MchpDeviceInfo *dev = s->dev;
+@@ -327,22 +391,21 @@ static bool pic32cm_init_memory(Pic32cmSocState *s, Error **errp)
+     uint32_t serial[4];
+ 
+     if (!pic32cm_serial(s, serial, errp) ||
+-        !pic32cm_init_flash(s, &s->flash, "flash", dev->flash_base,
+-                            dev->flash_size, errp) ||
++        !pic32cm_init_flash(s, MCHP_NVM_MAIN, &s->flash, "flash",
++                            dev->flash_base, dev->flash_size, errp) ||
+         (dev->dataflash_size &&
+-         !pic32cm_init_flash(s, &s->dataflash, "dataflash",
+-                             dev->dataflash_base, dev->dataflash_size,
+-                             errp))) {
++         !pic32cm_init_flash(s, MCHP_NVM_DATAFLASH, &s->dataflash,
++                             "dataflash", dev->dataflash_base,
++                             dev->dataflash_size, errp))) {
+         return false;
+     }
+ 
+     /* Calibration, lock, user and OTP rows plus the serial number */
+-    if (!memory_region_init_rom(&s->nvm_rows, OBJECT(s), "nvm-rows",
+-                                dev->nvmrows_size, errp)) {
++    if (!pic32cm_init_flash(s, MCHP_NVM_ROWS, &s->nvm_rows, "nvm-rows",
++                            dev->nvmrows_base, dev->nvmrows_size, errp)) {
+         return false;
+     }
+     dev->nvmrows_fill(memory_region_get_ram_ptr(&s->nvm_rows), serial);
+-    memory_region_add_subregion(sysmem, dev->nvmrows_base, &s->nvm_rows);
+ 
+     if (!memory_region_init_ram(&s->sram, OBJECT(s), "sram", dev->sram_size,
+                                 errp)) {
+@@ -1001,6 +1064,7 @@ static void pic32cm_soc_realize(DeviceState *dev, Error **errp)
+         return;
+     }
+     pic32cm_connect_resets(s);
++    pic32cm_connect_nvm(s);
+     pic32cm_connect_eic(s);
+     pic32cm_connect_events(s);
+     pic32cm_dmac_pulses(s);
+diff --git a/hw/core/loader.c b/hw/core/loader.c
+index 5cbfba0..7c34517 100644
+--- a/hw/core/loader.c
++++ b/hw/core/loader.c
+@@ -1357,7 +1357,14 @@ int rom_check_and_register_reset(void)
+         }
+         section = memory_region_find(rom->mr ? rom->mr : get_system_memory(),
+                                      rom->addr, 1);
+-        rom->isrom = int128_nz(section.size) && memory_region_is_rom(section.mr);
++        /*
++         * Peripheral Pretender: a ROM device in ROMD mode (flash that the
++         * guest programs) is a ROM here too: written once, so that what
++         * the guest programmed survives a system reset.
++         */
++        rom->isrom = int128_nz(section.size) &&
++                     (memory_region_is_rom(section.mr) ||
++                      memory_region_is_romd(section.mr));
+         memory_region_unref(section.mr);
+     }
+     if (found_overlap) {
+diff --git a/hw/misc/mchp_sysctrl.c b/hw/misc/mchp_sysctrl.c
+index f4ace92..811ed09 100644
+--- a/hw/misc/mchp_sysctrl.c
++++ b/hw/misc/mchp_sysctrl.c
+@@ -16,6 +16,7 @@
+ #include "qemu/host-utils.h"
+ #include "qemu/log.h"
+ #include "qemu/timer.h"
++#include "hw/core/cpu.h"
+ #include "hw/core/irq.h"
+ #include "hw/core/qdev-properties.h"
+ #include "hw/mchp/gen/divas_u2258.h"
+@@ -27,6 +28,7 @@
+ #include "hw/mchp/gen/wdt_u2251.h"
+ #include "hw/misc/mchp_sysctrl.h"
+ #include "migration/vmstate.h"
++#include "system/address-spaces.h"
+ #include "system/runstate.h"
+ #include "trace.h"
+ 
+@@ -44,57 +46,468 @@ static void mchp_reg_set_bits(MchpRegBlock *s, hwaddr offset, unsigned size,
+ /* NVMCTRL */
+ 
+ /*
+- * A command runs when CTRLA is written with the CMDEX key (DS 26.6.1);
+- * without it the write is dropped and STATUS.PROGE is set. The commands
+- * that need no flash array complete at once and READY stays 1.
++ * NVMCTRL 03929 (PIC32CM JH and MC): commands, the page buffer and the
++ * programming of the flash arrays the SoC attaches, as a PIC32CM MC00 does
++ * them (firmware/hello APP=nvmctrlprobe, docs/research/peripherals/
++ * nvmctrl-03929.md):
++ *
++ *   - writes to an array load the 64-byte page buffer through the 64-bit
++ *     PBLDATA register, which a write outside its 64-bit section first
++ *     resets to ones. 32- and 16-bit writes load; an 8-bit write loads its
++ *     byte on both lanes of its halfword and is a bus error. ADDR takes the
++ *     halfword address, from the start of the array, and is as wide as the
++ *     main array needs (16 bits for 128 KiB);
++ *   - a command needs the CMDEX key and READY; a command without them, or
++ *     a reserved one, sets PROGE and ERROR and leaves CTRLA as it was;
++ *   - ER and DFER erase a row (777 and 768 us), WP and DFWP AND the page
++ *     buffer into a page (169 and 130 us), with READY low meanwhile. The
++ *     array changes at once: silicon stalls reads of it until done. A
++ *     locked region, or the BOOTPROT section, refuses ER and WP with LOCKE
++ *     and ERROR, and a refused WP leaves the page buffer loaded;
++ *   - with CTRLB.MANW = 0, loading the last location of a page writes it;
++ *   - LR and UR lock and unlock a region until the next reset;
++ *   - SPRM sets STATUS.PRM a few cycles later, and the next access to an
++ *     array clears it. Code running from flash mostly sees it in the first
++ *     STATUS read and not after (silicon varies with the code's layout):
++ *     the model clears it at the second read by code in an array.
++ *
++ * From the data sheet only: EAR and WAP on the user row, with the ER and WP
++ * times; SSB sets STATUS.SB (until QEMU exits) and then refuses EAR and
++ * WAP; SCEHL needs SB; the BOOTPROT section. Not modelled: the cache
++ * (INVALL does nothing), ECC (JH01), SLEEPPRM, the AHB stalls.
+  */
++
++#define MCHP_NVM_PAGE           64
++#define MCHP_NVM_ROW            256
++#define MCHP_NVM_USER_ROW       0x00804000      /* PIC32CM JH and MC */
++#define MCHP_NVM_ER_NS          777000
++#define MCHP_NVM_WP_NS          169000
++#define MCHP_NVM_DFER_NS        768000
++#define MCHP_NVM_DFWP_NS        130000
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpNvmctrlState, MCHP_NVMCTRL)
++
++struct MchpNvmctrlState {
++    MchpRegBlock parent_obj;
++
++    MemoryRegion *array[MCHP_NVM_NARRAYS];
++    hwaddr base[MCHP_NVM_NARRAYS];
++    QEMUTimer *timer;               /* READY again */
++    uint32_t pb[MCHP_NVM_PAGE / 4]; /* the page buffer */
++    int32_t pbl_array;              /* the 64-bit section PBLDATA holds */
++    uint32_t pbl_section;
++    uint32_t boot_size;             /* BOOTPROT bytes, latched at reset */
++    bool security;                  /* SSB: until a chip erase */
++    bool prm_seen;                  /* code in flash read PRM since SPRM */
++};
++
++static uint64_t mchp_nvm_size(MchpNvmctrlState *s, MchpNvmArray a)
++{
++    return s->array[a] ? memory_region_size(s->array[a]) : 0;
++}
++
++static uint32_t mchp_nvm_addr_mask(MchpNvmctrlState *s)
++{
++    return mchp_nvm_size(s, MCHP_NVM_MAIN) / 2 - 1;
++}
++
++static void mchp_nvm_error(MchpNvmctrlState *s, uint32_t status)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++
++    mchp_reg_set_bits(rb, A_MCHP_NVMCTRL_STATUS, 2, status);
++    mchp_reg_set_bits(rb, A_MCHP_NVMCTRL_INTFLAG, 4,
++                      R_MCHP_NVMCTRL_INTFLAG_ERROR_MASK);
++    mchp_regblock_update_irq(rb);
++}
++
++static bool mchp_nvm_ready(MchpNvmctrlState *s)
++{
++    return mchp_reg(MCHP_REGBLOCK(s), A_MCHP_NVMCTRL_INTFLAG, 4) &
++           R_MCHP_NVMCTRL_INTFLAG_READY_MASK;
++}
++
++static void mchp_nvm_busy(MchpNvmctrlState *s, int64_t ns)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++
++    mchp_regfile_poke(&rb->rf, A_MCHP_NVMCTRL_INTFLAG, 4,
++                      mchp_reg(rb, A_MCHP_NVMCTRL_INTFLAG, 4) &
++                      ~R_MCHP_NVMCTRL_INTFLAG_READY_MASK);
++    mchp_regblock_update_irq(rb);
++    timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + ns);
++}
++
++static void mchp_nvm_done(void *opaque)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(opaque);
++
++    mchp_reg_set_bits(rb, A_MCHP_NVMCTRL_INTFLAG, 4,
++                      R_MCHP_NVMCTRL_INTFLAG_READY_MASK);
++    mchp_regblock_update_irq(rb);
++}
++
++static void mchp_nvm_pb_clear(MchpNvmctrlState *s)
++{
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++
++    memset(s->pb, 0xFF, sizeof(s->pb));
++    mchp_regfile_poke(&rb->rf, A_MCHP_NVMCTRL_PBLDATA0, 4, UINT32_MAX);
++    mchp_regfile_poke(&rb->rf, A_MCHP_NVMCTRL_PBLDATA1, 4, UINT32_MAX);
++    mchp_regfile_poke(&rb->rf, A_MCHP_NVMCTRL_STATUS, 2,
++                      mchp_reg(rb, A_MCHP_NVMCTRL_STATUS, 2) &
++                      ~R_MCHP_NVMCTRL_STATUS_LOAD_MASK);
++}
++
++/* Write through the address space: translated code there is invalidated */
++static void mchp_nvm_store(MchpNvmctrlState *s, MchpNvmArray a, hwaddr off,
++                           const uint8_t *buf, unsigned len)
++{
++    address_space_write_rom(&address_space_memory, s->base[a] + off,
++                            MEMTXATTRS_UNSPECIFIED, buf, len);
++}
++
++/* Main array rows that LOCK or BOOTPROT protect */
++static bool mchp_nvm_protected(MchpNvmctrlState *s, hwaddr off)
++{
++    uint32_t lock = mchp_reg(MCHP_REGBLOCK(s), A_MCHP_NVMCTRL_LOCK, 2);
++    uint64_t region = mchp_nvm_size(s, MCHP_NVM_MAIN) / 16;
++
++    return off < s->boot_size || !(lock & BIT(off / region));
++}
++
++static void mchp_nvm_erase(MchpNvmctrlState *s, MchpNvmArray a, hwaddr off,
++                           int64_t ns)
++{
++    uint8_t ones[MCHP_NVM_ROW];
++
++    memset(ones, 0xFF, sizeof(ones));
++    mchp_nvm_store(s, a, off & ~(hwaddr)(MCHP_NVM_ROW - 1), ones,
++                   sizeof(ones));
++    mchp_nvm_busy(s, ns);
++}
++
++/* Programming clears bits: the page becomes page AND page buffer */
++static void mchp_nvm_program(MchpNvmctrlState *s, MchpNvmArray a, hwaddr off,
++                             int64_t ns)
++{
++    const uint8_t *ram = memory_region_get_ram_ptr(s->array[a]);
++    uint8_t page[MCHP_NVM_PAGE];
++
++    off &= ~(hwaddr)(MCHP_NVM_PAGE - 1);
++    for (unsigned i = 0; i < MCHP_NVM_PAGE / 4; i++) {
++        stl_le_p(page + 4 * i, ldl_le_p(ram + off + 4 * i) & s->pb[i]);
++    }
++    mchp_nvm_store(s, a, off, page, sizeof(page));
++    mchp_nvm_pb_clear(s);
++    mchp_nvm_busy(s, ns);
++}
++
++/* A page write to @a at @off: WP, DFWP or WAP, or a MANW = 0 load */
++static void mchp_nvm_write_page(MchpNvmctrlState *s, MchpNvmArray a,
++                                hwaddr off)
++{
++    hwaddr user = MCHP_NVM_USER_ROW - s->base[MCHP_NVM_ROWS];
++
++    switch (a) {
++    case MCHP_NVM_MAIN:
++        if (mchp_nvm_protected(s, off)) {
++            mchp_nvm_error(s, R_MCHP_NVMCTRL_STATUS_LOCKE_MASK);
++            return;
++        }
++        mchp_nvm_program(s, a, off, MCHP_NVM_WP_NS);
++        break;
++    case MCHP_NVM_DATAFLASH:
++        mchp_nvm_program(s, a, off % mchp_nvm_size(s, a), MCHP_NVM_DFWP_NS);
++        break;
++    default:
++        if (s->security) {
++            mchp_nvm_error(s, R_MCHP_NVMCTRL_STATUS_PROGE_MASK);
++            return;
++        }
++        mchp_nvm_program(s, a, user + (off & (MCHP_NVM_ROW - 1)),
++                         MCHP_NVM_WP_NS);
++        break;
++    }
++}
++
++MemTxResult mchp_nvmctrl_load(DeviceState *dev, MchpNvmArray a, hwaddr off,
++                              uint64_t val, unsigned size)
++{
++    MchpNvmctrlState *s = MCHP_NVMCTRL(dev);
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
++    unsigned word = (off >> 2) & 1, lane = (off >> 1) & 1;
++    unsigned sec = (off % MCHP_NVM_PAGE) / 8;
++    uint32_t pbl[2] = {
++        mchp_reg(rb, A_MCHP_NVMCTRL_PBLDATA0, 4),
++        mchp_reg(rb, A_MCHP_NVMCTRL_PBLDATA1, 4),
++    };
++
++    if (a != s->pbl_array || off / 8 != s->pbl_section) {
++        pbl[0] = pbl[1] = UINT32_MAX;
++        s->pbl_array = a;
++        s->pbl_section = off / 8;
++    }
++    if (size == 4) {
++        pbl[word] = val;
++    } else {
++        /* An 8-bit write puts its byte on both lanes of the halfword */
++        pbl[word] = deposit32(pbl[word], 16 * lane, 16,
++                              size == 2 ? val : (val & 0xFF) * 0x0101);
++    }
++    mchp_regfile_poke(&rb->rf, A_MCHP_NVMCTRL_PBLDATA0, 4, pbl[0]);
++    mchp_regfile_poke(&rb->rf, A_MCHP_NVMCTRL_PBLDATA1, 4, pbl[1]);
++    s->pb[2 * sec] = pbl[0];
++    s->pb[2 * sec + 1] = pbl[1];
++    mchp_regfile_poke(&rb->rf, A_MCHP_NVMCTRL_ADDR, 4,
++                      (off >> 1) & mchp_nvm_addr_mask(s));
++    mchp_reg_set_bits(rb, A_MCHP_NVMCTRL_STATUS, 2,
++                      R_MCHP_NVMCTRL_STATUS_LOAD_MASK);
++
++    if (!(mchp_reg(rb, A_MCHP_NVMCTRL_CTRLB, 4) &
++          R_MCHP_NVMCTRL_CTRLB_MANW_MASK) &&
++        off % MCHP_NVM_PAGE + size == MCHP_NVM_PAGE) {
++        if (mchp_nvm_ready(s)) {
++            mchp_nvm_write_page(s, a, off);
++        } else {
++            mchp_nvm_error(s, R_MCHP_NVMCTRL_STATUS_PROGE_MASK);
++        }
++    }
++    if (size == 1) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s: 8-bit page buffer write at 0x%"
++                      HWADDR_PRIx " (bus error)\n", rb->name,
++                      s->base[a] + off);
++        return MEMTX_ERROR;
++    }
++    return MEMTX_OK;
++}
++
++void mchp_nvmctrl_attach(DeviceState *dev, MchpNvmArray a, MemoryRegion *mr,
++                         hwaddr base)
++{
++    MchpNvmctrlState *s = MCHP_NVMCTRL(dev);
++
++    s->array[a] = mr;
++    s->base[a] = base;
++}
++
++/* Code running from an array: its fetches clear STATUS.PRM */
++static bool mchp_nvm_cpu_in_array(MchpNvmctrlState *s)
++{
++    CPUState *cs = current_cpu;
++    vaddr pc;
++
++    if (!cs) {
++        return false;
++    }
++    pc = CPU_GET_CLASS(cs)->get_pc(cs);
++    for (unsigned a = 0; a < MCHP_NVM_NARRAYS; a++) {
++        if (s->array[a] && pc >= s->base[a] &&
++            pc - s->base[a] < mchp_nvm_size(s, a)) {
++            return true;
++        }
++    }
++    return false;
++}
++
++static uint32_t mchp_nvmctrl_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
++                                      unsigned idx, uint32_t stored,
++                                      bool side_effects)
++{
++    MchpNvmctrlState *s = MCHP_NVMCTRL(rf->opaque);
++
++    if (ri->offset != A_MCHP_NVMCTRL_STATUS || !side_effects ||
++        !(stored & R_MCHP_NVMCTRL_STATUS_PRM_MASK) ||
++        !mchp_nvm_cpu_in_array(s)) {
++        return stored;
++    }
++    if (!s->prm_seen) {
++        s->prm_seen = true;
++        return stored;
++    }
++    stored &= ~R_MCHP_NVMCTRL_STATUS_PRM_MASK;
++    mchp_regfile_set(rf, ri, idx, stored);
++    return stored;
++}
++
+ static void mchp_nvmctrl_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+                                     unsigned idx, uint32_t old,
+                                     uint32_t written, uint32_t we)
+ {
+-    MchpRegBlock *s = rf->opaque;
++    MchpNvmctrlState *s = MCHP_NVMCTRL(rf->opaque);
++    MchpRegBlock *rb = MCHP_REGBLOCK(s);
+     uint32_t cmd = FIELD_EX32(written, MCHP_NVMCTRL_CTRLA, CMD);
+-
++    hwaddr addr = (hwaddr)mchp_reg(rb, A_MCHP_NVMCTRL_ADDR, 4) * 2;
++    hwaddr user = MCHP_NVM_USER_ROW - s->base[MCHP_NVM_ROWS];
++    uint64_t region = mchp_nvm_size(s, MCHP_NVM_MAIN) / 16;
++    uint32_t lock = mchp_reg(rb, A_MCHP_NVMCTRL_LOCK, 2);
++
++    if (ri->offset == A_MCHP_NVMCTRL_ADDR) {
++        mchp_regfile_set(rf, ri, idx, mchp_regfile_get(rf, ri, idx) &
++                         mchp_nvm_addr_mask(s));
++        return;
++    }
+     if (ri->offset != A_MCHP_NVMCTRL_CTRLA) {
+         return;
+     }
+     if (FIELD_EX32(written, MCHP_NVMCTRL_CTRLA, CMDEX) !=
+-        MCHP_NVMCTRL_CTRLA_CMDEX_KEY) {
+-        qemu_log_mask(LOG_GUEST_ERROR, "%s.CTRLA: command 0x%" PRIx32
+-                      " without the CMDEX key (PROGE)\n", s->name, cmd);
++        MCHP_NVMCTRL_CTRLA_CMDEX_KEY || !mchp_nvm_ready(s)) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s.CTRLA: command 0x%" PRIx32 " %s"
++                      " (PROGE)\n", rb->name, cmd,
++                      mchp_nvm_ready(s) ? "without the CMDEX key" :
++                      "while busy");
+         mchp_regfile_set(rf, ri, idx, old);
+-        mchp_reg_set_bits(s, A_MCHP_NVMCTRL_STATUS, 2,
+-                          R_MCHP_NVMCTRL_STATUS_PROGE_MASK);
+-        mchp_reg_set_bits(s, A_MCHP_NVMCTRL_INTFLAG, 4,
+-                          R_MCHP_NVMCTRL_INTFLAG_ERROR_MASK);
++        mchp_nvm_error(s, R_MCHP_NVMCTRL_STATUS_PROGE_MASK);
+         return;
+     }
+ 
+     switch (cmd) {
++    case MCHP_NVMCTRL_CTRLA_CMD_ER:
++        if (mchp_nvm_protected(s, addr)) {
++            mchp_nvm_error(s, R_MCHP_NVMCTRL_STATUS_LOCKE_MASK);
++        } else {
++            mchp_nvm_erase(s, MCHP_NVM_MAIN, addr, MCHP_NVM_ER_NS);
++        }
++        break;
++    case MCHP_NVMCTRL_CTRLA_CMD_WP:
++        mchp_nvm_write_page(s, MCHP_NVM_MAIN, addr);
++        break;
++    case MCHP_NVMCTRL_CTRLA_CMD_DFER:
++    case MCHP_NVMCTRL_CTRLA_CMD_DFWP:
++        if (!s->array[MCHP_NVM_DATAFLASH]) {
++            mchp_nvm_error(s, R_MCHP_NVMCTRL_STATUS_PROGE_MASK);
++        } else if (cmd == MCHP_NVMCTRL_CTRLA_CMD_DFER) {
++            mchp_nvm_erase(s, MCHP_NVM_DATAFLASH,
++                           addr % mchp_nvm_size(s, MCHP_NVM_DATAFLASH),
++                           MCHP_NVM_DFER_NS);
++        } else {
++            mchp_nvm_write_page(s, MCHP_NVM_DATAFLASH, addr);
++        }
++        break;
++    case MCHP_NVMCTRL_CTRLA_CMD_EAR:
++        if (s->security) {
++            mchp_nvm_error(s, R_MCHP_NVMCTRL_STATUS_PROGE_MASK);
++        } else {
++            mchp_nvm_erase(s, MCHP_NVM_ROWS, user, MCHP_NVM_ER_NS);
++        }
++        break;
++    case MCHP_NVMCTRL_CTRLA_CMD_WAP:
++        mchp_nvm_write_page(s, MCHP_NVM_ROWS, addr);
++        break;
++    case MCHP_NVMCTRL_CTRLA_CMD_LR:
++    case MCHP_NVMCTRL_CTRLA_CMD_UR:
++        lock = deposit32(lock, addr / region, 1,
++                         cmd == MCHP_NVMCTRL_CTRLA_CMD_UR);
++        mchp_regfile_poke(rf, A_MCHP_NVMCTRL_LOCK, 2, lock);
++        break;
+     case MCHP_NVMCTRL_CTRLA_CMD_SPRM:
+-        mchp_reg_set_bits(s, A_MCHP_NVMCTRL_STATUS, 2,
++        s->prm_seen = false;
++        mchp_reg_set_bits(rb, A_MCHP_NVMCTRL_STATUS, 2,
+                           R_MCHP_NVMCTRL_STATUS_PRM_MASK);
+         break;
+     case MCHP_NVMCTRL_CTRLA_CMD_CPRM:
+         mchp_regfile_poke(rf, A_MCHP_NVMCTRL_STATUS, 2,
+-                          mchp_reg(s, A_MCHP_NVMCTRL_STATUS, 2) &
++                          mchp_reg(rb, A_MCHP_NVMCTRL_STATUS, 2) &
+                           ~R_MCHP_NVMCTRL_STATUS_PRM_MASK);
+         break;
+     case MCHP_NVMCTRL_CTRLA_CMD_PBC:
++        mchp_nvm_pb_clear(s);
++        break;
++    case MCHP_NVMCTRL_CTRLA_CMD_SSB:
++        qemu_log_mask(LOG_GUEST_ERROR, "%s.CTRLA: security bit set\n",
++                      rb->name);
++        s->security = true;
++        mchp_reg_set_bits(rb, A_MCHP_NVMCTRL_STATUS, 2,
++                          R_MCHP_NVMCTRL_STATUS_SB_MASK);
++        break;
+     case MCHP_NVMCTRL_CTRLA_CMD_INVALL:
+-        break;                  /* no page buffer or cache to clear */
++        break;                  /* no cache */
++    case MCHP_NVMCTRL_CTRLA_CMD_SCEHL:
++        if (!s->security) {
++            mchp_nvm_error(s, R_MCHP_NVMCTRL_STATUS_PROGE_MASK);
++        } else {
++            qemu_log_mask(LOG_UNIMP, "%s.CTRLA: chip-erase hard lock not"
++                          " modelled\n", rb->name);
++        }
++        break;
+     default:
+-        qemu_log_mask(LOG_UNIMP, "%s.CTRLA: command 0x%" PRIx32
+-                      " not modelled (flash programming)\n", s->name, cmd);
++        qemu_log_mask(LOG_GUEST_ERROR, "%s.CTRLA: reserved command 0x%"
++                      PRIx32 " (PROGE)\n", rb->name, cmd);
++        mchp_regfile_set(rf, ri, idx, old);
++        mchp_nvm_error(s, R_MCHP_NVMCTRL_STATUS_PROGE_MASK);
+         break;
+     }
+ }
+ 
++static void mchp_nvmctrl_reset_hold(MchpRegBlock *rb)
++{
++    MchpNvmctrlState *s = MCHP_NVMCTRL(rb);
++
++    timer_del(s->timer);
++    memset(s->pb, 0xFF, sizeof(s->pb));
++    s->pbl_array = MCHP_NVM_MAIN;
++    s->pbl_section = 0;
++    if (s->security) {
++        mchp_reg_set_bits(rb, A_MCHP_NVMCTRL_STATUS, 2,
++                          R_MCHP_NVMCTRL_STATUS_SB_MASK);
++    }
++}
++
++/* After the loader has written the images: BOOTPROT from the user row */
++static void mchp_nvmctrl_reset_exit(MchpRegBlock *rb)
++{
++    MchpNvmctrlState *s = MCHP_NVMCTRL(rb);
++    uint32_t bootprot = 7;
++
++    if (s->array[MCHP_NVM_ROWS]) {
++        const uint8_t *rows = memory_region_get_ram_ptr(
++            s->array[MCHP_NVM_ROWS]);
++
++        bootprot = ldl_le_p(rows + MCHP_NVM_USER_ROW -
++                            s->base[MCHP_NVM_ROWS]) & 7;
++    }
++    s->boot_size = bootprot == 7 ? 0 : 512u << (6 - bootprot);
++}
++
++static void mchp_nvmctrl_init(Object *obj)
++{
++    MchpNvmctrlState *s = MCHP_NVMCTRL(obj);
++
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mchp_nvm_done, s);
++}
++
++static void mchp_nvmctrl_finalize(Object *obj)
++{
++    timer_free(MCHP_NVMCTRL(obj)->timer);
++}
++
++static const VMStateDescription vmstate_mchp_nvmctrl = {
++    .name = TYPE_MCHP_NVMCTRL,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_STRUCT(parent_obj, MchpNvmctrlState, 1,
++                       vmstate_mchp_regblock, MchpRegBlock),
++        VMSTATE_TIMER_PTR(timer, MchpNvmctrlState),
++        VMSTATE_UINT32_ARRAY(pb, MchpNvmctrlState, MCHP_NVM_PAGE / 4),
++        VMSTATE_INT32(pbl_array, MchpNvmctrlState),
++        VMSTATE_UINT32(pbl_section, MchpNvmctrlState),
++        VMSTATE_UINT32(boot_size, MchpNvmctrlState),
++        VMSTATE_BOOL(security, MchpNvmctrlState),
++        VMSTATE_BOOL(prm_seen, MchpNvmctrlState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
+ static void mchp_nvmctrl_class_init(ObjectClass *klass, const void *data)
+ {
+     MchpRegBlockClass *c = MCHP_REGBLOCK_CLASS(klass);
+ 
++    DEVICE_CLASS(klass)->vmsd = &vmstate_mchp_nvmctrl;
++    c->pre_read = mchp_nvmctrl_pre_read;
+     c->post_write = mchp_nvmctrl_post_write;
++    c->reset_hold = mchp_nvmctrl_reset_hold;
++    c->reset_exit = mchp_nvmctrl_reset_exit;
+     c->log_writes = false;
+ }
+ 
+@@ -835,6 +1248,9 @@ static const TypeInfo mchp_sysctrl_types[] = {
+     {
+         .name = TYPE_MCHP_NVMCTRL,
+         .parent = TYPE_MCHP_REGBLOCK,
++        .instance_size = sizeof(MchpNvmctrlState),
++        .instance_init = mchp_nvmctrl_init,
++        .instance_finalize = mchp_nvmctrl_finalize,
+         .class_init = mchp_nvmctrl_class_init,
+     }, {
+         .name = TYPE_MCHP_SUPC,
+diff --git a/include/hw/arm/pic32cm_soc.h b/include/hw/arm/pic32cm_soc.h
+index f079697..787f5b2 100644
+--- a/include/hw/arm/pic32cm_soc.h
++++ b/include/hw/arm/pic32cm_soc.h
+@@ -57,6 +57,14 @@ struct Pic32cmSocClass {
+     const MchpDeviceInfo *dev;
+ };
+ 
++/* A flash array's link to the NVMCTRL that programs it */
++typedef struct Pic32cmNvmPort {
++    struct Pic32cmSocState *soc;
++    MemoryRegion *mr;
++    int array;                      /* MchpNvmArray */
++    bool warned;                    /* an ignored write was logged */
++} Pic32cmNvmPort;
++
+ struct Pic32cmSocState {
+     SysBusDevice parent_obj;
+ 
+@@ -74,6 +82,8 @@ struct Pic32cmSocState {
+     MemoryRegion nvm_rows;
+     MemoryRegion sram;
+     MemoryRegion bkupram;           /* SAM E51 backup RAM */
++    Pic32cmNvmPort nvm_port[3];     /* flash, data flash, NVM rows */
++    DeviceState *nvmctrl;           /* NVMCTRL 03929; NULL: no programming */
+ 
+     char *silicon_rev;
+     char *serial_number;
+diff --git a/include/hw/mchp/gen/nvmctrl_03929.h b/include/hw/mchp/gen/nvmctrl_03929.h
+index 010a528..f0f3e4c 100644
+--- a/include/hw/mchp/gen/nvmctrl_03929.h
++++ b/include/hw/mchp/gen/nvmctrl_03929.h
+@@ -9,7 +9,7 @@
+  * PIC32CM1216MC00048.atdf (PIC32CM-MC_DFP 1.4.67)
+  * Do not edit.
+  * Devices: PIC32CM5164JH01100, PIC32CM1216MC00048
+- * Overlay: overlays/nvmctrl_03929.yaml (sha1 0d8cc6f98d4c)
++ * Overlay: overlays/nvmctrl_03929.yaml (sha1 83a9f3f0d869)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+diff --git a/include/hw/mchp/gen/pic32cm1216mc00048/nvmctrl_03929.h b/include/hw/mchp/gen/pic32cm1216mc00048/nvmctrl_03929.h
+index 752b249..05867fc 100644
+--- a/include/hw/mchp/gen/pic32cm1216mc00048/nvmctrl_03929.h
++++ b/include/hw/mchp/gen/pic32cm1216mc00048/nvmctrl_03929.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM1216MC00048.atdf
+  * (PIC32CM-MC_DFP 1.4.67). Do not edit.
+- * Overlay: overlays/nvmctrl_03929.yaml (sha1 0d8cc6f98d4c)
++ * Overlay: overlays/nvmctrl_03929.yaml (sha1 83a9f3f0d869)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -54,12 +54,12 @@ static const MchpRegInfo pic32cm1216mc00048_nvmctrl_regs[] = {
+     {
+         .name = "STATUS", .offset = 0x18, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x011F, .wmask = 0x0000,
+-        .w1c = 0x001E, .flags = 0,
++        .w1c = 0x001E, .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "ADDR", .offset = 0x1C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x003FFFFF,
+-        .wmask = 0x003FFFFF, .flags = MCHP_F_PAC,
++        .wmask = 0x003FFFFF, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "LOCK", .offset = 0x20, .size = 2, .count = 1, .stride = 2,
+diff --git a/include/hw/mchp/gen/pic32cm5164jh01100/nvmctrl_03929.h b/include/hw/mchp/gen/pic32cm5164jh01100/nvmctrl_03929.h
+index a8db915..5244dca 100644
+--- a/include/hw/mchp/gen/pic32cm5164jh01100/nvmctrl_03929.h
++++ b/include/hw/mchp/gen/pic32cm5164jh01100/nvmctrl_03929.h
+@@ -6,7 +6,7 @@
+  *
+  * GENERATED by generator/atdf2qemu.py from PIC32CM5164JH01100.atdf
+  * (PIC32CM-JH_DFP 1.3.221). Do not edit.
+- * Overlay: overlays/nvmctrl_03929.yaml (sha1 0d8cc6f98d4c)
++ * Overlay: overlays/nvmctrl_03929.yaml (sha1 83a9f3f0d869)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -54,12 +54,12 @@ static const MchpRegInfo pic32cm5164jh01100_nvmctrl_regs[] = {
+     {
+         .name = "STATUS", .offset = 0x18, .size = 2, .count = 1, .stride = 2,
+         .alias_of = -1, .reset = 0x0000, .impl = 0x011F, .wmask = 0x0000,
+-        .w1c = 0x001E, .flags = 0,
++        .w1c = 0x001E, .flags = MCHP_F_DYNAMIC,
+     },
+     {
+         .name = "ADDR", .offset = 0x1C, .size = 4, .count = 1, .stride = 4,
+         .alias_of = -1, .reset = 0x00000000, .impl = 0x003FFFFF,
+-        .wmask = 0x003FFFFF, .flags = MCHP_F_PAC,
++        .wmask = 0x003FFFFF, .flags = MCHP_F_PAC | MCHP_F_HOOK_POST_WRITE,
+     },
+     {
+         .name = "LOCK", .offset = 0x20, .size = 2, .count = 1, .stride = 2,
+diff --git a/include/hw/misc/mchp_sysctrl.h b/include/hw/misc/mchp_sysctrl.h
+index 2230960..a75091f 100644
+--- a/include/hw/misc/mchp_sysctrl.h
++++ b/include/hw/misc/mchp_sysctrl.h
+@@ -15,6 +15,7 @@
+ #define HW_MISC_MCHP_SYSCTRL_H
+ 
+ #include "hw/misc/mchp_regblock.h"
++#include "system/memory.h"
+ 
+ /*
+  * OSCCTRL U2119. Clock inputs: "xtal" (XIN/XOUT crystal or external clock,
+@@ -41,9 +42,27 @@
+ /* MCLK U2234. Clock input "gclk-main" (generator 0); output "cpu". */
+ #define TYPE_MCHP_MCLK "mchp-mclk"
+ 
+-/* NVMCTRL 03929: PARAM, READY, CTRLA command keys; no flash programming. */
++/*
++ * NVMCTRL 03929: commands, the page buffer and the programming of the
++ * flash arrays, with the PIC32CM MC00's timings. The SoC maps the arrays as
++ * ROM devices, passes their writes (page buffer loads) to
++ * mchp_nvmctrl_load() and hands them over with mchp_nvmctrl_attach().
++ */
+ #define TYPE_MCHP_NVMCTRL "mchp-nvmctrl"
+ 
++typedef enum MchpNvmArray {
++    MCHP_NVM_MAIN,
++    MCHP_NVM_DATAFLASH,
++    MCHP_NVM_ROWS,                  /* calibration, user and OTP rows */
++    MCHP_NVM_NARRAYS,
++} MchpNvmArray;
++
++void mchp_nvmctrl_attach(DeviceState *nvm, MchpNvmArray array,
++                         MemoryRegion *mr, hwaddr base);
++/* A write of @size bytes at @offset into @array; 8-bit writes fail */
++MemTxResult mchp_nvmctrl_load(DeviceState *nvm, MchpNvmArray array,
++                              hwaddr offset, uint64_t val, unsigned size);
++
+ /* SUPC U2117: BODVDD (reset from the user row) and its ready flags. */
+ #define TYPE_MCHP_SUPC "mchp-supc"
+ 
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index f5d9dfa..21f9eaa 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -253,7 +253,7 @@ qtests_arm = \
+   (config_all_devices.has_key('CONFIG_VEXPRESS') ? ['test-arm-mptimer'] : []) + \
+   (config_all_devices.has_key('CONFIG_MICROBIT') ? ['microbit-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_PIC32CM_JH01_CPRO') ? ['pic32cm-jh-test', 'pic32cm-jh-sercom-test', 'pic32cm-jh-port-test'] : []) + \
+-  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-wdt-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-dmac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-click-test'] : []) + \
++  (config_all_devices.has_key('CONFIG_CURIOSITY_CIRCUITPYTHON') ? ['curiosity-cp-test'] : []) +   (config_all_devices.has_key('CONFIG_PIC32CM_MC00_CPRO') ? ['pic32cm-mc00-test', 'pic32cm-nvmctrl-test', 'pic32cm-wdt-test', 'pic32cm-ac-test', 'pic32cm-tsens-test', 'pic32cm-freqm-test', 'pic32cm-dmac-test', 'pic32cm-eic-test', 'pic32cm-tc-test', 'pic32cm-rtc-test', 'pic32cm-evsys-test', 'pic32cm-tcc-test', 'pic32cm-click-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_STM32L4X5_SOC') ? qtests_stm32l4x5 : []) + \
+   (config_all_devices.has_key('CONFIG_FSI_APB2OPB_ASPEED') ? ['aspeed_fsi-test'] : []) + \
+   (config_all_devices.has_key('CONFIG_CAN_FLEXCAN') ? ['flexcan-test'] : []) + \
+diff --git a/tests/qtest/pic32cm-nvmctrl-test.c b/tests/qtest/pic32cm-nvmctrl-test.c
+new file mode 100644
+index 0000000..6cf2768
+--- /dev/null
++++ b/tests/qtest/pic32cm-nvmctrl-test.c
+@@ -0,0 +1,253 @@
++/*
++ * QTest for the flash controller of the PIC32CM MC00 (pic32cm-mc00-cpro)
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The NVMCTRL model's timings on stepped virtual time, and what firmware
++ * on the desk board must not try: BOOTPROT, the security bit, the user row
++ * (EAR, WAP), and programmed flash staying over a loaded image through a
++ * reset. firmware/hello APP=nvmctrl checks the rest against silicon.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "libqtest.h"
++#include "qemu/bitops.h"
++
++#define MACHINE         "-M pic32cm-mc00-cpro"
++
++#define NVMCTRL         0x41004000
++#define R_CTRLA         0x00
++#define R_CTRLB         0x04
++#define R_INTFLAG       0x14
++#define R_STATUS        0x18
++#define R_ADDR          0x1C
++#define R_LOCK          0x20
++#define R_PBLDATA0      0x28
++#define R_PBLDATA1      0x2C
++
++#define READY           0x01
++#define INT_ERROR       0x02
++#define PRM             0x0001
++#define LOAD            0x0002
++#define PROGE           0x0004
++#define LOCKE           0x0008
++#define SB              0x0100
++
++#define CMD(c)          (0xA500 | (c))
++#define ER              0x02
++#define WP              0x04
++#define EAR             0x05
++#define WAP             0x06
++#define DFER            0x1A
++#define DFWP            0x1C
++#define SPRM            0x42
++#define CPRM            0x43
++#define SSB             0x45
++#define SCEHL           0x7F
++
++#define DF              0x00400000
++#define USER_ROW        0x00804000
++#define USER0           0xB15088FF      /* the twin's default user row */
++#define USER1           0xFFFFF8BB
++#define TEST_ROW        0x0001FF00
++
++#define ER_NS           777000
++#define WP_NS           169000
++#define DFER_NS         768000
++#define DFWP_NS         130000
++
++static uint32_t nvm(QTestState *qts, unsigned off)
++{
++    return qtest_readl(qts, NVMCTRL + off);
++}
++
++static void cmd(QTestState *qts, unsigned c)
++{
++    qtest_writew(qts, NVMCTRL + R_CTRLA, CMD(c));
++}
++
++/* READY drops for exactly @ns */
++static void expect_busy(QTestState *qts, int64_t ns)
++{
++    g_assert_cmphex(nvm(qts, R_INTFLAG) & READY, ==, 0);
++    qtest_clock_step(qts, ns - 1);
++    g_assert_cmphex(nvm(qts, R_INTFLAG) & READY, ==, 0);
++    qtest_clock_step(qts, 1);
++    g_assert_cmphex(nvm(qts, R_INTFLAG) & READY, ==, READY);
++}
++
++/* A flash image in Intel HEX for -device loader: @n words at @addr */
++static char *hex_image(uint32_t addr, const uint32_t *words, unsigned n)
++{
++    g_autoptr(GString) hex = g_string_new(NULL);
++    char *path = NULL;
++    unsigned sum = 0x02 + 0x04 + (addr >> 24) + ((addr >> 16) & 0xFF);
++    int fd;
++
++    g_string_append_printf(hex, ":02000004%04X%02X\n", addr >> 16,
++                           (0x100 - (sum & 0xFF)) & 0xFF);
++    sum = 4 * n + ((addr >> 8) & 0xFF) + (addr & 0xFF);
++    g_string_append_printf(hex, ":%02X%04X00", 4 * n, addr & 0xFFFF);
++    for (unsigned i = 0; i < n; i++) {
++        for (unsigned b = 0; b < 4; b++) {
++            uint8_t v = words[i] >> (8 * b);
++
++            g_string_append_printf(hex, "%02X", v);
++            sum += v;
++        }
++    }
++    g_string_append_printf(hex, "%02X\n:00000001FF\n",
++                           (0x100 - (sum & 0xFF)) & 0xFF);
++    fd = g_file_open_tmp("pic32cm-nvm-XXXXXX.hex", &path, NULL);
++    g_assert(fd >= 0);
++    close(fd);
++    g_assert(g_file_set_contents(path, hex->str, hex->len, NULL));
++    return path;
++}
++
++static void test_dataflash(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    cmd(qts, DFER);
++    expect_busy(qts, DFER_NS);
++    qtest_writel(qts, DF + 0x40, 0x11111111);
++    qtest_writel(qts, DF + 0x44, 0x22222222);
++    g_assert_cmphex(nvm(qts, R_PBLDATA0), ==, 0x11111111);
++    g_assert_cmphex(nvm(qts, R_PBLDATA1), ==, 0x22222222);
++    g_assert_cmphex(nvm(qts, R_ADDR), ==, 0x22);
++    g_assert_cmphex(nvm(qts, R_STATUS), ==, LOAD);
++    g_assert_cmphex(qtest_readl(qts, DF + 0x40), ==, 0xFFFFFFFF);
++    cmd(qts, DFWP);
++    expect_busy(qts, DFWP_NS);
++    g_assert_cmphex(qtest_readl(qts, DF + 0x40), ==, 0x11111111);
++    g_assert_cmphex(qtest_readl(qts, DF + 0x44), ==, 0x22222222);
++    g_assert_cmphex(qtest_readl(qts, DF + 0x48), ==, 0xFFFFFFFF);
++    g_assert_cmphex(nvm(qts, R_STATUS), ==, 0);
++    g_assert_cmphex(nvm(qts, R_PBLDATA0), ==, 0xFFFFFFFF);
++
++    /* A command while busy, and an 8-bit load (a bus error for a CPU) */
++    cmd(qts, DFER);
++    cmd(qts, DFWP);
++    g_assert_cmphex(nvm(qts, R_STATUS), ==, PROGE);
++    g_assert_cmphex(nvm(qts, R_INTFLAG), ==, INT_ERROR);
++    qtest_clock_step(qts, DFER_NS);
++    qtest_writeb(qts, DF + 0x101, 0x5A);
++    g_assert_cmphex(nvm(qts, R_PBLDATA0), ==, 0xFFFF5A5A);
++    qtest_quit(qts);
++}
++
++/* What the guest programs stays over a loaded image through a reset */
++static void test_main_array(void)
++{
++    static const uint32_t image[] = { 0x12345678, 0x9ABCDEF0 };
++    g_autofree char *path = NULL;
++    QTestState *qts;
++
++    if (!qtest_has_device("loader")) {
++        g_test_skip("generic loader not built");
++        return;
++    }
++    path = hex_image(TEST_ROW, image, 2);
++    qts = qtest_initf(MACHINE " -device loader,file=%s", path);
++    g_assert_cmphex(qtest_readl(qts, TEST_ROW), ==, 0x12345678);
++    qtest_writel(qts, NVMCTRL + R_ADDR, TEST_ROW / 2);
++    cmd(qts, ER);
++    expect_busy(qts, ER_NS);
++    qtest_writel(qts, TEST_ROW + 0x44, 0xC0DE0001);
++    g_assert_cmphex(nvm(qts, R_ADDR), ==, (TEST_ROW + 0x44) / 2);
++    cmd(qts, WP);
++    expect_busy(qts, WP_NS);
++    qtest_system_reset(qts);
++    g_assert_cmphex(qtest_readl(qts, TEST_ROW), ==, 0xFFFFFFFF);
++    g_assert_cmphex(qtest_readl(qts, TEST_ROW + 0x44), ==, 0xC0DE0001);
++    qtest_quit(qts);
++    unlink(path);
++}
++
++/* BOOTPROT = 6 protects the first 512 bytes, from the next reset */
++static void test_bootprot(void)
++{
++    static const uint32_t row[] = { (USER0 & ~7u) | 6, USER1 };
++    g_autofree char *path = NULL;
++    QTestState *qts;
++
++    if (!qtest_has_device("loader")) {
++        g_test_skip("generic loader not built");
++        return;
++    }
++    path = hex_image(USER_ROW, row, 2);
++    qts = qtest_initf(MACHINE " -device loader,file=%s", path);
++    qtest_writel(qts, NVMCTRL + R_ADDR, 0x100 / 2);
++    cmd(qts, ER);
++    g_assert_cmphex(nvm(qts, R_STATUS), ==, LOCKE);
++    g_assert_cmphex(nvm(qts, R_INTFLAG), ==, READY | INT_ERROR);
++    qtest_writel(qts, NVMCTRL + R_ADDR, 0x200 / 2);
++    cmd(qts, ER);
++    expect_busy(qts, ER_NS);
++    qtest_quit(qts);
++    unlink(path);
++}
++
++/* WAP programs the user row; its region locks apply at the next reset */
++static void test_user_row(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    g_assert_cmphex(nvm(qts, R_LOCK), ==, 0xFFFF);
++    cmd(qts, EAR);
++    expect_busy(qts, ER_NS);
++    g_assert_cmphex(qtest_readl(qts, USER_ROW), ==, 0xFFFFFFFF);
++    qtest_writel(qts, USER_ROW, USER0);
++    qtest_writel(qts, USER_ROW + 4, (USER1 & 0xFFFF) | 0x7FFF0000);
++    cmd(qts, WAP);
++    expect_busy(qts, WP_NS);
++    g_assert_cmphex(nvm(qts, R_LOCK), ==, 0xFFFF);
++    qtest_system_reset(qts);
++    g_assert_cmphex(nvm(qts, R_LOCK), ==, 0x7FFF);
++    qtest_quit(qts);
++}
++
++/* SSB sets SB until QEMU exits and refuses the user row from then on */
++static void test_security(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    cmd(qts, SCEHL);
++    g_assert_cmphex(nvm(qts, R_STATUS), ==, PROGE);
++    qtest_writew(qts, NVMCTRL + R_STATUS, PROGE);
++    cmd(qts, SSB);
++    g_assert_cmphex(nvm(qts, R_STATUS), ==, SB);
++    cmd(qts, EAR);
++    g_assert_cmphex(nvm(qts, R_STATUS), ==, SB | PROGE);
++    qtest_system_reset(qts);
++    g_assert_cmphex(nvm(qts, R_STATUS), ==, SB);
++    qtest_quit(qts);
++}
++
++/* No CPU fetches from flash here, so PRM stays until CPRM */
++static void test_power_reduction(void)
++{
++    QTestState *qts = qtest_init(MACHINE);
++
++    cmd(qts, SPRM);
++    g_assert_cmphex(nvm(qts, R_STATUS), ==, PRM);
++    cmd(qts, CPRM);
++    g_assert_cmphex(nvm(qts, R_STATUS), ==, 0);
++    qtest_quit(qts);
++}
++
++int main(int argc, char **argv)
++{
++    g_test_init(&argc, &argv, NULL);
++    qtest_add_func("pic32cm-nvmctrl/dataflash", test_dataflash);
++    qtest_add_func("pic32cm-nvmctrl/main-array", test_main_array);
++    qtest_add_func("pic32cm-nvmctrl/bootprot", test_bootprot);
++    qtest_add_func("pic32cm-nvmctrl/user-row", test_user_row);
++    qtest_add_func("pic32cm-nvmctrl/security", test_security);
++    qtest_add_func("pic32cm-nvmctrl/power-reduction", test_power_reduction);
++    return g_test_run();
++}
+-- 
+2.53.0.windows.2
+

@@ -11,7 +11,7 @@ registers:
   CTRLA:
     pac_protected: true
     strobe: [CMDEX]
-    hooks: [post_write]           # CMDEX=0xA5 runs CMD (instantly, flash writes LOG_UNIMP)
+    hooks: [post_write]           # CMDEX=0xA5 runs CMD (hw/misc/mchp_sysctrl.c)
   CTRLB: {pac_protected: true}    # RWS has no timing effect under TCG
   PARAM:
     pac_protected: true
@@ -26,7 +26,8 @@ registers:
   STATUS:
     w1c: [LOAD, PROGE, LOCKE, NVME]
     ro: [PRM, SB]
-  ADDR: {pac_protected: true}
+    dynamic: true                 # PRM: cleared by fetches (CPU reads only)
+  ADDR: {pac_protected: true, hooks: [post_write]}   # as wide as the main array needs
   LOCK: {read_only: true}         # DS 26.6.9: R, loaded from the user row
   ECCCTRL: {pac_protected: true, optional: true}   # JH only (ECC)
   FLTCTRL: {pac_protected: true, optional: true}   # JH only (ECC)

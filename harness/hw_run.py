@@ -149,6 +149,12 @@ def program_pyocd(args: argparse.Namespace, image: Image, port) -> dict:
                     else [f"user row unreadable: {'; '.join(info.errors)}"])
         if problems:
             raise HwRunError("refusing to program:\n  " + "\n  ".join(problems))
+        # The session halts without a reset, so the NVMCTRL keeps what the
+        # last firmware left, and the DFP's flash algorithm reads a sticky
+        # STATUS.PROGE as a failed erase (seen 2026-10-21 on the MC00:
+        # "flash erase sector failure (address 0x00000000; result code
+        # 0x1)", the vector table already erased). Start from a reset.
+        sess.target.reset_and_halt()
         FileProgrammer(sess, chip_erase="sector", smart_flash=True).program(
             str(image.path), file_format="elf")
         port.reset_input_buffer()
