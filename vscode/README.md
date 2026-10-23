@@ -17,17 +17,64 @@ engine that runs it. Nothing else to install.
 
 ## Use
 
-- Click the **chip icon** in the activity bar (the left edge): the **Boards** view lists the
-  boards; click one to open it beside your editor, running its demo firmware (the running one has
-  a green dot; click another to switch). Its title bar has **Debug on the Twin**, **Run on Twin**
-  (pick an ELF), **Stop** and the engine log. The **Twin** item in the status bar opens a board
-  too, or switches once one runs. **Twin: Open Board** in the Command Palette does the same.
+- Click the **chip icon** in the activity bar (the left edge). The bench opens beside your editor
+  as you left it: its boards, Click boards, parts, wires and firmware. The first time it is empty
+  and offers templates, such as a rotary angle on an OLED or text scrolling on an 8x8 matrix.
+- The **palette** on the left of the bench holds everything you can add: templates, boards,
+  Click boards, parts and pin tags. Press **/** to search it. Click an entry to add it, or drag it
+  onto the bench:
+  - **A Click board:** drop it on a mikroBUS header to plug it in. Drop it anywhere else to
+    wire it pin by pin (click a pin, then a header hole); the bench checks that the SPI or I2C
+    pins are ones a SERCOM can drive.
+  - **A part:** dropped on a header, its legs go into the holes.
+  - **Another board:** it joins the bench, each board with its own firmware. Wire one board's
+    pins to another's.
+- Pan the bench by dragging its background; zoom with the wheel, **Fit** (or **F**) shows
+  everything. Drag a board by its title bar, click it to select it; × takes it off.
+- The side panel follows the selected board: drop its firmware there (or on the board itself),
+  its Click boards' controls, its console.
 - Build your project: with MPLAB for VS Code (`out/**/*.elf`) or MPLAB X (`dist/**/*.elf`), each
-  new build in the workspace runs on the twin by itself (`peripheralPretender.watch`).
-- Right-click any `.elf` in the Explorer: **Run on Twin**. Or drop an ELF on the board view.
-- Switch boards from the dropdown at the top of the board view, or with **Twin: Switch Board**
-  (also the **Twin** item in the status bar).
-- **Twin: Stop** ends the twin; **Twin: Show Engine Log** shows what the engine did.
+  new build in the workspace runs on the selected board by itself (`peripheralPretender.watch`),
+  and the board keeps it. Reopening the bench brings back what each board ran last, unless you
+  built while it was closed.
+- Right-click any `.elf` in the Explorer: **Run on Twin** (on an empty bench it asks which
+  board).
+- The sidebar lists the boards too: clicking one puts it on the bench in place of the selected
+  board. **Twin: Stop** ends the twin; **Twin: Show Engine Log** shows what the engine did.
+
+## Timeline, faults and replay
+
+- **Timeline** (the waveform button, top right): the selected board's pins, its buses decoded
+  (UART text, SPI bytes, I2C transactions such as `0x18 W 05 | 0x18 R 01 90`) and its
+  interrupts, in the twin's own time. Every board has it: the Curiosity Pros, the PyKit and
+  the AVR64EA48 Nano.
+  - Live, it follows the board.
+  - The wheel zooms onto what is under the cursor, dragging goes back in time, and double-click
+    goes live again.
+  - Hover for the detail; **+ Row** adds a pad or a bus.
+- **Faults** (side panel): test your error handling.
+  - Short a pad to GND or VDD.
+  - Make an I2C Click stop answering.
+  - Make an SPI device's MISO stick.
+
+  The board's title bar shows a ⚡ while any is set. Faults are not saved.
+- **Record** (timeline bar) restarts the firmware and records a run that replays exactly: every
+  button, slider and console line, kept with the instant it took effect. **Replay** runs it
+  again and says whether everything happened the same, or where it first differed.
+
+## Assistants (MCP)
+
+The extension registers an MCP server, **Peripheral Pretender**, with VS Code (1.101 or later).
+Assistants in VS Code can then use your bench:
+- read the boards, LEDs and console;
+- run firmware;
+- press buttons and move Click controls;
+- read the timeline;
+- inject faults;
+- record and replay.
+
+They drive the same bench you see. Outside VS Code (Claude Code, for one), run
+`py -m tools.pp_mcp` from a source checkout: it finds a running bench, or starts its own.
 
 ## Debug on the twin
 
@@ -68,7 +115,7 @@ lines.
 ```
 py scripts/build_vsix.py            # stages vscode/engine, smoke-tests it, packages the VSIX
 cd vscode && npm test               # end to end in a downloaded VS Code
-code --install-extension vscode/peripheral-pretender-win32-x64-0.4.8.vsix
+code --install-extension vscode/peripheral-pretender-win32-x64-0.6.2.vsix
 ```
 
 Windows x64 only so far. The bundle holds QEMU (GPL-2.0-or-later) built from the pp-qemu fork,

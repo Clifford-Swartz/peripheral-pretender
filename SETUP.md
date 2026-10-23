@@ -21,8 +21,8 @@ its owner approves programming, erasing, resetting or halting it.
 2. Download the extension from this repository's Releases and install it:
 
    ```
-   curl -LO https://github.com/Clifford-Swartz/peripheral-pretender/releases/latest/download/peripheral-pretender-win32-x64-0.4.8.vsix
-   code --install-extension peripheral-pretender-win32-x64-0.4.8.vsix
+   curl -LO https://github.com/Clifford-Swartz/peripheral-pretender/releases/latest/download/peripheral-pretender-win32-x64-0.6.2.vsix
+   code --install-extension peripheral-pretender-win32-x64-0.6.2.vsix
    ```
 
    (Or download it from the Releases page in a browser.)

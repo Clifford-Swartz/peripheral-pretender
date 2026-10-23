@@ -29,7 +29,7 @@ const EM_ARM = 40;
 const EM_AVR = 83;
 
 /* The ELF's architecture (e_machine), or undefined if not an ELF */
-function elfArch(file: string): "arm" | "avr" | undefined {
+export function elfArch(file: string): "arm" | "avr" | undefined {
     const buf = Buffer.alloc(20);
     const fd = fs.openSync(file, "r");
     try {
@@ -45,7 +45,7 @@ function elfArch(file: string): "arm" | "avr" | undefined {
                                                            : undefined;
 }
 
-function boardArch(b: Board): "arm" | "avr" {
+export function boardArch(b: Board): "arm" | "avr" {
     return b.machine.startsWith("avr") ? "avr" : "arm";
 }
 

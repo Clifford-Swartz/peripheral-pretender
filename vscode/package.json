@@ -2,7 +2,7 @@
   "name": "peripheral-pretender",
   "displayName": "Peripheral Pretender",
   "description": "Run firmware on a digital twin of Microchip boards: the board, its LEDs, buttons, console, Click boards and a parts bench, live in VS Code.",
-  "version": "0.4.8",
+  "version": "0.6.2",
   "publisher": "cliffordswartz",
   "private": true,
   "engines": {
@@ -28,10 +28,16 @@
     "onStartupFinished"
   ],
   "contributes": {
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "peripheralPretender.mcp",
+        "label": "Peripheral Pretender"
+      }
+    ],
     "commands": [
       {
         "command": "peripheralPretender.open",
-        "title": "Open Board",
+        "title": "Open the Bench",
         "category": "Twin"
       },
       {
@@ -102,7 +108,7 @@
         "peripheralPretender.board": {
           "type": "string",
           "default": "",
-          "description": "Board to open (board id, e.g. ev15n46a). Empty: ask."
+          "description": "Board to open (board id, e.g. ev15n46a). Empty: the one the bench had last time (or an empty bench with templates)."
         },
         "peripheralPretender.watch": {
           "type": "boolean",

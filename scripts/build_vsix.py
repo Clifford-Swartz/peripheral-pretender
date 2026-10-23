@@ -3,9 +3,12 @@
 engine bundled, so installing it is all a user does.
 
 vscode/engine/ (staged here, not in git):
-  python/   the python.org embeddable Python, with aiohttp
+  python/   the python.org embeddable Python, with aiohttp and mcp
   app/      the project root the engine needs: tools/pp, tools/pp_web,
-            devices/*.json and each board's demo firmware (if built)
+            tools/pp_analog (ngspice is not bundled: without it a bench
+            with a capacitor stays on the DC solve), tools/pp_mcp (the MCP
+            server the extension registers), devices/*.json and each
+            board's demo firmware (if built)
   qemu/     qemu-system-arm and -avr (stripped) and their MSYS2 DLLs
   gdb/      gdb-multiarch (Arm, AVR) with its Python and data directory
 
@@ -31,7 +34,7 @@ STAGE = EXT / "engine"
 CACHE = Path.home() / ".cache" / "pp-vsix"
 PYTHON = "3.12.10"
 PY_TAG = "312"
-WHEELS = ["aiohttp==3.13.5"]          # as the test suite runs with
+WHEELS = ["aiohttp==3.13.5", "mcp==2.3.0"]  # as the test suite runs with
 MSYS2 = Path(os.environ.get("PP_MSYS2_ROOT", "C:/msys64"))
 # Not needed at run time: art and catalog tools, notes
 SKIP = shutil.ignore_patterns("__pycache__", "*.pyc", "make_art.py",
@@ -80,7 +83,7 @@ def stage_app() -> None:
     app = STAGE / "app"
     (app / "tools").mkdir(parents=True)
     shutil.copy2(ROOT / "tools" / "__init__.py", app / "tools")
-    for pkg in ("pp", "pp_web"):
+    for pkg in ("pp", "pp_web", "pp_analog", "pp_mcp"):
         shutil.copytree(ROOT / "tools" / pkg, app / "tools" / pkg,
                         ignore=SKIP)
     (app / "devices").mkdir()
@@ -174,17 +177,21 @@ def smoke() -> None:
     env.update(PP_QEMU=str(qemu / "qemu-system-arm.exe"),
                PP_QEMU_AVR=str(qemu / "qemu-system-avr.exe"),
                PP_MSYS2_BIN=str(qemu), PYTHONNOUSERSITE="1")
-    code = ("import aiohttp, tools.pp_web.server as s; "
+    code = ("import aiohttp, tools.pp_web.server as s, tools.pp_mcp.server; "
             "from tools.pp.qemu import find_qemu, qemu_env; "
+            "from tools.pp.trace import machine_has_trace; "
             "import subprocess; "
             "q = find_qemu(None, 'arm'); "
             "r = subprocess.run([str(q), '-machine', 'help'], env=qemu_env(), "
             "capture_output=True, text=True); "
             "assert 'pic32cm-mc00-cpro' in r.stdout, r.stderr; "
+            "assert machine_has_trace(q, 'pic32cm-mc00-cpro', qemu_env()); "
             "q = find_qemu(None, 'avr'); "
             "r = subprocess.run([str(q), '-machine', 'help'], env=qemu_env(), "
             "capture_output=True, text=True); "
-            "assert 'avr64ea48-cnano' in r.stdout, r.stderr; print('ok')")
+            "assert 'avr64ea48-cnano' in r.stdout, r.stderr; "
+            "assert machine_has_trace(q, 'avr64ea48-cnano', qemu_env()); "
+            "print('ok')")
     subprocess.run([str(STAGE / "python" / "python.exe"), "-c", code],
                    cwd=STAGE / "app", env=env, check=True)
     gdb = subprocess.run(

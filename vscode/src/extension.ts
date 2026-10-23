@@ -3,7 +3,9 @@
  *
  * The extension is a thin shell. The engine (tools/pp_web, Python, with
  * the pp-qemu binaries) runs as a child process on a free loopback port,
- * and the panel shows its page. The platform VSIX bundles the engine
+ * and the panel shows its page: the workspace, with the board, Click
+ * boards, parts and firmware it had last time (or an empty bench with
+ * templates). Picking a board switches the running engine to it. The platform VSIX bundles the engine
  * (engine/python, engine/app, engine/qemu: scripts/build_vsix.py), so
  * installing the extension is all a user does. For development,
  * peripheralPretender.engineRoot runs a checkout with a system Python.
@@ -14,15 +16,18 @@
 import * as cp from "child_process";
 import * as fs from "fs";
 import * as net from "net";
+import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
-import { registerDebug } from "./debug";
+import { boardArch, elfArch, registerDebug } from "./debug";
 import { registerSidebar } from "./sidebar";
 
 interface Engine {
-    proc: cp.ChildProcess;
+    proc?: cp.ChildProcess;     /* none: an engine already running, adopted */
     port: number;
-    board: string;
+    board?: string;             /* as the engine last said (/api/state) */
+    name?: string;
+    poll?: NodeJS.Timeout;
 }
 
 export interface Board {
@@ -32,6 +37,7 @@ export interface Board {
 }
 
 let engine: Engine | undefined;
+let starting: Promise<boolean> | undefined;   /* an engine on its way */
 let panel: vscode.WebviewPanel | undefined;
 let log: vscode.LogOutputChannel;     /* also saved under the exthost logs */
 let status: vscode.StatusBarItem;
@@ -121,7 +127,7 @@ async function waitReady(e: Engine, timeoutMs: number): Promise<void> {
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
-        if (e.proc.exitCode !== null) {
+        if (e.proc && e.proc.exitCode !== null) {
             throw new Error(`engine exited (${e.proc.exitCode})`);
         }
         try {
@@ -166,16 +172,47 @@ function stopEngine(): void {
     if (engine) {
         const e = engine;
         engine = undefined;
-        e.proc.removeAllListeners("exit");
-        if (process.platform === "win32" && e.proc.pid) {
+        clearInterval(e.poll);
+        if (!e.proc) {
+            /* Adopted: whoever started it stops it */
+        } else if (process.platform === "win32" && e.proc.pid) {
             /* The whole tree: the engine's QEMU would outlive it */
+            e.proc.removeAllListeners("exit");
             cp.spawnSync("taskkill", ["/T", "/F", "/PID", String(e.proc.pid)],
                          { windowsHide: true });
         } else {
+            e.proc.removeAllListeners("exit");
             e.proc.kill();
         }
     }
     refresh();
+}
+
+/*
+ * An engine already running on this workspace (the MCP server starts one
+ * when an assistant uses the bench first): each engine says where it
+ * listens in ~/.pp_web/engines
+ */
+async function runningEngine(lay: Layout): Promise<Engine | undefined> {
+    const dir = path.join(os.homedir(), ".pp_web", "engines");
+    const mine = path.resolve(lay.env.PP_WEB_BENCH_DIR as string,
+                              "workspace.json").toLowerCase();
+
+    for (const f of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+        try {
+            const info = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+            if (path.resolve(info.workspace).toLowerCase() !== mine) {
+                continue;
+            }
+            const r = await fetch(`http://127.0.0.1:${info.port}/api/state`);
+            if (r.ok) {
+                return { port: info.port };
+            }
+        } catch {
+            /* gone, or not an engine file */
+        }
+    }
+    return undefined;
 }
 
 /* Engine started or stopped: the status bar and the sidebar follow */
@@ -183,10 +220,11 @@ const changed = new vscode.EventEmitter<void>();
 
 function refresh(): void {
     if (engine) {
-        status.text = `$(circuit-board) Twin: ${engine.board}`;
-        status.tooltip = `Peripheral Pretender: ${engine.board} on port ` +
-            `${engine.port}. Click to switch boards.`;
-        status.command = "peripheralPretender.switchBoard";
+        const name = engine.name?.replace(/\s*\(.*$/, "") || "empty bench";
+        status.text = `$(circuit-board) Twin: ${name}`;
+        status.tooltip = `Peripheral Pretender: ${engine.name || "no board"} ` +
+            `on port ${engine.port}. Click to show the bench.`;
+        status.command = "peripheralPretender.open";
     } else {
         status.text = "$(circuit-board) Twin";
         status.tooltip = "Peripheral Pretender: open a board";
@@ -196,13 +234,32 @@ function refresh(): void {
     changed.fire();
 }
 
+/* Which board the engine has, for the status bar and the sidebar */
+async function poll(e: Engine): Promise<void> {
+    try {
+        const r = await fetch(`http://127.0.0.1:${e.port}/api/state`);
+        const s = await r.json() as { board: string | null; name: string | null };
+        if (s.board !== (e.board ?? null) || s.name !== (e.name ?? null)) {
+            e.board = s.board ?? undefined;
+            e.name = s.name ?? undefined;
+            if (panel) {
+                panel.title = `Twin: ${e.name?.replace(/\s*\(.*$/, "") || "bench"}`;
+            }
+            refresh();
+        }
+    } catch {
+        /* restarting */
+    }
+}
+
+/* The engine on the last workspace, or on @board when given */
 async function startEngine(ctx: vscode.ExtensionContext,
-                           board: string): Promise<Engine> {
+                           board?: string): Promise<Engine> {
     const lay = layout(ctx);
     const cfg = vscode.workspace.getConfiguration("peripheralPretender");
     const port = await freePort();
     const args = ["-m", "tools.pp_web", "--port", String(port),
-                  "--board", board];
+                  ...(board ? ["--board", board] : [])];
     const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
     if (folder && cfg.get<boolean>("watch", true)) {
@@ -210,6 +267,14 @@ async function startEngine(ctx: vscode.ExtensionContext,
     }
     if (!fs.existsSync(lay.root)) {
         throw new Error(`no engine at ${lay.root}`);
+    }
+    const running = await runningEngine(lay);
+    if (running) {
+        log.appendLine(`[twin] the engine on port ${running.port} runs this ` +
+                       "workspace already: showing it");
+        await poll(running);
+        running.poll = setInterval(() => poll(running), 2000);
+        return running;
     }
     fs.mkdirSync(lay.env.PP_WEB_BENCH_DIR as string, { recursive: true });
     log.appendLine(`[twin] ${lay.python} ${args.join(" ")} (in ${lay.root})`);
@@ -219,7 +284,7 @@ async function startEngine(ctx: vscode.ExtensionContext,
     proc.stdout?.on("data", (d) => log.append(d.toString()));
     proc.stderr?.on("data", (d) => log.append(d.toString()));
     proc.on("error", (err) => log.appendLine(`[twin] ${err.message}`));
-    const e: Engine = { proc, port, board };
+    const e: Engine = { proc, port };
     proc.on("exit", (code) => {
         log.appendLine(`[twin] engine exited (${code})`);
         if (engine === e) {
@@ -228,7 +293,21 @@ async function startEngine(ctx: vscode.ExtensionContext,
         }
     });
     await waitReady(e, 30000);
+    await poll(e);
+    e.poll = setInterval(() => poll(e), 2000);
     return e;
+}
+
+/* Switch the running engine to @board */
+async function switchTo(e: Engine, board: string): Promise<void> {
+    const r = await fetch(`http://127.0.0.1:${e.port}/api/board`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ board }),
+    });
+    if (!r.ok) {
+        throw new Error(await r.text());
+    }
+    await poll(e);
 }
 
 /*
@@ -253,7 +332,7 @@ async function pageHtml(port: number): Promise<string> {
     return injectPage(await r.text(), port);
 }
 
-async function showPanel(port: number, board: string): Promise<void> {
+async function showPanel(port: number, board?: string): Promise<void> {
     if (!panel) {
         panel = vscode.window.createWebviewPanel(
             "peripheralPretender", "Twin", vscode.ViewColumn.Beside, {
@@ -265,22 +344,47 @@ async function showPanel(port: number, board: string): Promise<void> {
             panel = undefined;
         });
     }
-    panel.title = `Twin: ${board}`;
+    panel.title = `Twin: ${board?.replace(/\s*\(.*$/, "") || "bench"}`;
     panel.webview.html = await pageHtml(port);
     panel.reveal();
 }
 
+/*
+ * Show the bench: the running engine (switched to @choice, if given), or
+ * a new one on the last workspace (the "board" setting, or @choice, picks
+ * a board instead)
+ */
 async function open(ctx: vscode.ExtensionContext,
                     choice?: string): Promise<boolean> {
-    if (engine && (!choice || choice === engine.board)) {
-        await showPanel(engine.port, engine.board);
+    if (starting) {
+        /* The sidebar and a command can both ask at once: one engine */
+        await starting;
+    }
+    if (engine) {
+        if (choice && choice !== engine.board) {
+            try {
+                await switchTo(engine, choice);
+            } catch (err) {
+                vscode.window.showErrorMessage(
+                    `Peripheral Pretender: ${(err as Error).message}`);
+                return false;
+            }
+        }
+        await showPanel(engine.port, engine.name);
         return true;
     }
-    stopEngine();
-    const board = choice || await pickBoard(layout(ctx).root);
-    if (!board) {
-        return false;
+    const cfg = vscode.workspace.getConfiguration("peripheralPretender");
+    const board = choice || cfg.get<string>("board", "") || undefined;
+    starting = launch(ctx, board);
+    try {
+        return await starting;
+    } finally {
+        starting = undefined;
     }
+}
+
+async function launch(ctx: vscode.ExtensionContext,
+                      board?: string): Promise<boolean> {
     try {
         engine = await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
@@ -294,7 +398,7 @@ async function open(ctx: vscode.ExtensionContext,
         return false;
     }
     refresh();
-    await showPanel(engine.port, board);
+    await showPanel(engine.port, engine.name);
     return true;
 }
 
@@ -309,8 +413,19 @@ async function runElf(ctx: vscode.ExtensionContext,
     if (!uri || !(await open(ctx)) || !engine) {
         return;
     }
+    /* An empty bench, or a board of another architecture: pick one */
+    const arch = elfArch(uri.fsPath);
+    const here = boards(layout(ctx).root).find((b) => b.id === engine?.board);
+    if (!here || (arch && boardArch(here) !== arch)) {
+        const board = await pickBoard(layout(ctx).root, true,
+                                      (b) => !arch || boardArch(b) === arch);
+        if (!board || !(await open(ctx, board)) || !engine) {
+            return;
+        }
+    }
     const data = await vscode.workspace.fs.readFile(uri);
-    const r = await fetch(`http://127.0.0.1:${engine.port}/api/firmware`, {
+    const name = encodeURIComponent(path.basename(uri.fsPath));
+    const r = await fetch(`http://127.0.0.1:${engine.port}/api/firmware?name=${name}`, {
         method: "POST", body: data,
     });
     if (!r.ok) {
@@ -352,6 +467,9 @@ export function activate(ctx: vscode.ExtensionContext): Api {
     registerSidebar(ctx, {
         boards: () => boards(layout(ctx).root),
         board: () => engine?.board,
+        running: () => !!engine,
+        panelOpen: () => !!panel,
+        open: () => open(ctx),
         changed: changed.event,
     });
     refresh();
@@ -364,7 +482,40 @@ export function activate(ctx: vscode.ExtensionContext): Api {
         open: (board) => open(ctx, board),
         gdb: () => gdbPath(ctx),
     });
+    registerMcp(ctx);
     return { port: () => engine?.port };
+}
+
+/*
+ * The MCP server (tools/pp_mcp), for the assistants in VS Code: they drive
+ * the bench the user sees. VS Code 1.101 brought the provider API; older
+ * ones go without.
+ */
+function registerMcp(ctx: vscode.ExtensionContext): void {
+    const lm = (vscode as any).lm;
+    const Def = (vscode as any).McpStdioServerDefinition;
+    if (!lm?.registerMcpServerDefinitionProvider || !Def) {
+        return;
+    }
+    ctx.subscriptions.push(lm.registerMcpServerDefinitionProvider(
+        "peripheralPretender.mcp", {
+            provideMcpServerDefinitions: () => {
+                const lay = layout(ctx);
+                const env: Record<string, string> = {};
+                for (const k of ["PP_WEB_BENCH_DIR", "PP_QEMU", "PP_QEMU_AVR",
+                                 "PP_MSYS2_BIN", "PYTHONNOUSERSITE",
+                                 "PYTHONUNBUFFERED"]) {
+                    if (lay.env[k]) {
+                        env[k] = lay.env[k] as string;
+                    }
+                }
+                const def = new Def("Peripheral Pretender", lay.python,
+                                    ["-m", "tools.pp_mcp"], env,
+                                    ctx.extension.packageJSON.version);
+                def.cwd = vscode.Uri.file(lay.root);
+                return [def];
+            },
+        }));
 }
 
 export function deactivate(): void {
