@@ -1,0 +1,3 @@
+rcstep: 10 k from PB09 into PB08 (ADC0 AIN2), 1 u to ground (EXT1 pins 4, 3, 2)
+r1 PB09 PB08 10k
+c1 PB08 0 1u

@@ -58,6 +58,13 @@ pacman -S --needed base-devel git \
   mingw-w64-ucrt-x86_64-arm-none-eabi-gcc mingw-w64-ucrt-x86_64-arm-none-eabi-newlib
 ```
 
+Optional: circuits simulated alongside the twin (`pp run --circuit`, a bench with a
+capacitor) need ngspice's shared library:
+
+```
+pacman -S --needed mingw-w64-ucrt-x86_64-ngspice
+```
+
 **Check:** in UCRT64, `arm-none-eabi-gcc --version` and `ninja --version` both answer.
 
 ### 2. Clone and Python packages

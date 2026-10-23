@@ -51,6 +51,11 @@ from .unimp import summarize_log
 
 EXIT_TIMEOUT = 124      # no PP:EXIT before the timeout (as GNU timeout)
 EXIT_NO_EXIT_LINE = 125  # QEMU ended without printing PP:EXIT
+EXIT_ANALOG = 126       # the circuit simulated alongside failed mid-run
+# A circuit runs in lockstep with virtual time, which must then count
+# instructions (without -icount it follows the host clock while QEMU waits
+# for the circuit): the checks' shift unless one is given
+CIRCUIT_ICOUNT_SHIFT = 5
 
 STATUS_EXIT = "exit"
 STATUS_TIMEOUT = "timeout"
@@ -97,6 +102,10 @@ class RunOptions:
     extra_args: Sequence[str] = ()
     log_path: str | os.PathLike[str] | None = None
     on_uart: Callable[[bytes], None] | None = None
+    # A SPICE netlist simulated alongside, in lockstep (tools.pp_analog):
+    # its pads are the twin's, the ADC reads it
+    circuit: str | os.PathLike[str] | None = None
+    tick_us: float = 1000.0
 
 
 @dataclass
@@ -116,6 +125,7 @@ class RunResult:
     log_path: str | None = None
     detail: str | None = None       # why the run ended, where the CPU was
     warnings: list[str] = field(default_factory=list)
+    analog: dict | None = None      # the analog host's report (--circuit)
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
@@ -125,6 +135,9 @@ def run(options: RunOptions) -> RunResult:
     """Run *options.elf* on QEMU until PP:EXIT, QEMU exit or timeout."""
     elf = Path(options.elf).resolve()
     target = check_elf(elf)
+    if options.circuit is not None and options.icount_shift is None:
+        options = dataclasses.replace(options,
+                                      icount_shift=CIRCUIT_ICOUNT_SHIFT)
     _check_options(options)
     extra = split_extra_args(options.extra_args)
     machine = extra.machine or options.machine
@@ -136,14 +149,19 @@ def run(options: RunOptions) -> RunResult:
     trace_patterns = _trace_patterns(options.trace, options.extra_args)
     warnings = unknown_trace_patterns(qemu, trace_patterns)
 
+    host = _analog_host(options)
     with tempfile.TemporaryDirectory(prefix="pp-run-",
                                      ignore_cleanup_errors=True) as tmp:
         log_path = kept_log or (Path(tmp) / "qemu.log").resolve()
-        with _UartLink() as link, _Monitor() as monitor:
-            cmd = build_command(qemu, elf, options,
-                                link.qemu_args() + monitor.qemu_args(),
-                                log_path)
-            outcome = _launch_and_pump(cmd, link, monitor, options)
+        try:
+            with _UartLink() as link, _Monitor() as monitor:
+                cmd = build_command(qemu, elf, options,
+                                    link.qemu_args() + monitor.qemu_args() +
+                                    (host.qemu_args() if host else []),
+                                    log_path)
+                outcome = _launch_and_pump(cmd, link, monitor, options)
+        finally:
+            analog = host.finish(timeout=3) if host else None
         summary = summarize_log(log_path, trace_patterns)
 
     status, detail = outcome.status, outcome.detail
@@ -162,6 +180,10 @@ def run(options: RunOptions) -> RunResult:
         exit_code = EXIT_TIMEOUT
     else:
         exit_code = EXIT_NO_EXIT_LINE
+    if analog and analog["errors"]:
+        warnings += [f"circuit: {e}" for e in analog["errors"]]
+        if exit_code == 0:
+            exit_code = EXIT_ANALOG     # the firmware saw a frozen circuit
     return RunResult(
         exit_code=exit_code,
         status=status,
@@ -178,7 +200,19 @@ def run(options: RunOptions) -> RunResult:
         log_path=str(log_path) if kept_log else None,
         detail=detail,
         warnings=warnings,
+        analog=analog,
     )
+
+
+def _analog_host(options: RunOptions):
+    """The analog host serving options.circuit, started, or None."""
+    if options.circuit is None:
+        return None
+    from tools.pp_analog.launch import HostError, HostProcess
+    try:
+        return HostProcess(options.circuit, tick_us=options.tick_us)
+    except HostError as e:
+        raise RunnerError(str(e)) from e
 
 
 def check_elf(path: Path) -> str:

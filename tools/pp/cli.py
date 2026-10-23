@@ -89,6 +89,13 @@ def build_parser() -> argparse.ArgumentParser:
                         "(default: after the first output)")
     p.add_argument("--log", metavar="FILE",
                    help="keep QEMU's -d log in FILE")
+    p.add_argument("--circuit", metavar="NETLIST",
+                   help="simulate this SPICE netlist alongside, in lockstep "
+                        "(nodes named like pads are the twin's pads; the "
+                        "ADC reads them); needs ngspice")
+    p.add_argument("--tick-us", type=float, default=1000.0, metavar="US",
+                   help="with --circuit: how often input pads read the "
+                        "circuit, in virtual microseconds (0: never)")
     p.add_argument("--json", action="store_true",
                    help="print one JSON object instead of the live "
                         "transcript and summary")
@@ -122,6 +129,8 @@ def options_from_args(args: argparse.Namespace) -> RunOptions:
         input_after=args.input_after,
         extra_args=args.extra_args,
         log_path=args.log,
+        circuit=args.circuit,
+        tick_us=args.tick_us,
     )
 
 
@@ -206,6 +215,11 @@ def report(result: RunResult, err: TextIO) -> None:
         print(line, file=err)
     if result.trace is not None:
         _report_trace(result.trace, err)
+    if result.analog is not None:
+        a = result.analog
+        print(f"[pp] circuit: {a.get('samples', 0)} ADC samples, "
+              f"{a.get('ticks', 0)} ticks, {a.get('events', 0)} pad changes, "
+              f"{a.get('steps', 0)} ngspice steps", file=err)
     if result.status not in (STATUS_EXIT, STATUS_TIMEOUT) and \
             result.qemu_stderr_tail:
         print("[pp] QEMU output:", file=err)
