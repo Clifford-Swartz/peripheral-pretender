@@ -1,0 +1,99 @@
+From 358a5cc3b538d5a26b18c1759805df03c3d9627b Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 22 Oct 2026 22:20:21 -0700
+Subject: [PATCH 77/78] target/avr: take an interrupt pending across SEI after
+ the next insn
+
+When an interrupt was pending but SREG.I was clear, cpu_handle_interrupt()
+cleared the exit request and the interrupt stayed pending. SEI, or a
+write to SREG (OUT, ST), did not ask for another look, so the interrupt
+waited for the CPU loop's next exit. Under -icount that moment depends
+on what else happens (pacing, the monitor, I/O): a recorded run took
+TCB0's handler 0.54 ms late, and its replay took it at once.
+
+SEI and SREG writes now re-arm the check when an interrupt is pending,
+as cpu_interrupt() does from the CPU thread (helper_sei). SEI also ends
+the TB after the next instruction, so the interrupt comes where silicon
+takes it: after the instruction that follows SEI.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ target/avr/helper.c    | 23 +++++++++++++++++++++++
+ target/avr/helper.h    |  1 +
+ target/avr/translate.c |  7 +++++++
+ 3 files changed, 31 insertions(+)
+
+diff --git a/target/avr/helper.c b/target/avr/helper.c
+index 93553e9..5049ed5 100644
+--- a/target/avr/helper.c
++++ b/target/avr/helper.c
+@@ -256,6 +256,28 @@ void helper_break(CPUAVRState *env)
+     cpu_loop_exit(cs);
+ }
+ 
++/*
++ * SREG.I may have just been set. An interrupt that went pending while it
++ * was clear is taken at the next TB boundary, as cpu_interrupt() arranges
++ * from the CPU thread: cpu_handle_interrupt() dropped that request when it
++ * could not take the interrupt. Without this the interrupt waited for the
++ * CPU loop's next exit, which an icount run cannot repeat (pacing, the
++ * monitor and I/O move it).
++ */
++static void avr_cpu_irq_recheck(CPUAVRState *env)
++{
++    CPUState *cs = env_cpu(env);
++
++    if (env->sregI && cpu_test_interrupt(cs, CPU_INTERRUPT_HARD)) {
++        qatomic_set(&cs->neg.icount_decr.u16.high, -1);
++    }
++}
++
++void helper_sei(CPUAVRState *env)
++{
++    avr_cpu_irq_recheck(env);
++}
++
+ /* RETI on AVRxt ends the highest executing level; SREG.I is untouched */
+ void helper_reti_level(CPUAVRState *env)
+ {
+@@ -401,6 +423,7 @@ void helper_fullwr(CPUAVRState *env, uint32_t data, uint32_t addr)
+         break;
+     case REG_38_SREG:
+         cpu_set_sreg(env, data);
++        avr_cpu_irq_recheck(env);
+         break;
+     }
+ }
+diff --git a/target/avr/helper.h b/target/avr/helper.h
+index 0b51373..1fc6edb 100644
+--- a/target/avr/helper.h
++++ b/target/avr/helper.h
+@@ -20,6 +20,7 @@
+ 
+ DEF_HELPER_1(wdr, void, env)
+ DEF_HELPER_1(reti_level, void, env)
++DEF_HELPER_1(sei, void, env)
+ DEF_HELPER_1(debug, noreturn, env)
+ DEF_HELPER_1(break, noreturn, env)
+ DEF_HELPER_1(sleep, noreturn, env)
+diff --git a/target/avr/translate.c b/target/avr/translate.c
+index 74aef41..0beb7d8 100644
+--- a/target/avr/translate.c
++++ b/target/avr/translate.c
+@@ -2496,6 +2496,13 @@ static bool trans_BSET(DisasContext *ctx, arg_BSET *a)
+         break;
+     case 0x07:
+         tcg_gen_movi_tl(cpu_If, 0x01);
++        /*
++         * SEI: a pending interrupt is taken after the next instruction.
++         * The TB ends there and the next one checks (helper_sei).
++         */
++        gen_helper_sei(tcg_env);
++        ctx->base.max_insns = MIN(ctx->base.max_insns,
++                                  ctx->base.num_insns + 1);
+         break;
+     }
+ 
+-- 
+2.53.0.windows.2
+

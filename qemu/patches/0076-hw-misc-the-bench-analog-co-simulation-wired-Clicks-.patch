@@ -1,0 +1,3229 @@
+From 7bbd7919d8ac3b807952f64d7f0321e66e5a8eef Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 22 Oct 2026 22:19:40 -0700
+Subject: [PATCH 76/78] hw/misc: the bench: analog co-simulation, wired Clicks,
+ event recorder
+
+Three links from a board's twin to the Peripheral Pretender bench, on
+the PIC32CM boards and the PyKit (curiosity-circuitpython):
+
+- pp-cosim (machine "cosim=<chardev>"): a circuit simulated outside
+  QEMU, in lockstep. It sees every pad's electrical state (high, low,
+  pulled, floating: mchp_port_observe(), mchp_port_pad_state()) and
+  drives the input pads wired to it and the ADC inputs; the U2247 ADC
+  reads an AIN the circuit drives at the end of its sampling phase.
+- Wired Clicks (machine "wired=name=click:role.PAD:..."): a Click on any
+  pads rather than a header. Its SPI and I2C reach every SERCOM that
+  can serve those pads, while the pads are muxed to it (pp-bus-tap); its
+  inputs listen to the pads beside the board's own parts
+  (mchp_port_pad_listen()).
+- pp-trace (machine "trace=<chardev>"): an event recorder. Pad levels
+  (the PORT reports each change, pp_trace_pad()), SERCOM UART, SPI and
+  I2C traffic, NVIC pend, entry and return (an observer hook in
+  armv7m_nvic.c) and resets, stamped with QEMU_CLOCK_VIRTUAL, as 16-byte
+  records. It knows no device: the SoC glue registers the pad source
+  and the interrupt observer, then attaches it. The reader schedules
+  inputs ("at <t> <id> set <path> <prop> <value>", "at <t> <id>
+  reset"), applied on a virtual timer in the order they came and
+  reported with the instant each took effect, and paces a deterministic
+  run (-icount shift=4,sleep=off) to real time by pausing the VM.
+- Injected faults and input: PORT "pX-short" (pads shorted to VDD or
+  GND over every driver), SERCOM "fault-nack" (I2C addresses that
+  NACK), "fault-miso" (what the SPI host reads) and "rx-inject"
+  (characters into the receiver, at a time the recorder knows).
+
+qtest pic32cm-click-test: the faults and rx-inject.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/adc/mchp_adc_u2247.c          |  32 +-
+ hw/arm/Kconfig                   |   1 +
+ hw/arm/curiosity_circuitpython.c |  23 ++
+ hw/arm/pic32cm_jh01_cpro.c       |  72 ++++
+ hw/arm/pic32cm_mc00_cpro.c       |  72 ++++
+ hw/arm/pic32cm_soc.c             | 221 +++++++++++
+ hw/char/Kconfig                  |   1 +
+ hw/char/mchp_sercom.c            | 171 ++++++++-
+ hw/gpio/Kconfig                  |   1 +
+ hw/gpio/mchp_port.c              | 222 ++++++++++-
+ hw/intc/armv7m_nvic.c            |  17 +
+ hw/misc/Kconfig                  |   7 +
+ hw/misc/meson.build              |   3 +
+ hw/misc/mikrobus.c               |  47 ++-
+ hw/misc/pp_bus_tap.c             | 228 +++++++++++
+ hw/misc/pp_cosim.c               | 414 ++++++++++++++++++++
+ hw/misc/pp_trace.c               | 630 +++++++++++++++++++++++++++++++
+ include/hw/arm/pic32cm_soc.h     |  23 ++
+ include/hw/gpio/mchp_port.h      |  43 +++
+ include/hw/intc/armv7m_nvic.h    |  17 +
+ include/hw/misc/mikrobus.h       |  11 +
+ include/hw/misc/pp_bus_tap.h     |  31 ++
+ include/hw/misc/pp_cosim.h       |  39 ++
+ include/hw/misc/pp_trace.h       | 106 ++++++
+ tests/qtest/pic32cm-click-test.c |  70 ++++
+ 25 files changed, 2476 insertions(+), 26 deletions(-)
+ create mode 100644 hw/misc/pp_bus_tap.c
+ create mode 100644 hw/misc/pp_cosim.c
+ create mode 100644 hw/misc/pp_trace.c
+ create mode 100644 include/hw/misc/pp_bus_tap.h
+ create mode 100644 include/hw/misc/pp_cosim.h
+ create mode 100644 include/hw/misc/pp_trace.h
+
+diff --git a/hw/adc/mchp_adc_u2247.c b/hw/adc/mchp_adc_u2247.c
+index cf8496e..0ca0939 100644
+--- a/hw/adc/mchp_adc_u2247.c
++++ b/hw/adc/mchp_adc_u2247.c
+@@ -19,7 +19,10 @@
+  *   silicon, APP=acprobe: 0xFFA), else the "ain" property
+  *   ("channel=millivolts,..."; the board sets the pins' voltages; unset
+  *   inputs read "ain-default", 0 mV); in differential mode MUXNEG is an
+- *   AIN or GND. "ain-pads" (set by the SoC) names each AIN's PORT pin;
++ *   AIN or GND. "ain-pads" (set by the SoC) names each AIN's PORT pin.
++ *   A circuit simulated alongside (pp-cosim) takes precedence over all
++ *   of these for the AINs it drives, read at the end of the sampling
++ *   phase (the resolution's bit cycles before the result);
+  * - INTREF: the SUPC's VREF (VREF.SEL: 1.024, 2.048 or 4.096 V); it only
+  *   reaches the input with VREF.VREFOE set, and without it a conversion
+  *   of INTREF never completes (SWTRIG.START stays set, no RESRDY);
+@@ -72,6 +75,7 @@
+ #include "hw/gpio/mchp_port.h"
+ #include "hw/misc/mchp_sysctrl.h"
+ #include "hw/misc/mchp_dac.h"
++#include "hw/misc/pp_cosim.h"
+ #include "hw/mchp/gen/adc_u2247.h"
+ #include "migration/vmstate.h"
+ 
+@@ -254,6 +258,9 @@ static int32_t adc_dac_vout_mv(MchpAdcU2247State *s, unsigned mux)
+     return dac ? mchp_dac_u2214_vout_mv(dac) : -1;
+ }
+ 
++static Clock *adc_gclk(MchpAdcU2247State *s);
++static uint64_t adc_div(MchpAdcU2247State *s);
++
+ static int32_t adc_input_mv(MchpAdcU2247State *s, unsigned mux)
+ {
+     int32_t vout = adc_dac_vout_mv(s, mux);
+@@ -288,6 +295,25 @@ static int32_t adc_input_mv(MchpAdcU2247State *s, unsigned mux)
+     }
+ }
+ 
++/*
++ * Input @mux in microvolts, sampled @bits CLK_ADC cycles before now: from
++ * the circuit on the board when one is simulated alongside
++ */
++static int64_t adc_input_uv(MchpAdcU2247State *s, unsigned mux,
++                            unsigned bits)
++{
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    int64_t uv;
++
++    if (mux < ADC_NAIN &&
++        pp_cosim_sample(OBJECT(s), mux,
++                        now - clock_ticks_to_ns(adc_gclk(s),
++                                                bits * adc_div(s)), &uv)) {
++        return uv;
++    }
++    return adc_input_mv(s, mux) * 1000LL;
++}
++
+ /* The reference in microvolts (INTVCC0 is a non-integer ratio) */
+ static int64_t adc_ref_uv(MchpAdcU2247State *s)
+ {
+@@ -358,13 +384,13 @@ static void adc_result(MchpAdcU2247State *s, unsigned mux)
+     unsigned adj = FIELD_EX32(avg, MCHP_ADC_AVGCTRL, ADJRES);
+     bool diff = FIELD_EX32(ctrlc, MCHP_ADC_CTRLC, DIFFMODE), win;
+     int64_t full = (1 << bits) - 1, vref = adc_ref_uv(s);
+-    int64_t uv = adc_input_mv(s, mux) * 1000LL;
++    int64_t uv = adc_input_uv(s, mux, bits);
+     int64_t code;
+ 
+     if (diff) {
+         unsigned neg = FIELD_EX32(in, MCHP_ADC_INPUTCTRL, MUXNEG);
+ 
+-        uv -= neg == MUXNEG_GND ? 0 : adc_input_mv(s, neg) * 1000LL;
++        uv -= neg == MUXNEG_GND ? 0 : adc_input_uv(s, neg, bits);
+         code = vref ? uv * (full / 2) / vref : 0;
+         code = MIN(MAX(code, -full / 2 - 1), full / 2);
+     } else {
+diff --git a/hw/arm/Kconfig b/hw/arm/Kconfig
+index 7866fbe..d0d9e51 100644
+--- a/hw/arm/Kconfig
++++ b/hw/arm/Kconfig
+@@ -719,6 +719,7 @@ config PIC32CM_SOC
+     select MCHP_SERCOM
+     select MIKROBUS
+     select OR_IRQ
++    select PP_COSIM
+     select SPLIT_IRQ
+     select UNIMP
+ 
+diff --git a/hw/arm/curiosity_circuitpython.c b/hw/arm/curiosity_circuitpython.c
+index ed72cbc..30bbe4a 100644
+--- a/hw/arm/curiosity_circuitpython.c
++++ b/hw/arm/curiosity_circuitpython.c
+@@ -117,6 +117,7 @@ struct CuriosityCpState {
+     DeviceState *neopixels;
+     bool bno085;                    /* breakout on QWIIC */
+     Chardev *ble;                   /* the RNBD451, or the user's chardev */
++    char *trace;                    /* chardev id of the event recorder */
+ };
+ 
+ /*
+@@ -299,6 +300,9 @@ static void curiosity_cp_init(MachineState *machine)
+                               qemu_allocate_irq(rnbd451_reset_pin, s->ble, 0),
+                               1, false);
+     }
++    if (s->trace) {
++        pic32cm_soc_trace(&s->soc, OBJECT(machine), s->trace);
++    }
+ 
+     armv7m_load_kernel(s->soc.armv7m.cpu, machine->kernel_filename,
+                        s->soc.dev->flash_base, s->soc.dev->flash_size);
+@@ -333,6 +337,20 @@ static void curiosity_cp_set_bno085(Object *obj, bool value, Error **errp)
+     CURIOSITY_CP_MACHINE(obj)->bno085 = value;
+ }
+ 
++static char *curiosity_cp_get_trace(Object *obj, Error **errp)
++{
++    return g_strdup(CURIOSITY_CP_MACHINE(obj)->trace);
++}
++
++static void curiosity_cp_set_trace(Object *obj, const char *value,
++                                   Error **errp)
++{
++    CuriosityCpState *s = CURIOSITY_CP_MACHINE(obj);
++
++    g_free(s->trace);
++    s->trace = g_strdup(value);
++}
++
+ static void curiosity_cp_class_init(ObjectClass *oc, const void *data)
+ {
+     MachineClass *mc = MACHINE_CLASS(oc);
+@@ -360,6 +378,11 @@ static void curiosity_cp_class_init(ObjectClass *oc, const void *data)
+     object_class_property_set_description(oc, "console",
+         "What serial0 is: usb (the USB CDC console, default) or debug (the "
+         "debug UART on SERCOM3)");
++    object_class_property_add_str(oc, "trace", curiosity_cp_get_trace,
++                                  curiosity_cp_set_trace);
++    object_class_property_set_description(oc, "trace",
++        "Chardev id of the event recorder: pads, SERCOM traffic and "
++        "exceptions in virtual time, for a timeline");
+ }
+ 
+ static const TypeInfo curiosity_cp_types[] = {
+diff --git a/hw/arm/pic32cm_jh01_cpro.c b/hw/arm/pic32cm_jh01_cpro.c
+index b252860..58f198c 100644
+--- a/hw/arm/pic32cm_jh01_cpro.c
++++ b/hw/arm/pic32cm_jh01_cpro.c
+@@ -20,6 +20,7 @@
+ #include "hw/core/qdev-clock.h"
+ #include "hw/gpio/mchp_port.h"
+ #include "hw/misc/led.h"
++#include "hw/misc/pp_cosim.h"
+ #include "system/system.h"
+ 
+ #define CPRO_XOSC_HZ        32000000
+@@ -50,6 +51,9 @@ struct Pic32cmJh01CproState {
+     LEDState *led0;
+     qemu_irq sw0;
+     bool sw0_pressed;
++    char *cosim;                /* chardev id of a circuit simulated along */
++    char *trace;                /* chardev id of the event recorder */
++    char *wired;                /* Clicks wired to pads on the bench */
+ };
+ 
+ /* A pressed SW0 pulls PB19 low; a released one leaves the pad undriven. */
+@@ -73,6 +77,48 @@ static void pic32cm_jh01_cpro_set_sw0(Object *obj, bool value, Error **errp)
+     pic32cm_jh01_cpro_update_sw0(s);
+ }
+ 
++static char *pic32cm_jh01_cpro_get_wired(Object *obj, Error **errp)
++{
++    return g_strdup(PIC32CM_JH01_CPRO_MACHINE(obj)->wired);
++}
++
++static void pic32cm_jh01_cpro_set_wired(Object *obj, const char *value,
++                                        Error **errp)
++{
++    Pic32cmJh01CproState *s = PIC32CM_JH01_CPRO_MACHINE(obj);
++
++    g_free(s->wired);
++    s->wired = g_strdup(value);
++}
++
++static char *pic32cm_jh01_cpro_get_cosim(Object *obj, Error **errp)
++{
++    return g_strdup(PIC32CM_JH01_CPRO_MACHINE(obj)->cosim);
++}
++
++static void pic32cm_jh01_cpro_set_cosim(Object *obj, const char *value,
++                                        Error **errp)
++{
++    Pic32cmJh01CproState *s = PIC32CM_JH01_CPRO_MACHINE(obj);
++
++    g_free(s->cosim);
++    s->cosim = g_strdup(value);
++}
++
++static char *pic32cm_jh01_cpro_get_trace(Object *obj, Error **errp)
++{
++    return g_strdup(PIC32CM_JH01_CPRO_MACHINE(obj)->trace);
++}
++
++static void pic32cm_jh01_cpro_set_trace(Object *obj, const char *value,
++                                        Error **errp)
++{
++    Pic32cmJh01CproState *s = PIC32CM_JH01_CPRO_MACHINE(obj);
++
++    g_free(s->trace);
++    s->trace = g_strdup(value);
++}
++
+ static void pic32cm_jh01_cpro_init(MachineState *machine)
+ {
+     Pic32cmJh01CproState *s = PIC32CM_JH01_CPRO_MACHINE(machine);
+@@ -103,6 +149,15 @@ static void pic32cm_jh01_cpro_init(MachineState *machine)
+     qemu_set_irq(qdev_get_gpio_in_named(port, MCHP_PORT_IN, CPRO_LED0_PIN), 1);
+     s->sw0 = qdev_get_gpio_in_named(port, MCHP_PORT_IN, CPRO_SW0_PIN);
+     pic32cm_jh01_cpro_update_sw0(s);
++    if (s->wired) {
++        pic32cm_soc_wire_clicks(&s->soc, OBJECT(machine), s->wired);
++    }
++    if (s->cosim) {
++        pp_cosim_attach(OBJECT(machine), s->cosim, port, 3300);
++    }
++    if (s->trace) {
++        pic32cm_soc_trace(&s->soc, OBJECT(machine), s->trace);
++    }
+ 
+     armv7m_load_kernel(s->soc.armv7m.cpu, machine->kernel_filename,
+                        s->soc.dev->flash_base, s->soc.dev->flash_size);
+@@ -127,6 +182,23 @@ static void pic32cm_jh01_cpro_class_init(ObjectClass *oc, const void *data)
+                                    pic32cm_jh01_cpro_set_sw0);
+     object_class_property_set_description(oc, "sw0-pressed",
+                                           "Hold user switch SW0 (PB19) down");
++    object_class_property_add_str(oc, "wired", pic32cm_jh01_cpro_get_wired,
++                                  pic32cm_jh01_cpro_set_wired);
++    object_class_property_set_description(oc, "wired",
++        "Click boards wired to pads on the bench: name=click:role.PAD:..."
++        " entries separated by /, roles an rst cs sck miso mosi pwm int "
++        "scl sda (/machine/<name>-click)");
++    object_class_property_add_str(oc, "cosim", pic32cm_jh01_cpro_get_cosim,
++                                  pic32cm_jh01_cpro_set_cosim);
++    object_class_property_set_description(oc, "cosim",
++        "Chardev id of a circuit simulated alongside, in lockstep (the "
++        "Peripheral Pretender analog host): it sees the pads and drives "
++        "the ADC inputs and the input pads wired to it");
++    object_class_property_add_str(oc, "trace", pic32cm_jh01_cpro_get_trace,
++                                  pic32cm_jh01_cpro_set_trace);
++    object_class_property_set_description(oc, "trace",
++        "Chardev id of the event recorder: pads, SERCOM traffic and "
++        "exceptions in virtual time, for a timeline");
+ }
+ 
+ static const TypeInfo pic32cm_jh01_cpro_types[] = {
+diff --git a/hw/arm/pic32cm_mc00_cpro.c b/hw/arm/pic32cm_mc00_cpro.c
+index 1cdb076..097a645 100644
+--- a/hw/arm/pic32cm_mc00_cpro.c
++++ b/hw/arm/pic32cm_mc00_cpro.c
+@@ -40,6 +40,7 @@
+ #include "hw/i2c/i2c.h"
+ #include "hw/misc/led.h"
+ #include "hw/misc/mchp_edbg_dgi.h"
++#include "hw/misc/pp_cosim.h"
+ #include "chardev/char.h"
+ #include "hw/core/qdev-properties-system.h"
+ #include "hw/ssi/ssi.h"
+@@ -108,6 +109,9 @@ struct Pic32cmMc00CproState {
+     char *ext[CPRO_EXT_NUM];
+     Chardev *ext_uart[CPRO_EXT_NUM];    /* a UART Click's module */
+     char *dgi;                  /* chardev id of the EDBG data gateway */
++    char *cosim;                /* chardev id of a circuit simulated along */
++    char *trace;                /* chardev id of the event recorder */
++    char *wired;                /* Clicks wired to pads on the bench */
+     uint32_t vcc_mv;            /* VCC_SEL: the target's VDD */
+     bool xosc32k_fitted;        /* the 32.768 kHz oscillator on XIN32 */
+ };
+@@ -259,6 +263,48 @@ static void pic32cm_mc00_cpro_set_dgi(Object *obj, const char *value,
+     s->dgi = g_strdup(value);
+ }
+ 
++static char *pic32cm_mc00_cpro_get_wired(Object *obj, Error **errp)
++{
++    return g_strdup(PIC32CM_MC00_CPRO_MACHINE(obj)->wired);
++}
++
++static void pic32cm_mc00_cpro_set_wired(Object *obj, const char *value,
++                                        Error **errp)
++{
++    Pic32cmMc00CproState *s = PIC32CM_MC00_CPRO_MACHINE(obj);
++
++    g_free(s->wired);
++    s->wired = g_strdup(value);
++}
++
++static char *pic32cm_mc00_cpro_get_cosim(Object *obj, Error **errp)
++{
++    return g_strdup(PIC32CM_MC00_CPRO_MACHINE(obj)->cosim);
++}
++
++static void pic32cm_mc00_cpro_set_cosim(Object *obj, const char *value,
++                                        Error **errp)
++{
++    Pic32cmMc00CproState *s = PIC32CM_MC00_CPRO_MACHINE(obj);
++
++    g_free(s->cosim);
++    s->cosim = g_strdup(value);
++}
++
++static char *pic32cm_mc00_cpro_get_trace(Object *obj, Error **errp)
++{
++    return g_strdup(PIC32CM_MC00_CPRO_MACHINE(obj)->trace);
++}
++
++static void pic32cm_mc00_cpro_set_trace(Object *obj, const char *value,
++                                        Error **errp)
++{
++    Pic32cmMc00CproState *s = PIC32CM_MC00_CPRO_MACHINE(obj);
++
++    g_free(s->trace);
++    s->trace = g_strdup(value);
++}
++
+ static void pic32cm_mc00_cpro_get_vcc(Object *obj, Visitor *v,
+                                       const char *name, void *opaque,
+                                       Error **errp)
+@@ -355,6 +401,15 @@ static void pic32cm_mc00_cpro_init(MachineState *machine)
+     pic32cm_mc00_cpro_add_dgi(s, port);
+     pic32cm_mc00_cpro_add_clicks(s);
+     pic32cm_mc00_cpro_update_sw0(s);
++    if (s->wired) {
++        pic32cm_soc_wire_clicks(&s->soc, OBJECT(machine), s->wired);
++    }
++    if (s->cosim) {
++        pp_cosim_attach(OBJECT(machine), s->cosim, port, s->vcc_mv);
++    }
++    if (s->trace) {
++        pic32cm_soc_trace(&s->soc, OBJECT(machine), s->trace);
++    }
+ 
+     armv7m_load_kernel(s->soc.armv7m.cpu, machine->kernel_filename,
+                        s->soc.dev->flash_base, s->soc.dev->flash_size);
+@@ -396,6 +451,23 @@ static void pic32cm_mc00_cpro_class_init(ObjectClass *oc, const void *data)
+     object_class_property_set_description(oc, "dgi",
+         "Chardev id for the EDBG data gateway's host side (the DGI "
+         "command protocol, as on the debugger's USB endpoints)");
++    object_class_property_add_str(oc, "wired", pic32cm_mc00_cpro_get_wired,
++                                  pic32cm_mc00_cpro_set_wired);
++    object_class_property_set_description(oc, "wired",
++        "Click boards wired to pads on the bench: name=click:role.PAD:..."
++        " entries separated by /, roles an rst cs sck miso mosi pwm int "
++        "scl sda (/machine/<name>-click)");
++    object_class_property_add_str(oc, "cosim", pic32cm_mc00_cpro_get_cosim,
++                                  pic32cm_mc00_cpro_set_cosim);
++    object_class_property_set_description(oc, "cosim",
++        "Chardev id of a circuit simulated alongside, in lockstep (the "
++        "Peripheral Pretender analog host): it sees the pads and drives "
++        "the ADC inputs and the input pads wired to it");
++    object_class_property_add_str(oc, "trace", pic32cm_mc00_cpro_get_trace,
++                                  pic32cm_mc00_cpro_set_trace);
++    object_class_property_set_description(oc, "trace",
++        "Chardev id of the event recorder: pads, SERCOM traffic and "
++        "exceptions in virtual time, for a timeline");
+     object_class_property_add_str(oc, "ext1", pic32cm_mc00_cpro_get_ext1,
+                                   pic32cm_mc00_cpro_set_ext1);
+     object_class_property_add_str(oc, "ext2", pic32cm_mc00_cpro_get_ext2,
+diff --git a/hw/arm/pic32cm_soc.c b/hw/arm/pic32cm_soc.c
+index 544c9dc..d6e9e4a 100644
+--- a/hw/arm/pic32cm_soc.c
++++ b/hw/arm/pic32cm_soc.c
+@@ -24,6 +24,11 @@
+ #include "hw/core/qdev-properties.h"
+ #include "hw/core/qdev-properties-system.h"
+ #include "hw/core/split-irq.h"
++#include "hw/intc/armv7m_nvic.h"
++#include "hw/misc/mikrobus.h"
++#include "hw/misc/pp_bus_tap.h"
++#include "hw/misc/pp_trace.h"
++#include "qemu/error-report.h"
+ #include "hw/gpio/mchp_port.h"
+ #include "hw/misc/mchp_ccl.h"
+ #include "hw/misc/mchp_dac.h"
+@@ -166,6 +171,222 @@ DeviceState *pic32cm_soc_periph(Pic32cmSocState *s, const char *name)
+     return NULL;
+ }
+ 
++/* The PORT pin of pad @pad ("PA05"), or -1 */
++static int pic32cm_pad_pin(Pic32cmSocState *s, const char *pad)
++{
++    for (unsigned i = 0; i < s->dev->nsignals; i++) {
++        const MchpSignalInfo *sig = &s->dev->signals[i];
++
++        if (sig->pad && sig->pin >= 0 && !strcmp(sig->pad, pad)) {
++            return sig->pin;
++        }
++    }
++    return -1;
++}
++
++/* SERCOM @inst's PAD index on @pin (*pmux: its function), or -1 */
++static int pic32cm_sercom_pad(Pic32cmSocState *s, const char *inst, int pin,
++                              int *pmux)
++{
++    for (unsigned i = 0; i < s->dev->nsignals && pin >= 0; i++) {
++        const MchpSignalInfo *sig = &s->dev->signals[i];
++
++        if (sig->pin == pin && sig->pmux >= 0 && sig->index >= 0 &&
++            !strcmp(sig->instance, inst) && !strcmp(sig->group, "PAD")) {
++            *pmux = sig->pmux;
++            return sig->index;
++        }
++    }
++    return -1;
++}
++
++/*
++ * A SERCOM can be the SPI host on these pads: DO (MOSI) and SCK one of
++ * DOPO's pairs (PAD0/1, PAD2/3, PAD3/1, PAD0/3), DI (MISO, -1: unwired)
++ * another of its pads. *pmux: SCK's function.
++ */
++static bool pic32cm_spi_fits(Pic32cmSocState *s, const char *inst, int sck,
++                             int mosi, int miso, int *pmux)
++{
++    static const int dopo[][2] = { { 0, 1 }, { 2, 3 }, { 3, 1 }, { 0, 3 } };
++    int f, so = pic32cm_sercom_pad(s, inst, mosi, &f);
++    int sc = pic32cm_sercom_pad(s, inst, sck, pmux);
++    int si = miso < 0 ? -2 : pic32cm_sercom_pad(s, inst, miso, &f);
++
++    if (so < 0 || sc < 0 || si == -1 || si == so || si == sc) {
++        return false;
++    }
++    for (unsigned i = 0; i < ARRAY_SIZE(dopo); i++) {
++        if (dopo[i][0] == so && dopo[i][1] == sc) {
++            return true;
++        }
++    }
++    return false;
++}
++
++void pic32cm_soc_wire_click(Pic32cmSocState *s, Object *machine,
++                            const char *name, const char *spec)
++{
++    static const char *const roles[] = {
++        "rst", "pwm", "int", "cs", "an", "sck", "miso", "mosi", "scl", "sda"
++    };
++    enum { R_AN = 4, R_SCK, R_MISO, R_MOSI, R_SCL, R_SDA, R_NUM };
++    g_auto(GStrv) items = g_strsplit(spec, ":", -1);
++    DeviceState *port = pic32cm_soc_periph(s, "PORT");
++    int pin[R_NUM];
++    char *click = items[0];
++    uint8_t addr = 0;
++    int bus = click ? mikrobus_click_bus(click, &addr) : MIKROBUS_BUS_NONE;
++    g_autofree char *hub_name = g_strdup_printf("%s-bus", name);
++    DeviceState *hub;
++    MikrobusSocket sock = {
++        .name = name, .port = port, .port_in = MCHP_PORT_IN,
++        .port_pad = MCHP_PORT_PAD, .pad_listen = mchp_port_pad_listen,
++        .an_pin = -1,
++    };
++    unsigned ntap = 0, nan = 0;
++
++    if (bus == MIKROBUS_BUS_NONE || bus == MIKROBUS_BUS_UART) {
++        warn_report("%s: %s cannot be wired on the bench%s", name,
++                    click ? click : "?",
++                    bus == MIKROBUS_BUS_UART ?
++                    " (a UART Click plugs into a mikroBUS header)" : "");
++        return;
++    }
++    for (unsigned r = 0; r < R_NUM; r++) {
++        pin[r] = -1;
++    }
++    for (unsigned i = 1; items[i]; i++) {
++        g_auto(GStrv) kv = g_strsplit(items[i], ".", 2);
++        int p = kv[0] && kv[1] ? pic32cm_pad_pin(s, kv[1]) : -1;
++        unsigned r = 0;
++
++        while (r < R_NUM && (!kv[0] || strcmp(roles[r], kv[0]))) {
++            r++;
++        }
++        if (r == R_NUM || p < 0) {
++            warn_report("%s: no pin %s here", name, items[i]);
++            continue;
++        }
++        pin[r] = p;
++    }
++    for (unsigned r = 0; r < MIKROBUS_ROLES; r++) {
++        sock.pins[r] = pin[r];
++    }
++    /* AN: a digital pin too, and the ADC inputs on its pad */
++    sock.an_pin = pin[R_AN];
++    for (unsigned i = 0; i < s->dev->nsignals && pin[R_AN] >= 0 &&
++         nan < MIKROBUS_AN_ADCS; i++) {
++        const MchpSignalInfo *sig = &s->dev->signals[i];
++        DeviceState *adc = pic32cm_soc_periph(s, sig->instance);
++
++        if (sig->pin == pin[R_AN] && g_str_has_prefix(sig->instance, "ADC") &&
++            !strcmp(sig->group, "AIN") && sig->index >= 0 && adc) {
++            sock.an[nan++] = (MikrobusAnalog) { OBJECT(adc), sig->index };
++        }
++    }
++    /* The private buses, and a tap on each SERCOM that fits the pads */
++    hub = qdev_new(TYPE_PP_BUS_HUB);
++    object_property_add_child(machine, hub_name, OBJECT(hub));
++    qdev_realize_and_unref(hub, NULL, &error_fatal);
++    sock.spi = pp_bus_hub_spi(hub);
++    sock.i2c = pp_bus_hub_i2c(hub);
++    for (unsigned i = 0; i < s->dev->ninstances; i++) {
++        const char *inst = s->dev->instances[i].name;
++        g_autofree char *lower = g_ascii_strdown(inst, -1);
++        g_autofree char *tap_name = g_strdup_printf("%s-tap%u", name, ntap);
++        DeviceState *sercom = s->periph[i], *tap;
++        BusState *b;
++        int pmux;
++
++        if (!sercom || !g_str_has_prefix(inst, "SERCOM")) {
++            continue;
++        }
++        if (bus == MIKROBUS_BUS_SPI &&
++            pic32cm_spi_fits(s, inst, pin[R_SCK], pin[R_MOSI], pin[R_MISO],
++                             &pmux)) {
++            g_autofree char *bname = g_strdup_printf("%s.spi", lower);
++
++            b = qdev_get_child_bus(sercom, bname);
++            if (!b) {
++                continue;
++            }
++            tap = qdev_new(TYPE_PP_SSI_TAP);
++            qdev_prop_set_uint32(tap, "pin", pin[R_SCK]);
++            qdev_prop_set_int32(tap, "pmux", pmux);
++            object_property_set_link(OBJECT(tap), "port", OBJECT(port),
++                                     &error_fatal);
++            object_property_set_link(OBJECT(tap), "hub", OBJECT(hub),
++                                     &error_fatal);
++            object_property_add_child(machine, tap_name, OBJECT(tap));
++            ssi_realize_and_unref(tap, (SSIBus *)b, &error_fatal);
++            ntap++;
++        } else if (bus == MIKROBUS_BUS_I2C &&
++                   pic32cm_sercom_pad(s, inst, pin[R_SDA], &pmux) == 0 &&
++                   pic32cm_sercom_pad(s, inst, pin[R_SCL], &pmux) == 1) {
++            g_autofree char *bname = g_strdup_printf("%s.i2c", lower);
++
++            b = qdev_get_child_bus(sercom, bname);
++            if (!b) {
++                continue;
++            }
++            pic32cm_sercom_pad(s, inst, pin[R_SDA], &pmux);
++            tap = qdev_new(TYPE_PP_I2C_TAP);
++            qdev_prop_set_uint8(tap, "address", addr);
++            qdev_prop_set_uint32(tap, "pin", pin[R_SDA]);
++            qdev_prop_set_int32(tap, "pmux", pmux);
++            object_property_set_link(OBJECT(tap), "port", OBJECT(port),
++                                     &error_fatal);
++            object_property_set_link(OBJECT(tap), "hub", OBJECT(hub),
++                                     &error_fatal);
++            object_property_add_child(machine, tap_name, OBJECT(tap));
++            i2c_slave_realize_and_unref(I2C_SLAVE(tap), I2C_BUS(b),
++                                        &error_fatal);
++            ntap++;
++        }
++    }
++    if ((bus == MIKROBUS_BUS_SPI || bus == MIKROBUS_BUS_I2C) && !ntap) {
++        warn_report("%s: no SERCOM can drive %s's %s on those pads", name,
++                    click, bus == MIKROBUS_BUS_SPI ? "SPI" : "I2C");
++    }
++    mikrobus_plug(machine, &sock, &click, 1);
++}
++
++void pic32cm_soc_wire_clicks(Pic32cmSocState *s, Object *machine,
++                             const char *wired)
++{
++    g_auto(GStrv) entries = g_strsplit(wired ? wired : "", "/", -1);
++
++    for (unsigned i = 0; entries[i]; i++) {
++        g_auto(GStrv) kv = g_strsplit(entries[i], "=", 2);
++
++        if (kv[0] && kv[1] && *kv[0]) {
++            pic32cm_soc_wire_click(s, machine, kv[0], kv[1]);
++        }
++    }
++}
++
++/* The NVIC's pends, entries and returns, as the recorder's events */
++static void pic32cm_soc_trace_irq(void *opaque, int irq, int what)
++{
++    static const PpTraceKind kind[] = {
++        [ARMV7M_NVIC_OBSERVE_PEND] = PP_TRACE_IRQ_PEND,
++        [ARMV7M_NVIC_OBSERVE_ENTER] = PP_TRACE_IRQ_ENTER,
++        [ARMV7M_NVIC_OBSERVE_EXIT] = PP_TRACE_IRQ_EXIT,
++    };
++
++    pp_trace_event(kind[what], PP_TRACE_SRC_NVIC, irq, 0);
++}
++
++void pic32cm_soc_trace(Pic32cmSocState *s, Object *machine,
++                       const char *chardev)
++{
++    /* The pads first: a reader already there gets them in the HELLO */
++    mchp_port_trace(pic32cm_soc_periph(s, "PORT"));
++    armv7m_nvic_observe(&s->armv7m.nvic, pic32cm_soc_trace_irq, NULL);
++    pp_trace_attach(machine, chardev, 0);
++}
++
+ /* A peripheral every supported device has */
+ static DeviceState *pic32cm_periph(Pic32cmSocState *s, const char *name)
+ {
+diff --git a/hw/char/Kconfig b/hw/char/Kconfig
+index a6fb5a7..1faa7fa 100644
+--- a/hw/char/Kconfig
++++ b/hw/char/Kconfig
+@@ -90,6 +90,7 @@ config MCHP_SERCOM
+     bool
+     select I2C
+     select MCHP_REGFILE
++    select PP_TRACE
+     select SSI
+ 
+ config SIFIVE_UART
+diff --git a/hw/char/mchp_sercom.c b/hw/char/mchp_sercom.c
+index aa5ce40..ca4372e 100644
+--- a/hw/char/mchp_sercom.c
++++ b/hw/char/mchp_sercom.c
+@@ -26,6 +26,15 @@
+  * the stop (silicon). Transfers complete at once; bus timing, arbitration,
+  * timeouts, 10-bit and high-speed addressing are not modelled.
+  *
++ * Every character and I2C condition goes to the event recorder
++ * (pp_trace_event()). "rx-inject" (hex characters) feeds the USART's
++ * receiver as the chardev would, as fast as it takes them: input whose
++ * timing the recorder controls, for runs that replay exactly. Injected
++ * faults, set at run time and not migrated:
++ * "fault-nack" (hex 7-bit I2C addresses, comma separated) NACKs those
++ * addresses whatever is on the bus, "fault-miso" (a hex character, empty
++ * for none) is what the SPI host reads whatever the device sends.
++ *
+  * Register semantics (W1C, set/clear aliases, enable protection, views,
+  * SWRST) come from the generated tables through mchp-regblock.
+  *
+@@ -35,6 +44,7 @@
+ #include "qemu/osdep.h"
+ #include "qemu/log.h"
+ #include "qemu/timer.h"
++#include "qapi/error.h"
+ #include "chardev/char-fe.h"
+ #include "hw/misc/mchp_edbg_dgi.h"
+ #include "hw/char/mchp_sercom.h"
+@@ -42,6 +52,7 @@
+ #include "hw/core/qdev-properties.h"
+ #include "hw/core/qdev-properties-system.h"
+ #include "hw/i2c/i2c.h"
++#include "hw/misc/pp_trace.h"
+ #include "hw/mchp/gen/sercom_u2201.h"
+ #include "hw/ssi/ssi.h"
+ #include "migration/vmstate.h"
+@@ -112,6 +123,13 @@ struct MchpSercomState {
+     uint8_t i2c_rx;             /* the byte DATA reads */
+     bool i2c_sb_unseen;         /* SB of a smart-mode next byte, unread */
+     QEMUTimer *i2c_stop_timer;
++
++    unsigned trace_src;         /* this SERCOM in the event recorder */
++    GByteArray *inject;         /* "rx-inject" characters not taken yet */
++    /* Injected faults ("fault-nack", "fault-miso"): not migrated */
++    char *fault_nack;
++    uint32_t fault_nack_map[128 / 32];
++    int fault_miso;             /* -1: none */
+ };
+ 
+ static uint32_t mchp_sercom_reg(MchpSercomState *s, hwaddr offset,
+@@ -327,6 +345,7 @@ static gboolean mchp_sercom_tx_send(void *do_not_use, GIOCondition cond,
+         /* No backend that could ever take it: the character is lost. */
+     }
+     trace_mchp_sercom_tx(MCHP_REGBLOCK(s)->name, ch);
++    pp_trace_event(PP_TRACE_UART_TX, s->trace_src, ch, 0);
+ 
+     frame_ns = s->pace_tx ? mchp_sercom_frame_ns(s) : 0;
+     if (frame_ns) {
+@@ -381,6 +400,7 @@ static void mchp_sercom_receive(void *opaque, const uint8_t *buf, int size)
+ 
+     for (int i = 0; i < size && s->rx_count < MCHP_SERCOM_RX_DEPTH; i++) {
+         trace_mchp_sercom_rx(MCHP_REGBLOCK(s)->name, buf[i]);
++        pp_trace_event(PP_TRACE_UART_RX, s->trace_src, buf[i], 0);
+         s->rx_buf[s->rx_count++] = buf[i] & mask;
+     }
+     /* Start-of-frame detection flags every start bit (DS 30.6.3.7) */
+@@ -393,6 +413,19 @@ static void mchp_sercom_receive(void *opaque, const uint8_t *buf, int size)
+     mchp_sercom_update(s);
+ }
+ 
++/* Give the receiver the injected characters it can take */
++static void mchp_sercom_drain(MchpSercomState *s)
++{
++    int n = MIN(s->inject->len, mchp_sercom_can_receive(s));
++
++    if (n > 0) {
++        g_autofree uint8_t *chars = g_memdup2(s->inject->data, n);
++
++        g_byte_array_remove_range(s->inject, 0, n);
++        mchp_sercom_receive(s, chars, n);
++    }
++}
++
+ /* Reading DATA pops the receive buffer, unless a debugger reads it. */
+ static uint32_t mchp_sercom_data_read(MchpSercomState *s, bool side_effects)
+ {
+@@ -406,6 +439,7 @@ static uint32_t mchp_sercom_data_read(MchpSercomState *s, bool side_effects)
+         s->rx_buf[0] = s->rx_buf[1];
+         s->rx_count--;
+         mchp_sercom_update(s);
++        mchp_sercom_drain(s);
+         qemu_chr_fe_accept_input(&s->chr);
+     }
+     return data;
+@@ -457,8 +491,12 @@ static void mchp_sercom_spi_write(MchpSercomState *s, uint32_t data)
+         rx = MAKE_64BIT_MASK(0, bits);  /* nothing drives MISO */
+     } else {
+         rx = ssi_transfer(s->spi, tx) & MAKE_64BIT_MASK(0, bits);
++        if (s->fault_miso >= 0) {
++            rx = s->fault_miso & MAKE_64BIT_MASK(0, bits);
++        }
+     }
+     trace_mchp_sercom_spi(MCHP_REGBLOCK(s)->name, tx, rx);
++    pp_trace_event(PP_TRACE_SPI, s->trace_src, tx, rx);
+     if (FIELD_EX32(ctrlb, MCHP_SERCOM_SPIM_CTRLB, RXEN)) {
+         if (s->rx_count < MCHP_SERCOM_RX_DEPTH) {
+             s->rx_buf[s->rx_count++] = rx;
+@@ -521,18 +559,25 @@ static void mchp_sercom_i2c_start(MchpSercomState *s)
+     timer_del(s->i2c_stop_timer);
+     s->i2c_read = addr & 1;
+     s->i2c_active = true;
++    /* An injected fault NACKs the address before any device sees it */
++    nack = extract32(s->fault_nack_map[dev / 32], dev % 32, 1);
+     if (s->i2c_read) {
+-        nack = i2c_start_recv(s->i2c, dev) != 0;
++        nack = nack || i2c_start_recv(s->i2c, dev) != 0;
+         if (!nack) {
+             s->i2c_rx = i2c_recv(s->i2c);
+         }
+         mchp_sercom_i2c_flag(s, nack ? I2CM(INTFLAG, MB) : I2CM(INTFLAG, SB));
+     } else {
+-        nack = i2c_start_send(s->i2c, dev) != 0;
++        nack = nack || i2c_start_send(s->i2c, dev) != 0;
+         mchp_sercom_i2c_flag(s, I2CM(INTFLAG, MB));
+     }
+     trace_mchp_sercom_i2c_start(MCHP_REGBLOCK(s)->name, dev, s->i2c_read,
+                                 nack);
++    pp_trace_event(PP_TRACE_I2C_START, s->trace_src, dev,
++                   s->i2c_read | nack << 1);
++    if (s->i2c_read && !nack) {
++        pp_trace_event(PP_TRACE_I2C_BYTE, s->trace_src, s->i2c_rx, 2);
++    }
+     mchp_sercom_i2c_status(s, I2C_BUS_OWNER, true, nack);
+ }
+ 
+@@ -545,6 +590,7 @@ static void mchp_sercom_i2c_write(MchpSercomState *s, uint8_t data)
+     }
+     nack = i2c_send(s->i2c, data) != 0;
+     trace_mchp_sercom_i2c_byte(MCHP_REGBLOCK(s)->name, data, nack);
++    pp_trace_event(PP_TRACE_I2C_BYTE, s->trace_src, data, nack);
+     mchp_sercom_i2c_flag(s, I2CM(INTFLAG, MB));
+     mchp_sercom_i2c_status(s, I2C_BUS_OWNER, true, nack);
+ }
+@@ -554,6 +600,7 @@ static void mchp_sercom_i2c_next(MchpSercomState *s)
+ {
+     s->i2c_rx = i2c_recv(s->i2c);
+     trace_mchp_sercom_i2c_byte(MCHP_REGBLOCK(s)->name, s->i2c_rx, 0);
++    pp_trace_event(PP_TRACE_I2C_BYTE, s->trace_src, s->i2c_rx, 2);
+     mchp_sercom_i2c_flag(s, I2CM(INTFLAG, SB));
+     mchp_sercom_i2c_status(s, I2C_BUS_OWNER, true, -1);
+ }
+@@ -578,6 +625,7 @@ static void mchp_sercom_i2c_command(MchpSercomState *s, unsigned cmd)
+     }
+     if (s->i2c_read && nack && cmd != 2) {
+         i2c_nack(s->i2c);
++        pp_trace_event(PP_TRACE_I2C_HOST_NACK, s->trace_src, 0, 0);
+     }
+     switch (cmd) {
+     case 1:
+@@ -590,6 +638,7 @@ static void mchp_sercom_i2c_command(MchpSercomState *s, unsigned cmd)
+         break;
+     case 3:
+         i2c_end_transfer(s->i2c);
++        pp_trace_event(PP_TRACE_I2C_STOP, s->trace_src, 0, 0);
+         s->i2c_active = false;
+         mchp_sercom_i2c_flag(s, 0);
+         mchp_sercom_i2c_status(s, I2C_BUS_OWNER, false, -1);
+@@ -611,6 +660,7 @@ static uint32_t mchp_sercom_i2c_read(MchpSercomState *s, bool side_effects)
+             if (FIELD_EX32(mchp_sercom_reg(s, A_CTRLB, 4),
+                            MCHP_SERCOM_I2CM_CTRLB, ACKACT)) {
+                 i2c_nack(s->i2c);
++                pp_trace_event(PP_TRACE_I2C_HOST_NACK, s->trace_src, 0, 0);
+             } else {
+                 mchp_sercom_i2c_next(s);
+                 s->i2c_sb_unseen = true;
+@@ -673,6 +723,7 @@ static void mchp_sercom_rx_switched(MchpSercomState *s, bool was_on)
+                             mchp_sercom_reg(s, A_STATUS, 2) &
+                             ~MCHP_SERCOM_RX_ERRORS);
+     } else if (!was_on && on) {
++        mchp_sercom_drain(s);
+         qemu_chr_fe_accept_input(&s->chr);
+     }
+ }
+@@ -837,6 +888,7 @@ static bool mchp_sercom_realize(MchpRegBlock *rb, Error **errp)
+     g_autofree char *i2c = g_strdup_printf("%s.i2c", rb->name);
+     g_autofree char *spi = g_strdup_printf("%s.spi", rb->name);
+ 
++    s->trace_src = pp_trace_source(rb->name);
+     s->i2c = i2c_init_bus(DEVICE(s), i2c);
+     s->spi = ssi_create_bus(DEVICE(s), spi);
+     s->frame_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mchp_sercom_frame_end,
+@@ -857,6 +909,111 @@ static void mchp_sercom_finalize(Object *obj)
+     timer_free(s->frame_timer);
+     timer_free(s->resume_timer);
+     timer_free(s->i2c_stop_timer);
++    g_free(s->fault_nack);
++    g_byte_array_unref(s->inject);
++}
++
++static void mchp_sercom_instance_init(Object *obj)
++{
++    MCHP_SERCOM(obj)->fault_miso = -1;
++    MCHP_SERCOM(obj)->inject = g_byte_array_new();
++}
++
++/* "rx-inject": characters for the receiver, in hex; reads what waits */
++static char *mchp_sercom_get_inject(Object *obj, Error **errp)
++{
++    GByteArray *inject = MCHP_SERCOM(obj)->inject;
++    GString *hex = g_string_new(NULL);
++
++    for (unsigned i = 0; i < inject->len; i++) {
++        g_string_append_printf(hex, "%02x", inject->data[i]);
++    }
++    return g_string_free(hex, false);
++}
++
++static void mchp_sercom_set_inject(Object *obj, const char *value,
++                                   Error **errp)
++{
++    MchpSercomState *s = MCHP_SERCOM(obj);
++    size_t len = strlen(value);
++    g_autoptr(GByteArray) chars = g_byte_array_new();
++
++    for (size_t i = 0; i < len; i += 2) {
++        int hi = g_ascii_xdigit_value(value[i]);
++        int lo = i + 1 < len ? g_ascii_xdigit_value(value[i + 1]) : -1;
++        uint8_t c;
++
++        if (hi < 0 || lo < 0) {
++            error_setg(errp, "rx-inject: \"%s\" is not hex characters", value);
++            return;
++        }
++        c = hi << 4 | lo;
++        g_byte_array_append(chars, &c, 1);
++    }
++    g_byte_array_append(s->inject, chars->data, chars->len);
++    mchp_sercom_drain(s);
++}
++
++/* "fault-nack": I2C addresses that NACK, "18,48" (hex, 7-bit) */
++static char *mchp_sercom_get_fault_nack(Object *obj, Error **errp)
++{
++    return g_strdup(MCHP_SERCOM(obj)->fault_nack ?: "");
++}
++
++static void mchp_sercom_set_fault_nack(Object *obj, const char *value,
++                                       Error **errp)
++{
++    MchpSercomState *s = MCHP_SERCOM(obj);
++    g_auto(GStrv) addrs = g_strsplit_set(value, ", ", -1);
++    uint32_t map[ARRAY_SIZE(s->fault_nack_map)] = { 0 };
++
++    for (char **a = addrs; *a; a++) {
++        char *end;
++        unsigned long dev;
++
++        if (!**a) {
++            continue;
++        }
++        dev = strtoul(*a, &end, 16);
++        if (*end || dev > 0x7f) {
++            error_setg(errp, "fault-nack: \"%s\" is not a 7-bit address in "
++                       "hex", *a);
++            return;
++        }
++        map[dev / 32] |= BIT(dev % 32);
++    }
++    memcpy(s->fault_nack_map, map, sizeof(map));
++    g_free(s->fault_nack);
++    s->fault_nack = g_strdup(value);
++}
++
++/* "fault-miso": the character the SPI host reads (hex), empty for none */
++static char *mchp_sercom_get_fault_miso(Object *obj, Error **errp)
++{
++    MchpSercomState *s = MCHP_SERCOM(obj);
++
++    return s->fault_miso < 0 ? g_strdup("") :
++           g_strdup_printf("%x", s->fault_miso);
++}
++
++static void mchp_sercom_set_fault_miso(Object *obj, const char *value,
++                                       Error **errp)
++{
++    MchpSercomState *s = MCHP_SERCOM(obj);
++    char *end;
++    unsigned long ch;
++
++    if (!*value) {
++        s->fault_miso = -1;
++        return;
++    }
++    ch = strtoul(value, &end, 16);
++    if (*end || ch > 0x1ff) {
++        error_setg(errp, "fault-miso: \"%s\" is not a character in hex",
++                   value);
++        return;
++    }
++    s->fault_miso = ch;
+ }
+ 
+ /* A watch of this process refers to state that loadvm replaces. */
+@@ -928,6 +1085,15 @@ static void mchp_sercom_class_init(ObjectClass *klass, const void *data)
+     c->post_write = mchp_sercom_post_write;
+     c->reset_hold = mchp_sercom_reset_hold;
+     c->log_writes = false;
++    object_class_property_add_str(klass, "fault-nack",
++                                  mchp_sercom_get_fault_nack,
++                                  mchp_sercom_set_fault_nack);
++    object_class_property_add_str(klass, "fault-miso",
++                                  mchp_sercom_get_fault_miso,
++                                  mchp_sercom_set_fault_miso);
++    object_class_property_add_str(klass, "rx-inject",
++                                  mchp_sercom_get_inject,
++                                  mchp_sercom_set_inject);
+ }
+ 
+ static const TypeInfo mchp_sercom_types[] = {
+@@ -935,6 +1101,7 @@ static const TypeInfo mchp_sercom_types[] = {
+         .name = TYPE_MCHP_SERCOM,
+         .parent = TYPE_MCHP_REGBLOCK,
+         .instance_size = sizeof(MchpSercomState),
++        .instance_init = mchp_sercom_instance_init,
+         .instance_finalize = mchp_sercom_finalize,
+         .class_init = mchp_sercom_class_init,
+     },
+diff --git a/hw/gpio/Kconfig b/hw/gpio/Kconfig
+index b8ce362..77895b5 100644
+--- a/hw/gpio/Kconfig
++++ b/hw/gpio/Kconfig
+@@ -19,6 +19,7 @@ config STM32L4X5_GPIO
+ config MCHP_PORT
+     bool
+     select MCHP_REGFILE
++    select PP_TRACE
+ 
+ config AVR8X_PORT
+     bool
+diff --git a/hw/gpio/mchp_port.c b/hw/gpio/mchp_port.c
+index 16fee7c..7e14ba8 100644
+--- a/hw/gpio/mchp_port.c
++++ b/hw/gpio/mchp_port.c
+@@ -17,8 +17,11 @@
+  * pad's driven-high and driven-low time is accounted on QEMU_CLOCK_VIRTUAL
+  * ("pa-stats"), for duty cycles. The board's bench of parts drives pads
+  * over the other external drivers ("pa-bench") and reads the pulls
+- * ("pa-pull"). Not modelled: the input sampling mode
+- * (CTRL.SAMPLING), since IN always shows the current pads.
++ * ("pa-pull"); a circuit simulated alongside (pp-cosim) observes each
++ * pad's state (mchp_port_observe()), the event recorder each pad's level
++ * (pp_trace_pad(), mchp_port_trace()). A short to VDD or GND ("pa-short", an
++ * injected fault) overrides every driver. Not modelled: the input sampling
++ * mode (CTRL.SAMPLING), since IN always shows the current pads.
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -29,6 +32,7 @@
+ #include "qapi/visitor.h"
+ #include "hw/core/irq.h"
+ #include "hw/gpio/mchp_port.h"
++#include "hw/misc/pp_trace.h"
+ #include "hw/mchp/gen/port_u2210.h"
+ #include "migration/vmstate.h"
+ #include "trace.h"
+@@ -47,6 +51,7 @@
+ OBJECT_DECLARE_SIMPLE_TYPE(MchpPortState, MCHP_PORT)
+ 
+ #define MCHP_PORT_WATCHES 16
++#define MCHP_PORT_LISTENS 64
+ 
+ struct MchpPortState {
+     MchpRegBlock parent_obj;
+@@ -93,6 +98,21 @@ struct MchpPortState {
+     int64_t acc_time[MCHP_PORT_GROUP_COUNT];
+     uint64_t high_ns[MCHP_PORT_NUM_PINS];
+     uint64_t low_ns[MCHP_PORT_NUM_PINS];
++    /* More sinks for the "pad" lines (mchp_port_pad_listen()) */
++    struct {
++        unsigned pin;
++        qemu_irq in;
++    } listen[MCHP_PORT_LISTENS];
++    unsigned nlisten;
++    /* The pad observer (mchp_port_observe()) and the states it last saw */
++    MchpPadObserveFn *obs_fn;
++    void *obs_opaque;
++    char obs_state[MCHP_PORT_NUM_PINS];
++    /* Every pad's level as last told to the event recorder */
++    uint32_t lvl_last[MCHP_PORT_GROUP_COUNT];
++    /* Pads shorted to VDD or GND ("pa-short"): a fault, not migrated */
++    uint32_t short_mask[MCHP_PORT_GROUP_COUNT];
++    uint32_t short_level[MCHP_PORT_GROUP_COUNT];
+ };
+ 
+ static MchpRegFile *mchp_port_rf(MchpPortState *s)
+@@ -208,7 +228,8 @@ static uint32_t mchp_port_pulls(MchpPortState *s, unsigned g)
+ /*
+  * Level of every pad of group @g (DS 27.6.3.2): the PORT's output, else
+  * the peripheral the pin is muxed to, else an external driver, else the
+- * pull resistor of an input (towards OUT), else 0 for a floating pad.
++ * pull resistor of an input (towards OUT), else 0 for a floating pad. A
++ * short overrides them all.
+  */
+ static uint32_t mchp_port_pads(MchpPortState *s, unsigned g)
+ {
+@@ -220,8 +241,19 @@ static uint32_t mchp_port_pads(MchpPortState *s, unsigned g)
+     uint32_t elevel = (s->ext_level[g] & ~bench) |
+                       (s->bench_level[g] & bench);
+     uint32_t pull = mchp_port_pulls(s, g) & ~ext;
++    uint32_t pads = (out & drive) | (plevel & periph) | (elevel & ext) |
++                    (out & pull);
++
++    return (pads & ~s->short_mask[g]) | s->short_level[g];
++}
+ 
+-    return (out & drive) | (plevel & periph) | (elevel & ext) | (out & pull);
++/* Pads of group @g held at a level: driven by the MCU, or shorted */
++static uint32_t mchp_port_driven(MchpPortState *s, unsigned g)
++{
++    uint32_t plevel;
++
++    return mchp_port_drive_mask(s, g) | mchp_port_periph(s, g, &plevel) |
++           s->short_mask[g];
+ }
+ 
+ /* Add the time since the last call to the high/low time of driven pads */
+@@ -244,6 +276,50 @@ static void mchp_port_account(MchpPortState *s, unsigned g)
+     s->acc_time[g] = now;
+ }
+ 
++/* The state of pad @pin of a group (MCHP_PAD_*) from its masks */
++static char mchp_port_state(uint32_t pads, uint32_t driven, uint32_t pulls,
++                            uint32_t out, unsigned pin)
++{
++    if (extract32(driven, pin, 1)) {
++        return extract32(pads, pin, 1) ? MCHP_PAD_HIGH : MCHP_PAD_LOW;
++    }
++    if (extract32(pulls, pin, 1)) {
++        return extract32(out, pin, 1) ? MCHP_PAD_PULLUP : MCHP_PAD_PULLDOWN;
++    }
++    return MCHP_PAD_FLOAT;
++}
++
++/* Every pad state of group @g into @state, by pin */
++static void mchp_port_states(MchpPortState *s, unsigned g, char *state)
++{
++    uint32_t driven = mchp_port_driven(s, g);
++    uint32_t pads = mchp_port_pads(s, g), pulls = mchp_port_pulls(s, g);
++    uint32_t out = mchp_port_reg(s, g, A_MCHP_PORT_GROUP_OUT);
++
++    for (unsigned pin = 0; pin < MCHP_PORT_GROUP_PINS; pin++) {
++        state[pin] = mchp_port_state(pads, driven, pulls, out, pin);
++    }
++}
++
++/* Tell the pad observer about the pads of group @g whose state changed */
++static void mchp_port_notify(MchpPortState *s, unsigned g)
++{
++    char state[MCHP_PORT_GROUP_PINS];
++
++    if (!s->obs_fn) {
++        return;
++    }
++    mchp_port_states(s, g, state);
++    for (unsigned pin = 0; pin < MCHP_PORT_GROUP_PINS; pin++) {
++        unsigned n = g * MCHP_PORT_GROUP_PINS + pin;
++
++        if (state[pin] != s->obs_state[n]) {
++            s->obs_state[n] = state[pin];
++            s->obs_fn(s->obs_opaque, n, state[pin]);
++        }
++    }
++}
++
+ /* IN shows the pads whose input buffer is enabled; the others read 0. */
+ static uint32_t mchp_port_in(MchpPortState *s, unsigned g)
+ {
+@@ -281,8 +357,7 @@ static void mchp_port_update_func(MchpPortState *s, unsigned g)
+     uint32_t pads = mchp_port_pads(s, g);
+     uint32_t level = pads & mchp_port_func_a(s, g);
+     uint32_t changed = level ^ s->func_level[g];
+-    uint32_t plevel, driven = mchp_port_drive_mask(s, g) |
+-                              mchp_port_periph(s, g, &plevel);
++    uint32_t driven = mchp_port_driven(s, g);
+     uint32_t pad_changed = (driven ^ s->pad_mask[g]) |
+                            ((pads ^ s->pad_level[g]) & driven);
+ 
+@@ -339,13 +414,33 @@ static void mchp_port_update_func(MchpPortState *s, unsigned g)
+         s->pad_mask[g] = driven;
+         s->pad_level[g] = pads & driven;
+         for (unsigned pin = 0; pin < MCHP_PORT_GROUP_PINS; pin++) {
+-            if (extract32(pad_changed, pin, 1)) {
+-                qemu_set_irq(s->pad[g * MCHP_PORT_GROUP_PINS + pin],
+-                             extract32(driven, pin, 1) ?
+-                             (int)extract32(pads, pin, 1) : -1);
++            unsigned n = g * MCHP_PORT_GROUP_PINS + pin;
++            int value = extract32(driven, pin, 1) ?
++                        (int)extract32(pads, pin, 1) : -1;
++
++            if (!extract32(pad_changed, pin, 1)) {
++                continue;
++            }
++            qemu_set_irq(s->pad[n], value);
++            for (unsigned i = 0; i < s->nlisten; i++) {
++                if (s->listen[i].pin == n) {
++                    qemu_set_irq(s->listen[i].in, value);
++                }
++            }
++        }
++    }
++    if (pads != s->lvl_last[g]) {
++        uint32_t lvl_changed = pads ^ s->lvl_last[g];
++
++        s->lvl_last[g] = pads;
++        for (unsigned pin = 0; pin < MCHP_PORT_GROUP_PINS; pin++) {
++            if (extract32(lvl_changed, pin, 1)) {
++                pp_trace_pad(g * MCHP_PORT_GROUP_PINS + pin,
++                             extract32(pads, pin, 1));
+             }
+         }
+     }
++    mchp_port_notify(s, g);
+ }
+ 
+ static void mchp_port_update(MchpPortState *s, unsigned g)
+@@ -620,6 +715,39 @@ static void mchp_port_set_bench(Object *obj, Visitor *v, const char *name,
+     mchp_port_update_func(s, g);
+ }
+ 
++/* "pa-short": "<mask> <level>" in hex, pads shorted to VDD or GND */
++static void mchp_port_get_short(Object *obj, Visitor *v, const char *name,
++                                void *opaque, Error **errp)
++{
++    MchpPortState *s = MCHP_PORT(obj);
++    unsigned g = GPOINTER_TO_UINT(opaque);
++    g_autofree char *val = g_strdup_printf("%" PRIx32 " %" PRIx32,
++                                           s->short_mask[g],
++                                           s->short_level[g]);
++
++    visit_type_str(v, name, &val, errp);
++}
++
++static void mchp_port_set_short(Object *obj, Visitor *v, const char *name,
++                                void *opaque, Error **errp)
++{
++    MchpPortState *s = MCHP_PORT(obj);
++    unsigned g = GPOINTER_TO_UINT(opaque);
++    g_autofree char *val = NULL;
++    uint32_t mask, level;
++
++    if (!visit_type_str(v, name, &val, errp)) {
++        return;
++    }
++    if (sscanf(val, "%" SCNx32 " %" SCNx32, &mask, &level) != 2) {
++        error_setg(errp, "%s must be \"<mask> <level>\" in hex", name);
++        return;
++    }
++    s->short_mask[g] = mask;
++    s->short_level[g] = level & mask;
++    mchp_port_update_func(s, g);
++}
++
+ /* "pa-pull": "<mask> <up>" in hex, the pads with a pull resistor on */
+ static void mchp_port_get_pull(Object *obj, Visitor *v, const char *name,
+                                void *opaque, Error **errp)
+@@ -655,13 +783,13 @@ bool mchp_port_pad_driven(DeviceState *port, unsigned pin, bool *level)
+ {
+     MchpPortState *s = MCHP_PORT(port);
+     unsigned g = pin / MCHP_PORT_GROUP_PINS, bit = pin % MCHP_PORT_GROUP_PINS;
+-    uint32_t plevel, driven;
++    uint32_t driven;
+ 
+     *level = false;
+     if (g >= s->ngroups) {
+         return false;
+     }
+-    driven = mchp_port_drive_mask(s, g) | mchp_port_periph(s, g, &plevel);
++    driven = mchp_port_driven(s, g);
+     if (!extract32(driven, bit, 1)) {
+         return false;
+     }
+@@ -669,6 +797,73 @@ bool mchp_port_pad_driven(DeviceState *port, unsigned pin, bool *level)
+     return true;
+ }
+ 
++void mchp_port_pad_listen(DeviceState *port, unsigned pin, qemu_irq in)
++{
++    MchpPortState *s = MCHP_PORT(port);
++    unsigned g = pin / MCHP_PORT_GROUP_PINS, bit = pin % MCHP_PORT_GROUP_PINS;
++
++    assert(s->nlisten < MCHP_PORT_LISTENS);
++    s->listen[s->nlisten].pin = pin;
++    s->listen[s->nlisten].in = in;
++    s->nlisten++;
++    if (g < s->ngroups) {
++        qemu_set_irq(in, extract32(s->pad_mask[g], bit, 1) ?
++                         (int)extract32(s->pad_level[g], bit, 1) : -1);
++    }
++}
++
++int mchp_port_pad_function(DeviceState *port, unsigned pin)
++{
++    MchpPortState *s = MCHP_PORT(port);
++    unsigned g = pin / MCHP_PORT_GROUP_PINS;
++
++    return g < s->ngroups ? mchp_port_sel(s, g, pin % MCHP_PORT_GROUP_PINS)
++                          : -1;
++}
++
++char mchp_port_pad_state(DeviceState *port, unsigned pin)
++{
++    MchpPortState *s = MCHP_PORT(port);
++    unsigned g = pin / MCHP_PORT_GROUP_PINS;
++    char state[MCHP_PORT_GROUP_PINS];
++
++    if (g >= s->ngroups) {
++        return MCHP_PAD_FLOAT;
++    }
++    mchp_port_states(s, g, state);
++    return state[pin % MCHP_PORT_GROUP_PINS];
++}
++
++void mchp_port_observe(DeviceState *port, MchpPadObserveFn *fn, void *opaque)
++{
++    MchpPortState *s = MCHP_PORT(port);
++
++    assert(!s->obs_fn);
++    for (unsigned g = 0; g < s->ngroups; g++) {
++        mchp_port_states(s, g, &s->obs_state[g * MCHP_PORT_GROUP_PINS]);
++    }
++    s->obs_opaque = opaque;
++    s->obs_fn = fn;
++}
++
++/* Every pad's level, a group a word (the event recorder's pad source) */
++static unsigned mchp_port_trace_levels(void *opaque, uint32_t *levels,
++                                       unsigned max)
++{
++    MchpPortState *s = MCHP_PORT(opaque);
++    unsigned n = MIN(s->ngroups, max);
++
++    for (unsigned g = 0; g < n; g++) {
++        levels[g] = mchp_port_pads(s, g);
++    }
++    return n;
++}
++
++void mchp_port_trace(DeviceState *port)
++{
++    pp_trace_pads(mchp_port_trace_levels, port, MCHP_PORT_GROUP_PINS);
++}
++
+ /* After a reset every pin is an input again: release the pads. */
+ /*
+  * "pa-stats": "<ns> <high0> <low0> ... <high31> <low31>", the virtual time
+@@ -746,6 +941,7 @@ static bool mchp_port_realize(MchpRegBlock *rb, Error **errp)
+         g_autofree char *levels = g_strdup_printf("p%c-levels", p);
+         g_autofree char *bench = g_strdup_printf("p%c-bench", p);
+         g_autofree char *pull = g_strdup_printf("p%c-pull", p);
++        g_autofree char *shorted = g_strdup_printf("p%c-short", p);
+ 
+         object_property_add(obj, in, "uint32", mchp_port_get_in,
+                             mchp_port_set_in, NULL, group);
+@@ -763,6 +959,8 @@ static bool mchp_port_realize(MchpRegBlock *rb, Error **errp)
+                             mchp_port_set_bench, NULL, group);
+         object_property_add(obj, pull, "str", mchp_port_get_pull,
+                             NULL, NULL, group);
++        object_property_add(obj, shorted, "str", mchp_port_get_short,
++                            mchp_port_set_short, NULL, group);
+     }
+     return true;
+ }
+diff --git a/hw/intc/armv7m_nvic.c b/hw/intc/armv7m_nvic.c
+index 3a99714..124d787 100644
+--- a/hw/intc/armv7m_nvic.c
++++ b/hw/intc/armv7m_nvic.c
+@@ -680,10 +680,21 @@ static void do_armv7m_nvic_set_pending(void *opaque, int irq, bool secure,
+ 
+     if (!vec->pending) {
+         nvic_update_pending_state(s, vec, irq, 1);
++        if (s->observer) {
++            s->observer(s->observer_opaque, irq, ARMV7M_NVIC_OBSERVE_PEND);
++        }
+         nvic_irq_update(s);
+     }
+ }
+ 
++void armv7m_nvic_observe(NVICState *s, void (*fn)(void *, int, int),
++                         void *opaque)
++{
++    assert(!s->observer);
++    s->observer_opaque = opaque;
++    s->observer = fn;
++}
++
+ void armv7m_nvic_set_pending(NVICState *s, int irq, bool secure)
+ {
+     do_armv7m_nvic_set_pending(s, irq, secure, false);
+@@ -811,6 +822,9 @@ void armv7m_nvic_acknowledge_irq(NVICState *s)
+     assert(s->vectpending_prio < running);
+ 
+     trace_nvic_acknowledge_irq(pending, s->vectpending_prio);
++    if (s->observer) {
++        s->observer(s->observer_opaque, pending, ARMV7M_NVIC_OBSERVE_ENTER);
++    }
+ 
+     vec->active = 1;
+     nvic_update_pending_state(s, vec, pending, 0);
+@@ -854,6 +868,9 @@ int armv7m_nvic_complete_irq(NVICState *s, int irq, bool secure)
+     assert(irq > ARMV7M_EXCP_RESET && irq < s->num_irq);
+ 
+     trace_nvic_complete_irq(irq, secure);
++    if (s->observer) {
++        s->observer(s->observer_opaque, irq, ARMV7M_NVIC_OBSERVE_EXIT);
++    }
+ 
+     if (secure && exc_is_banked(irq)) {
+         vec = &s->sec_vectors[irq];
+diff --git a/hw/misc/Kconfig b/hw/misc/Kconfig
+index a069ba9..6a4736a 100644
+--- a/hw/misc/Kconfig
++++ b/hw/misc/Kconfig
+@@ -203,6 +203,13 @@ config MCHP_PFSOC_DMC
+ config MCHP_REGFILE
+     bool
+ 
++config PP_COSIM
++    bool
++    select MCHP_PORT
++
++config PP_TRACE
++    bool
++
+ config WS2812
+     bool
+ 
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 66771af..7d0207f 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -33,8 +33,11 @@ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files(
+   'click_servo.c',
+ ))
+ system_ss.add(when: 'CONFIG_WS2812', if_true: files('ws2812.c'))
++system_ss.add(when: 'CONFIG_PP_COSIM', if_true: files('pp_cosim.c'))
++system_ss.add(when: 'CONFIG_PP_TRACE', if_true: files('pp_trace.c'))
+ system_ss.add(when: 'CONFIG_RNBD451', if_true: files('rnbd451.c'))
+ system_ss.add(when: 'CONFIG_PIC32CM_SOC', if_true: files(
++  'pp_bus_tap.c',
+   'mchp_ac_u2245.c',
+   'mchp_clock.c',
+   'mchp_edbg_dgi.c',
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index 269c351..18c2c10 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -462,6 +462,39 @@ Chardev *mikrobus_uart_share(const char *socket, Chardev *click,
+     return chr;
+ }
+ 
++/* A pad's level line (or -1 while undriven) into a Click input */
++static void mikrobus_pad_sink(const MikrobusSocket *sock, unsigned pin,
++                              qemu_irq in)
++{
++    if (sock->pad_listen) {
++        sock->pad_listen(sock->port, pin, in);
++    } else {
++        qdev_connect_gpio_out_named(sock->port, sock->port_pad, pin, in);
++    }
++}
++
++int mikrobus_click_bus(const char *click, uint8_t *i2c_addr)
++{
++    for (unsigned i = 0; i < ARRAY_SIZE(mikrobus_clicks); i++) {
++        const ClickInfo *c = &mikrobus_clicks[i];
++
++        if (!strcmp(c->name, click)) {
++            *i2c_addr = c->addr;
++            switch (c->bus) {
++            case CLICK_I2C:
++                return MIKROBUS_BUS_I2C;
++            case CLICK_SPI:
++                return MIKROBUS_BUS_SPI;
++            case CLICK_UART:
++                return MIKROBUS_BUS_UART;
++            default:
++                return MIKROBUS_BUS_GPIO;
++            }
++        }
++    }
++    return MIKROBUS_BUS_NONE;
++}
++
+ static void mikrobus_plug_one(Object *machine, const MikrobusSocket *sock,
+                               unsigned index, const ClickInfo *c)
+ {
+@@ -478,11 +511,9 @@ static void mikrobus_plug_one(Object *machine, const MikrobusSocket *sock,
+         /* The module is a chardev: reachable where other Clicks are */
+         object_property_add_const_link(machine, child, OBJECT(sock->uart));
+         for (unsigned i = 0; i < ARRAY_SIZE(c->ins) && c->ins[i].gpio; i++) {
+-            qdev_connect_gpio_out_named(sock->port, sock->port_pad,
+-                                        mikrobus_pin(sock, c, c->ins[i].role),
+-                                        qemu_allocate_irq(c->uart_pin,
+-                                                          sock->uart,
+-                                                          c->ins[i].role));
++            mikrobus_pad_sink(sock, mikrobus_pin(sock, c, c->ins[i].role),
++                              qemu_allocate_irq(c->uart_pin, sock->uart,
++                                                c->ins[i].role));
+         }
+         for (unsigned i = 0; i < ARRAY_SIZE(c->pulls) && c->pulls[i].used;
+              i++) {
+@@ -571,10 +602,8 @@ static void mikrobus_plug_one(Object *machine, const MikrobusSocket *sock,
+         qdev_connect_gpio_out_named(dev, c->outs[i].gpio, 0, pad);
+     }
+     for (unsigned i = 0; i < ARRAY_SIZE(c->ins) && c->ins[i].gpio; i++) {
+-        qdev_connect_gpio_out_named(sock->port, sock->port_pad,
+-                                    mikrobus_pin(sock, c, c->ins[i].role),
+-                                    qdev_get_gpio_in_named(dev,
+-                                                           c->ins[i].gpio, 0));
++        mikrobus_pad_sink(sock, mikrobus_pin(sock, c, c->ins[i].role),
++                          qdev_get_gpio_in_named(dev, c->ins[i].gpio, 0));
+     }
+ }
+ 
+diff --git a/hw/misc/pp_bus_tap.c b/hw/misc/pp_bus_tap.c
+new file mode 100644
+index 0000000..a735f99
+--- /dev/null
++++ b/hw/misc/pp_bus_tap.c
+@@ -0,0 +1,228 @@
++/*
++ * Bus taps: a Click wired to pads reaches whichever SERCOM the firmware
++ * muxes those pads to
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * See pp_bus_tap.h. The SPI tap has no chip select of its own: every byte
++ * the SERCOM shifts reaches the hub's bus, and the Click there answers
++ * only while its own CS pad is low. The I2C tap answers at the Click's
++ * address and forwards the transfer to the hub's bus.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/gpio/mchp_port.h"
++#include "hw/misc/pp_bus_tap.h"
++
++OBJECT_DECLARE_SIMPLE_TYPE(PpBusHubState, PP_BUS_HUB)
++OBJECT_DECLARE_SIMPLE_TYPE(PpSsiTapState, PP_SSI_TAP)
++OBJECT_DECLARE_SIMPLE_TYPE(PpI2cTapState, PP_I2C_TAP)
++
++struct PpBusHubState {
++    DeviceState parent_obj;
++
++    SSIBus *spi;
++    I2CBus *i2c;
++};
++
++struct PpSsiTapState {
++    SSIPeripheral parent_obj;
++
++    DeviceState *port;
++    DeviceState *hub;
++    uint32_t pin;
++    int32_t pmux;
++};
++
++struct PpI2cTapState {
++    I2CSlave parent_obj;
++
++    DeviceState *port;
++    DeviceState *hub;
++    uint32_t pin;
++    int32_t pmux;
++    bool open;                  /* a transfer the hub's bus took */
++};
++
++SSIBus *pp_bus_hub_spi(DeviceState *hub)
++{
++    return PP_BUS_HUB(hub)->spi;
++}
++
++I2CBus *pp_bus_hub_i2c(DeviceState *hub)
++{
++    return PP_BUS_HUB(hub)->i2c;
++}
++
++static void pp_bus_hub_init(Object *obj)
++{
++    PpBusHubState *s = PP_BUS_HUB(obj);
++
++    s->spi = ssi_create_bus(DEVICE(obj), "spi");
++    s->i2c = i2c_init_bus(DEVICE(obj), "i2c");
++}
++
++/* The tapped SERCOM drives the pads: its pad is muxed to its function */
++static bool pp_tap_routed(DeviceState *port, uint32_t pin, int32_t pmux)
++{
++    return port && mchp_port_pad_function(port, pin) == pmux;
++}
++
++static uint32_t pp_ssi_tap_transfer(SSIPeripheral *dev, uint32_t val)
++{
++    PpSsiTapState *s = PP_SSI_TAP(dev);
++
++    if (!pp_tap_routed(s->port, s->pin, s->pmux)) {
++        return 0;
++    }
++    return ssi_transfer(pp_bus_hub_spi(s->hub), val);
++}
++
++static int pp_i2c_tap_event(I2CSlave *dev, enum i2c_event event)
++{
++    PpI2cTapState *s = PP_I2C_TAP(dev);
++    I2CBus *bus = pp_bus_hub_i2c(s->hub);
++
++    switch (event) {
++    case I2C_START_SEND:
++    case I2C_START_RECV:
++        if (s->open) {
++            /* A repeated start */
++            s->open = false;
++        }
++        if (!pp_tap_routed(s->port, s->pin, s->pmux)) {
++            return -1;
++        }
++        if ((event == I2C_START_SEND ? i2c_start_send(bus, dev->address)
++                                     : i2c_start_recv(bus, dev->address))) {
++            return -1;
++        }
++        s->open = true;
++        return 0;
++    case I2C_FINISH:
++        if (s->open) {
++            i2c_end_transfer(bus);
++            s->open = false;
++        }
++        return 0;
++    case I2C_NACK:
++        if (s->open) {
++            i2c_nack(bus);
++        }
++        return 0;
++    default:
++        return 0;
++    }
++}
++
++static int pp_i2c_tap_send(I2CSlave *dev, uint8_t data)
++{
++    PpI2cTapState *s = PP_I2C_TAP(dev);
++
++    return s->open ? i2c_send(pp_bus_hub_i2c(s->hub), data) : -1;
++}
++
++static uint8_t pp_i2c_tap_recv(I2CSlave *dev)
++{
++    PpI2cTapState *s = PP_I2C_TAP(dev);
++
++    return s->open ? i2c_recv(pp_bus_hub_i2c(s->hub)) : 0xff;
++}
++
++static void pp_tap_check(DeviceState *port, DeviceState *hub, Error **errp)
++{
++    if (!port || !hub) {
++        error_setg(errp, "a bus tap needs its \"port\" and \"hub\"");
++    }
++}
++
++static void pp_ssi_tap_realize(SSIPeripheral *dev, Error **errp)
++{
++    PpSsiTapState *s = PP_SSI_TAP(dev);
++
++    pp_tap_check(s->port, s->hub, errp);
++}
++
++static void pp_i2c_tap_realize(DeviceState *dev, Error **errp)
++{
++    PpI2cTapState *s = PP_I2C_TAP(dev);
++
++    pp_tap_check(s->port, s->hub, errp);
++}
++
++static const Property pp_ssi_tap_properties[] = {
++    DEFINE_PROP_LINK("port", PpSsiTapState, port, TYPE_DEVICE,
++                     DeviceState *),
++    DEFINE_PROP_LINK("hub", PpSsiTapState, hub, TYPE_PP_BUS_HUB,
++                     DeviceState *),
++    DEFINE_PROP_UINT32("pin", PpSsiTapState, pin, 0),
++    DEFINE_PROP_INT32("pmux", PpSsiTapState, pmux, -1),
++};
++
++static const Property pp_i2c_tap_properties[] = {
++    DEFINE_PROP_LINK("port", PpI2cTapState, port, TYPE_DEVICE,
++                     DeviceState *),
++    DEFINE_PROP_LINK("hub", PpI2cTapState, hub, TYPE_PP_BUS_HUB,
++                     DeviceState *),
++    DEFINE_PROP_UINT32("pin", PpI2cTapState, pin, 0),
++    DEFINE_PROP_INT32("pmux", PpI2cTapState, pmux, -1),
++};
++
++static void pp_bus_hub_class_init(ObjectClass *klass, const void *data)
++{
++    DEVICE_CLASS(klass)->user_creatable = false;
++}
++
++static void pp_ssi_tap_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    SSIPeripheralClass *k = SSI_PERIPHERAL_CLASS(klass);
++
++    k->realize = pp_ssi_tap_realize;
++    k->transfer = pp_ssi_tap_transfer;
++    k->cs_polarity = SSI_CS_NONE;
++    dc->user_creatable = false;
++    device_class_set_props(dc, pp_ssi_tap_properties);
++}
++
++static void pp_i2c_tap_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
++
++    dc->realize = pp_i2c_tap_realize;
++    dc->user_creatable = false;
++    k->event = pp_i2c_tap_event;
++    k->send = pp_i2c_tap_send;
++    k->recv = pp_i2c_tap_recv;
++    device_class_set_props(dc, pp_i2c_tap_properties);
++}
++
++static const TypeInfo pp_bus_tap_types[] = {
++    {
++        .name = TYPE_PP_BUS_HUB,
++        .parent = TYPE_DEVICE,
++        .instance_size = sizeof(PpBusHubState),
++        .instance_init = pp_bus_hub_init,
++        .class_init = pp_bus_hub_class_init,
++    },
++    {
++        .name = TYPE_PP_SSI_TAP,
++        .parent = TYPE_SSI_PERIPHERAL,
++        .instance_size = sizeof(PpSsiTapState),
++        .class_init = pp_ssi_tap_class_init,
++    },
++    {
++        .name = TYPE_PP_I2C_TAP,
++        .parent = TYPE_I2C_SLAVE,
++        .instance_size = sizeof(PpI2cTapState),
++        .class_init = pp_i2c_tap_class_init,
++    },
++};
++
++DEFINE_TYPES(pp_bus_tap_types)
+diff --git a/hw/misc/pp_cosim.c b/hw/misc/pp_cosim.c
+new file mode 100644
+index 0000000..17394d3
+--- /dev/null
++++ b/hw/misc/pp_cosim.c
+@@ -0,0 +1,414 @@
++/*
++ * Peripheral Pretender co-simulation port
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The twin's side of a circuit simulated outside QEMU (the project's
++ * analog host, running SPICE: docs/design/analog.md), in lockstep with
++ * QEMU_CLOCK_VIRTUAL. A message, in either direction, is a 4-byte
++ * little-endian length and that many bytes of text lines. QEMU always
++ * speaks first and waits for the reply, so the host never runs ahead of
++ * QEMU's time and the result does not depend on host timing:
++ *
++ *   hello 1 <machine> <vdd mV>   at connection; the host answers with
++ *                                "watch <pad>" (send that pad's changes),
++ *                                "probe <id> <QOM path> <channel>" (that
++ *                                analog input reads the circuit), "tick
++ *                                <ns>" (0: none) and "ok"
++ *   init <t>                     after the watched pads' states; "ok"
++ *   e <t> <pad> <state>          a watched pad changed, sent with the next
++ *                                request: h or l (driven), u or d (pulled
++ *                                up or down, not driven), z (floating)
++ *   s <t> <id>                   the voltage of probe <id> at <t>; the
++ *                                host answers "v <microvolts>"
++ *   t <t>                        a tick; the host answers "in <group>
++ *                                <mask> <level>" lines (hex: the pads the
++ *                                circuit drives and their levels, set as
++ *                                the PORT's "pX-bench") and "ok"
++ *   f <t>                        a flush of many events; "ok"
++ *
++ * Times are QEMU_CLOCK_VIRTUAL nanoseconds; pads are named as in the data
++ * sheet (PA05). If the host goes away the port stops, and analog inputs
++ * fall back to their models' own inputs. Lockstep needs -icount: without
++ * it, virtual time follows the host clock and runs on while the circuit
++ * is being solved.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/timer.h"
++#include "qemu/bswap.h"
++#include "qemu/error-report.h"
++#include "qapi/error.h"
++#include "chardev/char.h"
++#include "chardev/char-fe.h"
++#include "exec/icount.h"
++#include "hw/core/boards.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/core/qdev-properties-system.h"
++#include "hw/gpio/mchp_port.h"
++#include "hw/misc/pp_cosim.h"
++#include "migration/vmstate.h"
++
++#define PP_COSIM_PINS       (4 * 32)    /* PA..PD */
++#define PP_COSIM_PROBES     32
++#define PP_COSIM_FLUSH      65536       /* bytes of events before a flush */
++#define PP_COSIM_MAX_REPLY  65536
++
++OBJECT_DECLARE_SIMPLE_TYPE(PpCosimState, PP_COSIM)
++
++typedef struct PpCosimProbe {
++    char *path;
++    Object *obj;
++    unsigned channel, id;
++} PpCosimProbe;
++
++struct PpCosimState {
++    DeviceState parent_obj;
++
++    CharFrontend chr;
++    DeviceState *port;
++    char *machine;
++    uint32_t vdd_mv;
++
++    bool up;                    /* configured, and the host answers */
++    bool observing;
++    bool watch[PP_COSIM_PINS];
++    PpCosimProbe probe[PP_COSIM_PROBES];
++    unsigned nprobes;
++    int64_t tick_ns;
++    QEMUTimer *tick;
++    GString *pending;           /* event lines for the next request */
++};
++
++/* The machine's port: analog inputs reach it from their sample hooks */
++static PpCosimState *pp_cosim;
++
++static void pp_cosim_down(PpCosimState *s, const char *why)
++{
++    if (s->up) {
++        warn_report("cosim: %s; the circuit no longer drives the pads", why);
++    }
++    s->up = false;
++    timer_del(s->tick);
++    g_string_truncate(s->pending, 0);
++}
++
++/*
++ * Send the pending events and the request @req, and read the reply into
++ * @reply. False if the host is gone.
++ */
++static bool pp_cosim_exchange(PpCosimState *s, const char *req,
++                              GString *reply)
++{
++    uint8_t hdr[4];
++    uint32_t len;
++
++    g_string_append_printf(s->pending, "%s\n", req);
++    stl_le_p(hdr, s->pending->len);
++    if (qemu_chr_fe_write_all(&s->chr, hdr, 4) != 4 ||
++        qemu_chr_fe_write_all(&s->chr, (uint8_t *)s->pending->str,
++                              s->pending->len) != (int)s->pending->len) {
++        pp_cosim_down(s, "cannot write to the circuit host");
++        return false;
++    }
++    g_string_truncate(s->pending, 0);
++    if (qemu_chr_fe_read_all(&s->chr, hdr, 4) != 4) {
++        pp_cosim_down(s, "the circuit host stopped answering");
++        return false;
++    }
++    len = ldl_le_p(hdr);
++    if (len > PP_COSIM_MAX_REPLY) {
++        pp_cosim_down(s, "bad reply from the circuit host");
++        return false;
++    }
++    g_string_set_size(reply, len);
++    if (len && qemu_chr_fe_read_all(&s->chr, (uint8_t *)reply->str,
++                                    len) != (int)len) {
++        pp_cosim_down(s, "the circuit host stopped answering");
++        return false;
++    }
++    return true;
++}
++
++/* "PA05" -> 5, "PB10" -> 42; -1 if @name is not a pad */
++static int pp_cosim_pin(const char *name)
++{
++    unsigned n;
++    char g, end;
++
++    if (sscanf(name, "P%c%u%c", &g, &n, &end) != 2 || g < 'A' ||
++        g >= 'A' + PP_COSIM_PINS / 32 || n >= 32) {
++        return -1;
++    }
++    return (g - 'A') * 32 + n;
++}
++
++static void pp_cosim_append_pad(PpCosimState *s, int64_t t, unsigned pin,
++                                char state)
++{
++    g_string_append_printf(s->pending, "e %" PRId64 " P%c%02u %c\n", t,
++                           'A' + pin / 32, pin % 32, state);
++}
++
++/* The PORT's pad observer */
++static void pp_cosim_pad(void *opaque, unsigned pin, char state)
++{
++    PpCosimState *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    if (!s->up || pin >= PP_COSIM_PINS || !s->watch[pin]) {
++        return;
++    }
++    pp_cosim_append_pad(s, now, pin, state);
++    if (s->pending->len > PP_COSIM_FLUSH) {
++        g_autoptr(GString) reply = g_string_new(NULL);
++        g_autofree char *req = g_strdup_printf("f %" PRId64, now);
++
++        pp_cosim_exchange(s, req, reply);
++    }
++}
++
++static void pp_cosim_tick(void *opaque)
++{
++    PpCosimState *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    g_autoptr(GString) reply = g_string_new(NULL);
++    g_autofree char *req = g_strdup_printf("t %" PRId64, now);
++    g_auto(GStrv) lines = NULL;
++
++    if (!s->up || !pp_cosim_exchange(s, req, reply)) {
++        return;
++    }
++    lines = g_strsplit(reply->str, "\n", -1);
++    for (char **l = lines; *l; l++) {
++        uint32_t mask, level;
++        char group;
++
++        if (sscanf(*l, "in %c %" SCNx32 " %" SCNx32, &group, &mask,
++                   &level) == 3) {
++            g_autofree char *prop = g_strdup_printf("p%c-bench",
++                                                    g_ascii_tolower(group));
++            g_autofree char *val = g_strdup_printf("%" PRIx32 " %" PRIx32,
++                                                   mask, level);
++
++            /* A group this device lacks: nothing to drive */
++            object_property_set_str(OBJECT(s->port), prop, val, NULL);
++        }
++    }
++    timer_mod(s->tick, now + s->tick_ns);
++}
++
++/* Read the host's configuration, one line of the hello's reply */
++static bool pp_cosim_config(PpCosimState *s, const char *line)
++{
++    char name[16], path[256];
++    unsigned id, channel;
++    int64_t tick;
++    int pin;
++
++    if (sscanf(line, "watch %15s", name) == 1) {
++        pin = pp_cosim_pin(name);
++        if (pin < 0) {
++            warn_report("cosim: no pad %s", name);
++        } else {
++            s->watch[pin] = true;
++        }
++    } else if (sscanf(line, "probe %u %255s %u", &id, path, &channel) == 3) {
++        PpCosimProbe *p = &s->probe[s->nprobes];
++
++        if (s->nprobes == PP_COSIM_PROBES) {
++            warn_report("cosim: more than %d probes", PP_COSIM_PROBES);
++            return true;
++        }
++        p->obj = object_resolve_path(path, NULL);
++        if (!p->obj) {
++            warn_report("cosim: no device %s", path);
++            return true;
++        }
++        p->path = g_strdup(path);
++        p->channel = channel;
++        p->id = id;
++        s->nprobes++;
++    } else if (sscanf(line, "tick %" SCNd64, &tick) == 1) {
++        s->tick_ns = MAX(tick, 0);
++    } else if (g_str_has_prefix(line, "error")) {
++        error_report("cosim: the circuit host refused: %s", line);
++        return false;
++    }
++    return true;
++}
++
++/* Hello, configuration, and the watched pads' states */
++static void pp_cosim_connect(PpCosimState *s)
++{
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    g_autoptr(GString) reply = g_string_new(NULL);
++    g_autofree char *hello = g_strdup_printf("hello 1 %s %" PRIu32,
++                                             s->machine ?: "?", s->vdd_mv);
++    g_autofree char *init = g_strdup_printf("init %" PRId64, now);
++    g_auto(GStrv) lines = NULL;
++
++    memset(s->watch, 0, sizeof(s->watch));
++    for (unsigned i = 0; i < s->nprobes; i++) {
++        g_free(s->probe[i].path);
++    }
++    s->nprobes = 0;
++    s->tick_ns = 0;
++    g_string_truncate(s->pending, 0);
++    s->up = true;
++    if (!pp_cosim_exchange(s, hello, reply)) {
++        return;
++    }
++    lines = g_strsplit(reply->str, "\n", -1);
++    for (char **l = lines; *l; l++) {
++        if (!pp_cosim_config(s, *l)) {
++            pp_cosim_down(s, "configuration refused");
++            return;
++        }
++    }
++    if (!s->observing) {
++        mchp_port_observe(s->port, pp_cosim_pad, s);
++        s->observing = true;
++    }
++    for (unsigned pin = 0; pin < PP_COSIM_PINS; pin++) {
++        if (s->watch[pin]) {
++            pp_cosim_append_pad(s, now, pin,
++                                mchp_port_pad_state(s->port, pin));
++        }
++    }
++    if (!pp_cosim_exchange(s, init, reply)) {
++        return;
++    }
++    if (s->tick_ns) {
++        timer_mod(s->tick, now + s->tick_ns);
++    }
++}
++
++static void pp_cosim_event(void *opaque, QEMUChrEvent event)
++{
++    PpCosimState *s = opaque;
++
++    switch (event) {
++    case CHR_EVENT_OPENED:
++        if (!s->up) {
++            pp_cosim_connect(s);
++        }
++        break;
++    case CHR_EVENT_CLOSED:
++        pp_cosim_down(s, "the circuit host disconnected");
++        break;
++    default:
++        break;
++    }
++}
++
++bool pp_cosim_sample(Object *dev, unsigned channel, int64_t when,
++                     int64_t *uv)
++{
++    PpCosimState *s = pp_cosim;
++    g_autoptr(GString) reply = NULL;
++    g_autofree char *req = NULL;
++    PpCosimProbe *p = NULL;
++    int64_t v;
++
++    if (!s || !s->up) {
++        return false;
++    }
++    for (unsigned i = 0; i < s->nprobes && !p; i++) {
++        if (s->probe[i].obj == dev && s->probe[i].channel == channel) {
++            p = &s->probe[i];
++        }
++    }
++    if (!p) {
++        return false;
++    }
++    reply = g_string_new(NULL);
++    req = g_strdup_printf("s %" PRId64 " %u", when, p->id);
++    if (!pp_cosim_exchange(s, req, reply) ||
++        sscanf(reply->str, "v %" SCNd64, &v) != 1) {
++        return false;
++    }
++    *uv = v;
++    return true;
++}
++
++void pp_cosim_attach(Object *machine, const char *chardev, DeviceState *port,
++                     uint32_t vdd_mv)
++{
++    DeviceState *dev = qdev_new(TYPE_PP_COSIM);
++    Chardev *chr = qemu_chr_find(chardev);
++
++    if (!chr) {
++        error_report("cosim: no chardev \"%s\"", chardev);
++        exit(1);
++    }
++    qdev_prop_set_chr(dev, "chardev", chr);
++    qdev_prop_set_string(dev, "machine", MACHINE_GET_CLASS(machine)->name);
++    qdev_prop_set_uint32(dev, "vdd-mv", vdd_mv);
++    object_property_set_link(OBJECT(dev), "port", OBJECT(port),
++                             &error_fatal);
++    object_property_add_child(machine, "pp-cosim", OBJECT(dev));
++    qdev_realize_and_unref(dev, NULL, &error_fatal);
++}
++
++static void pp_cosim_realize(DeviceState *dev, Error **errp)
++{
++    PpCosimState *s = PP_COSIM(dev);
++
++    if (!s->port) {
++        error_setg(errp, "cosim: no PORT to observe");
++        return;
++    }
++    if (pp_cosim) {
++        error_setg(errp, "cosim: one per machine");
++        return;
++    }
++    if (!icount_enabled()) {
++        warn_report("cosim: without -icount, virtual time runs on while "
++                    "the circuit is solved; timing will be wrong");
++    }
++    pp_cosim = s;
++    s->pending = g_string_new(NULL);
++    s->tick = timer_new_ns(QEMU_CLOCK_VIRTUAL, pp_cosim_tick, s);
++    /* No read handlers: every read is a reply, read synchronously */
++    qemu_chr_fe_set_handlers(&s->chr, NULL, NULL, pp_cosim_event, NULL, s,
++                             NULL, true);
++}
++
++static const Property pp_cosim_properties[] = {
++    DEFINE_PROP_CHR("chardev", PpCosimState, chr),
++    DEFINE_PROP_STRING("machine", PpCosimState, machine),
++    DEFINE_PROP_UINT32("vdd-mv", PpCosimState, vdd_mv, 3300),
++    DEFINE_PROP_LINK("port", PpCosimState, port, TYPE_MCHP_PORT,
++                     DeviceState *),
++};
++
++/* The circuit's state lives outside QEMU */
++static const VMStateDescription vmstate_pp_cosim = {
++    .name = TYPE_PP_COSIM,
++    .unmigratable = 1,
++};
++
++static void pp_cosim_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->realize = pp_cosim_realize;
++    dc->vmsd = &vmstate_pp_cosim;
++    dc->user_creatable = false;
++    device_class_set_props(dc, pp_cosim_properties);
++}
++
++static const TypeInfo pp_cosim_types[] = {
++    {
++        .name = TYPE_PP_COSIM,
++        .parent = TYPE_DEVICE,
++        .instance_size = sizeof(PpCosimState),
++        .class_init = pp_cosim_class_init,
++    },
++};
++
++DEFINE_TYPES(pp_cosim_types)
+diff --git a/hw/misc/pp_trace.c b/hw/misc/pp_trace.c
+new file mode 100644
+index 0000000..0c73837
+--- /dev/null
++++ b/hw/misc/pp_trace.c
+@@ -0,0 +1,630 @@
++/*
++ * Peripheral Pretender event recorder
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * The machine's recorder for a timeline of the board (see
++ * include/hw/misc/pp_trace.h for the stream): every pad's level from the
++ * PORT, each interrupt's pend, entry and return, and what the models
++ * report (bytes on a SERCOM, a USART, a TWI). Records are stamped with
++ * QEMU_CLOCK_VIRTUAL; with -icount that is the firmware's own time. The
++ * recorder knows no particular model: the SoC wires its PORT and its
++ * interrupt controller to it, so the Arm and AVR builds share it.
++ *
++ * A pad that toggles more than PP_TRACE_BURST times in a window of
++ * PP_TRACE_WINDOW_NS (a PWM, a buzzer) is reported a window at a time
++ * (PP_TRACE_PAD_BUSY: its edges and high time) until it calms down. The
++ * stream never blocks QEMU: when the reader falls behind, records wait in
++ * a buffer and past PP_TRACE_BUF_MAX are dropped and counted
++ * (PP_TRACE_LOST). On each connection the recorder says hello, names its
++ * sources and sends every pad's level.
++ *
++ * The reader's actions ("at <t> <id> set ...", "at <t> <id> reset") wait
++ * in time order for a QEMU_CLOCK_VIRTUAL timer at their time, so with a
++ * fixed -icount shift and sleep=off the guest sees each at the same
++ * instruction in every run. "pace 1" keeps such a run near real time:
++ * a QEMU_CLOCK_REALTIME timer pauses the VM while virtual time is ahead,
++ * which the guest cannot tell (-icount align=on would, but it needs
++ * sleep=on, whose idle time follows the host clock).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/timer.h"
++#include "qemu/bswap.h"
++#include "qemu/error-report.h"
++#include "qemu/main-loop.h"
++#include "qapi/error.h"
++#include "chardev/char.h"
++#include "chardev/char-fe.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/core/qdev-properties-system.h"
++#include "hw/misc/pp_trace.h"
++#include "migration/vmstate.h"
++#include "system/reset.h"
++#include "system/runstate.h"
++
++#define PP_TRACE_REC        16
++#define PP_TRACE_BUF_MAX    (8 * 1024 * 1024)
++#define PP_TRACE_SOURCES    64
++#define PP_TRACE_PADS       128     /* PA..PD of 32, or PA..PF of 8 */
++#define PP_TRACE_WINDOW_NS  1000000             /* 1 ms */
++#define PP_TRACE_BURST      64                  /* edges a window, singly */
++#define PP_TRACE_TICK_NS    20000000            /* the time, every 20 ms */
++#define PP_TRACE_LINE_MAX   65536               /* a line from the reader */
++#define PP_TRACE_PACE_NS    5000000             /* pacing looks every 5 ms */
++#define PP_TRACE_AHEAD_NS   5000000             /* virtual time may lead */
++#define PP_TRACE_BEHIND_NS  200000000           /* and lag, then let go */
++
++/* An action of the reader, waiting for its virtual time */
++typedef struct PpTraceAction {
++    int64_t t;
++    uint64_t seq;               /* arrival order, for actions at one t */
++    uint32_t id;
++    char *path, *prop, *value;  /* NULL path: a system reset */
++} PpTraceAction;
++
++OBJECT_DECLARE_SIMPLE_TYPE(PpTraceState, PP_TRACE)
++
++typedef struct PpTracePad {
++    int64_t start;              /* of the current window */
++    int64_t last;               /* the last edge, or the window's start */
++    int64_t high_ns;            /* high time in the window so far */
++    uint32_t edges;             /* in the window */
++    bool level;
++    bool busy;                  /* reported a window at a time */
++} PpTracePad;
++
++struct PpTraceState {
++    DeviceState parent_obj;
++
++    CharFrontend chr;
++    uint32_t irq_flags;         /* PP_TRACE_IRQ_VECTORS, or 0 */
++
++    bool connected;
++    GByteArray *buf;            /* records from @sent on wait to be written */
++    unsigned sent;
++    guint watch_tag;
++    QEMUBH *flush_bh;
++    QEMUTimer *tick;
++    uint32_t lost;
++    unsigned names_sent;
++    PpTracePad pad[PP_TRACE_PADS];
++
++    /* The reader's actions, in time order, and their timer */
++    GString *line;
++    GQueue actions;
++    uint64_t action_seq;
++    QEMUTimer *act_timer;
++    /* Pacing: the origins of real and virtual time, whether we paused */
++    bool pace, paused;
++    int64_t real0, virt0;
++    QEMUTimer *pace_timer;
++};
++
++static PpTraceState *pp_trace;
++static char *pp_trace_names[PP_TRACE_SOURCES];
++static unsigned pp_trace_nnames;
++/* The PORT's way to read every pad (pp_trace_pads()) */
++static PpTraceLevelsFn *pp_trace_levels;
++static void *pp_trace_levels_opaque;
++static unsigned pp_trace_group_pins = 32;
++
++void pp_trace_pads(PpTraceLevelsFn *fn, void *opaque, unsigned group_pins)
++{
++    pp_trace_levels = fn;
++    pp_trace_levels_opaque = opaque;
++    pp_trace_group_pins = group_pins;
++}
++
++unsigned pp_trace_source(const char *name)
++{
++    if (!pp_trace_nnames) {
++        pp_trace_names[PP_TRACE_SRC_PORT] = g_strdup("PORT");
++        pp_trace_names[PP_TRACE_SRC_NVIC] = g_strdup("NVIC");
++        pp_trace_nnames = 2;
++    }
++    for (unsigned i = 0; i < pp_trace_nnames; i++) {
++        if (!strcmp(pp_trace_names[i], name)) {
++            return i;
++        }
++    }
++    if (pp_trace_nnames == PP_TRACE_SOURCES) {
++        warn_report("trace: more than %d sources; %s shares the last",
++                    PP_TRACE_SOURCES, name);
++        return PP_TRACE_SOURCES - 1;
++    }
++    pp_trace_names[pp_trace_nnames] = g_strdup(name);
++    return pp_trace_nnames++;
++}
++
++static void pp_trace_record(PpTraceState *s, int64_t t, unsigned kind,
++                            unsigned src, uint32_t a, uint32_t b)
++{
++    uint8_t rec[PP_TRACE_REC];
++
++    stq_le_p(rec, t);
++    rec[8] = kind;
++    rec[9] = src;
++    stw_le_p(rec + 10, a);
++    stl_le_p(rec + 12, b);
++    g_byte_array_append(s->buf, rec, PP_TRACE_REC);
++}
++
++/* The names of the sources registered since the last ones were sent */
++static void pp_trace_send_names(PpTraceState *s, int64_t t)
++{
++    static const uint8_t zeros[PP_TRACE_REC];
++
++    for (; s->names_sent < pp_trace_nnames; s->names_sent++) {
++        const char *name = pp_trace_names[s->names_sent];
++        size_t len = MIN(strlen(name), 255);
++
++        pp_trace_record(s, t, PP_TRACE_NAME, s->names_sent, len, 0);
++        g_byte_array_append(s->buf, (const uint8_t *)name, len);
++        g_byte_array_append(s->buf, zeros, -len & (PP_TRACE_REC - 1));
++    }
++}
++
++/* Queue a record for the reader (and the names it refers to) */
++static void pp_trace_put(PpTraceState *s, int64_t t, unsigned kind,
++                         unsigned src, uint32_t a, uint32_t b)
++{
++    if (!s->connected) {
++        return;
++    }
++    if (s->buf->len - s->sent >= PP_TRACE_BUF_MAX) {
++        s->lost++;
++        return;
++    }
++    if (s->lost) {
++        pp_trace_record(s, t, PP_TRACE_LOST, 0, 0, s->lost);
++        s->lost = 0;
++    }
++    if (s->names_sent < pp_trace_nnames) {
++        pp_trace_send_names(s, t);
++    }
++    pp_trace_record(s, t, kind, src, a, b);
++    qemu_bh_schedule(s->flush_bh);
++}
++
++void pp_trace_event(PpTraceKind kind, unsigned src, uint32_t a, uint32_t b)
++{
++    PpTraceState *s = pp_trace;
++
++    if (s && s->connected) {
++        pp_trace_put(s, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL), kind, src, a,
++                     b);
++    }
++}
++
++static gboolean pp_trace_writable(void *do_not_use, GIOCondition cond,
++                                  void *opaque);
++
++/* Write what the chardev takes; wait for it to take the rest */
++static void pp_trace_flush(void *opaque)
++{
++    PpTraceState *s = opaque;
++    int n;
++
++    if (s->watch_tag) {
++        return;                 /* pp_trace_writable() goes on */
++    }
++    if (!s->connected) {
++        g_byte_array_set_size(s->buf, 0);
++        s->sent = 0;
++        return;
++    }
++    if (s->sent < s->buf->len) {
++        n = qemu_chr_fe_write(&s->chr, s->buf->data + s->sent,
++                              s->buf->len - s->sent);
++        if (n > 0) {
++            s->sent += n;
++        }
++    }
++    if (s->sent == s->buf->len) {
++        g_byte_array_set_size(s->buf, 0);
++        s->sent = 0;
++        return;
++    }
++    if (s->sent > s->buf->len / 2) {
++        g_byte_array_remove_range(s->buf, 0, s->sent);
++        s->sent = 0;
++    }
++    s->watch_tag = qemu_chr_fe_add_watch(&s->chr, G_IO_OUT | G_IO_HUP,
++                                         pp_trace_writable, s);
++    if (!s->watch_tag) {
++        /* A backend that cannot say when it is ready: drop the rest */
++        s->lost += (s->buf->len - s->sent) / PP_TRACE_REC;
++        g_byte_array_set_size(s->buf, 0);
++        s->sent = 0;
++    }
++}
++
++static gboolean pp_trace_writable(void *do_not_use, GIOCondition cond,
++                                  void *opaque)
++{
++    PpTraceState *s = opaque;
++
++    s->watch_tag = 0;
++    pp_trace_flush(s);
++    return G_SOURCE_REMOVE;
++}
++
++/* Close pad @pin's window if it ended before @now */
++static void pp_trace_pad_close(PpTraceState *s, unsigned pin, int64_t now)
++{
++    PpTracePad *p = &s->pad[pin];
++    int64_t end = p->start + PP_TRACE_WINDOW_NS;
++
++    if (now < end) {
++        return;
++    }
++    if (p->busy) {
++        uint32_t duty;
++
++        if (p->level) {
++            p->high_ns += end - p->last;
++        }
++        duty = MIN(p->high_ns * 255 / PP_TRACE_WINDOW_NS, 255);
++        pp_trace_put(s, p->start, PP_TRACE_PAD_BUSY, PP_TRACE_SRC_PORT, pin,
++                     MIN(p->edges, 0xffffff) | duty << 24);
++        /* A calm window (or none since): single edges again */
++        if (p->edges <= PP_TRACE_BURST || now - end >= PP_TRACE_WINDOW_NS) {
++            p->busy = false;
++            pp_trace_put(s, end, PP_TRACE_PAD, PP_TRACE_SRC_PORT, pin,
++                         p->level);
++        }
++    }
++    p->start = p->last = now;
++    p->edges = 0;
++    p->high_ns = 0;
++}
++
++/* A pad changed level (the PORT calls this) */
++void pp_trace_pad(unsigned pin, bool level)
++{
++    PpTraceState *s = pp_trace;
++    int64_t now;
++    PpTracePad *p;
++
++    if (!s || pin >= PP_TRACE_PADS) {
++        return;
++    }
++    now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    p = &s->pad[pin];
++    pp_trace_pad_close(s, pin, now);
++    if (p->level) {
++        p->high_ns += now - p->last;
++    }
++    p->last = now;
++    p->level = level;
++    p->edges++;
++    if (p->edges > PP_TRACE_BURST) {
++        p->busy = true;
++    }
++    if (!p->busy) {
++        pp_trace_put(s, now, PP_TRACE_PAD, PP_TRACE_SRC_PORT, pin, level);
++    }
++}
++
++/* The time now and then; busy pads that went quiet get their level */
++static void pp_trace_tick(void *opaque)
++{
++    PpTraceState *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++
++    for (unsigned pin = 0; pin < PP_TRACE_PADS; pin++) {
++        if (s->pad[pin].busy) {
++            pp_trace_pad_close(s, pin, now);
++        }
++    }
++    pp_trace_put(s, now, PP_TRACE_TIME, 0, 0, 0);
++    timer_mod(s->tick, now + PP_TRACE_TICK_NS);
++}
++
++static void pp_trace_reset(void *opaque)
++{
++    pp_trace_event(PP_TRACE_RESET, 0, 0, 0);
++}
++
++/* -- the reader's actions ------------------------------------------------ */
++
++static void pp_trace_action_free(gpointer data)
++{
++    PpTraceAction *a = data;
++
++    g_free(a->path);
++    g_free(a->prop);
++    g_free(a->value);
++    g_free(a);
++}
++
++static gint pp_trace_action_cmp(gconstpointer x, gconstpointer y,
++                                gpointer unused)
++{
++    const PpTraceAction *a = x, *b = y;
++
++    /* In time order, and in the order they came for one time */
++    if (a->t != b->t) {
++        return a->t < b->t ? -1 : 1;
++    }
++    return a->seq < b->seq ? -1 : a->seq > b->seq;
++}
++
++static void pp_trace_arm(PpTraceState *s)
++{
++    PpTraceAction *a = g_queue_peek_head(&s->actions);
++
++    if (a) {
++        timer_mod(s->act_timer, a->t);
++    } else {
++        timer_del(s->act_timer);
++    }
++}
++
++/* The actions whose time has come, in order */
++static void pp_trace_act(void *opaque)
++{
++    PpTraceState *s = opaque;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    PpTraceAction *a;
++
++    while ((a = g_queue_peek_head(&s->actions)) && a->t <= now) {
++        Error *err = NULL;
++        bool ok = true;
++
++        g_queue_pop_head(&s->actions);
++        if (!a->path) {
++            qemu_system_reset_request(SHUTDOWN_CAUSE_HOST_QMP_SYSTEM_RESET);
++        } else {
++            Object *obj = object_resolve_path(a->path, NULL);
++
++            if (!obj) {
++                error_setg(&err, "no object %s", a->path);
++            } else {
++                object_property_parse(obj, a->prop, a->value, &err);
++            }
++            if (err) {
++                warn_report_err(err);
++                ok = false;
++            }
++        }
++        pp_trace_put(s, now, ok ? PP_TRACE_INPUT : PP_TRACE_INPUT_ERROR, 0,
++                     a->id & 0xffff, a->id >> 16);
++        pp_trace_action_free(a);
++    }
++    pp_trace_arm(s);
++}
++
++/* Keep virtual time near real time by pausing the VM while it is ahead */
++static void pp_trace_pace(void *opaque)
++{
++    PpTraceState *s = opaque;
++    int64_t real, virt;
++
++    if (!s->pace) {
++        return;
++    }
++    real = qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - s->real0;
++    virt = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - s->virt0;
++    if (runstate_is_running()) {
++        if (virt > real + PP_TRACE_AHEAD_NS) {
++            s->paused = true;
++            vm_stop(RUN_STATE_PAUSED);
++        } else if (virt < real - PP_TRACE_BEHIND_NS) {
++            /* A guest slower than real time: do not race it later */
++            s->real0 += real - virt - PP_TRACE_BEHIND_NS;
++        }
++    } else if (s->paused && runstate_check(RUN_STATE_PAUSED) &&
++               virt <= real) {
++        s->paused = false;
++        vm_start();
++    }
++    timer_mod(s->pace_timer,
++              qemu_clock_get_ns(QEMU_CLOCK_REALTIME) + PP_TRACE_PACE_NS);
++}
++
++static void pp_trace_set_pace(PpTraceState *s, bool on)
++{
++    s->pace = on;
++    if (on) {
++        s->real0 = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
++        s->virt0 = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++        pp_trace_pace(s);
++        return;
++    }
++    timer_del(s->pace_timer);
++    if (s->paused && runstate_check(RUN_STATE_PAUSED)) {
++        s->paused = false;
++        vm_start();
++    }
++}
++
++/* One line from the reader */
++static void pp_trace_line(PpTraceState *s, const char *line)
++{
++    int64_t t;
++    uint32_t id;
++    int on, n = 0;
++    char path[256], prop[128];
++
++    if (sscanf(line, "pace %d", &on) == 1) {
++        pp_trace_set_pace(s, on);
++    } else if (sscanf(line, "at %" SCNd64 " %" SCNu32 " %n", &t, &id,
++                      &n) == 2 && n) {
++        const char *rest = line + n;
++        PpTraceAction *a = g_new0(PpTraceAction, 1);
++        int m = 0;
++
++        a->t = MAX(t, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
++        a->seq = s->action_seq++;
++        a->id = id;
++        if (!strcmp(rest, "reset")) {
++            /* a->path NULL */
++        } else if (sscanf(rest, "set %255s %127s %n", path, prop, &m) == 2 &&
++                   m) {
++            a->path = g_strdup(path);
++            a->prop = g_strdup(prop);
++            a->value = g_strdup(rest + m);
++        } else {
++            warn_report("trace: what is \"%s\"?", line);
++            g_free(a);
++            return;
++        }
++        g_queue_insert_sorted(&s->actions, a, pp_trace_action_cmp, NULL);
++        pp_trace_arm(s);
++    } else if (*line) {
++        warn_report("trace: what is \"%s\"?", line);
++    }
++}
++
++static int pp_trace_can_read(void *opaque)
++{
++    return PP_TRACE_LINE_MAX;
++}
++
++static void pp_trace_read(void *opaque, const uint8_t *buf, int size)
++{
++    PpTraceState *s = opaque;
++
++    for (int i = 0; i < size; i++) {
++        if (buf[i] == '\n') {
++            g_strchomp(s->line->str);
++            pp_trace_line(s, s->line->str);
++            g_string_truncate(s->line, 0);
++        } else if (s->line->len < PP_TRACE_LINE_MAX) {
++            g_string_append_c(s->line, buf[i]);
++        }
++    }
++}
++
++/* A reader connected: hello, the names, every pad's level */
++static void pp_trace_connect(PpTraceState *s)
++{
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    unsigned gp = pp_trace_group_pins;
++    uint32_t levels[PP_TRACE_PADS / 8];
++    unsigned groups = 0;
++
++    g_clear_handle_id(&s->watch_tag, g_source_remove);
++    g_byte_array_set_size(s->buf, 0);
++    s->sent = 0;
++    s->lost = 0;
++    s->names_sent = 0;
++    s->connected = true;
++    pp_trace_record(s, now, PP_TRACE_HELLO, 0, PP_TRACE_VERSION,
++                    gp | s->irq_flags);
++    if (pp_trace_levels) {
++        groups = pp_trace_levels(pp_trace_levels_opaque, levels,
++                                 MIN(ARRAY_SIZE(levels), PP_TRACE_PADS / gp));
++    }
++    for (unsigned pin = 0; pin < groups * gp; pin++) {
++        PpTracePad *p = &s->pad[pin];
++
++        p->level = extract32(levels[pin / gp], pin % gp, 1);
++        p->busy = false;
++        p->start = p->last = now;
++        p->edges = 0;
++        p->high_ns = 0;
++        pp_trace_put(s, now, PP_TRACE_PAD, PP_TRACE_SRC_PORT, pin, p->level);
++    }
++    pp_trace_put(s, now, PP_TRACE_TIME, 0, 0, 0);
++    timer_mod(s->tick, now + PP_TRACE_TICK_NS);
++}
++
++static void pp_trace_chr_event(void *opaque, QEMUChrEvent event)
++{
++    PpTraceState *s = opaque;
++
++    switch (event) {
++    case CHR_EVENT_OPENED:
++        pp_trace_connect(s);
++        break;
++    case CHR_EVENT_CLOSED:
++        s->connected = false;
++        g_clear_handle_id(&s->watch_tag, g_source_remove);
++        g_byte_array_set_size(s->buf, 0);
++        s->sent = 0;
++        timer_del(s->tick);
++        /* The reader's actions and pacing go with it */
++        g_queue_clear_full(&s->actions, pp_trace_action_free);
++        timer_del(s->act_timer);
++        g_string_truncate(s->line, 0);
++        pp_trace_set_pace(s, false);
++        break;
++    default:
++        break;
++    }
++}
++
++void pp_trace_attach(Object *machine, const char *chardev, uint32_t irq_flags)
++{
++    DeviceState *dev = qdev_new(TYPE_PP_TRACE);
++    Chardev *chr = qemu_chr_find(chardev);
++
++    if (!chr) {
++        error_report("trace: no chardev \"%s\"", chardev);
++        exit(1);
++    }
++    qdev_prop_set_chr(dev, "chardev", chr);
++    qdev_prop_set_uint32(dev, "irq-flags", irq_flags);
++    object_property_add_child(machine, "pp-trace", OBJECT(dev));
++    qdev_realize_and_unref(dev, NULL, &error_fatal);
++}
++
++static void pp_trace_realize(DeviceState *dev, Error **errp)
++{
++    PpTraceState *s = PP_TRACE(dev);
++
++    if (pp_trace) {
++        error_setg(errp, "trace: one per machine");
++        return;
++    }
++    pp_trace = s;
++    pp_trace_source("PORT");            /* names PORT and NVIC */
++    s->buf = g_byte_array_new();
++    s->line = g_string_new(NULL);
++    g_queue_init(&s->actions);
++    s->flush_bh = qemu_bh_new(pp_trace_flush, s);
++    s->tick = timer_new_ns(QEMU_CLOCK_VIRTUAL, pp_trace_tick, s);
++    s->act_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, pp_trace_act, s);
++    s->pace_timer = timer_new_ns(QEMU_CLOCK_REALTIME, pp_trace_pace, s);
++    qemu_register_reset(pp_trace_reset, s);
++    qemu_chr_fe_set_handlers(&s->chr, pp_trace_can_read, pp_trace_read,
++                             pp_trace_chr_event, NULL, s, NULL, true);
++}
++
++static const Property pp_trace_properties[] = {
++    DEFINE_PROP_CHR("chardev", PpTraceState, chr),
++    DEFINE_PROP_UINT32("irq-flags", PpTraceState, irq_flags, 0),
++};
++
++/* The reader keeps what was recorded; a restored VM starts a new stream */
++static const VMStateDescription vmstate_pp_trace = {
++    .name = TYPE_PP_TRACE,
++    .unmigratable = 1,
++};
++
++static void pp_trace_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->realize = pp_trace_realize;
++    dc->vmsd = &vmstate_pp_trace;
++    dc->user_creatable = false;
++    device_class_set_props(dc, pp_trace_properties);
++}
++
++static const TypeInfo pp_trace_types[] = {
++    {
++        .name = TYPE_PP_TRACE,
++        .parent = TYPE_DEVICE,
++        .instance_size = sizeof(PpTraceState),
++        .class_init = pp_trace_class_init,
++    },
++};
++
++DEFINE_TYPES(pp_trace_types)
+diff --git a/include/hw/arm/pic32cm_soc.h b/include/hw/arm/pic32cm_soc.h
+index 60c3e04..1c5e1eb 100644
+--- a/include/hw/arm/pic32cm_soc.h
++++ b/include/hw/arm/pic32cm_soc.h
+@@ -107,4 +107,27 @@ void pic32cm_soc_connect_usb(Pic32cmSocState *s, Chardev *chr);
+ /* The model of ATDF instance @name (e.g. "PORT"), or NULL */
+ DeviceState *pic32cm_soc_periph(Pic32cmSocState *s, const char *name);
+ 
++/*
++ * Plug a Click wired to pads on the bench, as /machine/@name-click: @spec
++ * is "click:role.PAD:role.PAD..." with the roles an, rst, cs, sck, miso,
++ * mosi, pwm, int, scl and sda (for example "oledc:cs.PA17:sck.PA19:
++ * mosi.PA18:rst.PA20:pwm.PB10:int.PB02"). Its SPI and I2C reach every
++ * SERCOM that can serve those pads, while the pads are muxed to it. A
++ * spec that cannot be wired is reported and skipped. Call after realize.
++ */
++void pic32cm_soc_wire_click(Pic32cmSocState *s, Object *machine,
++                            const char *name, const char *spec);
++
++/* Each "name=spec" of @wired, separated by "/" (a machine's "wired") */
++void pic32cm_soc_wire_clicks(Pic32cmSocState *s, Object *machine,
++                             const char *wired);
++
++/*
++ * The event recorder on chardev @chardev (a machine's "trace"): the PORT's
++ * pads and the NVIC's exceptions, besides what the models report. Call
++ * after realize.
++ */
++void pic32cm_soc_trace(Pic32cmSocState *s, Object *machine,
++                       const char *chardev);
++
+ #endif /* HW_ARM_PIC32CM_SOC_H */
+diff --git a/include/hw/gpio/mchp_port.h b/include/hw/gpio/mchp_port.h
+index 59f396f..2b3cd84 100644
+--- a/include/hw/gpio/mchp_port.h
++++ b/include/hw/gpio/mchp_port.h
+@@ -45,6 +45,9 @@
+  *   "pa-stats"     str, read-only: "<ns> <high0> <low0> ... <high31>
+  *                  <low31>", virtual time and each pad's total driven-high
+  *                  and driven-low time in ns (duty = difference of totals)
++ *   "pa-short"     str: "<mask> <level>" in hex, pads shorted to VDD
++ *                  (level 1) or GND (0) over every driver, the PORT's
++ *                  too: an injected fault (not migrated)
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -91,4 +94,44 @@ void mchp_port_watch(DeviceState *port, unsigned pin, MchpPadWatchFn *fn,
+  */
+ bool mchp_port_pad_driven(DeviceState *port, unsigned pin, bool *level);
+ 
++/*
++ * The electrical state of pad @pin as the MCU sets it, for circuits on the
++ * board (pp-cosim): high or low while the PORT or a peripheral drives it,
++ * pulled up or down while only its pull resistor does, else floating.
++ * External drivers (Click boards, buttons, the bench) do not count: they
++ * are the board's side of the pad.
++ */
++#define MCHP_PAD_HIGH       'h'
++#define MCHP_PAD_LOW        'l'
++#define MCHP_PAD_PULLUP     'u'
++#define MCHP_PAD_PULLDOWN   'd'
++#define MCHP_PAD_FLOAT      'z'
++char mchp_port_pad_state(DeviceState *port, unsigned pin);
++
++/*
++ * Observe the state of every pad: @fn(@opaque, pin, state) runs at the
++ * virtual time of each change (not for the states at the time of the
++ * call). One observer per PORT.
++ */
++typedef void MchpPadObserveFn(void *opaque, unsigned pin, char state);
++void mchp_port_observe(DeviceState *port, MchpPadObserveFn *fn,
++                       void *opaque);
++
++/*
++ * One more sink for pad @pin's "pad" line: its level while the PORT or a
++ * peripheral drives it, else -1. Unlike the "pad" GPIO output, which takes
++ * one sink, any number can listen (a Click wired to the pad on the bench,
++ * beside the board's own LED on it). @in gets the current level at once.
++ */
++void mchp_port_pad_listen(DeviceState *port, unsigned pin, qemu_irq in);
++
++/* The peripheral function (PMUX value) pad @pin is muxed to, or -1 */
++int mchp_port_pad_function(DeviceState *port, unsigned pin);
++
++/*
++ * Make @port the event recorder's pad source: it reports every pad's
++ * level, whoever sets it (as "pa-levels"), with pp_trace_pad()
++ */
++void mchp_port_trace(DeviceState *port);
++
+ #endif /* HW_GPIO_MCHP_PORT_H */
+diff --git a/include/hw/intc/armv7m_nvic.h b/include/hw/intc/armv7m_nvic.h
+index e699546..9f89782 100644
+--- a/include/hw/intc/armv7m_nvic.h
++++ b/include/hw/intc/armv7m_nvic.h
+@@ -81,7 +81,24 @@ struct NVICState {
+     uint32_t num_irq;
+     qemu_irq excpout;
+     qemu_irq sysresetreq;
++
++    /* Peripheral Pretender: told of each pend, entry and return */
++    void (*observer)(void *opaque, int irq, int what);
++    void *observer_opaque;
++};
++
++/*
++ * Peripheral Pretender (not upstream): @fn(@opaque, irq, what) runs when
++ * exception @irq becomes pending, is taken or returns (what: one of the
++ * ARMV7M_NVIC_OBSERVE_* values). One observer per NVIC; not migrated.
++ */
++enum {
++    ARMV7M_NVIC_OBSERVE_PEND,
++    ARMV7M_NVIC_OBSERVE_ENTER,
++    ARMV7M_NVIC_OBSERVE_EXIT,
+ };
++void armv7m_nvic_observe(NVICState *s, void (*fn)(void *, int, int),
++                         void *opaque);
+ 
+ /* Interface between CPU and Interrupt controller.  */
+ /**
+diff --git a/include/hw/misc/mikrobus.h b/include/hw/misc/mikrobus.h
+index 9b7c530..f428d8e 100644
+--- a/include/hw/misc/mikrobus.h
++++ b/include/hw/misc/mikrobus.h
+@@ -50,8 +50,19 @@ typedef struct MikrobusSocket {
+     int an_pin;                 /* AN's pad in the port arrays; -1: not wired
+                                    (set it: 0 is a pad) */
+     Chardev *uart;              /* mikrobus_uart_chardev() for this socket */
++    /*
++     * Connect a pad's level line (as port_pad gives it) to a Click input;
++     * NULL: the port_pad output itself, which takes one sink. A socket
++     * wired to any pads (a Click on the bench) shares them this way.
++     */
++    void (*pad_listen)(DeviceState *port, unsigned pin, qemu_irq in);
+ } MikrobusSocket;
+ 
++/* What the catalog says of Click @click: its bus and I2C address */
++enum { MIKROBUS_BUS_NONE, MIKROBUS_BUS_GPIO, MIKROBUS_BUS_I2C,
++       MIKROBUS_BUS_SPI, MIKROBUS_BUS_UART };
++int mikrobus_click_bus(const char *click, uint8_t *i2c_addr);
++
+ /* Comma-separated names of the catalog, for option descriptions */
+ const char *mikrobus_click_names(void);
+ 
+diff --git a/include/hw/misc/pp_bus_tap.h b/include/hw/misc/pp_bus_tap.h
+new file mode 100644
+index 0000000..eaabf5c
+--- /dev/null
++++ b/include/hw/misc/pp_bus_tap.h
+@@ -0,0 +1,31 @@
++/*
++ * Bus taps: a Click wired to pads reaches whichever SERCOM the firmware
++ * muxes those pads to
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * A Click wired on the bench sits on the private SPI and I2C buses of a
++ * TYPE_PP_BUS_HUB. A tap (TYPE_PP_SSI_TAP, TYPE_PP_I2C_TAP) sits on the bus
++ * of each SERCOM that could drive those pads, and passes its traffic on to
++ * the hub's bus while the pad it checks ("pin") is muxed to that SERCOM's
++ * function ("pmux"), as silicon routes it through the PORT.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_PP_BUS_TAP_H
++#define HW_MISC_PP_BUS_TAP_H
++
++#include "hw/i2c/i2c.h"
++#include "hw/ssi/ssi.h"
++
++#define TYPE_PP_BUS_HUB "pp-bus-hub"
++#define TYPE_PP_SSI_TAP "pp-ssi-tap"
++#define TYPE_PP_I2C_TAP "pp-i2c-tap"
++
++/* The hub's private buses ("spi", "i2c") */
++SSIBus *pp_bus_hub_spi(DeviceState *hub);
++I2CBus *pp_bus_hub_i2c(DeviceState *hub);
++
++#endif /* HW_MISC_PP_BUS_TAP_H */
+diff --git a/include/hw/misc/pp_cosim.h b/include/hw/misc/pp_cosim.h
+new file mode 100644
+index 0000000..87c6831
+--- /dev/null
++++ b/include/hw/misc/pp_cosim.h
+@@ -0,0 +1,39 @@
++/*
++ * Peripheral Pretender co-simulation port: the twin's pads and analog
++ * inputs in lockstep with a circuit simulated outside QEMU
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * A board machine creates one with pp_cosim_attach() when its "cosim"
++ * property names a chardev. The protocol is described in pp_cosim.c and in
++ * the project's docs/design/analog.md.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_PP_COSIM_H
++#define HW_MISC_PP_COSIM_H
++
++#include "hw/core/qdev.h"
++
++#define TYPE_PP_COSIM "pp-cosim"
++
++/*
++ * Create the port as a child of @machine ("pp-cosim"), talking on chardev
++ * @chardev, observing @port (a TYPE_MCHP_PORT); @vdd_mv is the pads'
++ * supply. Exits with an error if @chardev does not exist.
++ */
++void pp_cosim_attach(Object *machine, const char *chardev, DeviceState *port,
++                     uint32_t vdd_mv);
++
++/*
++ * The voltage of analog input @channel of @dev (an ADC) at virtual time
++ * @when (ns, not after now), in microvolts, if the circuit drives that
++ * input: true and *@uv set; false while no circuit does (the model falls
++ * back to its own inputs).
++ */
++bool pp_cosim_sample(Object *dev, unsigned channel, int64_t when,
++                     int64_t *uv);
++
++#endif /* HW_MISC_PP_COSIM_H */
+diff --git a/include/hw/misc/pp_trace.h b/include/hw/misc/pp_trace.h
+new file mode 100644
+index 0000000..3c36ed8
+--- /dev/null
++++ b/include/hw/misc/pp_trace.h
+@@ -0,0 +1,106 @@
++/*
++ * Peripheral Pretender event recorder
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Models report what happens on the board (a pad changes, a byte crosses
++ * a bus, an exception is taken) with pp_trace_event(); the machine's
++ * recorder ("trace=<chardev>") stamps each event with QEMU_CLOCK_VIRTUAL
++ * and streams it to the chardev for a timeline. Without a recorder the
++ * calls cost a test of one pointer.
++ *
++ * The stream is 16-byte little-endian records:
++ *   uint64 t     virtual time in ns
++ *   uint8  kind  PP_TRACE_*
++ *   uint8  src   the source (pp_trace_source()): a SERCOM, the PORT...
++ *   uint16 a, uint32 b   as each kind says
++ * A PP_TRACE_NAME record is followed by its name, padded to 16 bytes.
++ *
++ * The reader may send lines back, to act on the board at exact virtual
++ * times (for a run that replays exactly, with a fixed -icount shift and
++ * sleep=off):
++ *   at <t> <id> set <path> <property> <value>   set a QOM property at
++ *                       virtual time <t> ns (0: now), as qom-set would
++ *   at <t> <id> reset   a system reset at <t>
++ *   pace <0|1>          keep virtual time from running ahead of real time
++ *                       by pausing the VM (invisible to the guest)
++ * Each applied action is reported (PP_TRACE_INPUT, its id) with the time
++ * it took effect, so a recording can repeat it at that time.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_PP_TRACE_H
++#define HW_MISC_PP_TRACE_H
++
++#include "hw/core/qdev.h"
++
++#define TYPE_PP_TRACE "pp-trace"
++
++#define PP_TRACE_VERSION    1
++
++typedef enum PpTraceKind {
++    PP_TRACE_PAD = 1,       /* a: pad (group * pads a group + pin),
++                               b: level */
++    PP_TRACE_PAD_BUSY,      /* a: pad, b: edges in the window (t: its start;
++                               the pad toggles too fast for single edges);
++                               bits 24-31 of b: high time, of 255 */
++    PP_TRACE_UART_TX,       /* a: character */
++    PP_TRACE_UART_RX,       /* a: character */
++    PP_TRACE_SPI,           /* a: character out, b: character in */
++    PP_TRACE_I2C_START,     /* a: 7-bit address, b: bit 0 read, bit 1 NACK */
++    PP_TRACE_I2C_BYTE,      /* a: byte, b: bit 0 NACK, bit 1 read */
++    PP_TRACE_I2C_HOST_NACK, /* the host NACKs the last byte it read */
++    PP_TRACE_I2C_STOP,
++    PP_TRACE_IRQ_PEND,      /* a: exception number (16 + IRQ line), or
++                               the AVR vector (PP_TRACE_IRQ_VECTORS) */
++    PP_TRACE_IRQ_ENTER,     /* a: exception number, or vector */
++    PP_TRACE_IRQ_EXIT,      /* a: exception number, or vector */
++    PP_TRACE_RESET,         /* a system reset */
++    PP_TRACE_INPUT,         /* an action of the reader took effect: id in
++                               a (low 16 bits) and b (high 16) */
++    PP_TRACE_INPUT_ERROR,   /* an action failed (as PP_TRACE_INPUT) */
++    PP_TRACE_HELLO = 0xf0,  /* a: PP_TRACE_VERSION; b: pads a group (bits
++                               0-7: PA05 is pad 5 + 32 on Arm parts, PB3
++                               pad 3 + 8 on AVR), interrupt numbering (bit
++                               8: AVR vectors, else Cortex-M exceptions) */
++    PP_TRACE_NAME,          /* a: length of the name that follows */
++    PP_TRACE_LOST,          /* b: events dropped (the reader fell behind) */
++    PP_TRACE_TIME,          /* the virtual time, now and then */
++} PpTraceKind;
++
++/* Sources with fixed ids: the pads, and the interrupt controller */
++#define PP_TRACE_SRC_PORT   0
++#define PP_TRACE_SRC_NVIC   1
++
++#define PP_TRACE_IRQ_VECTORS    (1 << 8)    /* PP_TRACE_HELLO flag */
++
++/* A source id for the model instance called @name ("SERCOM3") */
++unsigned pp_trace_source(const char *name);
++
++/* Record an event of @kind from @src; nothing without a recorder */
++void pp_trace_event(PpTraceKind kind, unsigned src, uint32_t a, uint32_t b);
++
++/*
++ * The pads: a PORT model calls pp_trace_pad() whenever pad @pin (group *
++ * @group_pins + pin) changes level, whoever set it, and registers with
++ * pp_trace_pads() how to read every pad's level now (@fn fills one word a
++ * group, returns the groups), for a reader that connects.
++ */
++typedef unsigned PpTraceLevelsFn(void *opaque, uint32_t *levels,
++                                 unsigned max);
++void pp_trace_pads(PpTraceLevelsFn *fn, void *opaque, unsigned group_pins);
++void pp_trace_pad(unsigned pin, bool level);
++
++/*
++ * The machine's recorder on chardev @chardev; @irq_flags: 0 for Cortex-M
++ * exception numbers, PP_TRACE_IRQ_VECTORS for AVR vectors. The SoC wires
++ * its PORT (pp_trace_pads(), before this: a reader that is already
++ * connected gets the HELLO now) and its interrupt controller
++ * (PP_TRACE_IRQ_* events from PP_TRACE_SRC_NVIC).
++ */
++void pp_trace_attach(Object *machine, const char *chardev,
++                     uint32_t irq_flags);
++
++#endif /* HW_MISC_PP_TRACE_H */
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index 11221b2..e76c4bc 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -630,6 +630,75 @@ static void test_thumbstick(void)
+     qtest_quit(qts);
+ }
+ 
++#define SERCOM0         0x42000400
++
++/*
++ * Injected faults: a short over the PORT's own drive (LED0, PA24), an I2C
++ * address that NACKs (the Thermo 8), a stuck MISO (the Thumbstick's
++ * MCP3204); characters into the VCOM's receiver (SERCOM0 rx-inject)
++ */
++static void test_faults(void)
++{
++    QTestState *qts = click_init("");
++    const char *ch;
++
++    qtest_writeb(qts, PA + P_PINCFG + 24, 0x02);            /* INEN */
++    qtest_writel(qts, PA + P_OUTCLR, BIT(24));
++    qtest_writel(qts, PA + P_DIRSET, BIT(24));
++    g_assert_cmphex(qtest_readl(qts, PA + P_IN) & BIT(24), ==, 0);
++    qtest_qmp_assert_success(qts, "{ 'execute': 'qom-set', 'arguments': {"
++                             " 'path': '/machine/soc/port', 'property':"
++                             " 'pa-short', 'value': '1000000 1000000' } }");
++    g_assert_cmphex(qtest_readl(qts, PA + P_IN) & BIT(24), ==, BIT(24));
++    qtest_qmp_assert_success(qts, "{ 'execute': 'qom-set', 'arguments': {"
++                             " 'path': '/machine/soc/port', 'property':"
++                             " 'pa-short', 'value': '0 0' } }");
++    g_assert_cmphex(qtest_readl(qts, PA + P_IN) & BIT(24), ==, 0);
++
++    qtest_qmp_assert_success(qts, "{ 'execute': 'qom-set', 'arguments': {"
++                             " 'path': '/machine/soc/sercom2', 'property':"
++                             " 'fault-nack', 'value': '18' } }");
++    g_assert_false(mcp_write(qts, 1, NULL, 0));
++    qtest_qmp_assert_success(qts, "{ 'execute': 'qom-set', 'arguments': {"
++                             " 'path': '/machine/soc/sercom2', 'property':"
++                             " 'fault-nack', 'value': '' } }");
++    g_assert_cmphex(mcp_read(qts, 6, 2), ==, 0x0054);       /* manufacturer */
++
++    /* VCOM: 8N1, RXPO 1, TXEN and RXEN (as pic32cm-mc00-test) */
++    qtest_writel(qts, SERCOM0 + 0x00, 0x40310004);
++    qtest_writel(qts, SERCOM0 + 0x04, 0x00030000);
++    qtest_writel(qts, SERCOM0 + 0x00, 0x40310006);
++    qtest_qmp_assert_success(qts, "{ 'execute': 'qom-set', 'arguments': {"
++                             " 'path': '/machine/soc/sercom0', 'property':"
++                             " 'rx-inject', 'value': '686921' } }");
++    for (ch = "hi!"; *ch; ch++) {
++        g_assert_cmphex(qtest_readb(qts, SERCOM0 + 0x18) & BIT(2), ==,
++                        BIT(2));                            /* RXC */
++        g_assert_cmphex(qtest_readw(qts, SERCOM0 + 0x28), ==, *ch);
++    }
++    g_assert_cmphex(qtest_readb(qts, SERCOM0 + 0x18) & BIT(2), ==, 0);
++    qtest_quit(qts);
++
++    qts = qtest_init("-M pic32cm-mc00-cpro,ext1=thumbstick ");
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16);
++    qtest_writel(qts, SERCOM1 + 0x04, BIT(17));             /* RXEN */
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16 | 0x02);
++    qtest_writel(qts, PA + P_OUTSET, BIT(17));
++    qtest_writel(qts, PA + P_DIRSET, BIT(17));
++    qtest_qmp_assert_success(qts, "{ 'execute': 'qom-set', 'arguments': {"
++                             " 'path': '/machine/soc/sercom1', 'property':"
++                             " 'fault-miso', 'value': 'a5' } }");
++    qtest_writel(qts, PA + P_OUTCLR, BIT(17));
++    g_assert_cmphex(spi_xfer(qts, 0x06), ==, 0xa5);
++    g_assert_cmphex(spi_xfer(qts, 0x00), ==, 0xa5);
++    qtest_writel(qts, PA + P_OUTSET, BIT(17));
++    qtest_qmp_assert_success(qts, "{ 'execute': 'qom-set', 'arguments': {"
++                             " 'path': '/machine/soc/sercom1', 'property':"
++                             " 'fault-miso', 'value': '' } }");
++    g_assert_cmpuint(mcp3204_read(qts, 0x06, 0x00), ==, 2048);
++    qtest_quit(qts);
++}
++
+ /* I2C on SERCOM2 (as mcp_write/mcp_read) to any address */
+ static bool i2c_wr(QTestState *qts, uint8_t addr, uint8_t reg,
+                    const uint8_t *d, unsigned n)
+@@ -1400,5 +1469,6 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/thermo8-limits", test_limit_flags);
+     qtest_add_func("pic32cm-click/thermo8-alert", test_alert);
+     qtest_add_func("pic32cm-click/thermo8-shutdown-lock", test_shutdown_lock);
++    qtest_add_func("pic32cm-click/faults", test_faults);
+     return g_test_run();
+ }
+-- 
+2.53.0.windows.2
+

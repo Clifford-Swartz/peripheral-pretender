@@ -1,0 +1,1033 @@
+From 6dbd5a079a1f0113dea1861e0f2417f1c70b60c8 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 22 Oct 2026 22:24:56 -0700
+Subject: [PATCH 78/78] hw/avr: the event recorder and injected faults on the
+ AVR64EA48 Nano
+
+The bench's timeline, faults and exact replay for avr64ea48-cnano
+(machine "trace=<chardev>"), as on the PIC32CM boards:
+
+- PORT: each pad's level to the recorder (pp_trace_pad(), 8 pads a
+  group), "pX-short" (pads shorted to VDD or GND over every driver).
+- USART: bytes each way, "rx-inject" (characters into the receiver as
+  it has room). TWI: start, byte, host NACK and stop, "fault-nack".
+  SPI: transfers, "fault-miso".
+- Interrupts: an observer in target/avr (avr_cpu_observe_irqs()) for a
+  source asserting its line, the CPU taking the vector and the RETI that
+  ends its level (the CPU keeps the vector each level runs). The stream
+  numbers them by vector (PP_TRACE_IRQ_VECTORS).
+- avr8x_soc_trace() wires the PORT and the observer, then attaches the
+  recorder.
+
+qtest avr64ea48-cnano-test: the faults and rx-inject.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ hw/avr/avr64ea48_cnano.c           | 23 +++++++++
+ hw/avr/avr8x_soc.c                 | 20 ++++++++
+ hw/char/Kconfig                    |  1 +
+ hw/char/avr8x_usart.c              | 67 +++++++++++++++++++++++++
+ hw/gpio/Kconfig                    |  1 +
+ hw/gpio/avr8x_port.c               | 78 ++++++++++++++++++++++++++++--
+ hw/i2c/Kconfig                     |  1 +
+ hw/i2c/avr8x_twi.c                 | 67 ++++++++++++++++++++++++-
+ hw/ssi/Kconfig                     |  1 +
+ hw/ssi/avr8x_spi.c                 | 51 +++++++++++++++++++
+ include/hw/avr/avr8x_soc.h         |  7 +++
+ include/hw/gpio/avr8x_port.h       | 15 +++++-
+ target/avr/cpu.c                   | 11 +++++
+ target/avr/cpu.h                   | 27 +++++++++++
+ target/avr/helper.c                | 14 +++++-
+ tests/qtest/avr64ea48-cnano-test.c | 71 ++++++++++++++++++++++++++-
+ 16 files changed, 447 insertions(+), 8 deletions(-)
+
+diff --git a/hw/avr/avr64ea48_cnano.c b/hw/avr/avr64ea48_cnano.c
+index 94ce382..470a233 100644
+--- a/hw/avr/avr64ea48_cnano.c
++++ b/hw/avr/avr64ea48_cnano.c
+@@ -82,6 +82,7 @@ struct Avr64ea48CnanoState {
+     bool sw0_pressed;
+     char *mb[CNANO_MB_NUM];
+     Chardev *mb_uart[CNANO_MB_NUM];     /* a UART Click's module */
++    char *trace;                        /* chardev id of the event recorder */
+ };
+ 
+ /* A pressed SW0 pulls PB2 low; a released one leaves the pad undriven. */
+@@ -152,6 +153,20 @@ static void avr64ea48_cnano_set_mb3(Object *obj, const char *value,
+     avr64ea48_cnano_set_mb(obj, value, errp, 2);
+ }
+ 
++static char *avr64ea48_cnano_get_trace(Object *obj, Error **errp)
++{
++    return g_strdup(AVR64EA48_CNANO_MACHINE(obj)->trace);
++}
++
++static void avr64ea48_cnano_set_trace(Object *obj, const char *value,
++                                      Error **errp)
++{
++    Avr64ea48CnanoState *s = AVR64EA48_CNANO_MACHINE(obj);
++
++    g_free(s->trace);
++    s->trace = g_strdup(value);
++}
++
+ /* Plug the Click boards named by mb1= .. mb3= into the Nano Base */
+ static void avr64ea48_cnano_add_clicks(Avr64ea48CnanoState *s)
+ {
+@@ -222,6 +237,9 @@ static void avr64ea48_cnano_init(MachineState *machine)
+     s->sw0 = qdev_get_gpio_in_named(port, AVR8X_PORT_IN, CNANO_SW0_PIN);
+     avr64ea48_cnano_update_sw0(s);
+     avr64ea48_cnano_add_clicks(s);
++    if (s->trace) {
++        avr8x_soc_trace(&s->soc, OBJECT(machine), s->trace);
++    }
+ 
+     if (!firmware) {
+         /* qom-test and friends start machines without firmware */
+@@ -270,6 +288,11 @@ static void avr64ea48_cnano_class_init(ObjectClass *oc, const void *data)
+ 
+         object_class_property_set_description(oc, name, desc);
+     }
++    object_class_property_add_str(oc, "trace", avr64ea48_cnano_get_trace,
++                                  avr64ea48_cnano_set_trace);
++    object_class_property_set_description(oc, "trace",
++        "Chardev id of the event recorder: pads, USART, SPI and TWI traffic "
++        "and interrupt vectors in virtual time, for a timeline");
+ }
+ 
+ static const TypeInfo avr64ea48_cnano_types[] = {
+diff --git a/hw/avr/avr8x_soc.c b/hw/avr/avr8x_soc.c
+index 20593f7..1885f8d 100644
+--- a/hw/avr/avr8x_soc.c
++++ b/hw/avr/avr8x_soc.c
+@@ -29,6 +29,7 @@
+ #include "hw/core/qdev-clock.h"
+ #include "hw/core/qdev-properties.h"
+ #include "hw/core/qdev-properties-system.h"
++#include "hw/misc/pp_trace.h"
+ #include "hw/misc/unimp.h"
+ #include "hw/i2c/avr8x_twi.h"
+ #include "hw/ssi/avr8x_spi.h"
+@@ -103,6 +104,25 @@ MemoryRegion *avr8x_soc_flash(Avr8xSocState *s)
+     return &s->flash;
+ }
+ 
++static void avr8x_soc_trace_irq(void *opaque, AvrIrqEvent ev, unsigned vector)
++{
++    static const PpTraceKind kind[] = {
++        [AVR_IRQ_PEND] = PP_TRACE_IRQ_PEND,
++        [AVR_IRQ_ENTER] = PP_TRACE_IRQ_ENTER,
++        [AVR_IRQ_EXIT] = PP_TRACE_IRQ_EXIT,
++    };
++
++    pp_trace_event(kind[ev], PP_TRACE_SRC_NVIC, vector, 0);
++}
++
++void avr8x_soc_trace(Avr8xSocState *s, Object *machine, const char *chardev)
++{
++    /* The pads first: a reader already there gets them in the HELLO */
++    avr8x_port_trace(DEVICE(&s->port));
++    avr_cpu_observe_irqs(&s->cpu, avr8x_soc_trace_irq, NULL);
++    pp_trace_attach(machine, chardev, PP_TRACE_IRQ_VECTORS);
++}
++
+ void avr8x_soc_connect_serial(Avr8xSocState *s, unsigned usart, Chardev *chr)
+ {
+     assert(usart < AVR8X_MAX_USART);
+diff --git a/hw/char/Kconfig b/hw/char/Kconfig
+index 1faa7fa..2392216 100644
+--- a/hw/char/Kconfig
++++ b/hw/char/Kconfig
+@@ -78,6 +78,7 @@ config AVR_USART
+ config AVR8X_USART
+     bool
+     select MCHP_REGFILE
++    select PP_TRACE
+ 
+ config DIVA_GSP
+     bool
+diff --git a/hw/char/avr8x_usart.c b/hw/char/avr8x_usart.c
+index c1b5514..ad83f10 100644
+--- a/hw/char/avr8x_usart.c
++++ b/hw/char/avr8x_usart.c
+@@ -19,17 +19,24 @@
+  * loop-back and the start-of-frame detector; writes to their bits are
+  * logged.
+  *
++ * Every character goes to the event recorder (pp_trace_event()).
++ * "rx-inject" (hex characters) feeds the receiver as the chardev would, as
++ * fast as it takes them: input whose timing the recorder controls, for
++ * runs that replay exactly.
++ *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+ 
+ #include "qemu/osdep.h"
+ #include "qemu/log.h"
+ #include "qemu/timer.h"
++#include "qapi/error.h"
+ #include "chardev/char-fe.h"
+ #include "hw/core/irq.h"
+ #include "hw/core/qdev-properties.h"
+ #include "hw/core/qdev-properties-system.h"
+ #include "hw/char/avr8x_usart.h"
++#include "hw/misc/pp_trace.h"
+ #include "hw/mchp/gen/usart_uart_autobd_v4.h"
+ #include "migration/vmstate.h"
+ #include "trace.h"
+@@ -64,6 +71,9 @@ struct Avr8xUsartState {
+     uint16_t rx_buf[AVR8X_USART_RX_DEPTH];  /* bit 8: DATA8, 15: BUFOVF */
+     uint8_t rx_count;
+     bool rx_overflow;
++
++    unsigned trace_src;         /* this USART in the event recorder */
++    GByteArray *inject;         /* "rx-inject" characters not taken yet */
+ };
+ 
+ static MchpRegFile *avr8x_usart_rf(Avr8xUsartState *s)
+@@ -171,6 +181,7 @@ static gboolean avr8x_usart_tx_send(void *do_not_use, GIOCondition cond,
+         /* No backend that could ever take it: the character is lost. */
+     }
+     trace_avr8x_usart_tx(MCHP_REGBLOCK(s)->name, ch);
++    pp_trace_event(PP_TRACE_UART_TX, s->trace_src, ch, 0);
+     frame_ns = s->pace_tx ? avr8x_usart_frame_ns(s) : 0;
+     if (frame_ns) {
+         timer_mod(s->frame_timer,
+@@ -206,6 +217,7 @@ static void avr8x_usart_receive(void *opaque, const uint8_t *buf, int size)
+ 
+     for (int i = 0; i < size; i++) {
+         trace_avr8x_usart_rx(MCHP_REGBLOCK(s)->name, buf[i]);
++        pp_trace_event(PP_TRACE_UART_RX, s->trace_src, buf[i], 0);
+         if (s->rx_count == AVR8X_USART_RX_DEPTH) {
+             s->rx_overflow = true;
+             continue;
+@@ -216,6 +228,19 @@ static void avr8x_usart_receive(void *opaque, const uint8_t *buf, int size)
+     mchp_regblock_update_irq(MCHP_REGBLOCK(s));
+ }
+ 
++/* Give the receiver the injected characters it can take */
++static void avr8x_usart_drain(Avr8xUsartState *s)
++{
++    int n = MIN(s->inject->len, avr8x_usart_can_receive(s));
++
++    if (n > 0) {
++        g_autofree uint8_t *chars = g_memdup2(s->inject->data, n);
++
++        g_byte_array_remove_range(s->inject, 0, n);
++        avr8x_usart_receive(s, chars, n);
++    }
++}
++
+ static uint32_t avr8x_usart_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
+                                      unsigned idx, uint32_t stored,
+                                      bool side_effects)
+@@ -229,6 +254,7 @@ static uint32_t avr8x_usart_pre_read(MchpRegFile *rf, const MchpRegInfo *ri,
+             s->rx_buf[0] = s->rx_buf[1];
+             s->rx_count--;
+             mchp_regblock_update_irq(MCHP_REGBLOCK(s));
++            avr8x_usart_drain(s);
+             qemu_chr_fe_accept_input(&s->chr);
+         }
+         return head & 0xff;
+@@ -282,6 +308,7 @@ static void avr8x_usart_post_write(MchpRegFile *rf, const MchpRegInfo *ri,
+         if (!(ctrlb & R_MCHP_USART_CTRLB_RXEN_MASK)) {
+             s->rx_count = 0;            /* disabling RX flushes the FIFO */
+         } else if (!(old & R_MCHP_USART_CTRLB_RXEN_MASK)) {
++            avr8x_usart_drain(s);
+             qemu_chr_fe_accept_input(&s->chr);
+         }
+         break;
+@@ -303,6 +330,7 @@ static bool avr8x_usart_realize(MchpRegBlock *rb, Error **errp)
+ {
+     Avr8xUsartState *s = AVR8X_USART(rb);
+ 
++    s->trace_src = pp_trace_source(rb->name);
+     s->frame_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, avr8x_usart_frame_end,
+                                   s);
+     qemu_chr_fe_set_handlers(&s->chr, avr8x_usart_can_receive,
+@@ -316,6 +344,7 @@ static void avr8x_usart_init(Object *obj)
+ 
+     sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq_dre);
+     sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq_txc);
++    s->inject = g_byte_array_new();
+ }
+ 
+ static void avr8x_usart_finalize(Object *obj)
+@@ -324,6 +353,42 @@ static void avr8x_usart_finalize(Object *obj)
+ 
+     g_clear_handle_id(&s->watch_tag, g_source_remove);
+     timer_free(s->frame_timer);
++    g_byte_array_unref(s->inject);
++}
++
++/* "rx-inject": characters for the receiver, in hex; reads what waits */
++static char *avr8x_usart_get_inject(Object *obj, Error **errp)
++{
++    GByteArray *inject = AVR8X_USART(obj)->inject;
++    GString *hex = g_string_new(NULL);
++
++    for (unsigned i = 0; i < inject->len; i++) {
++        g_string_append_printf(hex, "%02x", inject->data[i]);
++    }
++    return g_string_free(hex, false);
++}
++
++static void avr8x_usart_set_inject(Object *obj, const char *value,
++                                   Error **errp)
++{
++    Avr8xUsartState *s = AVR8X_USART(obj);
++    size_t len = strlen(value);
++    g_autoptr(GByteArray) chars = g_byte_array_new();
++
++    for (size_t i = 0; i < len; i += 2) {
++        int hi = g_ascii_xdigit_value(value[i]);
++        int lo = i + 1 < len ? g_ascii_xdigit_value(value[i + 1]) : -1;
++        uint8_t c;
++
++        if (hi < 0 || lo < 0) {
++            error_setg(errp, "rx-inject: \"%s\" is not hex characters", value);
++            return;
++        }
++        c = hi << 4 | lo;
++        g_byte_array_append(chars, &c, 1);
++    }
++    g_byte_array_append(s->inject, chars->data, chars->len);
++    avr8x_usart_drain(s);
+ }
+ 
+ static const VMStateDescription vmstate_avr8x_usart = {
+@@ -364,6 +429,8 @@ static void avr8x_usart_class_init(ObjectClass *klass, const void *data)
+     c->reset_hold = avr8x_usart_reset_hold;
+     c->is_enabled = avr8x_never_enabled;
+     c->log_writes = false;
++    object_class_property_add_str(klass, "rx-inject", avr8x_usart_get_inject,
++                                  avr8x_usart_set_inject);
+ }
+ 
+ static const TypeInfo avr8x_usart_types[] = {
+diff --git a/hw/gpio/Kconfig b/hw/gpio/Kconfig
+index 77895b5..afa6645 100644
+--- a/hw/gpio/Kconfig
++++ b/hw/gpio/Kconfig
+@@ -23,6 +23,7 @@ config MCHP_PORT
+ 
+ config AVR8X_PORT
+     bool
++    select PP_TRACE
+ 
+ config PCA9552
+     bool
+diff --git a/hw/gpio/avr8x_port.c b/hw/gpio/avr8x_port.c
+index 61ffa15..3285f1f 100644
+--- a/hw/gpio/avr8x_port.c
++++ b/hw/gpio/avr8x_port.c
+@@ -13,7 +13,9 @@
+  * otherwise an external driver sets it, else the pull-up, else it floats
+  * and reads 0. INVEN inverts both the output and the input. The board's
+  * bench of parts drives pads over the other external drivers ("pa-bench")
+- * and reads the pull-ups ("pa-pull"). Not modelled:
++ * and reads the pull-ups ("pa-pull"); the event recorder sees each pad's
++ * level (pp_trace_pad(), avr8x_port_trace()). A short to VDD or GND
++ * ("pa-short", an injected fault) overrides every driver. Not modelled:
+  * slew rate (PORTCTRL.SRL), input levels (INLVL) and the event generators
+  * (EVGENCTRL is stored only).
+  *
+@@ -29,6 +31,7 @@
+ #include "hw/core/qdev-properties.h"
+ #include "hw/gpio/avr8x_port.h"
+ #include "hw/mchp/gen/port_gpio_ports_avr_v3.h"
++#include "hw/misc/pp_trace.h"
+ #include "hw/mchp/gen/vport_gpio_ports_avr_v3_vport.h"
+ #include "migration/vmstate.h"
+ #include "trace.h"
+@@ -73,7 +76,7 @@ static uint8_t avr8x_port_pulls(Avr8xPortGroup *g)
+     return avr8x_port_mask_of(g, avr8x_pullup) & ~g->dir;
+ }
+ 
+-/* Level of every pad of group @g */
++/* Level of every pad of group @g; a short overrides every driver */
+ static uint8_t avr8x_port_pads(Avr8xPortGroup *g)
+ {
+     uint8_t drive = g->dir;
+@@ -81,8 +84,10 @@ static uint8_t avr8x_port_pads(Avr8xPortGroup *g)
+     uint8_t elevel = (g->ext_level & ~g->bench_mask) |
+                      (g->bench_level & g->bench_mask);
+     uint8_t pull = avr8x_port_pulls(g) & ~ext;
++    uint8_t pads = (avr8x_port_drive_level(g) & drive) | (elevel & ext) |
++                   pull;
+ 
+-    return (avr8x_port_drive_level(g) & drive) | (elevel & ext) | pull;
++    return (pads & ~g->short_mask) | g->short_level;
+ }
+ 
+ /* IN: the pads as the input buffers see them (INVEN, input disable) */
+@@ -149,7 +154,7 @@ static void avr8x_port_update(Avr8xPortState *s, unsigned n)
+ {
+     Avr8xPortGroup *g = &s->g[n];
+     uint8_t pads = avr8x_port_pads(g);
+-    uint8_t driven = g->dir;
++    uint8_t driven = g->dir | g->short_mask;
+     uint8_t changed = (driven ^ g->pad_mask) |
+                       ((pads ^ g->pad_level) & driven);
+ 
+@@ -168,6 +173,17 @@ static void avr8x_port_update(Avr8xPortState *s, unsigned n)
+             }
+         }
+     }
++    if (pads != g->lvl_last) {
++        uint8_t lvl_changed = pads ^ g->lvl_last;
++
++        g->lvl_last = pads;
++        for (unsigned pin = 0; pin < AVR8X_PORT_PINS; pin++) {
++            if (extract32(lvl_changed, pin, 1)) {
++                pp_trace_pad(n * AVR8X_PORT_PINS + pin,
++                             extract32(pads, pin, 1));
++            }
++        }
++    }
+     qemu_set_irq(s->irq[n], g->intflags != 0);
+ }
+ 
+@@ -438,6 +454,39 @@ static void avr8x_port_set_bench(Object *obj, Visitor *v, const char *name,
+     avr8x_port_update(s, grp);
+ }
+ 
++/* "pa-short": "<mask> <level>" in hex, pads shorted to VDD or GND */
++static void avr8x_port_get_short(Object *obj, Visitor *v, const char *name,
++                                 void *opaque, Error **errp)
++{
++    Avr8xPortState *s = AVR8X_PORT(obj);
++    Avr8xPortGroup *g = &s->g[GPOINTER_TO_UINT(opaque)];
++    g_autofree char *val = g_strdup_printf("%x %x", g->short_mask,
++                                           g->short_level);
++
++    visit_type_str(v, name, &val, errp);
++}
++
++static void avr8x_port_set_short(Object *obj, Visitor *v, const char *name,
++                                 void *opaque, Error **errp)
++{
++    Avr8xPortState *s = AVR8X_PORT(obj);
++    unsigned grp = GPOINTER_TO_UINT(opaque);
++    Avr8xPortGroup *g = &s->g[grp];
++    g_autofree char *val = NULL;
++    unsigned mask, level;
++
++    if (!visit_type_str(v, name, &val, errp)) {
++        return;
++    }
++    if (sscanf(val, "%x %x", &mask, &level) != 2 || mask > 0xff) {
++        error_setg(errp, "%s must be \"<mask> <level>\" in hex", name);
++        return;
++    }
++    g->short_mask = mask;
++    g->short_level = level & mask;
++    avr8x_port_update(s, grp);
++}
++
+ /* "pa-pull": "<mask> <up>" in hex, the pads with a pull resistor on */
+ static void avr8x_port_get_pull(Object *obj, Visitor *v, const char *name,
+                                 void *opaque, Error **errp)
+@@ -503,6 +552,7 @@ static void avr8x_port_realize(DeviceState *dev, Error **errp)
+         g_autofree char *levels = g_strdup_printf("p%c-levels", 'a' + n);
+         g_autofree char *bench = g_strdup_printf("p%c-bench", 'a' + n);
+         g_autofree char *pull = g_strdup_printf("p%c-pull", 'a' + n);
++        g_autofree char *shorted = g_strdup_printf("p%c-short", 'a' + n);
+ 
+         s->g[n].owner = s;
+         s->g[n].index = n;
+@@ -521,9 +571,29 @@ static void avr8x_port_realize(DeviceState *dev, Error **errp)
+                             avr8x_port_set_bench, NULL, group);
+         object_property_add(obj, pull, "str", avr8x_port_get_pull,
+                             NULL, NULL, group);
++        object_property_add(obj, shorted, "str", avr8x_port_get_short,
++                            avr8x_port_set_short, NULL, group);
+     }
+ }
+ 
++/* Every pad's level, a group a word (the event recorder's pad source) */
++static unsigned avr8x_port_trace_levels(void *opaque, uint32_t *levels,
++                                        unsigned max)
++{
++    Avr8xPortState *s = AVR8X_PORT(opaque);
++    unsigned n = MIN(s->ngroups, max);
++
++    for (unsigned g = 0; g < n; g++) {
++        levels[g] = avr8x_port_pads(&s->g[g]);
++    }
++    return n;
++}
++
++void avr8x_port_trace(DeviceState *port)
++{
++    pp_trace_pads(avr8x_port_trace_levels, port, AVR8X_PORT_PINS);
++}
++
+ static const VMStateDescription vmstate_avr8x_port_group = {
+     .name = "avr8x-port-group",
+     .version_id = 2,
+diff --git a/hw/i2c/Kconfig b/hw/i2c/Kconfig
+index 71db51a..72cc503 100644
+--- a/hw/i2c/Kconfig
++++ b/hw/i2c/Kconfig
+@@ -59,3 +59,4 @@ config AVR8X_TWI
+     bool
+     select I2C
+     select MCHP_REGFILE
++    select PP_TRACE
+diff --git a/hw/i2c/avr8x_twi.c b/hw/i2c/avr8x_twi.c
+index 2e9651c..946d655 100644
+--- a/hw/i2c/avr8x_twi.c
++++ b/hw/i2c/avr8x_twi.c
+@@ -21,16 +21,23 @@
+  * timeouts, quick command, arbitration, the client side and the pin
+  * routing (PORTMUX.TWIROUTEA) are not modelled.
+  *
++ * Every condition and byte goes to the event recorder (pp_trace_event()).
++ * "fault-nack" (hex 7-bit addresses, comma separated; set at run time, not
++ * migrated) NACKs those addresses whatever is on the bus: an injected
++ * fault.
++ *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+ 
+ #include "qemu/osdep.h"
+ #include "qemu/log.h"
++#include "qapi/error.h"
+ #include "hw/avr/avr8x_periph.h"
+ #include "hw/core/irq.h"
+ #include "hw/core/sysbus.h"
+ #include "hw/i2c/avr8x_twi.h"
+ #include "hw/i2c/i2c.h"
++#include "hw/misc/pp_trace.h"
+ #include "hw/mchp/gen/twi_i2c_8bit_avr_v3.h"
+ #include "migration/vmstate.h"
+ 
+@@ -50,6 +57,10 @@ struct Avr8xTwiState {
+     uint8_t data;               /* last byte received */
+     bool reading;               /* the address had R/W = 1 */
+     bool in_transfer;           /* a START is open on the QEMU bus */
++
++    unsigned trace_src;         /* this TWI in the event recorder */
++    char *fault_nack;           /* "fault-nack", and as a bitmap */
++    uint32_t fault_nack_map[128 / 32];
+ };
+ 
+ static uint8_t avr8x_twi_reg(Avr8xTwiState *s, hwaddr reg)
+@@ -89,12 +100,14 @@ static void avr8x_twi_clear_flags(Avr8xTwiState *s)
+ static void avr8x_twi_receive(Avr8xTwiState *s)
+ {
+     s->data = i2c_recv(s->bus);
++    pp_trace_event(PP_TRACE_I2C_BYTE, s->trace_src, s->data, 2);
+     s->status |= R_MCHP_TWI_MSTATUS_RIF_MASK |
+                  R_MCHP_TWI_MSTATUS_CLKHOLD_MASK;
+ }
+ 
+ static void avr8x_twi_stop(Avr8xTwiState *s)
+ {
++    pp_trace_event(PP_TRACE_I2C_STOP, s->trace_src, 0, 0);
+     if (s->in_transfer) {
+         i2c_end_transfer(s->bus);
+         s->in_transfer = false;
+@@ -122,10 +135,17 @@ static void avr8x_twi_start(Avr8xTwiState *s, uint8_t addr)
+         return;
+     }
+     s->reading = addr & 1;
+-    nack = i2c_start_transfer(s->bus, addr >> 1, s->reading) != 0;
++    /* An injected fault NACKs the address before any device sees it */
++    nack = extract32(s->fault_nack_map[(addr >> 1) / 32], (addr >> 1) % 32, 1);
++    if (s->in_transfer && nack) {
++        i2c_end_transfer(s->bus);       /* a repeated START to it */
++    }
++    nack = nack || i2c_start_transfer(s->bus, addr >> 1, s->reading) != 0;
+     s->in_transfer = !nack;
+     avr8x_twi_set_bus(s, MCHP_TWI_MSTATUS_BUSSTATE_OWNER);
+     s->status = FIELD_DP8(s->status, MCHP_TWI_MSTATUS, RXACK, nack);
++    pp_trace_event(PP_TRACE_I2C_START, s->trace_src, addr >> 1,
++                   s->reading | nack << 1);
+     if (s->reading && !nack) {
+         avr8x_twi_receive(s);
+     } else {
+@@ -141,6 +161,7 @@ static void avr8x_twi_send(Avr8xTwiState *s, uint8_t byte)
+     avr8x_twi_clear_flags(s);
+     if (s->in_transfer && !s->reading) {
+         nack = i2c_send(s->bus, byte) != 0;
++        pp_trace_event(PP_TRACE_I2C_BYTE, s->trace_src, byte, nack);
+     } else {
+         qemu_log_mask(LOG_GUEST_ERROR, "%s.MDATA: write without a write "
+                       "transaction\n", MCHP_REGBLOCK(s)->name);
+@@ -161,6 +182,7 @@ static void avr8x_twi_ack(Avr8xTwiState *s, bool next)
+     }
+     if (nack) {
+         i2c_nack(s->bus);
++        pp_trace_event(PP_TRACE_I2C_HOST_NACK, s->trace_src, 0, 0);
+     } else if (next) {
+         avr8x_twi_receive(s);
+     }
+@@ -260,10 +282,49 @@ static bool avr8x_twi_realize(MchpRegBlock *rb, Error **errp)
+ {
+     g_autofree char *bus = g_strdup_printf("%s.i2c", rb->name);
+ 
++    AVR8X_TWI(rb)->trace_src = pp_trace_source(rb->name);
+     AVR8X_TWI(rb)->bus = i2c_init_bus(DEVICE(rb), bus);
+     return true;
+ }
+ 
++/* "fault-nack": I2C addresses that NACK, "18,48" (hex, 7-bit) */
++static char *avr8x_twi_get_fault_nack(Object *obj, Error **errp)
++{
++    return g_strdup(AVR8X_TWI(obj)->fault_nack ?: "");
++}
++
++static void avr8x_twi_set_fault_nack(Object *obj, const char *value,
++                                     Error **errp)
++{
++    Avr8xTwiState *s = AVR8X_TWI(obj);
++    g_auto(GStrv) addrs = g_strsplit_set(value, ", ", -1);
++    uint32_t map[ARRAY_SIZE(s->fault_nack_map)] = { 0 };
++
++    for (char **a = addrs; *a; a++) {
++        char *end;
++        unsigned long dev;
++
++        if (!**a) {
++            continue;
++        }
++        dev = strtoul(*a, &end, 16);
++        if (*end || dev > 0x7f) {
++            error_setg(errp, "fault-nack: \"%s\" is not a 7-bit address in "
++                       "hex", *a);
++            return;
++        }
++        map[dev / 32] |= BIT(dev % 32);
++    }
++    memcpy(s->fault_nack_map, map, sizeof(map));
++    g_free(s->fault_nack);
++    s->fault_nack = g_strdup(value);
++}
++
++static void avr8x_twi_finalize(Object *obj)
++{
++    g_free(AVR8X_TWI(obj)->fault_nack);
++}
++
+ static void avr8x_twi_init(Object *obj)
+ {
+     /* Sysbus IRQ 0 (the regblock's) is TWIS, IRQ 1 TWIM */
+@@ -298,6 +359,9 @@ static void avr8x_twi_class_init(ObjectClass *klass, const void *data)
+     c->reset_hold = avr8x_twi_reset_hold;
+     c->is_enabled = avr8x_never_enabled;
+     c->log_writes = false;
++    object_class_property_add_str(klass, "fault-nack",
++                                  avr8x_twi_get_fault_nack,
++                                  avr8x_twi_set_fault_nack);
+ }
+ 
+ static const TypeInfo avr8x_twi_types[] = {
+@@ -306,6 +370,7 @@ static const TypeInfo avr8x_twi_types[] = {
+         .parent = TYPE_MCHP_REGBLOCK,
+         .instance_size = sizeof(Avr8xTwiState),
+         .instance_init = avr8x_twi_init,
++        .instance_finalize = avr8x_twi_finalize,
+         .class_init = avr8x_twi_class_init,
+     },
+ };
+diff --git a/hw/ssi/Kconfig b/hw/ssi/Kconfig
+index 9c27d97..de944a6 100644
+--- a/hw/ssi/Kconfig
++++ b/hw/ssi/Kconfig
+@@ -13,6 +13,7 @@ config AVR8X_SPI
+     bool
+     select SSI
+     select MCHP_REGFILE
++    select PP_TRACE
+ 
+ config XILINX_SPI
+     bool
+diff --git a/hw/ssi/avr8x_spi.c b/hw/ssi/avr8x_spi.c
+index bb1ce21..d8ac80b 100644
+--- a/hw/ssi/avr8x_spi.c
++++ b/hw/ssi/avr8x_spi.c
+@@ -16,14 +16,20 @@
+  * board. Not modelled: client mode, the SS pin's host-mode fault
+  * (CTRLB.SSD), clock modes and timing (transfers take no time).
+  *
++ * Every transfer goes to the event recorder (pp_trace_event()). Injected
++ * fault: "fault-miso" (a byte in hex, empty for none) replaces what the
++ * clients return.
++ *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+ 
+ #include "qemu/osdep.h"
+ #include "qemu/log.h"
+ #include "qemu/bitops.h"
++#include "qapi/error.h"
+ #include "hw/core/irq.h"
+ #include "hw/avr/avr8x_periph.h"
++#include "hw/misc/pp_trace.h"
+ #include "hw/mchp/gen/spi_spi_8bit_v2.h"
+ #include "hw/ssi/avr8x_spi.h"
+ #include "hw/ssi/ssi.h"
+@@ -43,6 +49,9 @@ struct Avr8xSpiState {
+     uint8_t rx[AVR8X_SPI_RX_DEPTH];
+     uint8_t rx_count;
+     bool if_read;               /* INTFLAGS read with IF set */
++
++    unsigned trace_src;         /* this SPI in the event recorder */
++    int fault_miso;             /* -1: none; not migrated */
+ };
+ 
+ static uint8_t avr8x_spi_reg(Avr8xSpiState *s, hwaddr reg)
+@@ -107,7 +116,11 @@ static void avr8x_spi_transfer(Avr8xSpiState *s, uint8_t out)
+         return;
+     }
+     in = avr8x_spi_order(s, ssi_transfer(s->bus, avr8x_spi_order(s, out)));
++    if (s->fault_miso >= 0) {
++        in = s->fault_miso;
++    }
+     trace_avr8x_spi_transfer(rb->name, out, in);
++    pp_trace_event(PP_TRACE_SPI, s->trace_src, out, in);
+     if (!avr8x_spi_buffered(s)) {
+         s->data = in;
+         s->flags |= R_MCHP_SPI_INTFLAGS_IF_MASK;
+@@ -210,10 +223,44 @@ static bool avr8x_spi_realize(MchpRegBlock *rb, Error **errp)
+ {
+     g_autofree char *bus = g_strdup_printf("%s.spi", rb->name);
+ 
++    AVR8X_SPI(rb)->trace_src = pp_trace_source(rb->name);
+     AVR8X_SPI(rb)->bus = ssi_create_bus(DEVICE(rb), bus);
+     return true;
+ }
+ 
++/* "fault-miso": the byte the host reads (hex), empty for none */
++static char *avr8x_spi_get_fault_miso(Object *obj, Error **errp)
++{
++    Avr8xSpiState *s = AVR8X_SPI(obj);
++
++    return s->fault_miso < 0 ? g_strdup("") :
++           g_strdup_printf("%x", s->fault_miso);
++}
++
++static void avr8x_spi_set_fault_miso(Object *obj, const char *value,
++                                     Error **errp)
++{
++    Avr8xSpiState *s = AVR8X_SPI(obj);
++    char *end;
++    unsigned long byte;
++
++    if (!*value) {
++        s->fault_miso = -1;
++        return;
++    }
++    byte = strtoul(value, &end, 16);
++    if (*end || byte > 0xff) {
++        error_setg(errp, "fault-miso: \"%s\" is not a byte in hex", value);
++        return;
++    }
++    s->fault_miso = byte;
++}
++
++static void avr8x_spi_init(Object *obj)
++{
++    AVR8X_SPI(obj)->fault_miso = -1;
++}
++
+ static const VMStateDescription vmstate_avr8x_spi = {
+     .name = TYPE_AVR8X_SPI,
+     .version_id = 1,
+@@ -243,6 +290,9 @@ static void avr8x_spi_class_init(ObjectClass *klass, const void *data)
+     c->reset_hold = avr8x_spi_reset_hold;
+     c->is_enabled = avr8x_never_enabled;
+     c->log_writes = false;
++    object_class_property_add_str(klass, "fault-miso",
++                                  avr8x_spi_get_fault_miso,
++                                  avr8x_spi_set_fault_miso);
+ }
+ 
+ static const TypeInfo avr8x_spi_types[] = {
+@@ -250,6 +300,7 @@ static const TypeInfo avr8x_spi_types[] = {
+         .name = TYPE_AVR8X_SPI,
+         .parent = TYPE_MCHP_REGBLOCK,
+         .instance_size = sizeof(Avr8xSpiState),
++        .instance_init = avr8x_spi_init,
+         .class_init = avr8x_spi_class_init,
+     },
+ };
+diff --git a/include/hw/avr/avr8x_soc.h b/include/hw/avr/avr8x_soc.h
+index 0faf202..c2cbb83 100644
+--- a/include/hw/avr/avr8x_soc.h
++++ b/include/hw/avr/avr8x_soc.h
+@@ -78,4 +78,11 @@ DeviceState *avr8x_soc_periph(Avr8xSocState *s, const char *name);
+ /* The flash memory region (for the firmware loader) */
+ MemoryRegion *avr8x_soc_flash(Avr8xSocState *s);
+ 
++/*
++ * The event recorder on chardev @chardev (a machine's "trace"): the PORT's
++ * pads and the CPU's interrupt vectors, besides what the models report.
++ * Call after realize.
++ */
++void avr8x_soc_trace(Avr8xSocState *s, Object *machine, const char *chardev);
++
+ #endif /* HW_AVR_AVR8X_SOC_H */
+diff --git a/include/hw/gpio/avr8x_port.h b/include/hw/gpio/avr8x_port.h
+index ec0db1a..d9441bb 100644
+--- a/include/hw/gpio/avr8x_port.h
++++ b/include/hw/gpio/avr8x_port.h
+@@ -17,7 +17,9 @@
+  * an output pin (USART TX, SPI MOSI, TCA WOn); negative: no override.
+  * QOM "p<x>-levels" (uint32): every pad's level (pulls and externals too);
+  * "p<x>-stats" (str): "<ns> <high0> <low0> ... <high7> <low7>", the
+- * virtual time and each pad's driven-high and driven-low time.
++ * virtual time and each pad's driven-high and driven-low time;
++ * "p<x>-short" (str): "<mask> <level>" in hex, pads shorted to VDD or GND
++ * (an injected fault over every driver).
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -68,6 +70,11 @@ typedef struct Avr8xPortGroup {
+     int64_t acc_time;
+     uint64_t high_ns[AVR8X_PORT_PINS];
+     uint64_t low_ns[AVR8X_PORT_PINS];
++    /* Every pad's level as last reported to the event recorder */
++    uint8_t lvl_last;
++    /* Pads shorted to VDD or GND ("pX-short"): a fault, not migrated */
++    uint8_t short_mask;
++    uint8_t short_level;
+ } Avr8xPortGroup;
+ 
+ DECLARE_INSTANCE_CHECKER(Avr8xPortState, AVR8X_PORT, TYPE_AVR8X_PORT)
+@@ -84,4 +91,10 @@ struct Avr8xPortState {
+     Avr8xPortGroup g[AVR8X_PORT_GROUPS];
+ };
+ 
++/*
++ * Make @port the event recorder's pad source: it reports every pad's
++ * level, whoever sets it (as "pX-levels"), with pp_trace_pad()
++ */
++void avr8x_port_trace(DeviceState *port);
++
+ #endif /* HW_GPIO_AVR8X_PORT_H */
+diff --git a/target/avr/cpu.c b/target/avr/cpu.c
+index cf568c0..ea1cb3d 100644
+--- a/target/avr/cpu.c
++++ b/target/avr/cpu.c
+@@ -174,6 +174,11 @@ static void avr_cpu_set_int(void *opaque, int irq, int level)
+     CPUState *cs = CPU(cpu);
+     uint64_t mask = (1ull << irq);
+ 
++    /* On AVRxt the source's bit is its vector */
++    if (level && !(env->intsrc & mask) &&
++        avr_feature(env, AVR_FEATURE_CPUINT)) {
++        avr_cpu_irq_event(cpu, AVR_IRQ_PEND, irq);
++    }
+     if (level) {
+         env->intsrc |= mask;
+         cpu_interrupt(cs, CPU_INTERRUPT_HARD);
+@@ -185,6 +190,12 @@ static void avr_cpu_set_int(void *opaque, int irq, int level)
+     }
+ }
+ 
++void avr_cpu_observe_irqs(AVRCPU *cpu, AvrIrqObserver *fn, void *opaque)
++{
++    cpu->irq_observer_opaque = opaque;
++    cpu->irq_observer = fn;
++}
++
+ static void avr_cpu_initfn(Object *obj)
+ {
+     AVRCPU *cpu = AVR_CPU(obj);
+diff --git a/target/avr/cpu.h b/target/avr/cpu.h
+index 88028fa..ac3a20d 100644
+--- a/target/avr/cpu.h
++++ b/target/avr/cpu.h
+@@ -159,6 +159,19 @@ typedef struct CPUArchState {
+     uint64_t features;
+ } CPUAVRState;
+ 
++/*
++ * AVRxt (CPUINT) interrupts as they progress, for an observer such as an
++ * event recorder (avr_cpu_observe_irqs()): a source asserting its line,
++ * the CPU taking a vector, a RETI ending it.
++ */
++typedef enum AvrIrqEvent {
++    AVR_IRQ_PEND,
++    AVR_IRQ_ENTER,
++    AVR_IRQ_EXIT,
++} AvrIrqEvent;
++
++typedef void AvrIrqObserver(void *opaque, AvrIrqEvent ev, unsigned vector);
++
+ /**
+  *  AVRCPU:
+  *  @env: #CPUAVRState
+@@ -175,6 +188,11 @@ struct ArchCPU {
+ 
+     /* Initial value of stack pointer */
+     uint32_t init_sp;
++
++    /* The interrupt observer, and the vector each level executes */
++    AvrIrqObserver *irq_observer;
++    void *irq_observer_opaque;
++    uint8_t irq_vector[3];      /* level 0, level 1, NMI; not migrated */
+ };
+ 
+ /**
+@@ -194,6 +212,15 @@ struct AVRCPUClass {
+ extern const struct VMStateDescription vms_avr_cpu;
+ 
+ void avr_cpu_do_interrupt(CPUState *cpu);
++void avr_cpu_observe_irqs(AVRCPU *cpu, AvrIrqObserver *fn, void *opaque);
++
++static inline void avr_cpu_irq_event(AVRCPU *cpu, AvrIrqEvent ev,
++                                     unsigned vector)
++{
++    if (cpu->irq_observer) {
++        cpu->irq_observer(cpu->irq_observer_opaque, ev, vector);
++    }
++}
+ bool avr_cpu_exec_interrupt(CPUState *cpu, int int_req);
+ hwaddr avr_cpu_get_phys_addr_debug(CPUState *cpu, vaddr addr);
+ int avr_cpu_gdb_read_register(CPUState *cpu, GByteArray *buf, int reg);
+diff --git a/target/avr/helper.c b/target/avr/helper.c
+index 5049ed5..1b26a84 100644
+--- a/target/avr/helper.c
++++ b/target/avr/helper.c
+@@ -139,12 +139,15 @@ void avr_cpu_do_interrupt(CPUState *cs)
+         base = env->vector_base / 2;
+         if (vector == env->cpuint_lvl1vec) {
+             env->cpuint_status |= AVR_CPUINT_LVL1EX;
++            env_archcpu(env)->irq_vector[1] = vector;
+         } else {
+             env->cpuint_status |= AVR_CPUINT_LVL0EX;
++            env_archcpu(env)->irq_vector[0] = vector;
+             if (env->cpuint_ctrla & AVR_CPUINT_LVL0RR) {
+                 env->cpuint_lvl0pri = vector;
+             }
+         }
++        avr_cpu_irq_event(env_archcpu(env), AVR_IRQ_ENTER, vector);
+     } else if (cs->exception_index == EXCP_RESET) {
+         vector = 0;
+     } else if (env->intsrc != 0) {
+@@ -281,12 +284,21 @@ void helper_sei(CPUAVRState *env)
+ /* RETI on AVRxt ends the highest executing level; SREG.I is untouched */
+ void helper_reti_level(CPUAVRState *env)
+ {
++    int level = -1;
++
+     if (env->cpuint_status & AVR_CPUINT_NMIEX) {
+         env->cpuint_status &= ~AVR_CPUINT_NMIEX;
++        level = 2;
+     } else if (env->cpuint_status & AVR_CPUINT_LVL1EX) {
+         env->cpuint_status &= ~AVR_CPUINT_LVL1EX;
+-    } else {
++        level = 1;
++    } else if (env->cpuint_status & AVR_CPUINT_LVL0EX) {
+         env->cpuint_status &= ~AVR_CPUINT_LVL0EX;
++        level = 0;
++    }
++    if (level >= 0) {
++        avr_cpu_irq_event(env_archcpu(env), AVR_IRQ_EXIT,
++                          env_archcpu(env)->irq_vector[level]);
+     }
+ }
+ 
+diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
+index de8e55c..40149d9 100644
+--- a/tests/qtest/avr64ea48-cnano-test.c
++++ b/tests/qtest/avr64ea48-cnano-test.c
+@@ -6,7 +6,9 @@
+  *
+  * Device identity and reset values (DS40002324, silicon rev B1), the data
+  * space map (I/O, SIGROW, EEPROM, SRAM, the FLMAP flash window), PORT and
+- * VPORT, the board's LED0 (PB3) and SW0 (PB2), USART1 flags and CPUINT.
++ * VPORT, the board's LED0 (PB3) and SW0 (PB2), USART1 flags and CPUINT,
++ * the injected faults and input of the timeline (pX-short, fault-miso,
++ * fault-nack, rx-inject).
+  *
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+@@ -485,6 +487,72 @@ static void test_twi_rtc6(const void *fw)
+     qtest_quit(qts);
+ }
+ 
++static void qom_set_str(QTestState *qts, const char *path, const char *prop,
++                        const char *value)
++{
++    qtest_qmp_assert_success(qts, "{ 'execute': 'qom-set', 'arguments': {"
++                             " 'path': %s, 'property': %s, 'value': %s } }",
++                             path, prop, value);
++}
++
++/*
++ * Injected faults: a short over the PORT's own drive, a stuck MISO, an
++ * I2C address that NACKs; characters into USART1's receiver (rx-inject),
++ * as many as it takes, the rest when it has room
++ */
++static void test_faults(const void *fw)
++{
++    QTestState *qts = qtest_initf("-M avr64ea48-cnano,mb1=thermo8 -kernel %s",
++                                  (const char *)fw);
++    g_autofree char *waiting = NULL;
++    uint8_t d[2];
++
++    /* LED0's pad driven low, shorted to VDD: the pad and IN read high */
++    qtest_writeb(qts, PORTB + P_DIRSET, LED0);
++    qtest_writeb(qts, PORTB + P_OUTCLR, LED0);
++    qom_set_str(qts, "/machine/soc/port", "pb-short", "8 8");
++    g_assert_cmphex(qom_uint(qts, "/machine/soc/port", "pb-levels") & LED0,
++                    ==, LED0);
++    g_assert_cmphex(qtest_readb(qts, PORTB + P_IN) & LED0, ==, LED0);
++    qom_set_str(qts, "/machine/soc/port", "pb-short", "0 0");
++    g_assert_cmphex(qtest_readb(qts, PORTB + P_IN) & LED0, ==, 0);
++
++    /* SPI0 reads the stuck value whatever the bus returns */
++    qtest_writeb(qts, SPI0 + 0, 0x21);                  /* MASTER, ENABLE */
++    qom_set_str(qts, "/machine/soc/spi0", "fault-miso", "a5");
++    qtest_writeb(qts, SPI0 + 4, 0x00);
++    g_assert_cmphex(qtest_readb(qts, SPI0 + 3) & 0x80, ==, 0x80);  /* IF */
++    g_assert_cmphex(qtest_readb(qts, SPI0 + 4), ==, 0xa5);
++    qom_set_str(qts, "/machine/soc/spi0", "fault-miso", "");
++    qtest_writeb(qts, SPI0 + 4, 0x00);
++    g_assert_cmphex(qtest_readb(qts, SPI0 + 3) & 0x80, ==, 0x80);
++    g_assert_cmphex(qtest_readb(qts, SPI0 + 4), ==, 0x00);  /* no client */
++
++    /* The Thermo 8 (0x18) NACKs while the fault is on */
++    qtest_writeb(qts, TWI0 + T_MCTRLA, 0x03);
++    qtest_writeb(qts, TWI0 + T_MSTATUS, 0x01);
++    qom_set_str(qts, "/machine/soc/twi0", "fault-nack", "18");
++    qtest_writeb(qts, TWI0 + T_MADDR, 0x18 << 1);
++    g_assert_cmphex(qtest_readb(qts, TWI0 + T_MSTATUS) & (T_WIF | T_RXACK),
++                    ==, T_WIF | T_RXACK);
++    qtest_writeb(qts, TWI0 + T_MCTRLB, 0x03);
++    qom_set_str(qts, "/machine/soc/twi0", "fault-nack", "");
++    twi_read(qts, 0x18, 0x06, d, 2);
++    g_assert_cmphex(d[0] << 8 | d[1], ==, 0x0054);
++
++    /* "hi!": two fit the receive buffer once RXEN is set, then the third */
++    qom_set_str(qts, "/machine/soc/usart1", "rx-inject", "686921");
++    qtest_writeb(qts, USART1 + 6, 0x80);                        /* RXEN */
++    waiting = qom_str(qts, "/machine/soc/usart1", "rx-inject");
++    g_assert_cmpstr(waiting, ==, "21");
++    g_assert_cmphex(qtest_readb(qts, USART1 + 4) & 0x80, ==, 0x80); /* RXC */
++    g_assert_cmphex(qtest_readb(qts, USART1 + 0), ==, 'h');
++    g_assert_cmphex(qtest_readb(qts, USART1 + 0), ==, 'i');
++    g_assert_cmphex(qtest_readb(qts, USART1 + 0), ==, '!');
++    g_assert_cmphex(qtest_readb(qts, USART1 + 4) & 0x80, ==, 0);
++    qtest_quit(qts);
++}
++
+ int main(int argc, char **argv)
+ {
+     g_autofree char *fw = write_firmware();
+@@ -505,6 +573,7 @@ int main(int argc, char **argv)
+     qtest_add_data_func("avr64ea48-cnano/twi-thermo8", fw, test_twi_thermo8);
+     qtest_add_data_func("avr64ea48-cnano/twi-rtc6", fw, test_twi_rtc6);
+     qtest_add_data_func("avr64ea48-cnano/an", fw, test_an);
++    qtest_add_data_func("avr64ea48-cnano/faults", fw, test_faults);
+     ret = g_test_run();
+     unlink(fw);
+     return ret;
+-- 
+2.53.0.windows.2
+
