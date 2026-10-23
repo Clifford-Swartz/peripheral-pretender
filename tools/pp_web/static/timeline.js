@@ -171,15 +171,17 @@ const Timeline = (() => {
     sel.hidden = !names.length;
     const p = r.replaying;
     let text = r.error || "";
+    // The verdict first, so a narrow bar still shows it; the name is in the tooltip
     if (!text && p) {
-      text = p.state === "running" ? `replaying ${p.name}…`
-        : p.state === "same" ? `✓ ${p.name}: replayed exactly (${p.verdict.events} events)`
-        : p.state === "differs" ? `✗ ${p.name}: differs from ${fmtTime(p.verdict.differs_at, 1e7)}`
-        : `${p.name}: the replay stalled`;
+      text = p.state === "running" ? "replaying…"
+        : p.state === "same" ? `✓ replayed exactly (${p.verdict.events} events)`
+        : p.state === "differs" ? `✗ differs from ${fmtTime(p.verdict.differs_at, 1e7)}`
+        : "the replay stalled";
     } else if (!text && since) {
       text = "recording";
     }
-    state.textContent = state.title = text;
+    state.textContent = text;
+    state.title = p && !r.error ? `${p.name}: ${text}` : text;
     state.className = p && p.state === "differs" || r.error ? "bad" : p && p.state === "same" ? "good" : "";
   }
 
