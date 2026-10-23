@@ -13,27 +13,64 @@
 </head>
 <body>
   <header>
+    <button id="palette-toggle" class="icon-btn" title="Show or hide the palette (/ searches it)">
+      <svg viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
+    </button>
     <h1>Peripheral Pretender</h1>
-    <select id="board-select" title="Board"></select>
-    <span id="status" class="status idle">no firmware</span>
+    <span id="ws-title" class="ws-title"></span>
+    <span id="status" class="status idle">starting</span>
+    <button id="tl-toggle" class="icon-btn" title="Timeline: the board's pins, buses and interrupts in time">
+      <svg viewBox="0 0 16 16"><path d="M1 12h3V4h3v8h3V7h5"/></svg>
+    </button>
   </header>
   <main>
+    <aside id="palette">
+      <div class="pal-search">
+        <input id="pal-q" type="search" placeholder="Search boards, Clicks, parts, pins…"
+               autocomplete="off" spellcheck="false">
+      </div>
+      <div id="pal-list"></div>
+      <div class="pal-foot">Click to add · drag onto the bench</div>
+    </aside>
     <div id="left">
-      <section id="board-pane">
-        <div id="board">
-          <img id="board-img" alt="Board">
-          <div id="overlays"></div>
-          <svg id="bench-svg" preserveAspectRatio="none"></svg>
+      <section id="canvas">
+        <div id="world">
+          <div id="wired-layer"></div>
+        </div>
+        <svg id="bench-svg"></svg>
+        <div id="empty" hidden></div>
+        <div id="ws-hint" hidden></div>
+        <div id="zoom">
+          <button id="zoom-out" title="Zoom out (wheel)">−</button>
+          <button id="zoom-fit" title="Fit everything (F)">Fit</button>
+          <button id="zoom-in" title="Zoom in (wheel)">+</button>
         </div>
       </section>
-      <section id="bench-pane" hidden>
+      <section id="timeline" hidden>
+        <div class="tl-bar">
+          <b>Timeline</b>
+          <button id="tl-live" class="on" title="Follow the twin (double-click the chart)">● Live</button>
+          <select id="tl-span" title="Time across the chart (the wheel zooms)"></select>
+          <select id="tl-add" title="Show another row"><option value="">+ Row</option></select>
+          <button id="tl-rec" title="Record a run that replays exactly: the firmware restarts from reset, and every input is kept with the instant it took effect">⏺ Record</button>
+          <select id="tl-replay" title="Run a recording again and check that everything happens as it did"><option value="">▶ Replay…</option></select>
+          <span id="tl-rec-state"></span>
+          <span id="tl-where"></span>
+          <button id="tl-close" class="tl-x" title="Close the timeline">×</button>
+        </div>
+        <div class="tl-head"><div class="tl-corner"></div><canvas id="tl-axis"></canvas></div>
+        <div id="tl-body">
+          <div id="tl-labels"></div>
+          <canvas id="tl-canvas"></canvas>
+        </div>
+        <div id="tl-tip" hidden></div>
+      </section>
+      <section id="bench-pane">
         <div class="bench-bar">
-          <b class="bench-title">Parts</b>
-          <select id="bench-add" title="Add a part beside the board"></select>
-          <select id="bench-pin" title="A tag for a pad or rail with no header hole"></select>
           <span id="bench-props"></span>
+          <span id="bench-solver" hidden title="The bench has a part that changes in time: it runs in ngspice, in lockstep with the twin's clock, and the ADC samples it at its own instants">ngspice · lockstep</span>
           <span id="bench-warn"></span>
-          <button id="bench-clear" title="Remove every part and wire">Clear</button>
+          <button id="bench-clear" title="Remove every part and wire">Clear parts</button>
         </div>
       </section>
     </div>
@@ -42,7 +79,7 @@
         <strong>Drop a firmware ELF here</strong>
         <span>or <label class="link">choose a file<input type="file" id="file" accept=".elf"></label></span>
       </div>
-      <div class="hint" id="hint">Click <b>SW0</b> (hold to keep it pressed) and <b>RESET</b> on the board.</div>
+      <div class="hint" id="hint"></div>
       <h2 id="clicks-head">Click boards <small id="clicks-where"></small></h2>
       <div id="clicks"></div>
       <h2 id="files-head" hidden>CIRCUITPY <small>code.py (saving restarts the twin)</small></h2>
@@ -60,14 +97,30 @@
         <canvas id="dv-gpio" width="380" height="88"></canvas>
         <pre id="dv-raw"></pre>
       </div>
+      <h2>Faults <small>injected into the twin, not saved</small></h2>
+      <div id="faults">
+        <div id="fault-list"></div>
+        <form id="fault-add">
+          <select id="fault-kind">
+            <option value="short">Short a pad</option>
+            <option value="nack">I2C device not answering</option>
+            <option value="miso">SPI MISO stuck</option>
+          </select>
+          <span id="fault-args"></span>
+          <button>Inject</button>
+        </form>
+        <div class="hint" id="fault-error"></div>
+      </div>
       <h2>VCOM <small id="vcom"></small></h2>
       <pre id="console"></pre>
       <form id="send"><input id="send-text" placeholder="send to the UART" autocomplete="off"><button>Send</button></form>
     </section>
   </main>
   <script src="/static/app.js"></script>
+  <script src="/static/workspace.js"></script>
   <script src="/static/bench.js"></script>
   <script src="/static/dv.js"></script>
-  <script>Bench.init();</script>
+  <script src="/static/timeline.js"></script>
+  <script>Workspace.init(); Bench.init(); Timeline.init(); connect();</script>
 </body>
 </html>

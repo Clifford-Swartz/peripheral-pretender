@@ -6,7 +6,16 @@ QEMU runs with icount paced to the host clock (shift=auto, sleep=on), so
 a 2 Hz blink looks like 2 Hz and timer events land at exact virtual
 times. Each frame the PORT model's "pX-stats" give every pad's driven-high
 and driven-low time; their differences are the duty cycles the page shows
-(a PWM-dimmed LED at its brightness).
+(a PWM-dimmed LED at its brightness). Where the machine has pp-qemu's event
+recorder, its stream (every pad edge, SERCOM character and exception, in
+virtual time) fills a trace store for the timeline.
+
+A deterministic session replays exactly: a fixed icount (shift 4,
+sleep=off) paced to real time by the recorder, started paused until go()
+so its starting settings are in place, and every input (a button, a Click
+control, the console) sent through the recorder, which applies it at a
+virtual time and reports which. recording() gives those back; a session
+given a recording repeats them at their times and takes no live input.
 """
 
 from __future__ import annotations
@@ -22,9 +31,11 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from tools.pp.qemu import elf_target, find_qemu, machine_target, qemu_env
+from tools.pp.trace import Store, machine_has_trace
 
 POLL_S = 1 / 30
 QMP_LINE_LIMIT = 4 * 1024 * 1024
+DETERMINISTIC_ICOUNT = "shift=4,sleep=off"      # 16 ns an instruction
 STOP_S = 3.0                    # the most stopping QEMU may take per step
 PORT_PATH = "/machine/soc/port"
 # Terminal control sequences (CircuitPython sets the window title with
@@ -43,6 +54,13 @@ def plain_text(pending: str, chunk: str) -> tuple[str, str]:
     if cut:
         return text[:cut.start()], text[cut.start():]
     return text, ""
+
+
+def qom_text(value) -> str:
+    """@value as QOM parses a property from text (true, 35500, "1000 0")"""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
 
 
 def free_port() -> int:
@@ -129,10 +147,24 @@ class Session:
     # TCP port its DGI host side listens on once started
     dgi: bool = False
     dgi_port: int | None = None
+    # The event recorder, if the machine has one: what it saw
+    trace: bool = True
+    trace_store: Store | None = None
+    # A run that replays exactly (needs the recorder), paced to real time
+    # or as fast as it goes; a recording to repeat
+    deterministic: bool = False
+    pace: bool = True
+    replay: dict | None = None
+    vcom: str | None = None             # its VCOM ("sercom0", "usart1")
+    initial: list = field(default_factory=list)  # [path, prop, value]
+    running: bool = False               # a deterministic one: go() was
+    _actions: dict = field(default_factory=dict)  # id -> action
+    _next_id: int = 1
     click_state: dict[str, object] = field(default_factory=dict)
     proc: asyncio.subprocess.Process | None = None
     qmp: Qmp | None = None
     uart_writer: asyncio.StreamWriter | None = None
+    trace_writer: asyncio.StreamWriter | None = None
     tasks: list[asyncio.Task] = field(default_factory=list)
     pins: dict[str, list[list[float]]] = field(default_factory=dict)
     levels: dict[str, int] = field(default_factory=dict)
@@ -144,12 +176,29 @@ class Session:
         self.dgi_port = free_port() if self.dgi else None
         # Arm firmware runs on qemu-system-arm, AVR on qemu-system-avr
         target = elf_target(self.elf) or machine_target(self.machine)
-        args = [str(find_qemu(target=target)), "-M", self.machine,
+        qemu = find_qemu(target=target)
+        self.deterministic = self.deterministic or bool(self.replay)
+        trace_port = free_port() if (self.trace or self.deterministic) and \
+            await asyncio.to_thread(machine_has_trace, qemu, self.machine,
+                                    qemu_env()) else None
+        if self.deterministic and not trace_port:
+            raise RuntimeError("this QEMU build has no event recorder for "
+                               f"{self.machine.split(',')[0]}: it cannot "
+                               "record or replay")
+        machine = self.machine + (",trace=pptrace" if trace_port else "")
+        # QEMU waits for the VCOM client, then the recorder's, then runs
+        # (a deterministic run: when go() says)
+        args = [str(qemu), "-M", machine,
                 "-kernel", str(self.elf),
                 "-display", "none", "-monitor", "none",
-                "-icount", "shift=auto,sleep=on",
+                "-icount", DETERMINISTIC_ICOUNT if self.deterministic
+                else "shift=auto,sleep=on",
+                *(["-S"] if self.deterministic else []),
                 "-chardev", f"socket,id=vcom,host=127.0.0.1,port={uart_port},"
                             "server=on,wait=on",
+                *(["-chardev", f"socket,id=pptrace,host=127.0.0.1,"
+                               f"port={trace_port},server=on,wait=on"]
+                  if trace_port else []),
                 "-serial", "chardev:vcom",
                 "-qmp", f"tcp:127.0.0.1:{qmp_port},server=on,wait=off",
                 *(["-drive", f"if=mtd,format=raw,file={self.drive}"]
@@ -163,11 +212,70 @@ class Session:
             stderr=asyncio.subprocess.PIPE)
         # QEMU waits for the UART client before running the firmware
         reader, self.uart_writer = await self._connect(uart_port)
+        self.tasks = [asyncio.create_task(self._uart(reader))]
+        if trace_port:
+            treader, self.trace_writer = await self._connect(trace_port)
+            self.trace_store = Store()
+            self.tasks.append(asyncio.create_task(self._trace(treader)))
         self.qmp = await Qmp.connect(qmp_port)
-        self.tasks = [asyncio.create_task(self._uart(reader)),
-                      asyncio.create_task(self._poll()),
-                      asyncio.create_task(self._watch())]
-        self.emit({"type": "status", "state": "running", "elf": self.elf.name})
+        self.tasks += [asyncio.create_task(self._poll()),
+                       asyncio.create_task(self._watch())]
+        if not self.deterministic:
+            self.emit({"type": "status", "state": "running",
+                       "elf": self.elf.name})
+
+    async def go(self) -> None:
+        """Run a deterministic session from its starting settings: a
+        replay's first, then its inputs wait for their times."""
+        if self.replay:
+            for path, prop, value in self.replay.get("initial", []):
+                await self.qmp.execute("qom-set", path=path, property=prop,
+                                       value=value)
+            for t, *action in self.replay.get("inputs", []):
+                self._send_at(t, tuple(action))
+        self._trace_line(f"pace {1 if self.pace else 0}")
+        await self.qmp.execute("cont")
+        self.running = True
+        self.emit({"type": "status", "state": "running",
+                   "elf": self.elf.name})
+
+    def _trace_line(self, line: str) -> None:
+        self.trace_writer.write((line + "\n").encode())
+
+    def _send_at(self, t: int, action: tuple) -> None:
+        """@action ("set", path, prop, value) or ("reset",) through the
+        recorder, at virtual time @t (0: now)"""
+        i = self._next_id
+        self._next_id += 1
+        self._actions[i] = action
+        if action[0] == "reset":
+            self._trace_line(f"at {t} {i} reset")
+        else:
+            self._trace_line(f"at {t} {i} set {action[1]} {action[2]} "
+                             f"{qom_text(action[3])}")
+
+    async def _act(self, path: str, prop: str, value) -> None:
+        """Set a property of the board: through the recorder in a running
+        deterministic session, kept as a starting setting before go(), and
+        never in a replay (it has its own inputs)"""
+        if self.replay:
+            return
+        if self.deterministic and self.running:
+            self._send_at(0, ("set", path, prop, value))
+            return
+        if self.deterministic:
+            self.initial.append([path, prop, value])
+        await self.qmp.execute("qom-set", path=path, property=prop,
+                               value=value)
+
+    def recording(self) -> dict:
+        """What a replay needs: the starting settings and each input with
+        the virtual time it took effect"""
+        inputs = [[t, *self._actions[i]]
+                  for t, i, ok in (self.trace_store.inputs
+                                   if self.trace_store else [])
+                  if ok and i in self._actions]
+        return {"initial": list(self.initial), "inputs": inputs}
 
     async def _connect(self, port: int):
         loop = asyncio.get_running_loop()
@@ -189,6 +297,10 @@ class Session:
             text, pending = plain_text(pending, dec.decode(data))
             if text:
                 self.emit({"type": "uart", "data": text})
+
+    async def _trace(self, reader: asyncio.StreamReader) -> None:
+        while data := await reader.read(1 << 16):
+            self.trace_store.feed(data)
 
     async def _poll(self) -> None:
         """Per-pad [driven-high, driven-low] fractions and every pad's
@@ -257,34 +369,42 @@ class Session:
         """Press or release a board button: "reset", or a machine bool
         property (@prop; "sw0" means "sw0-pressed")."""
         if button == "reset":
-            if pressed:
+            if not pressed or self.replay:
+                return
+            if self.deterministic and self.running:
+                self._send_at(0, ("reset",))
+            else:
                 await self.qmp.execute("system_reset")
             return
         prop = prop or ("sw0-pressed" if button == "sw0" else None)
         if prop:
-            await self.qmp.execute("qom-set", path="/machine",
-                                   property=prop, value=pressed)
+            await self._act("/machine", prop, pressed)
 
     async def set_prop(self, path: str, prop: str,
                        value: int | bool | str) -> None:
         """Set QOM property @prop of @path (a part on the board)."""
-        await self.qmp.execute("qom-set", path=path, property=prop,
-                               value=value)
+        await self._act(path, prop, value)
 
     async def set_click(self, slot: str, prop: str,
                         value: int | bool | str) -> None:
         """Set a QOM property of the Click board in @slot ("ext1")."""
-        await self.qmp.execute("qom-set", path=f"/machine/{slot}-click",
-                               property=prop, value=value)
+        await self._act(f"/machine/{slot}-click", prop, value)
 
     async def uart_send(self, text: str) -> None:
-        if self.uart_writer:
-            self.uart_writer.write(text.encode("latin-1", errors="replace"))
+        data = text.encode("latin-1", errors="replace")
+        if self.deterministic and self.vcom:
+            # Into the VCOM's receiver, at a time the recorder knows
+            await self._act(f"/machine/soc/{self.vcom}", "rx-inject",
+                            data.hex())
+        elif self.uart_writer:
+            self.uart_writer.write(data)
             await self.uart_writer.drain()
 
     async def stop(self) -> None:
         for t in self.tasks:
             t.cancel()
+        if self.trace_writer:
+            self.trace_writer.close()
         # Bounded: a QEMU that does not answer must not stall a board switch
         if self.qmp:
             with contextlib.suppress(Exception):

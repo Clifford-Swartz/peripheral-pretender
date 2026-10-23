@@ -252,6 +252,11 @@ and note. CircuitPython boards: the REPL comparison in "CircuitPython boards" in
    - Layers: copper, solder mask, silkscreen, paste, outline, and the drill files. Leave out
      drawing frames and binary drill drawings: some releases name the real drill files
      `*-RoundHoles.TXT` and `*-SlotHoles.TXT` while the `.DRL` is a drawing.
+   - tracespace takes any Altium mechanical layer (`.GM1`, `.GM12`…) for the outline and clips
+     the whole board to it. Render each GM layer alone and look: keep one only if it is just the
+     board edge. A drawing there (dimensions, a test-point map) cuts wedges out of the board;
+     `recolor_board.py` stops on an outline with more than 16 contours. With no clean outline,
+     leave every GM layer out and give `--edge`.
    - Then `py tools/pp_web/boards/recolor_board.py <top.svg> out.svg --mask "<colour>" --edge <x,y,w,h>`.
      The mask colour comes from the kit photo. `--edge` is the board outline in Gerber units;
      with no outline layer, use the silkscreen frame or the board size from the user guide. The

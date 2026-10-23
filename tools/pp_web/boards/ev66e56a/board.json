@@ -51,7 +51,8 @@
         6.0,
         4.4
       ],
-      "action": "sw0"
+      "action": "sw0",
+      "pin": "PB2"
     }
   ],
   "headers": [

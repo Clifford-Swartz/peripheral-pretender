@@ -5,10 +5,16 @@ firmware runs: LEDs light as the pins drive them, SW0 and RESET respond to click
 VCOM UART appears in a console. This is the first slice of the endgame in
 `docs/design/endgame.md`.
 
+The page is a workspace (`docs/design/workspace.md`): a bench to pan and zoom with one or more
+boards on it, each running its own firmware, and a palette of templates, boards, Click boards,
+parts and pins to add. It opens as it was left (`workspace.json`); with nothing on it, it offers
+templates.
+
 ```
 make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=blinky     # or APP=breathe (PWM)
-py -m tools.pp_web --elf firmware/hello/build/pic32cm_mc00_cpro/blinky.elf
+py -m tools.pp_web --elf firmware/hello/build/pic32cm_mc00_cpro/blinky.elf --board ev15n46a
 # open http://127.0.0.1:8080/ ; drop another ELF on the page to switch firmware
+py -m tools.pp_web                  # the last workspace, or an empty bench
 ```
 
 You need a pp-qemu build (`PP_QEMU`, as for `tools.pp`) and `aiohttp`.
@@ -66,19 +72,25 @@ MPLAB, and with `--watch` on that folder the page follows every build.
 ## The parts bench
 
 Everyday parts plug into the board itself: resistors, LEDs (and an RGB LED), a diode, a push
-button, a switch, a potentiometer, a DC motor, a logic-level N-MOSFET, a servo and a voltmeter.
+button, a switch, a potentiometer, a DC motor, a logic-level N-MOSFET, a servo, a voltmeter,
+a capacitor and an inductor.
 They sit on or beside the board picture, and jumper wires run from their legs into the holes of
 the board's headers (`board.json` `"pin_headers"`: the Arduino, EXT and power headers on the
 MC00, J9 on the PyKit), each tied to its pad or to GND, 3V3 or 5V:
 
-- **+ part…** (the toolbar under the board) adds a part beside the board. Drag it onto a
-  header and drop it: its legs plug into the holes nearest them (green while you drag), bent
-  in like a real part pushed into a header, so an LED dropped on D13 and GND sits in those two
-  pins. **R** turns the selected part (to put the anode where you want it); drag it away to
-  unplug it; right-click a leg to pull just that one out.
+- The **palette** (left of the bench; **/** searches it) has the parts. Click one to add it
+  beside the boards, or drag it where it goes: dropped on a header, its legs plug into the holes
+  nearest them (green while you drag), bent in like a real part pushed into a header, so an LED
+  dropped on D13 and GND sits in those two pins. **R** turns the selected part (to put the anode
+  where you want it); drag it away to unplug it; right-click a leg to pull just that one out.
 - Or run a jumper: click a leg, then a header hole (hover shows the pin's name, pad and
   voltage); Esc cancels. A leg can also go to another leg, and a hole to another hole.
-- **+ pin tag…** puts a pad with no header hole (or a rail) on the page as a tag to wire to.
+- The palette's **Pins and rails** put a pad with no header hole (or a rail) on the bench as a
+  tag to wire to; with several boards, each pad says whose it is.
+- A **Click board** dropped off its headers lands on the bench with its 16 mikroBUS pins: wire
+  them to header holes (3V3 or 5V and GND power it) and the twin plugs it into the pads they
+  reach; its SPI or I2C must be on pads a SERCOM can drive (the bar says when they are not).
+  See `docs/design/workspace.md`.
 - Drag parts and tags. Select a part to edit its values in the toolbar; right-click (or select
   and Delete) to remove things. Wires in use light their holes (red while the pad is high).
 - While the twin runs: hold a button, drag a pot's knob, double-click a switch. LEDs glow with
@@ -94,9 +106,19 @@ bench reads the level its net settles at (`pX-bench`, a drive layer over the Cli
 buttons'; hysteresis at 40/60 % of VDD), and a pad with an ADC channel reads its net's voltage
 (the ADC's `ain`: the PyKit's SAM D5x ADC and the MC00/JH01's PIC32CM ADC). Pads a peripheral
 drives with a voltage (`board.json` `"analog_out"`: the MC00's DAC on PA02, J700) are sources
-behind their output resistance, so a meter or an LED on DAC OUT follows the firmware. Not modelled: anything
-that changes in time (capacitors, inductors, motor inertia). That is the analog step, with
-ngspice, later.
+behind their output resistance, so a meter or an LED on DAC OUT follows the firmware.
+
+A **capacitor** or an **inductor** on the bench makes it change in time. The engine then runs
+the whole bench in ngspice, in lockstep with the twin's clock (`tools/pp_analog`,
+`docs/design/analog.md`). On the MC00 and the JH01, with ngspice installed (`SETUP.md`):
+- the twin restarts with the circuit attached;
+- the ADC samples it at the instant of each conversion, and input pads read it;
+- knobs, buttons and switches reach it live;
+- the toolbar shows **ngspice · lockstep**, and the readouts are ngspice's averages over each
+  frame.
+
+Elsewhere, capacitors are open and inductors are their winding resistance in the DC solve.
+Not modelled yet: motor inertia and back-EMF.
 
 `firmware/hello` has a demo for it on the MC00: `make BOARD=pic32cm_mc00_cpro APP=shield`
 blinks D13 at 2 Hz, at 8 Hz while D2 is pulled low. Plug an LED into D13/GND and a button into
@@ -138,14 +160,38 @@ DGI tools over USB only; letting it use the twin's socket is a change on its sid
 It is a local, single-user prototype: one twin is shared by every open page. Hosting
 (one sandboxed twin per visitor) is a later step.
 
+## Timeline, faults, record and replay, scripting
+
+`docs/design/timeline.md` has the design.
+- Machines with pp-qemu's event recorder (all four boards: MC00, JH01, PyKit, AVR64EA48 Nano)
+  stream every pad edge, serial character (SERCOM, or AVR USART, SPI and TWI) and interrupt in
+  virtual time.
+- `timeline.py` builds the drawer's rows from it with `tools/pp/trace.py`.
+- `faults` messages set shorts, I2C NACKs and stuck MISO lines.
+- `record` and `replay` messages run a board deterministically: `-icount shift=4,sleep=off`,
+  inputs scheduled in QEMU, recordings in `<workspace dir>/recordings`.
+
+Scripts and assistants use HTTP:
+- `GET /api/bench`;
+- `POST /api/request`, which takes any page message;
+- `POST /api/timeline`;
+- `GET /api/uart?since=`;
+- `GET /api/recordings`.
+
+`tools/pp_mcp` wraps these as MCP tools.
+
 ## Board assets: `boards/ev15n46a/`
 
 `top.png` is rendered from Microchip's production Gerbers for the PIC32CM MC00 Curiosity Pro
 (design files R3, from the EV15N46A product page: "PIC32CM MC00 Curiosity Pro Evaluation Kit
-Design Documentation"). It was made with tracespace 4.2.1: every layer except the Mechanical 2
-drawing frame. `recolor_board.py` then gives it the board's red solder mask (copper showing
-through as traces, gold pads) and crops it to the board edge, and resvg rasterizes it at
-20 px/mm.
+Design Documentation"). It was made with tracespace 4.2.1 from the copper, mask, paste and
+silkscreen layers and the two NC drill files (`-RoundHoles.TXT`, `-SlotHoles.TXT`). The release
+has no outline layer: GM2 is a drawing frame and GM12 a test-point drawing (dimensions, arrows,
+notes). tracespace takes a GM layer for the outline and clips the board to it, which cut white
+wedges and stray labels into the top-left corner of an earlier render, so both stay out.
+`recolor_board.py` then gives it the board's red solder mask (copper showing through as
+traces, gold pads) and crops it to the board edge (its default `--edge`), and resvg rasterizes
+it at 20 px/mm with a transparent background, so holes show what is under the board.
 
 Part positions in `board.json` come from the pick-and-place file of the same release. Its
 coordinates are the Gerber coordinates in mm, checked against the paste pads of U300 and

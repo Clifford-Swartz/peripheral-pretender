@@ -79,9 +79,22 @@ def main() -> None:
     ap.add_argument("--flip", type=float, help="default: from the SVG")
     ap.add_argument("--unit", choices=UNITS, default="mm")
     ap.add_argument("--parts", help="JSON file: {\"parts\": [...]}")
+    ap.add_argument("--any-outline", action="store_true",
+                    help="clip to the outline layer however many contours it has")
     args = ap.parse_args()
 
     s = Path(args.src).read_text(encoding="utf-8")
+    # tracespace clips the board to the layer it took for the outline. A
+    # board edge is one contour (a few with cut-outs); a drawing on a
+    # mechanical layer has hundreds, and clipping to it cuts wedges out of
+    # the board (the EV15N46A R3's GM12, a test-point drawing)
+    m = re.search(r'<clipPath id="\w+_top_outline">(.*?)</clipPath>', s, re.S)
+    if m and not args.any_outline:
+        contours = len(re.findall(r"[Mm]\s", m.group(1))) + len(
+            re.findall(r"<(?:circle|rect)\b", m.group(1)))
+        assert contours <= 16, (
+            f"the outline layer has {contours} contours: a drawing, not the "
+            "board edge? Render without it and give --edge, or pass --any-outline")
     colors = {**PALETTES[args.palette], "cf": "#d9b36a",
               "sm": f"{args.mask}; opacity: {args.opacity}", "ss": "#ffffff",
               "sp": "#bbbbbb", "out": "#000000"}

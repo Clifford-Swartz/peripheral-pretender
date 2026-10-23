@@ -1,13 +1,18 @@
 // Peripheral Pretender parts bench. Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
 //
-// Parts on the board itself: an SVG layer over the board picture, in the
-// stage's millimetres. Parts sit on or beside the board and jumper wires
-// run from their legs into the holes of the board's headers (board.json
-// "pin_headers", sent as "bench_holes"), to pad tags or to rail tags. The
+// Parts on the workspace (workspace.js): an SVG layer over the boards, in
+// bench millimetres. Parts sit on or beside the boards, drawn to scale,
+// and jumper wires run from their legs into the holes of the boards'
+// headers (board.json "pin_headers", sent as "bench_holes" with where each
+// is on the bench), to pad tags or to rail tags. A pad or hole end names
+// its board: "pin:b2/PA05", "hole:b2/J801.6". The
 // server solves the circuit (bench.py) and sends "benchstate"; this draws
-// it: LED glow, motor spin, servo horn, meter readings, wire voltages.
+// it: LED glow, motor spin, servo horn, meter readings, wire voltages. A
+// bench with a capacitor or an inductor runs in ngspice, in lockstep with
+// the twin ("solver" in benchstate); the bar says so.
 //
-// Editing: drag a part onto a header and drop it: each leg near a hole
+// Editing: parts come from the palette (click, or drag one where it
+// goes). Drag a part onto a header and drop it: each leg near a hole
 // plugs into it (drawn as a bent lead, like a real part pushed into a
 // header); drag it away to unplug, right-click a leg to pull just that
 // one out, R to turn it. Or click a leg, then a header hole (or another
@@ -22,11 +27,12 @@ const Bench = (() => {
   let solved = { parts: {}, pads: {}, nets: {}, warnings: [] };
   let svg, layerHoles, layerWires, layerParts, rubber;
   let wiring = null, selected = null, drag = null, held = false;
-  let stage = { x0: 0, y0: 0, w: 100, h: 100 };   // the board's view, mm
+  let twinList = [];                     // the boards: key, board, at
+  const U = 0.2;                         // mm per drawing unit
   const spin = {};                       // motor id -> angle
 
   // Terminal offsets and the drawing of each part type, at (0, 0), in
-  // drawing units (one screen pixel each: see unit())
+  // drawing units (U mm each: see unit())
   const SHAPES = {
     resistor: { terms: { a: [-40, 0], b: [40, 0] }, draw: (p) =>
       `<path class="lead" d="M-40 0H-24M24 0H40"/>
@@ -81,6 +87,16 @@ const Bench = (() => {
        <rect class="body" x="-26" y="-18" width="52" height="36" rx="4"/>
        <g class="horn"><path d="M0 0V-30" class="arm"/><circle r="6" class="hub"/></g>
        <text y="32">servo</text>` },
+    capacitor: { terms: { a: [-32, 0], b: [32, 0] }, draw: (p) =>
+      `<path class="lead" d="M-32 0H-5M5 0H32"/>
+       <path class="plate" d="M-5 -14V14M5 -14V14"/>
+       <rect class="hit" x="-10" y="-16" width="20" height="32"/>
+       <text y="-19">${fmtUnit(p.farads, "F")}</text>` },
+    inductor: { terms: { a: [-40, 0], b: [40, 0] }, draw: (p) =>
+      `<path class="lead" d="M-40 0H-24M24 0H40"/>
+       <path class="coil" d="M-24 0a6 6 0 0 1 12 0a6 6 0 0 1 12 0a6 6 0 0 1 12 0a6 6 0 0 1 12 0"/>
+       <rect class="hit" x="-26" y="-10" width="52" height="14"/>
+       <text y="-13">${fmtUnit(p.henries, "H")}</text>` },
     voltmeter: { terms: { p: [-24, 22], n: [24, 22] }, draw: () =>
       `<path class="lead" d="M-24 22V12M24 22V12"/>
        <rect class="body meter" x="-32" y="-14" width="64" height="26" rx="4"/>
@@ -88,6 +104,35 @@ const Bench = (() => {
        <text class="pm" x="-24" y="34">+</text><text class="pm" x="24" y="34">−</text>` },
   };
   const TAG_TERM = [34, 0];
+
+  // A Click board on the bench: its mikroBUS header (two rows of eight,
+  // 22.86 mm apart, AN and PWM at the top) centred on the part's (x, y),
+  // the Click's picture (drawn by app.js) around it as the catalog places
+  // it; pins in the bench's terminal names (bench.py "click")
+  const MB_LEFT = ["an", "rst", "cs", "sck", "miso", "mosi", "3v3", "gnd"];
+  const MB_RIGHT = ["pwm", "int", "rx", "tx", "scl", "sda", "5v", "gnd2"];
+  const MB_LABEL = { "3v3": "3V3", "5v": "5V", gnd2: "GND" };
+  function clickShape(p) {
+    const def = (typeof catalog !== "undefined" && catalog[p.click]) || null;
+    const terms = {};
+    MB_LEFT.forEach((t, k) => { terms[t] = [-11.43 / U, (-8.89 + 2.54 * k) / U]; });
+    MB_RIGHT.forEach((t, k) => { terms[t] = [11.43 / U, (-8.89 + 2.54 * k) / U]; });
+    return {
+      terms,
+      draw: () => {
+        // The handle to drag it by: the header area, so the Click's own
+        // buttons and sticks (on its picture, under the bench) stay usable
+        const box = def ? `<rect class="click-hit" x="${-13.5 / U}" y="${-10.5 / U}"
+                             width="${27 / U}" height="${21 / U}" rx="8"/>` : "";
+        const label = (t, [x, y], left) =>
+          `<text class="mb-pin" x="${x + (left ? -9 : 9)}" y="${y + 3}"
+                 text-anchor="${left ? "end" : "start"}">${MB_LABEL[t] || t.toUpperCase()}</text>`;
+        return box + MB_LEFT.map((t) => label(t, terms[t], true)).join("") +
+          MB_RIGHT.map((t) => label(t, terms[t], false)).join("");
+      },
+    };
+  }
+  function shapeOf(p) { return p.type === "click" ? clickShape(p) : SHAPES[p.type]; }
   const LED_COLORS = { red: "#ff3b2f", yellow: "#ffd21a", orange: "#ff8c1a",
                        green: "#2bff55", blue: "#3b82ff", white: "#ffffff" };
   const RAIL_COLORS = { "3V3": "#ff6b5e", "5V": "#ffae42", GND: "#6f7c8c" };
@@ -98,6 +143,14 @@ const Bench = (() => {
       : `${+r.toFixed(1)} Ω`;
   }
   function fmtV(v) { return v == null ? "" : `${v.toFixed(2)} V`; }
+  // 4.7e-6, "F" -> "4.7 µF"
+  function fmtUnit(v, unit) {
+    let scale = 1e-12, prefix = "p";
+    for (const [s, p] of [[1e-12, "p"], [1e-9, "n"], [1e-6, "µ"], [1e-3, "m"], [1, ""]]) {
+      if (Math.abs(v) >= s * 0.9995) [scale, prefix] = [s, p];
+    }
+    return `${+(v / scale).toFixed(2)} ${prefix}${unit}`;
+  }
   function el(tag, attrs = {}, html) {
     const e = document.createElementNS(SVGNS, tag);
     for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
@@ -105,13 +158,14 @@ const Bench = (() => {
     return e;
   }
 
-  // Millimetres per drawing unit: parts keep their size on screen
-  function unit() {
-    const w = svg && svg.getBoundingClientRect().width;
-    return w ? stage.w / w : 0.2;
+  // Millimetres per drawing unit: parts are drawn to scale with the board
+  function unit() { return U; }
+  // A pad or hole end's name for people: its board's key only when
+  // there are several boards
+  function padName(name) {
+    const [key, bare] = name.includes("/") ? name.split("/") : ["", name];
+    return twinList.length > 1 && key ? `${bare} (${key})` : bare;
   }
-  // Board coordinates (mm, y up) to the stage's (mm from top-left)
-  function fromBoard([x, y]) { return [x - stage.x0, stage.y0 - y]; }
 
   function endPos(end) {
     if (end.startsWith("hole:")) return holes[end] ? holes[end].at : null;
@@ -128,7 +182,7 @@ const Bench = (() => {
 
   // A leg's offset from the part's centre, turned with the part
   function legOffset(p, term) {
-    const off = SHAPES[p.type] && SHAPES[p.type].terms[term];
+    const shape = shapeOf(p), off = shape && shape.terms[term];
     if (!off) return null;
     const [x, y] = off;
     switch ((p.rot || 0) % 360) {
@@ -152,9 +206,9 @@ const Bench = (() => {
   }
   function endName(end) {
     const h = holes[end];
-    if (!h) return end;
-    const net = h.net.split(":")[1];
-    return `${end.slice(5)} ${h.label}${h.label === net ? "" : ` (${net})`}`;
+    if (!h) return end.startsWith("pin:") ? padName(end.slice(4)) : end;
+    const net = padName(h.net.split(":")[1]);
+    return `${padName(end.slice(5))} ${h.label}${h.label === net ? "" : ` (${net})`}`;
   }
 
   function commit() { send({ type: "bench", bench: data }); }
@@ -197,7 +251,7 @@ const Bench = (() => {
     if (!near) return {};
     const header = near.slice(0, near.lastIndexOf(".") + 1);
     const pool = Object.entries(holes).filter(([end, h]) => h.net && end.startsWith(header));
-    const legs = Object.keys(SHAPES[p.type].terms).map((term) => {
+    const legs = Object.keys(shapeOf(p).terms).map((term) => {
       const [ox, oy] = legOffset(p, term);
       return [`${p.id}.${term}`, p.x + ox / PITCH_UNITS * 2.54, p.y + oy / PITCH_UNITS * 2.54];
     });
@@ -235,46 +289,67 @@ const Bench = (() => {
   function nextId(type) {
     const stem = { resistor: "r", led: "led", rgb_led: "rgb", diode: "d", button: "sw",
                    switch: "s", pot: "pot", motor: "m", nmos: "q", servo: "servo",
-                   voltmeter: "vm" }[type] || type;
+                   voltmeter: "vm", capacitor: "c", inductor: "l" }[type] || type;
     let n = 1;
-    while (data.parts.some((p) => p.id === `${stem}${n}`)) n++;
+    while (data.parts.some((p) => p.id === `${stem}${n}`) ||
+           twinList.some((tw) => tw.board.headers.some((h) => h.slot === `${stem}${n}`))) n++;
     return `${stem}${n}`;
   }
 
-  // A free spot for a new part: the stage's free area beside the board
-  // (or below it), stepping across then down
+  // A free spot for a new part: right of the boards (where their Clicks
+  // and headers are), in columns going right
   function freeSpot() {
-    const u = unit(), dx = 140 * u, dy = 90 * u;
+    const dx = 22, dy = 16;
     const taken = [...data.parts.map((p) => [p.x, p.y]), ...Object.values(data.anchors)];
-    // Beside the board when the stage has room there, else below it,
-    // starting under the headers so the wires stay short
-    const hx = Object.values(holes).map((h) => h.at[0]);
-    const area = board && board.size_mm && stage.w - board.size_mm[0] > 30
-      ? [board.origin_mm[0] - stage.x0 + board.size_mm[0] + 8, 10]
-      : [hx.length ? Math.max(5, Math.min(...hx) - 30 * u) : 10,
-         (board ? board.size_mm[1] : 0) + 12 * u];
-    for (let y = area[1] + dy / 2; y < stage.h - dy / 3; y += dy) {
-      for (let x = area[0] + dx / 2; x < stage.w - dx / 3; x += dx) {
+    const sizeOf = (tw) => (tw.board.view_mm || { size: tw.board.size_mm }).size;
+    const x0 = Math.max(0, ...twinList.map((tw) => tw.at[0] + sizeOf(tw)[0])) + 14;
+    const y0 = twinList.length ? Math.min(...twinList.map((tw) => tw.at[1])) : 0;
+    const h = Math.max(80, ...twinList.map((tw) => sizeOf(tw)[1]));
+    for (let col = 0; col < 40; col++) {
+      for (let y = y0 + 10; y < y0 + h; y += dy) {
+        const x = x0 + col * dx;
         if (!taken.some(([a, b]) => Math.abs(a - x) < dx * 0.8 && Math.abs(b - y) < dy * 0.8)) return [x, y];
       }
     }
-    return [area[0] + dx / 2, area[1] + dy / 2];
+    return [x0, y0 + 10];
   }
 
-  function addPart(type) {
-    const [x, y] = freeSpot();
-    const part = { id: nextId(type), type, x, y, ...lib[type].props };
+  // A new part at @at (bench mm; dropped from the palette: its legs plug
+  // into the holes there) or at a free spot; @props over its defaults
+  function addPart(type, at, props) {
+    const [x, y] = at || freeSpot();
+    const part = { id: nextId(type), type, x, y, ...lib[type].props, ...(props || {}) };
     data.parts.push(part);
+    if (at && type !== "click") plug(part);
     selected = { part: part.id };
     commit();
     render();
   }
 
-  function addAnchor(end) {
-    if (data.anchors[end]) return;
-    data.anchors[end] = freeSpot();
+  function addAnchor(end, at) {
+    if (data.anchors[end] && !at) { selected = { anchor: end }; render(); return; }
+    data.anchors[end] = at || freeSpot();
     commit();
     render();
+  }
+
+  // A part type drawn on its own: the palette's icons
+  function icon(type) {
+    const shape = SHAPES[type];
+    if (!shape) return "";
+    const p = { id: "", type, ...(lib[type] ? lib[type].props : {}) };
+    return `<svg class="pal-icon" viewBox="-50 -42 100 84"><g class="part bp-${type}">${shape.draw(p)}</g></svg>`;
+  }
+
+  // Bounding boxes of what is on the bench (bench mm), for Fit
+  function boxes() {
+    const out = [];
+    for (const p of data.parts) {
+      const r = p.type === "click" ? 30 : 10;
+      out.push([p.x - r, p.y - r, p.x + r, p.y + r]);
+    }
+    for (const at of Object.values(data.anchors)) out.push([at[0] - 8, at[1] - 4, at[0] + 8, at[1] + 4]);
+    return out;
   }
 
   function removeSelected() {
@@ -296,8 +371,7 @@ const Bench = (() => {
   }
 
   function toStage(e) {
-    const r = svg.getBoundingClientRect();
-    return [(e.clientX - r.left) / r.width * stage.w, (e.clientY - r.top) / r.height * stage.h];
+    return Workspace.toWorld(e.clientX, e.clientY);
   }
 
   function clickEnd(end, e) {
@@ -353,7 +427,7 @@ const Bench = (() => {
     const used = new Set(data.wires.flat());
     for (const [end, h] of Object.entries(holes)) {
       if (!h.net) continue;
-      const c = el("circle", { class: "hole", cx: h.at[0], cy: h.at[1], r: Math.max(0.75, 5 * u) });
+      const c = el("circle", { class: "hole", cx: h.at[0], cy: h.at[1], r: 0.8 });
       c.dataset.end = end;
       if (used.has(end)) c.classList.add("used");
       if (wiring === end) c.classList.add("armed");
@@ -373,7 +447,7 @@ const Bench = (() => {
       g.dataset.end = end;
       const isPin = end.startsWith("pin:"), name = end.slice(isPin ? 4 : 5);
       const info = isPin ? pins.find((p) => p.pad === name) : null;
-      const label = isPin ? `${name}${info && info.label ? ` ${info.label}` : ""}` : name;
+      const label = isPin ? `${padName(name)}${info && info.label ? ` ${info.label}` : ""}` : name;
       g.innerHTML = `<rect x="-36" y="-15" width="70" height="30" rx="5"/>
         <text x="-1" y="-2" class="tag-name">${label}</text>
         <text x="-1" y="10" class="tag-sub"></text>`;
@@ -397,7 +471,7 @@ const Bench = (() => {
   function renderParts() {
     const u = unit();
     for (const p of data.parts) {
-      const shape = SHAPES[p.type];
+      const shape = shapeOf(p);
       if (!shape) continue;
       const g = el("g", { class: `part bp-${p.type}`,
                           transform: `translate(${p.x},${p.y}) scale(${u}) rotate(${p.rot || 0})` },
@@ -405,7 +479,7 @@ const Bench = (() => {
       g.dataset.id = p.id;
       if (selected && selected.part === p.id) g.classList.add("selected");
       const title = el("title");
-      title.textContent = `${p.id}: ${lib[p.type].name}`;
+      title.textContent = `${p.id}: ${p.type === "click" && catalog[p.click] ? catalog[p.click].name : lib[p.type].name}`;
       g.prepend(title);
       draggable(g, () => [p.x, p.y], (x, y) => { p.x = x; p.y = y; }, p);
       g.addEventListener("click", (e) => {
@@ -580,7 +654,7 @@ const Bench = (() => {
         g.querySelector("text").textContent = st.rpm ? `motor ${st.rpm} rpm` : "motor";
       }
       g.classList.toggle("warn", !!st.warn);
-      g.querySelector("title").textContent = `${p.id}: ${lib[p.type].name}${st.warn ? ` — ${st.warn}` : ""}`;
+      if (p.type !== "click") g.querySelector("title").textContent = `${p.id}: ${lib[p.type].name}${st.warn ? ` — ${st.warn}` : ""}`;
     }
     for (const g of layerParts.querySelectorAll(".tag")) {
       const end = g.dataset.end, isPin = end.startsWith("pin:");
@@ -617,6 +691,8 @@ const Bench = (() => {
     }
     const warn = document.getElementById("bench-warn");
     if (warn) warn.textContent = (solved.warnings || []).join(" · ");
+    const solver = document.getElementById("bench-solver");
+    if (solver) solver.hidden = solved.solver !== "ngspice";
   }
 
   function render() {
@@ -630,6 +706,7 @@ const Bench = (() => {
     renderParts();
     paint();
     showProps();
+    if (typeof drawWired === "function") drawWired(data.parts);
   }
 
   // The selected part's properties, editable in the bar
@@ -647,7 +724,7 @@ const Bench = (() => {
     head.textContent = p.id;
     box.appendChild(head);
     for (const [k, def] of Object.entries(lib[p.type].props)) {
-      if (k === "pressed") continue;
+      if (k === "pressed" || k === "click") continue;
       const lab = document.createElement("label");
       lab.textContent = `${k} `;
       let input;
@@ -696,18 +773,9 @@ const Bench = (() => {
   }
 
   function buildBar() {
-    const add = document.getElementById("bench-add");
-    add.innerHTML = `<option value="">+ part…</option>` +
-      Object.entries(lib).map(([t, d]) => `<option value="${t}">${d.name}</option>`).join("");
-    add.onchange = () => { if (add.value) addPart(add.value); add.value = ""; };
-    const pin = document.getElementById("bench-pin");
-    pin.innerHTML = `<option value="">+ pin tag…</option>` +
-      `<optgroup label="Rails">${["3V3", "5V", "GND"].map((r) => `<option value="rail:${r}">${r}</option>`).join("")}</optgroup>` +
-      `<optgroup label="Pads">${pins.map((p) => `<option value="pin:${p.pad}">${p.pad}${p.label ? ` (${p.label})` : ""}${p.adc ? " · ADC" : ""}</option>`).join("")}</optgroup>`;
-    pin.onchange = () => { if (pin.value) addAnchor(pin.value); pin.value = ""; };
-    document.getElementById("bench-clear").onclick = () => {
+    document.getElementById("bench-clear").onclick = async () => {
       if (!data.parts.length && !Object.keys(data.anchors).length) return;
-      if (!confirm("Remove every part and wire?")) return;
+      if (!await ask("Remove every part and wire?", "Remove")) return;
       data = { parts: [], wires: [], anchors: {} };
       selected = wiring = null;
       commit();
@@ -737,7 +805,7 @@ const Bench = (() => {
     });
     window.addEventListener("pointerup", () => {
       if (drag && drag.moved) {
-        if (drag.part) plug(drag.part);
+        if (drag.part && drag.part.type !== "click") plug(drag.part);
         commit();
         const d = drag;
         setTimeout(() => { if (drag === d) drag = null; render(); }, 0);
@@ -745,9 +813,9 @@ const Bench = (() => {
       }
       setTimeout(() => { drag = null; }, 0);
     });
-    // A click on the board (not on a part, hole or wire) ends wiring and
+    // A click on the bench (not on a part, hole or wire) ends wiring and
     // drops the selection
-    document.getElementById("board").addEventListener("click", () => {
+    document.getElementById("canvas").addEventListener("click", () => {
       if (wiring || selected) { wiring = null; selected = null; render(); }
     });
     document.addEventListener("keydown", (e) => {
@@ -765,24 +833,26 @@ const Bench = (() => {
     requestAnimationFrame(animate);
   }
 
-  let board = null;
   return {
     init,
     board(msg) {
-      board = msg.board;
+      twinList = msg.twins || [];
       lib = msg.bench_lib || {};
       pins = msg.bench_pins || [];
-      const v = board.view_mm || { origin: board.origin_mm, size: board.size_mm };
-      stage = { x0: v.origin[0], y0: v.origin[1], w: v.size[0], h: v.size[1] };
-      svg.setAttribute("viewBox", `0 0 ${stage.w} ${stage.h}`);
       holes = {};
       for (const [end, h] of Object.entries(msg.bench_holes || {})) {
-        holes[end] = { ...h, at: fromBoard(h.at_mm) };
+        holes[end] = { ...h };              // "at": bench mm
       }
-      document.getElementById("bench-pane").hidden = !Object.keys(lib).length;
       buildBar();
       render();
     },
+    addPart,
+    addAnchor,
+    icon,
+    boxes,
+    // Take part @id (a wired Click) off the bench with its wires
+    removePart(id) { selected = { part: id }; removeSelected(); },
+    redraw() { render(); },
     bench(b) {
       // Keep a part being dragged where the pointer has it, and a held
       // button or knob under the pointer
@@ -793,6 +863,7 @@ const Bench = (() => {
       }
       if (selected && selected.part && !data.parts.some((p) => p.id === selected.part)) selected = null;
       render();
+      Workspace.bench();
     },
     state(s) {
       solved = s;

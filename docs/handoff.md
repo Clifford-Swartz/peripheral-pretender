@@ -647,3 +647,108 @@ Next on the MC00, in order (the owner's list of 2026-10-21):
 
 The JH01, SAM E51 and AVR blocks wait for their boards to be plugged in, so they can be checked
 the same way.
+
+## Analog co-simulation with ngspice (2026-10-21)
+
+Circuits on the board now run in ngspice in lockstep with the twin's virtual time
+(`docs/design/analog.md`, phases 1 and 2).
+
+- **pp-qemu** (patch 0076):
+  - the PORT reports every pad's electrical state through `mchp_port_observe()`: driven h/l,
+    pulled u/d, floating;
+  - a `pp-cosim` device (machine property `cosim=<chardev>` on the MC00 and the JH01) speaks a
+    length-prefixed request/reply protocol over a socket;
+  - the U2247 ADC asks it for the voltage at the end of its sampling phase.
+- **Analog host** (`tools/pp_analog`): ngspice's shared library through ctypes, holding the
+  transient at the twin's frontier from its sync callback; pads are Norton sources. Run with
+  `py -m tools.pp run ... --circuit board.cir`, which defaults to `-icount 5` (lockstep needs
+  instruction-counted time).
+- **Check:** `firmware/hello` `APP=rcstep` with `circuits/rcstep.cir` (10 kΩ, 1 µF on EXT1
+  pins 4-3-2). The twin's 80 samples match the analytic RC within 2 mV
+  (`tests/e2e/test_analog_twin.py`), and the host alone within 50 µV
+  (`tests/test_pp_analog.py`).
+- **Engine:** the bench gained a capacitor and an inductor. A bench with either runs in ngspice
+  with no setup: the twin restarts with the circuit, knobs and buttons reach it live, and the bar
+  shows "ngspice · lockstep" (`tests/web/test_bench.py`).
+- **Lessons:**
+  - ngspice's 1 ms steps leave about 0.6 mV of error on a 10 ms RC; the default `tmax` is
+    100 µs;
+  - an edge that arrives after ngspice chose its step must shorten that step, not only set a
+    breakpoint;
+  - `set no_mem_check`, since `.save none` keeps one point;
+  - an M0+ software division between a timestamp and an ADC start skews it by microseconds.
+- **Open:**
+  - the silicon check needs the RC wired on the MC00;
+  - the PWM-into-RC demo;
+  - ngspice in the VSIX (licence: the MSYS2 build links GPL FFTW);
+  - AC/SDADC/DAC/AVR hooks, the scope and logic-analyzer view (phase 3), and part models
+    (phase 4).
+
+## The workspace: palette, several boards, wired Clicks (2026-10-22)
+
+The board view became a workspace (`docs/design/workspace.md`).
+
+- **Start-up.** Showing the Twin view in VS Code opens the bench as it was left. The engine keeps
+  `workspace.json` with the boards, their Clicks and firmware (uploads are copied beside it), and
+  the bench. With no board it shows templates (`tools/pp_web/templates.json`).
+- **Palette.** Templates, boards, Click boards, parts and pin tags, searchable (`/`). Click to
+  add or drag onto the bench; Clicks drop onto mikroBUS headers, parts onto header holes. The
+  dropdowns are gone.
+- **Several boards.** `App` is the workspace; each board is a `Twin` with its own QEMU, firmware
+  and console. Messages carry `"twin"`, and bench ends name their board (`pin:b2/PA05`). Boards
+  wired together are coupled through the DC bench at about 30 Hz
+  (`tests/web/test_workspace.py`: an AVR Nano's LED pin read by the MC00's SW0 input).
+- **Wired Clicks.** A Click part on the bench, wired pin by pin, becomes pp-qemu's
+  `wired=name=click:role.PAD:...`. A socket is built from the pads, with SPI and I2C reaching
+  every SERCOM that fits through bus taps that pass traffic only while the pads are muxed to
+  them. Checked with an OLED C over SPI and a Thermo 8 over I2C, neither on a header. The PORT
+  gained `mchp_port_pad_listen()` and `mchp_port_pad_function()`, and mikroBUS sockets a
+  `pad_listen` hook (pp-qemu patch 0076).
+- **Open:** board-to-board links in lockstep, wired UART Clicks, bare chips on a breadboard,
+  `pp run --workspace`, undo.
+
+## Timeline, faults, exact replay, MCP bench (2026-10-22)
+
+`docs/design/timeline.md`. pp-qemu patches 0076 (Arm: recorder, faults), 0077 (`target/avr`:
+interrupts pending across SEI) and 0078 (AVR: recorder, faults).
+
+- **pp-qemu:**
+  - `pp-trace`, an event recorder (machine `trace=<chardev>` on all four boards: MC00, JH01,
+    PyKit, AVR64EA48 Nano). It records pads, serial traffic, interrupt pend/entry/exit and
+    resets, in virtual time, as 16-byte records. It also schedules inputs at exact virtual times
+    (first in, first out within one instant) and paces deterministic runs. It knows no device:
+    the PORT models call `pp_trace_pad()`, and the SoC glue (`pic32cm_soc_trace()`,
+    `avr8x_soc_trace()`) wires the sources before attaching it.
+  - PORT (Arm and AVR): `pX-short` and pad tracing.
+  - SERCOM: `fault-nack`, `fault-miso` and `rx-inject`. AVR: USART `rx-inject`, TWI
+    `fault-nack`, SPI `fault-miso`.
+  - NVIC: an observer hook (`armv7m_nvic.c`, a QEMU core file).
+  - `target/avr` (QEMU core files):
+    - an interrupt observer (`avr_cpu_observe_irqs()`);
+    - SEI and SREG writes re-arm the interrupt check (`helper_sei`), and SEI ends the TB after
+      the next instruction. Without this an interrupt pending across `cli`/`sei` waited for the
+      CPU loop's next exit, and AVR replays differed.
+- **Engine:**
+  - `tools/pp/trace.py`: store and decoders;
+  - `tools/pp_web/timeline.py`: rows;
+  - faults per board;
+  - deterministic sessions, record and replay with digests;
+  - HTTP for scripts and assistants;
+  - `~/.pp_web/engines/` discovery.
+- **Page:** a timeline drawer (header button), a Faults section, Record and Replay in the
+  timeline bar.
+- **MCP:** 11 `bench_*` tools plus `bench_record`, `bench_replay` and `bench_recordings`. The
+  extension registers the server with VS Code and adopts an engine the MCP server started.
+- **Checked:**
+  - two runs at `shift=auto` differ by tens of ns, while at `shift=4,sleep=off` they are
+    identical;
+  - a paced recording with four inputs and a reset replays all events;
+  - a moved input is caught;
+  - the AVR Nano (8x8 G demo, blinky) and the PyKit record, show their rows and faults, and the
+    AVR replays exactly (`test_avr_recorder_faults_and_replay`, `test_pykit_recorder`);
+  - the wired OLED C test now waits for a drawn frame. QEMU starts after the recorder connects,
+    so the first poll can catch the cleared panel.
+- **Open:**
+  - bus timing in the serial models;
+  - DGI, analog and board-to-board in deterministic runs;
+  - CI scenarios on the scheduler.

@@ -37,8 +37,11 @@ falls short.
 - `firmware/hello/` — bare-metal test image that runs unchanged on twin and silicon; ends with a
   `PP:EXIT <n>` line. One image per board: `make BOARD=pic32cm_jh01_cpro|pic32cm_mc00_cpro`,
   output in `build/<board>/`.
-- `tools/pp` (runner CLI), `tools/pp_mcp` (MCP server), `harness/` (silicon comparison via
-  pyOCD/EDBG), `tests/`.
+- `tools/pp` (runner CLI; `trace.py` decodes pp-qemu's event recorder), `tools/pp_mcp` (MCP
+  server: the runner and the live bench), `harness/` (silicon comparison via pyOCD/EDBG),
+  `tests/`. Timeline, faults, exact replay: `docs/design/timeline.md`.
+- `tools/pp_analog` — analog co-simulation: SPICE circuits in ngspice, in lockstep with the twin
+  over pp-qemu's `pp-cosim` port (`docs/design/analog.md`).
 - `scripts/fetch_packs.py` — pins and fetches the device packs (PIC32CM-JH, PIC32CM-MC, AVR-Ex, SAME51)
   and CMSIS into `~/.mchp_packs`.
 
@@ -65,5 +68,7 @@ make -C firmware/hello [BOARD=pic32cm_mc00_cpro]   # hello.elf (arm-none-eabi-gc
 python -m pytest tests harness/tests          # Python test suites
 python -m tools.pp run firmware/hello/build/pic32cm_jh01_cpro/hello.elf
 python -m tools.pp run firmware/hello/build/pic32cm_mc00_cpro/hello.elf --machine pic32cm-mc00-cpro
+python -m tools.pp run firmware/hello/build/pic32cm_mc00_cpro/rcstep.elf --machine pic32cm-mc00-cpro \
+    --circuit firmware/hello/circuits/rcstep.cir   # an RC in ngspice, in lockstep (needs ngspice)
 ```
 On Windows use `py` for Python and run the build steps in an MSYS2 UCRT64 shell.

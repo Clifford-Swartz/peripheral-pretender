@@ -256,7 +256,8 @@
   ],
   "buttons": [
     {"id": "USER", "ref": "USER", "at_mm": [173.1, 31.0],
-     "size_mm": [6.4, 3.6], "action": "user", "property": "user-pressed"},
+     "size_mm": [6.4, 3.6], "action": "user", "property": "user-pressed",
+     "pin": "PA27"},
     {"id": "RESET", "ref": "RESET", "at_mm": [284.7, 29.2],
      "size_mm": [6.4, 3.6], "action": "reset"}
   ],

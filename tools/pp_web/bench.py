@@ -4,9 +4,10 @@ circuit each frame.
 
 A bench is JSON: {"parts": [{"id", "type", "x", "y", <props>}], "wires":
 [[end, end], ...], "anchors": {end: [x, y]}}. An end is a part terminal
-("r1.a"), a pad ("pin:PA05"), a rail ("rail:3V3", "rail:5V", "rail:GND")
-or a hole in one of the board's headers ("hole:J801.6", which the board
-ties to a pad or rail: see header_holes()). Wires join ends into nets;
+("r1.a"), a pad ("pin:PA05"; on a workspace with several boards, with the
+board's key: "pin:b2/PA05"), a rail ("rail:3V3", "rail:5V", "rail:GND")
+or a hole in one of the board's headers ("hole:J801.6", "hole:b2/J801.6",
+which the board ties to a pad or rail: see header_holes()). Wires join ends into nets;
 anchors are where the page draws a pad or rail tag. Positions (parts,
 anchors) are millimetres on the page's stage, from its top-left corner.
 
@@ -23,15 +24,21 @@ steps for the diodes and LEDs. The results go two ways:
   settles at (the PORT's "pX-bench" layer, with hysteresis), and each pad
   with an ADC channel reads its net's voltage (the ADC's "ain").
 
-Units: volts, amps, ohms. Not modelled: anything that changes in time
-(capacitors, inductors, motor inertia); that is the analog step later.
+Units: volts, amps, ohms, farads, henries. The DC solve takes capacitors
+as open and inductors as their winding resistance. A bench with a
+capacitor or an inductor changes in time: the server then runs it in
+ngspice alongside the twin, in lockstep (tools/pp_analog, netlist()),
+and shows the averages it reports (analog_result()). Not modelled: motor
+inertia and back-EMF.
 """
 
 from __future__ import annotations
 
 import itertools
+import json
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 
 R_RAIL = 0.01           # a supply rail's output resistance
 R_PAD = 40.0            # an MCU output pad's output resistance (typical)
@@ -73,13 +80,37 @@ PARTS = {
     "servo": {"name": "Servo", "terminals": ["sig", "vcc", "gnd"],
               "props": {}},
     "voltmeter": {"name": "Voltmeter", "terminals": ["p", "n"], "props": {}},
+    "capacitor": {"name": "Capacitor", "terminals": ["a", "b"],
+                  "props": {"farads": 1e-6}},
+    "inductor": {"name": "Inductor", "terminals": ["a", "b"],
+                 "props": {"henries": 1e-3, "ohms": 1.0}},
+    # A Click board wired on the bench: its mikroBUS pins (the twin plugs
+    # it into the pads they are wired to; no load in the DC solve)
+    "click": {"name": "Click board", "terminals": [
+        "an", "rst", "cs", "sck", "miso", "mosi", "3v3", "gnd",
+        "pwm", "int", "rx", "tx", "scl", "sda", "5v", "gnd2"],
+        "props": {"click": ""}},
 }
+CLICK_IDS = set(json.loads((Path(__file__).resolve().parent / "clicks.json")
+                           .read_text(encoding="utf-8")))
+# Parts that change in time: a bench with one runs in ngspice
+DYNAMIC = {"capacitor", "inductor"}
+# Properties a running circuit takes live (ngspice external sources)
+LIVE = {"pressed", "on", "position"}
+R_OPEN = 1e9            # an open switch, and every node's leak to ground
+N_VT = V_T / 0.025852   # the LED/diode law as a SPICE emission coefficient
 RAILS = {"3V3": None, "5V": 5.0, "GND": 0.0}      # 3V3 follows the board VDD
 
 
 def pad_ref(pad: str) -> tuple[str, int]:
-    """"PA05" -> ("a", 5)."""
+    """"PA05" (or "b2/PA05") -> ("a", 5)."""
+    pad = pad.rpartition("/")[2]
     return pad[1].lower(), int(pad[2:])
+
+
+def bare_pad(pad: str) -> str:
+    """"b2/PA05" -> "PA05" (a SPICE node, one board's pad)."""
+    return pad.rpartition("/")[2]
 
 
 def new_part(ptype: str, pid: str, x: float = 0, y: float = 0) -> dict:
@@ -139,6 +170,9 @@ def clean(bench: dict, holes: dict | None = None) -> dict:
                     part[k] = float(v)
                 except (TypeError, ValueError):
                     part[k] = default
+            elif k == "click":
+                part[k] = v if isinstance(v, str) and v in CLICK_IDS \
+                    else default
             else:
                 part[k] = v if isinstance(v, str) and v in LED_VF else default
         # The legs plugged straight into header holes (their leg-to-hole
@@ -155,15 +189,18 @@ def clean(bench: dict, holes: dict | None = None) -> dict:
         for k in ("ohms", "ron", "rpm_per_volt"):
             if k in part:
                 part[k] = max(part[k], 1e-3)
+        for k in ("farads", "henries"):
+            if k in part:
+                part[k] = max(part[k], 1e-15)
         parts.append(part)
 
     def ok(end: str) -> bool:
         if end.startswith("hole:"):
             return bool(holes.get(end, {}).get("net"))
         if end.startswith("pin:"):
-            pad = end[4:]
+            key, _, pad = end[4:].rpartition("/")
             return len(pad) >= 3 and pad[0] == "P" and pad[1].isalpha() and \
-                pad[2:].isdigit()
+                pad[2:].isdigit() and (not key or key.isalnum())
         if end.startswith("rail:"):
             return end[5:] in RAILS
         pid, _, term = end.partition(".")
@@ -302,10 +339,18 @@ class Bench:
     def empty(self) -> bool:
         return not self.data["parts"] and not self.pads
 
+    @property
+    def dynamic(self) -> bool:
+        """Something on the bench changes in time (see DYNAMIC)."""
+        return any(p["type"] in DYNAMIC for p in self.data["parts"])
+
     def _pad_attached(self, pad: str) -> bool:
-        """The pad's net has something other than pads on it."""
-        root = self.ends.find(f"pin:{pad}")
-        return any(self.ends.find(e) == root and not e.startswith("pin:")
+        """The pad's net has something other than the pad itself on it (a
+        part, a rail, or another pad: another board's, wired to it)."""
+        root, me = self.ends.find(f"pin:{pad}"), f"pin:{pad}"
+        return any(self.ends.find(e) == root and e != me and
+                   not (e.startswith("hole:") and
+                        self.holes.get(e, {}).get("net") == me)
                    for e in self.ends.up)
 
     # -- one operating point ------------------------------------------
@@ -401,7 +446,7 @@ class Bench:
         for p in self.data["parts"]:
             pid, t = p["id"], p["type"]
             end = lambda term: self.n(f"{pid}.{term}")      # noqa: E731
-            if t in ("resistor", "motor"):
+            if t in ("resistor", "motor", "inductor"):
                 g(end("a"), end("b"), 1 / p["ohms"])
             elif t == "button" and p["pressed"] or t == "switch" and p["on"]:
                 g(end("a"), end("b"), 1 / R_SWITCH)
@@ -558,6 +603,149 @@ class Bench:
             return {"angle": None, "pulse_ms": round(pulse * 1000, 2)}
         angle = (min(max(pulse, 0.0005), 0.0025) - 0.0005) / 0.002 * 180
         return {"angle": round(angle, 1), "pulse_ms": round(pulse * 1000, 2)}
+
+
+class Analog:
+    """The bench as a SPICE netlist for the analog host (netlist()), and
+    its averages back as a Result (result())."""
+
+    def __init__(self, bench: Bench):
+        self.bench = bench
+        self.node: dict[str, str] = {}      # net root -> SPICE node
+
+    def netlist(self) -> tuple[str, dict[str, float]]:
+        """(the netlist, its live controls {name: value}). Pads are nodes
+        named like them (the host adds their sources), 3V3 is VDD, GND is
+        0. The controls' values are left out of the text, so a knob that
+        turns leaves it unchanged."""
+        b = self.bench
+        roots: dict[str, list[str]] = {}
+        for e in b.ends.up:
+            roots.setdefault(b.ends.find(e), []).append(e)
+        lines = ["pp_web bench"]
+        named, extra = {}, []
+        for i, (root, ends) in enumerate(sorted(roots.items())):
+            rails = {e[5:] for e in ends if e.startswith("rail:")}
+            pads = sorted(bare_pad(e[4:]) for e in ends
+                          if e.startswith("pin:"))
+            if "GND" in rails:
+                node = "0"
+            elif "3V3" in rails:
+                node = "vdd"
+            elif "5V" in rails:
+                node = "v5"
+            elif pads:
+                node = pads.pop(0)
+            else:
+                node = f"n{i}"
+            named[root] = node
+            # More names for the same net: tied with a milliohm
+            extra += [f"r_tie_{pad} {pad} {node} 1m" for pad in pads]
+            if node not in ("0", "vdd", "v5") and not pads and \
+                    not node.startswith("P"):
+                extra.append(f"r_leak_{node} {node} 0 {R_OPEN:g}")
+        self.node = named
+        controls: dict[str, float] = {}
+        models: set[float] = set()
+        for p in b.data["parts"]:
+            lines += self._element(p, controls, models)
+        lines += extra
+        if any(n == "v5" for n in named.values()):
+            lines.append("v_rail_5v v5 0 dc 5")
+        for vf in sorted(models):
+            i_s = I_LED_RATED * math.exp(-vf / V_T)
+            lines.append(f".model dvf{round(vf * 100)} d(is={i_s:.4g} "
+                         f"n={N_VT:.4f})")
+        decl = [f"*pp control {k} {v:g}" for k, v in sorted(controls.items())]
+        return "\n".join(lines[:1] + decl + lines[1:]) + "\n", controls
+
+    def _n(self, pid: str, term: str) -> str:
+        return self.node[self.bench.ends.find(f"{pid}.{term}")]
+
+    @staticmethod
+    def _v(node: str) -> str:
+        return "0" if node == "0" else f"v({node})"
+
+    def _element(self, p: dict, controls: dict, models: set) -> list[str]:
+        pid, t = p["id"].lower(), p["type"]
+        n = lambda term: self._n(p["id"], term)             # noqa: E731
+        v = self._v
+        if t in ("resistor", "motor"):
+            return [f"r_{pid} {n('a')} {n('b')} {p['ohms']:g}"]
+        if t == "capacitor":
+            return [f"c_{pid} {n('a')} {n('b')} {p['farads']:g}"]
+        if t == "inductor":
+            return [f"l_{pid} {n('a')} i_{pid} {p['henries']:g}",
+                    f"r_{pid} i_{pid} {n('b')} {p['ohms']:g}"]
+        if t in ("led", "diode"):
+            vf = LED_VF[p["color"]] if t == "led" else 0.7
+            models.add(vf)
+            return [f"vs_{pid} {n('a')} i_{pid} 0",
+                    f"d_{pid} i_{pid} {n('k')} dvf{round(vf * 100)}"]
+        if t == "rgb_led":
+            out = []
+            for c, vf in (("r", 1.9), ("g", 2.9), ("b", 2.9)):
+                models.add(vf)
+                out += [f"vs_{pid}_{c} {n(c)} i_{pid}_{c} 0",
+                        f"d_{pid}_{c} i_{pid}_{c} {n('k')} "
+                        f"dvf{round(vf * 100)}"]
+            return out
+        if t in ("button", "switch"):
+            closed = p["pressed"] if t == "button" else p["on"]
+            controls[pid] = 1 / R_SWITCH if closed else 1 / R_OPEN
+            a, b = n("a"), n("b")
+            return [f"vx_{pid} x_{pid} 0 dc 0 external",
+                    f"b_{pid} {a} {b} i = v(x_{pid}) * ({v(a)} - {v(b)})"]
+        if t == "pot":
+            controls[pid] = p["position"]
+            a, w, b, r = n("a"), n("w"), n("b"), p["ohms"]
+            return [f"vx_{pid} x_{pid} 0 dc 0 external",
+                    f"b_{pid}_a {a} {w} i = ({v(a)} - {v(w)}) / "
+                    f"(v(x_{pid}) * {r:g} + 0.5)",
+                    f"b_{pid}_b {w} {b} i = ({v(w)} - {v(b)}) / "
+                    f"((1 - v(x_{pid})) * {r:g} + 0.5)"]
+        if t == "nmos":
+            d, g, s = n("d"), n("g"), n("s")
+            return [f"b_{pid} {d} {s} i = ({v(d)} - {v(s)}) * "
+                    f"(1 / {p['ron']:g} / (1 + exp(-(({v(g)} - {v(s)}) - "
+                    f"{p['vth']:g}) / 0.08)) + 1e-9)"]
+        if t == "servo":
+            return [f"r_{pid} {n('vcc')} {n('gnd')} 50"]
+        return []                       # a voltmeter only looks
+
+    def result(self, avg: dict[str, float], pads: dict[str, Pad]) -> Result:
+        """The page's view from the host's averages (vector names in
+        lower case: node voltages, "vs_<id>#branch" currents)."""
+        b = self.bench
+        res = Result()
+        node_v = lambda node: 0.0 if node == "0" else \
+            avg.get(node.lower(), 0.0)                      # noqa: E731
+        volt = lambda end: node_v(self.node.get(b.ends.find(end), "0")) \
+            # noqa: E731
+        cur: dict[str, float] = {}
+        for p in b.data["parts"]:
+            pid = p["id"].lower()
+            if p["type"] in ("led", "diode"):
+                cur[p["id"]] = avg.get(f"vs_{pid}#branch", 0.0)
+            elif p["type"] == "rgb_led":
+                for c in "rgb":
+                    cur[f"{p['id']}.{c}"] = avg.get(f"vs_{pid}_{c}#branch",
+                                                    0.0)
+            elif p["type"] == "motor":
+                va = volt(f"{p['id']}.a") - volt(f"{p['id']}.b")
+                res.parts[p["id"]] = {"amps": va / p["ohms"]}
+        # A driven pad's current: its source's conductance times the
+        # difference to its target (constant while it drives, so the
+        # averages give the average)
+        acc_pad = {}
+        for pad in b.pads:
+            if pads.get(pad, Pad()).driven:
+                k = bare_pad(pad).lower()
+                acc_pad[pad] = (avg.get(f"t_{k}", 0.0) - avg.get(k, 0.0)) * \
+                    avg.get(f"g_{k}", 0.0)
+        b._report(res, cur, cur, acc_pad, pads, volt)
+        res.nets = {e: round(volt(e), 4) for e in b.ends.up}
+        return res
 
 
 def pad_drives(inputs: dict[str, int], groups) -> dict[str, tuple[int, int]]:

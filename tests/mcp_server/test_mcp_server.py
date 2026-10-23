@@ -51,7 +51,12 @@ def call_server(calls, qemu_path=None):
 def test_tools_are_listed():
     tools, _ = call_server([])
     by_name = {t.name: t for t in tools.tools}
-    assert set(by_name) == {"twin_run", "twin_machines"}
+    assert set(by_name) == {"twin_run", "twin_machines", "bench_status",
+                            "bench_add_board", "bench_remove_board",
+                            "bench_template", "bench_plug", "bench_run",
+                            "bench_press", "bench_control", "bench_uart",
+                            "bench_timeline", "bench_faults", "bench_record",
+                            "bench_replay", "bench_recordings"}
     schema = field(by_name["twin_run"], "inputSchema")
     assert list(schema["properties"])[:4] == ["elf_path", "timeout_s",
                                               "input_text", "icount_shift"]

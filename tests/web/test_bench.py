@@ -336,3 +336,133 @@ def test_voltmeter_on_the_mc00_dac_out(qemu_path, qemu_machines):
     assert min(readings) < 0.8 and max(readings) > 2.5, (min(readings),
                                                          max(readings))
     assert max(readings) <= 3.31
+
+
+# -- a bench that changes in time: ngspice alongside the twin ----------
+
+
+def test_netlist_of_every_part():
+    from tools.pp_web.bench import Analog
+    b = Bench({"parts": [part("resistor", "r1"), part("capacitor", "c1"),
+                         part("inductor", "l1"), part("led", "led1"),
+                         part("button", "sw1"), part("pot", "pot1"),
+                         part("nmos", "q1"), part("motor", "m1")],
+               "wires": [["pin:PB09", "r1.a"], ["r1.b", "pin:PB08"],
+                         ["pin:PB08", "c1.a"], ["c1.b", "rail:GND"],
+                         ["pin:PA05", "l1.a"], ["l1.b", "led1.a"],
+                         ["led1.k", "sw1.a"], ["sw1.b", "rail:GND"],
+                         ["pot1.a", "rail:3V3"], ["pot1.b", "rail:GND"],
+                         ["pot1.w", "pin:PA04"], ["q1.g", "pin:PA06"],
+                         ["q1.s", "rail:GND"], ["q1.d", "m1.b"],
+                         ["m1.a", "rail:5V"], ["pin:PA07", "pin:PA04"]]})
+    assert b.dynamic
+    text, controls = Analog(b).netlist()
+    lines = text.splitlines()
+    assert "r_r1 PB09 PB08 330" in lines
+    assert "c_c1 PB08 0 1e-06" in lines
+    # The inductor (and its winding resistance) into the LED's anode,
+    # whose current a 0 V source senses
+    assert "l_l1 PA05 i_l1 0.001" in lines
+    mid = next(ln.split()[2] for ln in lines if ln.startswith("r_l1 "))
+    assert f"r_l1 i_l1 {mid} 1" in lines
+    assert f"vs_led1 {mid} i_led1 0" in lines
+    assert any(ln.startswith("d_led1 i_led1 ") and ln.endswith(" dvf190")
+               for ln in lines)
+    assert "vx_pot1 x_pot1 0 dc 0 external" in lines
+    assert "v_rail_5v v5 0 dc 5" in lines
+    assert "r_tie_PA07 PA07 PA04 1m" in lines        # one net, two pads
+    assert controls == {"pot1": 0.5, "sw1": 1e-9}
+    assert "*pp control pot1 0.5" in lines
+    # The host reads the pads, the controls and the LED model from it
+    from tools.pp_analog import circuit
+    c = circuit.parse(text)
+    assert c.pads == ["PA04", "PA05", "PA06", "PA07", "PB08", "PB09"]
+    assert c.controls == controls and c.uses_vdd
+
+
+def test_analog_result_from_averages():
+    from tools.pp_web.bench import Analog
+    b = Bench({"parts": [part("resistor", "r1", ohms=100.0),
+                         part("led", "led1"), part("capacitor", "c1"),
+                         part("voltmeter", "vm1")],
+               "wires": [["pin:PA05", "r1.a"], ["r1.b", "led1.a"],
+                         ["led1.k", "rail:GND"], ["r1.b", "c1.a"],
+                         ["c1.b", "rail:GND"], ["vm1.p", "r1.b"],
+                         ["vm1.n", "rail:GND"]]})
+    a = Analog(b)
+    a.netlist()
+    node = a.node[b.ends.find("r1.b")]
+    avg = {"pa05": 3.0, node.lower(): 1.9, "vs_led1#branch": 0.011,
+           "t_pa05": 3.3, "g_pa05": 1 / 40}
+    res = a.result(avg, {"PA05": Pad(high=1.0)})
+    assert res.parts["led1"]["brightness"] == pytest.approx(0.55)
+    assert res.parts["vm1"]["volts"] == pytest.approx(1.9)
+    assert res.pads["PA05"]["volts"] == pytest.approx(3.0)
+    assert res.pads["PA05"]["amps"] == pytest.approx(0.3 / 40, rel=1e-3)
+
+
+POT_ELF = ROOT / "firmware" / "hello" / "build" / "pic32cm_mc00_cpro" / \
+    "pot.elf"
+
+
+def test_dynamic_bench_runs_in_ngspice_on_the_mc00(qemu_path, qemu_machines):
+    """A pot's wiper into J803 A0 (PB08, ADC0 AIN2) with 10 uF to ground:
+    the twin restarts with the circuit in ngspice, pot.elf reads the
+    wiper through the RC, and turning the knob reaches ngspice live."""
+    from tools.pp_analog import ngspice
+    if not ngspice.available():
+        pytest.skip("ngspice not installed")
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not POT_ELF.is_file():
+        pytest.skip("pot.elf not built (py -m tools.periph build mc00 pot)")
+
+    async def scenario():
+        app = App("ev15n46a", POT_ELF)
+        msgs = []
+        app.emit = msgs.append
+
+        def uart():
+            return "".join(m.get("data", "") for m in msgs
+                           if m["type"] == "uart")
+
+        async def settled_mv():
+            last, same = None, 0
+            for _ in range(60):
+                await asyncio.sleep(0.1)
+                done = uart().rpartition("\n")[0].splitlines()
+                vals = [int(ln.split()[1]) for ln in done
+                        if ln.startswith("pot ")]
+                if vals and vals[-1] == last:
+                    same += 1
+                    if same >= 5:
+                        return last
+                else:
+                    same = 0
+                last = vals[-1] if vals else None
+            return last
+        await app.run(POT_ELF)
+        try:
+            await app.set_bench({
+                "parts": [part("pot", "p1", position=0.25),
+                          part("capacitor", "c1", farads=10e-6)],
+                "wires": [["p1.a", "hole:J802.4"], ["p1.b", "hole:J802.6"],
+                          ["p1.w", "hole:J803.1"], ["c1.a", "hole:J803.1"],
+                          ["c1.b", "hole:J802.6"]]})
+            assert app.analog is not None
+            quarter = await settled_mv()
+            host = app.analog
+            await app.bench_prop("p1", "position", 0.9)
+            assert app.analog is host           # live: no restart
+            ninety = await settled_mv()
+            solvers = {m.get("solver") for m in msgs
+                       if m["type"] == "benchstate"}
+        finally:
+            await app.session.stop()
+            app._stop_analog()
+        return quarter, ninety, solvers, uart()
+
+    quarter, ninety, solvers, text = asyncio.run(scenario())
+    assert "ngspice" in solvers
+    assert quarter == pytest.approx(2475, abs=20), text[-300:]
+    assert ninety == pytest.approx(330, abs=20), text[-300:]

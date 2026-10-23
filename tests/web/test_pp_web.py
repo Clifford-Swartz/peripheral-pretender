@@ -358,7 +358,8 @@ def test_session_thermo8(qemu_path, qemu_machines):
 
 
 def test_watch_runs_each_new_build(tmp_path, monkeypatch):
-    """--watch: the newest out/ or dist/ ELF runs once its build settles."""
+    """--watch: the newest out/ or dist/ ELF runs once its build settles,
+    and the board keeps it for next time."""
     import os
     from tools.pp_web import server
 
@@ -377,7 +378,8 @@ def test_watch_runs_each_new_build(tmp_path, monkeypatch):
         async def run(elf):
             ran.append(elf.read_bytes())
         app.run = run
-        task = asyncio.create_task(app._watch())
+        assert app.build_is_new(old)            # a first workspace
+        task = asyncio.create_task(app._watch(old))
         await asyncio.sleep(0.2)                # the existing build runs
         new = tmp_path / "dist" / "default" / "production" / "app.elf"
         new.parent.mkdir(parents=True)
@@ -387,9 +389,13 @@ def test_watch_runs_each_new_build(tmp_path, monkeypatch):
         (tmp_path / "out" / "app" / "notes.txt").write_text("x")
         await asyncio.sleep(0.2)
         task.cancel()
-        return ran
+        return ran, new
 
-    assert asyncio.run(scenario()) == [b"\x7fELF old", b"\x7fELF new"]
+    ran, new = asyncio.run(scenario())
+    assert ran == [b"\x7fELF old", b"\x7fELF new"]
+    again = server.App("ev15n46a", None, tmp_path)
+    assert again.kept_elf.read_bytes() == b"\x7fELF new"
+    assert not again.build_is_new(new)
 
 
 @pytest.mark.qemu
@@ -1237,7 +1243,9 @@ def test_session_gnss(qemu_path, qemu_machines):
     assert ",A,3317.7900,N,11153.8200,W," in rmc, rmc
     assert "fix lat 3317.7900 N lon 11153.8200 W alt 370.0 m sats 8" in lines
     assert "fix lat 3351.4080 S lon 15112.9180 E alt 12.0 m sats 8" in lines
-    assert lines[-1] == "waiting for a fix", uart
+    # The twin stops at a moment: the last line may be half sent
+    complete = uart.rpartition("\n")[0].splitlines()
+    assert complete[-1] == "waiting for a fix", uart
 
 
 ROTARY_DEMO = BUILD / "rotary.elf"

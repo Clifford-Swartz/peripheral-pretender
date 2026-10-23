@@ -1,0 +1,59 @@
+[
+  {
+    "id": "mc00-rotary-oled",
+    "name": "Rotary angle on an OLED C",
+    "description": "Turn a Rotary R Click; an OLED C Click draws the angle as digits and a dial.",
+    "board": "ev15n46a",
+    "clicks": {"ext1": "oledc", "ext2": "rotaryr"},
+    "firmware": "examples/mplab/rotary_oledc_angle/firmware/pic32cm_mc00_curiosity_pro.X/dist/pic32cm_mc00_curiosity_pro/production/pic32cm_mc00_curiosity_pro.X.production.elf"
+  },
+  {
+    "id": "nano-scroll",
+    "name": "MICROCHIP on an 8x8 matrix",
+    "description": "An AVR64EA48 Curiosity Nano on its Nano Base scrolls text across an 8x8 G Click.",
+    "board": "ev66e56a",
+    "clicks": {"mb1": "8x8g"},
+    "firmware": "firmware/avr-hello/build/scroll.elf"
+  },
+  {
+    "id": "mc00-rc",
+    "name": "An RC filter on the ADC",
+    "description": "A resistor and a capacitor on A1 and A0, simulated in ngspice in step with the chip; the firmware steps A1 and samples A0.",
+    "board": "ev15n46a",
+    "clicks": {},
+    "bench": {
+      "parts": [
+        {"id": "r1", "type": "resistor", "x": 78, "y": 74, "ohms": 10000, "rot": 90},
+        {"id": "c1", "type": "capacitor", "x": 92, "y": 74, "farads": 1e-6, "rot": 90}
+      ],
+      "wires": [["r1.a", "hole:J803.2"], ["r1.b", "hole:J803.1"],
+                ["c1.a", "hole:J803.1"], ["c1.b", "hole:J802.6"]],
+      "anchors": {}
+    },
+    "firmware": "firmware/hello/build/pic32cm_mc00_cpro/rcstep.elf"
+  },
+  {
+    "id": "mc00-thermo",
+    "name": "Temperature from a Thermo 8 Click",
+    "description": "An MCP9808 on EXT1 over I2C; its ALERT line lights LED0.",
+    "board": "ev15n46a",
+    "clicks": {"ext1": "thermo8"},
+    "firmware": "firmware/hello/build/pic32cm_mc00_cpro/thermo.elf"
+  },
+  {
+    "id": "pykit",
+    "name": "CircuitPython on the PyKit",
+    "description": "The Curiosity CircuitPython board running stock CircuitPython; edit code.py beside it.",
+    "board": "pykit",
+    "clicks": {},
+    "firmware": null
+  },
+  {
+    "id": "jh01",
+    "name": "PIC32CM JH01 Curiosity Pro",
+    "description": "The JH01 board with its demo firmware.",
+    "board": "ev81x90a",
+    "clicks": {},
+    "firmware": null
+  }
+]

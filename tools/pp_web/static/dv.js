@@ -163,7 +163,7 @@ const DV = (() => {
 
   return {
     board(b) {
-      gpioNames = (b.dgi && b.dgi.gpio) || [];
+      gpioNames = (b && b.dgi && b.dgi.gpio) || [];
       $("dv-head").hidden = $("dv").hidden = true;
       series = []; raw = ""; rest = {}; gpio = { edges: [], now: 0 };
     },

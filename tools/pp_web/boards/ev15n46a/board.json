@@ -405,7 +405,7 @@
   ],
   "buttons": [
     {"id": "SW0", "ref": "SW700", "at_mm": [22.8485, 95.1],
-     "size_mm": [6.2, 6.4], "action": "sw0"},
+     "size_mm": [6.2, 6.4], "action": "sw0", "pin": "PA25"},
     {"id": "RESET", "ref": "SW301", "at_mm": [34.0, 95.1],
      "size_mm": [6.2, 6.4], "action": "reset"}
   ],

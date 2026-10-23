@@ -1,9 +1,22 @@
 // Peripheral Pretender web board view. Copyright (c) 2026 Clifford Swartz. MIT License (see LICENSE).
+//
+// The boards on the workspace (workspace.js has the bench, the palette and
+// the empty state): each is a TwinView, its picture, LEDs, buttons and
+// plugged Click boards drawn in bench millimetres where it sits. Drag a
+// board by its title bar; click it to select it. The side panel shows the
+// selected board: its firmware, Click controls, CIRCUITPY files, data
+// gateway and console. Messages about one board carry "twin": its key.
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-let ws, board, catalog = {}, adapters = {}, leds = [], clicks = {}, levels = {};
-let pinsNow = {}, clickState = {};
+let ws, catalog = {}, adapters = {};
+const twins = {};                       // key -> TwinView
+let selected = null;                    // the key the side panel shows
+let workspaceMsg = null;
+
+// The Clicks wired on the bench (bench.js parts) are drawn in a layer of
+// their own at the bench's origin: a stage 1000 mm square, y down
+const WIRED_FRAME = { board: { view_mm: { origin: [0, 0], size: [1000, 1000] } } };
 
 // The mikroBUS pin behind a Click signal name ("int", "pwm", ...) on header h
 function clickPin(h, role) {
@@ -12,11 +25,11 @@ function clickPin(h, role) {
 
 // Fraction of the last frame a pad was high: driven time from the duty
 // figures, the rest at its resolved level (a pull, an external driver)
-function pinHigh(pin) {
+function pinHigh(tv, pin) {
   const { group, bit } = pinRef(pin);
-  const level = group in levels ? (levels[group] >>> bit) & 1 : 0;
-  const g = pinsNow[group];
-  if (!g) return level;
+  const level = group in tv.levels ? (tv.levels[group] >>> bit) & 1 : 0;
+  const g = tv.pinsNow[group];
+  if (!g || !g[bit]) return level;
   const [hi, lo] = g[bit];
   return hi + Math.max(0, 1 - hi - lo) * level;
 }
@@ -31,6 +44,41 @@ function segPolys() {
            e: v(1.6, 8.1, 13.9), f: v(1.6, 2.1, 7.9), g: h(8) };
 }
 
+// A yes-or-no question drawn in the page, resolving true for yes. A VS Code
+// webview is sandboxed without modals, where confirm() answers false unseen.
+// While it is up, keys go to it alone: Escape says no, Enter its focused button
+// With @placeholder it asks for text too (prompt() is blocked as well):
+// the text, or null
+function ask(text, yes = "OK", placeholder = null) {
+  return new Promise((resolve) => {
+    const back = document.createElement("div");
+    back.className = "ask";
+    back.innerHTML = `<div class="ask-card" role="alertdialog" aria-modal="true">
+      <p></p>${placeholder === null ? "" : '<input class="ask-input" spellcheck="false">'}
+      <div class="ask-btns"><button class="no">Cancel</button><button class="yes"></button></div></div>`;
+    back.querySelector("p").textContent = text;
+    back.querySelector(".yes").textContent = yes;
+    const input = back.querySelector(".ask-input");
+    if (input) input.placeholder = placeholder;
+    const key = (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape") done(false);
+      else if (e.key === "Enter" && input) done(true);
+    };
+    const done = (answer) => {
+      window.removeEventListener("keydown", key, true);
+      back.remove();
+      resolve(input ? (answer ? input.value : null) : answer);
+    };
+    back.addEventListener("pointerdown", (e) => { if (e.target === back) done(false); });
+    back.querySelector(".no").onclick = () => done(false);
+    back.querySelector(".yes").onclick = () => done(true);
+    window.addEventListener("keydown", key, true);
+    document.body.appendChild(back);
+    (input || back.querySelector(".yes")).focus();
+  });
+}
+
 function connect() {
   // From the base URL, not the page's: a VS Code webview loads this page
   // from its own origin with <base href> pointing at the engine
@@ -41,7 +89,9 @@ function connect() {
   ws.onclose = () => { setStatus("error", "disconnected"); setTimeout(connect, 1000); };
 }
 
+// To the engine; what the side panel sends is for the selected board
 function send(msg) {
+  if (!msg.twin && ["uart", "save-file", "dgi", "button"].includes(msg.type)) msg.twin = selected;
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 
@@ -51,20 +101,21 @@ function setStatus(state, text) {
   el.textContent = text;
 }
 
-// The stage: the board image plus room beside it for plugged Click boards
-function view() {
-  return board.view_mm || { origin: board.origin_mm, size: board.size_mm };
+// A board's stage: its picture plus room beside it for plugged Clicks
+function view(tv) {
+  const b = tv.board;
+  return b.view_mm || { origin: b.origin_mm, size: b.size_mm };
 }
 
 // Board millimetres (origin bottom-left) to percentages of the stage
-function pos(atMm) {
-  const { origin: [x0, y0], size: [w, h] } = view();
+function pos(tv, atMm) {
+  const { origin: [x0, y0], size: [w, h] } = view(tv);
   return [((atMm[0] - x0) / w) * 100, ((y0 - atMm[1]) / h) * 100];
 }
 
 // A box of @sizeMm centred on @atMm, in stage percentages
-function place(el, atMm, sizeMm) {
-  const [x, y] = pos(atMm), [w, h] = view().size;
+function place(tv, el, atMm, sizeMm) {
+  const [x, y] = pos(tv, atMm), [w, h] = view(tv).size;
   el.style.left = `${x}%`;
   el.style.top = `${y}%`;
   el.style.width = `${(sizeMm[0] / w) * 100}%`;
@@ -75,25 +126,143 @@ function pinRef(pin) {
   return { group: pin[1].toLowerCase(), bit: +pin.slice(2) };
 }
 
-function buildBoard(b, cat, ads) {
-  board = b;
-  catalog = cat || {};
-  adapters = ads || {};
-  $("board-select").value = b.id;
-  $("vcom").textContent = b.vcom || "";
-  $("board-img").src = `/board/${b.image}?board=${b.id}`;   // per board: no stale cache
-  // The image covers the board outline; the stage may be larger
-  const v = view();
-  // Fit the stage in the pane at its aspect ratio (container query units)
-  $("board").style.aspectRatio = `${v.size[0]} / ${v.size[1]}`;
-  $("board").style.width = `min(100cqw, calc(100cqh * ${v.size[0] / v.size[1]}))`;
-  place($("board-img"), [b.origin_mm[0] + b.size_mm[0] / 2,
-                         b.origin_mm[1] - b.size_mm[1] / 2], b.size_mm);
-  const layer = $("overlays");
+// -- a board on the workspace --------------------------------------------------
+
+class TwinView {
+  constructor(t) {
+    this.key = t.key;
+    this.el = document.createElement("div");
+    this.el.className = "board-inst";
+    this.el.dataset.twin = t.key;
+    this.el.innerHTML = `
+      <div class="board-label" title="Drag to move the board; click to select it">
+        <i class="dot"></i><b></b><span class="st"></span>
+        <span class="flt" hidden title="Faults injected into this board (side panel)"></span>
+        <button class="board-off" title="Take this board off the bench">×</button>
+      </div>
+      <img class="board-img" alt="Board" draggable="false">
+      <div class="overlays"></div>`;
+    this.img = this.el.querySelector(".board-img");
+    this.overlays = this.el.querySelector(".overlays");
+    this.leds = [];
+    this.clicks = {};
+    this.wired = {};
+    this.levels = {};
+    this.pinsNow = {};
+    this.clickState = {};
+    this.uart = "";
+    this.status = { state: "idle", text: "starting" };
+    this.files = null;
+    this.dgiinfo = null;
+    this.faults = [];
+    this.faultError = "";
+    $("world").appendChild(this.el);
+    this.labelEvents();
+    this.dropEvents();
+    this.el.addEventListener("click", (e) => {
+      if (e.target.closest(".button, .click-btn, .click-stick, .board-label")) return;
+      select(this.key);
+    });
+    this.update(t);
+  }
+
+  update(t) {
+    const rebuild = !this.board || this.board.id !== t.board.id;
+    this.board = t.board;
+    this.spiHosts = t.spi_hosts || [];
+    this.at = t.at;
+    this.el.style.left = `${this.at[0] * Workspace.PX}px`;
+    this.el.style.top = `${this.at[1] * Workspace.PX}px`;
+    if (rebuild) buildBoard(this);
+    this.label();
+  }
+
+  label() {
+    const n = Object.keys(twins).length;
+    this.el.querySelector(".board-label b").textContent =
+      `${n > 1 ? `${this.key} · ` : ""}${this.board.name.replace(/\s*\(.*$/, "")}`;
+    this.el.querySelector(".board-label .st").textContent =
+      this.status.state === "running" ? this.status.elf || "" : this.status.text || this.status.error || "";
+    this.el.classList.toggle("running", this.status.state === "running");
+    this.el.classList.toggle("selected", this.key === selected && n > 1);
+    const flt = this.el.querySelector(".board-label .flt");
+    flt.hidden = !this.faults.length;
+    flt.textContent = `⚡ ${this.faults.length} fault${this.faults.length > 1 ? "s" : ""}`;
+  }
+
+  // The title bar: drag moves the board; × takes it off
+  labelEvents() {
+    const bar = this.el.querySelector(".board-label");
+    let drag = null;
+    bar.querySelector(".board-off").addEventListener("click", (e) => {
+      e.stopPropagation();
+      ask(`Take the ${this.board.name} off the bench? Its Clicks come off; the parts stay.`,
+          "Take it off").then((yes) => { if (yes) send({ type: "remove-board", twin: this.key }); });
+    });
+    bar.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || e.target.closest(".board-off")) return;
+      e.stopPropagation();
+      try { bar.setPointerCapture(e.pointerId); } catch (_) { /* synthetic */ }
+      drag = { x: e.clientX, y: e.clientY, at: [...this.at], moved: false };
+    });
+    bar.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      const k = Workspace.unit();
+      const dx = (e.clientX - drag.x) * k, dy = (e.clientY - drag.y) * k;
+      if (!drag.moved && Math.hypot(dx, dy) < 1) return;
+      drag.moved = true;
+      this.at = [drag.at[0] + dx, drag.at[1] + dy];
+      this.el.style.left = `${this.at[0] * Workspace.PX}px`;
+      this.el.style.top = `${this.at[1] * Workspace.PX}px`;
+    });
+    const end = () => {
+      if (!drag) return;
+      if (drag.moved) {
+        send({ type: "move-board", twin: this.key,
+               at: [Math.round(this.at[0] * 10) / 10, Math.round(this.at[1] * 10) / 10] });
+      } else {
+        select(this.key);
+      }
+      drag = null;
+    };
+    bar.addEventListener("pointerup", end);
+    bar.addEventListener("pointercancel", end);
+  }
+
+  // An ELF dropped on the board runs on it
+  dropEvents() {
+    this.el.addEventListener("dragover", (e) => {
+      if (e.dataTransfer && [...e.dataTransfer.types].includes("Files")) {
+        e.preventDefault();
+        this.el.classList.add("drop-over");
+      }
+    });
+    this.el.addEventListener("dragleave", () => this.el.classList.remove("drop-over"));
+    this.el.addEventListener("drop", (e) => {
+      e.preventDefault();
+      this.el.classList.remove("drop-over");
+      if (e.dataTransfer.files[0]) { select(this.key); upload(e.dataTransfer.files[0], this.key); }
+    });
+  }
+
+  remove() {
+    this.el.remove();
+    for (const s of document.querySelectorAll(`.ext-stack[data-owner="${this.key}"]`)) s.remove();
+  }
+}
+
+function buildBoard(tv) {
+  const b = tv.board, v = view(tv);
+  tv.img.src = `/board/${b.image}?board=${b.id}`;   // per board: no stale cache
+  tv.el.style.width = `${v.size[0] * Workspace.PX}px`;
+  tv.el.style.height = `${v.size[1] * Workspace.PX}px`;
+  place(tv, tv.img, [b.origin_mm[0] + b.size_mm[0] / 2,
+                     b.origin_mm[1] - b.size_mm[1] / 2], b.size_mm);
+  const layer = tv.overlays;
   layer.textContent = "";
-  leds = b.leds.map((led) => {
+  tv.leds = b.leds.map((led) => {
     const el = document.createElement("div");
-    place(el, led.at_mm, [5.3, 5.3]);
+    place(tv, el, led.at_mm, [5.3, 5.3]);
     el.className = "led";
     el.style.background = `radial-gradient(circle, #fff 0 12%, ${led.color} 22%, ${led.color}66 45%, transparent 70%)`;
     el.title = `${led.id} (${led.pin})`;
@@ -102,14 +271,15 @@ function buildBoard(b, cat, ads) {
   });
   for (const btn of b.buttons) {
     const el = document.createElement("div");
-    place(el, btn.at_mm, btn.size_mm);
+    place(tv, el, btn.at_mm, btn.size_mm);
     el.className = "button";
     el.innerHTML = `<span class="tag">${btn.id}</span>`;
     const press = (down) => {
       el.classList.toggle("down", down);
-      send({ type: "button", id: btn.action, pressed: down });
+      send({ type: "button", twin: tv.key, id: btn.action, pressed: down });
     };
     el.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
       try { el.setPointerCapture(e.pointerId); } catch (_) { /* synthetic */ }
       press(true);
     });
@@ -117,21 +287,21 @@ function buildBoard(b, cat, ads) {
     el.addEventListener("pointercancel", () => press(false));
     layer.appendChild(el);
   }
-  buildParts(b);
-  buildSlots();
-  // The hint names this board's buttons
-  const names = b.buttons.map((x) => `<b>${x.id}</b>`);
-  $("hint").innerHTML = names.length ? `Click ${names.join(" and ")} on the board` +
-    ((b.parts || []).some((p) => p.sticks) ? "; drag the stick to tilt it." : ".") : "";
-  $("files-head").hidden = $("files").hidden = !b.circuitpython;
+  buildParts(tv);
+  for (const h of b.headers.filter((x) => x.slot)) {
+    const art = document.createElement("div");
+    art.className = "ext-stack";
+    art.dataset.slot = h.slot;
+    layer.appendChild(art);
+  }
 }
 
 // The board's own parts (board.json "parts"): a display panel, NeoPixels
 // and an IMU to tilt, drawn like their Click counterparts; their state
 // comes under "<part>.<property>" in the polled properties
-function buildParts(b) {
-  const layer = $("overlays");
-  for (const part of b.parts || []) {
+function buildParts(tv) {
+  const layer = tv.overlays;
+  for (const part of tv.board.parts || []) {
     const d = part.display;
     if (d && d.type === "panel") {
       const cv = document.createElement("canvas");
@@ -140,7 +310,7 @@ function buildParts(b) {
       cv.height = d.height;
       cv.dataset.prop = `${part.id}.${d.property}`;
       cv.title = part.name || part.id;
-      place(cv, d.at_mm, d.size_mm);
+      place(tv, cv, d.at_mm, d.size_mm);
       cv.style.transform = "translate(-50%, -50%)";
       layer.appendChild(cv);
     }
@@ -152,7 +322,7 @@ function buildParts(b) {
         el.dataset.prop = `${part.id}.${px.property}`;
         el.dataset.index = i;
         el.title = `${part.name || part.id} #${i}`;
-        place(el, at, [px.size_mm, px.size_mm]);
+        place(tv, el, at, [px.size_mm, px.size_mm]);
         layer.appendChild(el);
       });
     }
@@ -166,15 +336,15 @@ function buildParts(b) {
       el.innerHTML = "<i></i><i></i><span></span>";
       el.addEventListener("click", () => {
         muted = !muted;
-        updateClickParts();
+        updateClickParts(tv);
       });
-      place(el, au.at_mm, [au.size_mm, au.size_mm]);
+      place(tv, el, au.at_mm, [au.size_mm, au.size_mm]);
       el.style.transform = "translate(-50%, -50%)";
       layer.appendChild(el);
     }
     for (const st of part.sticks || []) {
-      const el = makeStick({ part: part.id }, st, $("board-img"));
-      place(el, st.at_mm, [st.size_mm, st.size_mm]);
+      const el = makeStick(tv.key, { part: part.id }, st, tv.img);
+      place(tv, el, st.at_mm, [st.size_mm, st.size_mm]);
       el.style.transform = "translate(-50%, -50%)";
       el.classList.add("board-stick");
       layer.appendChild(el);
@@ -182,47 +352,15 @@ function buildParts(b) {
   }
 }
 
-// One row per extension header: a Click picker, then the plugged Click's
-// controls (live) and signals (from the pad it drives)
-function buildSlots() {
-  const box = $("clicks");
-  box.textContent = "";
-  // Only headers the QEMU machine can plug a Click into have a slot
-  const slots = board.headers.filter((x) => x.slot);
-  $("clicks-head").hidden = !slots.length;
-  $("clicks-where").textContent =
-    `mikroBUS on ${slots.map((h) => h.id).join("/")}`;
-  for (const h of slots) {
-    const row = document.createElement("div");
-    row.className = "slot";
-    row.dataset.slot = h.slot;
-    const sel = document.createElement("select");
-    sel.innerHTML = `<option value="">(empty)</option>` + Object.entries(catalog)
-      .map(([id, c]) => `<option value="${id}">${c.name}</option>`).join("");
-    sel.addEventListener("change", () =>
-      send({ type: "click", slot: h.slot, click: sel.value || null }));
-    const head = document.createElement("div");
-    head.className = "slot-head";
-    head.innerHTML = `<b>${h.id}</b>`;
-    head.appendChild(sel);
-    const body = document.createElement("div");
-    body.className = "slot-body";
-    row.append(head, body);
-    box.appendChild(row);
-    const art = document.createElement("div");
-    art.className = "ext-stack";
-    art.dataset.slot = h.slot;
-    $("overlays").appendChild(art);
-  }
-}
-
-// Draw a plugged Click from its rendered top side. On a header that needs
-// an adapter, the adapter's socket sits on the header and the Click on the
+// Draw a plugged Click from its rendered top side, on @frame (a board, or
+// WIRED_FRAME for one wired on the bench). On a header that needs an
+// adapter, the adapter's socket sits on the header and the Click on the
 // adapter's mikroBUS socket (rotated as the adapter holds it); a header
 // that is a mikroBUS socket itself (a Curiosity Nano Base) gives "socket"
 // (where the Click's header centre goes, rotation); otherwise the Click is
-// centred on click_at_mm. LEDs and signal pins are overlays.
-function drawClick(stack, h, id, def) {
+// centred on click_at_mm. LEDs and signal pins are overlays. h.twin: the
+// board it talks to.
+function drawClick(frame, stack, h, id, def) {
   if (stack.dataset.click === (id || "")) return;
   stack.dataset.click = id || "";
   stack.textContent = "";
@@ -236,8 +374,8 @@ function drawClick(stack, h, id, def) {
     img.className = "adapter-board";
     img.src = `/adapters/${ad.image}`;
     img.alt = img.title = `${ad.name} (${ad.part}) on ${h.id}`;
-    place(img, [ad.origin_mm[0] + ad.size_mm[0] / 2 + dx,
-                ad.origin_mm[1] - ad.size_mm[1] / 2 + dy], ad.size_mm);
+    place(frame, img, [ad.origin_mm[0] + ad.size_mm[0] / 2 + dx,
+                       ad.origin_mm[1] - ad.size_mm[1] / 2 + dy], ad.size_mm);
     stack.appendChild(img);
     socket = ad.socket;
   }
@@ -256,12 +394,13 @@ function drawClick(stack, h, id, def) {
   art.className = "click-board";
   stack.appendChild(art);
   const [ox, oy] = def.origin_mm, [w, hh] = def.size_mm;
-  place(art, at, def.size_mm);
+  place(frame, art, at, def.size_mm);
   art.style.transform = `translate(-50%, -50%) rotate(${rot}deg)`;
   art.title = `${def.name} on ${h.id}`;
   const img = document.createElement("img");
   img.src = `/clicks/${def.image}`;
   img.alt = def.name;
+  img.draggable = false;
   art.appendChild(img);
   art.dataset.slot = h.slot;
   const put = (el, mm, d, dh) => {
@@ -289,9 +428,10 @@ function drawClick(stack, h, id, def) {
     el.title = `${btn.id} (hold to keep it pressed)`;
     const press = (down) => {
       el.classList.toggle("down", down);
-      send({ type: "control", slot: h.slot, id: btn.id, value: down ? 1 : 0 });
+      send({ type: "control", twin: h.twin, slot: h.slot, id: btn.id, value: down ? 1 : 0 });
     };
     el.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
       try { el.setPointerCapture(e.pointerId); } catch (_) { /* synthetic */ }
       press(true);
     });
@@ -421,8 +561,8 @@ function drawClick(stack, h, id, def) {
   // double-click levels it)
   art.dataset.rot = rot;
   for (const st of def.sticks || []) {
-    put(makeStick({ slot: h.slot }, st, art), [st.at_mm[0] - st.size_mm / 2,
-                                     st.at_mm[1] + st.size_mm / 2],
+    put(makeStick(h.twin, { slot: h.slot }, st, art), [st.at_mm[0] - st.size_mm / 2,
+                                                       st.at_mm[1] + st.size_mm / 2],
         st.size_mm, st.size_mm);
   }
   // A text readout (RTC 6's time): a polled string property
@@ -440,20 +580,19 @@ function drawClick(stack, h, id, def) {
   if (def.sound) {
     const el = document.createElement("div");
     el.className = "click-sound";
-    el.dataset.slot = h.slot;
+    el.dataset.slot = `${h.twin}.${h.slot}`;
     el.dataset.prop = `${h.slot}.${def.sound.property}`;
     el.dataset.duty = `${h.slot}.${def.sound.duty_property}`;
     el.title = "Buzzer (click to mute or unmute)";
     el.innerHTML = "<i></i><i></i><span></span>";
     el.addEventListener("click", () => {
       muted = !muted;
-      updateClickParts();
+      for (const tv of Object.values(twins)) updateClickParts(tv);
     });
     put(el, [def.sound.at_mm[0] - def.sound.size_mm / 2,
              def.sound.at_mm[1] + def.sound.size_mm / 2],
         def.sound.size_mm, def.sound.size_mm);
   }
-  updateClickParts();
   for (const sig of def.signals) {
     if (!sig.at_mm) continue;
     const el = document.createElement("div");
@@ -463,6 +602,8 @@ function drawClick(stack, h, id, def) {
     el.title = `${sig.id} (${el.dataset.pin})`;
     put(el, sig.at_mm, 2.6);
   }
+  const tv = twins[h.twin];
+  if (tv) updateClickParts(tv);
 }
 
 // Turn every fan on the page by its rpm while any is shown
@@ -485,15 +626,109 @@ function spinFans() {
   fanFrame = requestAnimationFrame(step);
 }
 
-function showClicks(state) {
-  clicks = state;
-  for (const h of board.headers.filter((x) => x.slot)) {
-    const c = state[h.slot], def = c && catalog[c.id];
-    const row = document.querySelector(`.slot[data-slot="${h.slot}"]`);
-    const art = document.querySelector(`.ext-stack[data-slot="${h.slot}"]`);
-    const sel = row.querySelector("select"), body = row.querySelector(".slot-body");
-    sel.value = c ? c.id : "";
-    drawClick(art, h, c && c.id, def);
+// -- Click boards: on a header, or wired on the bench ---------------------------
+
+// A Click wired on the bench as a header: its pins are the pads its
+// wires reach (drawClick and the rows read them like a slot's)
+function wiredHeader(pid, w) {
+  w = w || { pins: {} };
+  return { slot: pid, id: pid, mikrobus: w.pins, int_pin: w.pins.int, twin: w.twin };
+}
+
+// Every wired Click, whichever board it is on
+function allWired() {
+  const out = {};
+  for (const tv of Object.values(twins)) Object.assign(out, tv.wired);
+  return out;
+}
+
+// Draw the Clicks on the bench (bench.js parts of type "click") under
+// their pins: the picture once per Click and turn, moved with the part
+function drawWired(parts) {
+  const layer = $("wired-layer"), keep = new Set(), wired = allWired();
+  for (const p of parts.filter((x) => x.type === "click" && catalog[x.click])) {
+    keep.add(p.id);
+    let stack = layer.querySelector(`.ext-stack[data-wired="${p.id}"]`);
+    if (!stack) {
+      stack = document.createElement("div");
+      stack.className = "ext-stack wired";
+      stack.dataset.wired = p.id;
+      layer.appendChild(stack);
+    }
+    const w = wired[p.id];
+    const key = `${p.click}:${p.rot || 0}:${JSON.stringify(w || {})}`;
+    if (stack.dataset.key !== key) {
+      stack.dataset.key = key;
+      stack.dataset.click = "";
+      stack.dataset.owner = (w && w.twin) || "";
+      // The header centre at the layer's (0, 0); the stack moves with it
+      const h = { ...wiredHeader(p.id, w), socket: { at_mm: [0, 0], rotation: p.rot || 0 } };
+      drawClick(WIRED_FRAME, stack, h, p.click, catalog[p.click]);
+      stack.classList.toggle("unplugged", !(w && w.plugged));
+    }
+    stack.style.transform = `translate(${p.x * Workspace.PX}px, ${p.y * Workspace.PX}px)`;
+  }
+  for (const s of layer.querySelectorAll(".ext-stack[data-wired]")) {
+    if (!keep.has(s.dataset.wired)) s.remove();
+  }
+}
+
+// The Clicks of a board: their pictures on its headers, and the side
+// panel's rows if it is the selected board
+function showClicks(tv, msg) {
+  tv.clicks = msg.clicks || {};
+  tv.wired = msg.wired || {};
+  for (const h of tv.board.headers.filter((x) => x.slot)) {
+    const c = tv.clicks[h.slot], def = c && catalog[c.id];
+    const art = tv.overlays.querySelector(`.ext-stack[data-slot="${h.slot}"]`);
+    drawClick(tv, art, { ...h, twin: tv.key }, c && c.id, def);
+  }
+  if (tv.key === selected) clickRows(tv);
+  showSignals(tv, tv.levels);
+}
+
+// One row per extension header and per wired Click of @tv: the plugged
+// Click (from the palette; × takes it off), its controls (live) and
+// signals (from the pad it drives)
+function clickRows(tv) {
+  const box = $("clicks"), heads = tv.board.headers.filter((x) => x.slot);
+  const rows = [...heads.map((h) => [{ ...h, twin: tv.key }, tv.clicks[h.slot], false]),
+                ...Object.entries(tv.wired).map(([pid, w]) => [wiredHeader(pid, w), w, true])];
+  $("clicks-head").hidden = !rows.length;
+  $("clicks-where").textContent = heads.length ? `mikroBUS on ${heads.map((h) => h.id).join("/")}` : "";
+  const keys = new Set(rows.map(([h]) => h.slot));
+  for (const r of box.querySelectorAll(".slot")) {
+    if (!keys.has(r.dataset.slot) || r.dataset.twin !== tv.key) r.remove();
+  }
+  for (const [h, c, isWired] of rows) {
+    let row = box.querySelector(`.slot[data-slot="${h.slot}"]`);
+    if (!row) {
+      row = document.createElement("div");
+      row.className = isWired ? "slot wired" : "slot";
+      row.dataset.slot = h.slot;
+      row.dataset.twin = tv.key;
+      const head = document.createElement("div");
+      head.className = "slot-head";
+      head.innerHTML = `<b>${h.id}</b><span class="slot-click"></span>`;
+      const off = document.createElement("button");
+      off.className = "slot-off";
+      off.title = isWired ? `Take ${h.slot} off the bench` : `Take the Click off ${h.id}`;
+      off.textContent = "×";
+      off.addEventListener("click", () => {
+        if (isWired) Bench.removePart(h.slot);
+        else send({ type: "click", twin: tv.key, slot: h.slot, click: null });
+      });
+      head.appendChild(off);
+      const body = document.createElement("div");
+      body.className = "slot-body";
+      row.append(head, body);
+      box.appendChild(row);
+    }
+    const def = c && catalog[c.id], body = row.querySelector(".slot-body");
+    row.querySelector(".slot-click").textContent = def
+      ? `${def.name}${isWired ? (c.plugged ? " · wired" : " · not connected") : ""}`
+      : "empty: drag a Click here from the palette";
+    row.classList.toggle("empty", !def);
     if (!def) { body.textContent = ""; body.dataset.click = ""; continue; }
     if (body.dataset.click !== c.id) {
       body.dataset.click = c.id;
@@ -508,7 +743,7 @@ function showClicks(state) {
         range.dataset.id = ctl.id;
         range.addEventListener("input", () => {
           r.querySelector("output").textContent = `${(+range.value).toFixed(2)} ${ctl.unit}`;
-          send({ type: "control", slot: h.slot, id: ctl.id, value: +range.value });
+          send({ type: "control", twin: h.twin, slot: h.slot, id: ctl.id, value: +range.value });
         });
         body.appendChild(r);
       }
@@ -517,10 +752,10 @@ function showClicks(state) {
         const r = document.createElement("label");
         r.className = "control toggle";
         r.innerHTML = `<span>${tg.label}</span><input type="checkbox">`;
-        const box = r.querySelector("input");
-        box.dataset.prop = `${h.slot}.${tg.property}`;
-        box.addEventListener("change", () =>
-          send({ type: "control", slot: h.slot, id: tg.id, value: box.checked ? 1 : 0 }));
+        const cb = r.querySelector("input");
+        cb.dataset.prop = `${h.slot}.${tg.property}`;
+        cb.addEventListener("change", () =>
+          send({ type: "control", twin: h.twin, slot: h.slot, id: tg.id, value: cb.checked ? 1 : 0 }));
         body.appendChild(r);
       }
       for (const inp of def.inputs || []) {
@@ -530,7 +765,7 @@ function showClicks(state) {
         f.addEventListener("submit", (e) => {
           e.preventDefault();
           const field = f.querySelector("input");
-          send({ type: "click-text", slot: h.slot, id: inp.id,
+          send({ type: "click-text", twin: h.twin, slot: h.slot, id: inp.id,
                  text: field.value + (inp.suffix || "") });
           field.value = "";
         });
@@ -558,7 +793,11 @@ function showClicks(state) {
       if (document.activeElement !== range) range.value = v;
       range.parentElement.querySelector("output").textContent = `${(+v).toFixed(2)} ${ctl.unit}`;
     }
-    const d = def.display, sw = art.querySelector(".click-swatch");
+    // A colour sensor's swatch: its controls' colour, on its picture
+    const d = def.display;
+    const where = isWired ? document.querySelector(`.ext-stack[data-wired="${h.slot}"]`)
+      : tv.overlays.querySelector(`.ext-stack[data-slot="${h.slot}"]`);
+    const sw = where && where.querySelector(".click-swatch");
     if (sw && d) {
       const [r, g, b] = d.controls.map((id) => Math.round(+c.values[id] || 0));
       const lit = Math.min(1, (+c.values[d.brightness] || 0) / d.full);
@@ -567,50 +806,57 @@ function showClicks(state) {
       sw.style.boxShadow = `0 0 ${(4 + 10 * lit).toFixed(1)}px rgb(${r}, ${g}, ${b})`;
     }
   }
-  showSignals(levels);
 }
 
-// A Click output is "active" while its pad sits at the active level
+// Elements of @tv's: on the board, its wired Clicks on the bench, and the
+// side panel's rows when it is selected
+function within(tv, selector) {
+  const roots = [tv.el, ...document.querySelectorAll(`.ext-stack[data-owner="${tv.key}"]`)];
+  if (tv.key === selected) roots.push($("clicks"));
+  return roots.flatMap((r) => [...r.querySelectorAll(selector)]);
+}
+
 // Pin-driven parts on the Clicks: LEDs, relays, seven-segment digits
-function updateClickParts() {
-  for (const el of document.querySelectorAll(".click-led.pinned:not(.bits)")) {
-    const f = pinHigh(el.dataset.pin);
+function updateClickParts(tv) {
+  const state = tv.clickState;
+  for (const el of within(tv, ".click-led.pinned:not(.bits)")) {
+    const f = pinHigh(tv, el.dataset.pin);
     el.style.opacity = Math.min(1, el.dataset.activeLow ? 1 - f : f);
   }
-  for (const el of document.querySelectorAll(".click-relay")) {
-    const on = pinHigh(el.dataset.pin) > 0.5;
+  for (const el of within(tv, ".click-relay")) {
+    const on = pinHigh(tv, el.dataset.pin) > 0.5;
     if (on !== el.classList.contains("on") && el.dataset.seen) tick();
     el.dataset.seen = "1";
     el.classList.toggle("on", on);
   }
-  for (const el of document.querySelectorAll(".click-dot")) {
-    const bytes = String(clickState[el.dataset.prop] || "").split(" ");
+  for (const el of within(tv, ".click-dot")) {
+    const bytes = String(state[el.dataset.prop] || "").split(" ");
     const v = parseInt(bytes[Number(el.dataset.digit)] || "0", 16) || 0;
     el.classList.toggle("on", ((v >>> Number(el.dataset.bit)) & 1) === 1);
   }
-  for (const box of document.querySelectorAll(".control.toggle input")) {
-    if (box.dataset.prop in clickState) box.checked = clickState[box.dataset.prop] === true;
+  for (const cb of within(tv, ".control.toggle input")) {
+    if (cb.dataset.prop in state) cb.checked = state[cb.dataset.prop] === true;
   }
-  for (const pre of document.querySelectorAll(".click-monitor pre")) {
-    const v = String(clickState[pre.dataset.prop] ?? "");
+  for (const pre of within(tv, ".click-monitor pre")) {
+    const v = String(state[pre.dataset.prop] ?? "");
     if (pre.textContent !== v) {
       pre.textContent = v;
       pre.scrollTop = pre.scrollHeight;
     }
   }
-  for (const el of document.querySelectorAll(".click-led.bits")) {
-    const v = Number(clickState[el.dataset.prop] || 0);
+  for (const el of within(tv, ".click-led.bits")) {
+    const v = Number(state[el.dataset.prop] || 0);
     el.style.opacity = ((v >>> Number(el.dataset.bit)) & 1) ? 1 : 0;
   }
-  for (const cv of document.querySelectorAll(".click-panel")) {
-    const frame = clickState[cv.dataset.prop] || "";
+  for (const cv of within(tv, ".click-panel")) {
+    const frame = state[cv.dataset.prop] || "";
     if (shownFrames.get(cv) === frame) continue;
     shownFrames.set(cv, frame);
     drawPanel(cv, frame);
   }
   // NeoPixels: "RRGGBB RRGGBB ..." per chain, glowing at their colour
-  for (const el of document.querySelectorAll(".pixel")) {
-    const hex = String(clickState[el.dataset.prop] || "").split(" ")[Number(el.dataset.index)] || "000000";
+  for (const el of within(tv, ".pixel")) {
+    const hex = String(state[el.dataset.prop] || "").split(" ")[Number(el.dataset.index)] || "000000";
     if (el.dataset.hex === hex) continue;
     el.dataset.hex = hex;
     const v = parseInt(hex, 16) || 0, r = v >> 16, g = (v >> 8) & 255, bl = v & 255;
@@ -618,13 +864,13 @@ function updateClickParts() {
     el.style.background = `radial-gradient(circle, #fff 0 10%, rgb(${r * k},${g * k},${bl * k}) 30%, transparent 72%)`;
     el.style.opacity = peak ? Math.min(1, 0.25 + peak / 160) : 0;
   }
-  for (const el of document.querySelectorAll(".click-text")) {
-    const t = el.querySelector("text"), v = String(clickState[el.dataset.prop] ?? "");
+  for (const el of within(tv, ".click-text")) {
+    const t = el.querySelector("text"), v = String(state[el.dataset.prop] ?? "");
     if (t.textContent !== v) t.textContent = v;
   }
   // Speakers: each new chunk of the DAC's waveform is queued to play
-  for (const el of document.querySelectorAll(".board-sound")) {
-    const chunk = String(clickState[el.dataset.prop] || "");
+  for (const el of within(tv, ".board-sound")) {
+    const chunk = String(state[el.dataset.prop] || "");
     const seq = chunk.split(" ", 2)[1];
     if (chunk && seq !== el.dataset.seq) {
       el.dataset.seq = seq;
@@ -635,9 +881,9 @@ function updateClickParts() {
     el.classList.toggle("muted", muted);
   }
   const sounding = new Set();
-  for (const el of document.querySelectorAll(".click-sound:not(.board-sound)")) {
-    const hz = Number(clickState[el.dataset.prop] || 0);
-    const duty = Number(clickState[el.dataset.duty] || 0) / 1000;
+  for (const el of within(tv, ".click-sound:not(.board-sound)")) {
+    const hz = Number(state[el.dataset.prop] || 0);
+    const duty = Number(state[el.dataset.duty] || 0) / 1000;
     const on = hz >= 20 && hz <= 20000;
     el.classList.toggle("on", on);
     el.classList.toggle("muted", muted);
@@ -647,25 +893,26 @@ function updateClickParts() {
     tone(el.dataset.slot, on && !muted ? hz : 0, duty);
   }
   for (const slot of Object.keys(tones)) {
-    if (!sounding.has(slot) || !document.querySelector(`.click-sound[data-slot="${slot}"]`)) {
+    if (slot.startsWith(`${tv.key}.`) && (!sounding.has(slot) ||
+        !document.querySelector(`.click-sound[data-slot="${slot}"]`))) {
       tone(slot, 0, 0);
     }
   }
-  for (const el of document.querySelectorAll(".click-servo")) {
-    const deg = Number(String(clickState[el.dataset.prop] || "").split(" ")[el.dataset.ch] ?? -1);
+  for (const el of within(tv, ".click-servo")) {
+    const deg = Number(String(state[el.dataset.prop] || "").split(" ")[el.dataset.ch] ?? -1);
     const live = deg >= 0;
     el.classList.toggle("limp", !live);
     if (live) el.querySelector(".horn").style.transform = `rotate(${deg - 90}deg)`;
     el.querySelector("span").textContent = `S${Number(el.dataset.ch) + 1}${live ? ` ${deg}°` : ""}`;
   }
-  for (const el of document.querySelectorAll(".click-fan")) {
-    const rpm = Number(clickState[el.dataset.prop] || 0);
+  for (const el of within(tv, ".click-fan")) {
+    const rpm = Number(state[el.dataset.prop] || 0);
     el.dataset.rpm = rpm;
     el.querySelector("span").textContent = `${rpm} rpm`;
   }
-  for (const el of document.querySelectorAll(".click-7seg")) {
-    const value = Number(clickState[el.dataset.prop] || 0);
-    const bright = Math.min(1, pinHigh(el.dataset.enable));
+  for (const el of within(tv, ".click-7seg")) {
+    const value = Number(state[el.dataset.prop] || 0);
+    const bright = Math.min(1, pinHigh(tv, el.dataset.enable));
     for (const seg of el.querySelectorAll("[data-bit]")) {
       const lit = (value >>> (Number(el.dataset.shift) + Number(seg.dataset.bit))) & 1;
       seg.style.opacity = lit ? Math.max(0.08, bright) : 0.07;
@@ -674,8 +921,8 @@ function updateClickParts() {
 }
 
 // A stick control on a Click (see drawClick) or a board part; @target
-// is {slot} or {part}; sends {"type": "stick"}
-function makeStick(target, st, art) {
+// is {slot} or {part}; sends {"type": "stick"} for board @twin
+function makeStick(twin, target, st, art) {
   const el = document.createElement("div"), knob = document.createElement("b");
   const tilt = st.mode === "tilt";
   el.className = tilt ? "click-stick tilt" : "click-stick";
@@ -700,7 +947,7 @@ function makeStick(target, st, art) {
     const now = performance.now();
     if (!force && now - last < 30) return;
     last = now;
-    send({ type: "stick", ...target, id: st.id, x: pos[0], y: pos[1],
+    send({ type: "stick", twin, ...target, id: st.id, x: pos[0], y: pos[1],
            ...(st.press_property ? { pressed } : {}) });
   };
   // Screen offset from the stick's centre to stick units (-1..1, y up),
@@ -716,6 +963,7 @@ function makeStick(target, st, art) {
     return [x, y];
   };
   el.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
     try { el.setPointerCapture(e.pointerId); } catch (_) { /* synthetic */ }
     start = [e.clientX, e.clientY];
     el.classList.add("held");
@@ -776,8 +1024,9 @@ function audioCtx() {
 }
 document.addEventListener("pointerdown", () => { try { audioCtx(); } catch (_) { /* no audio */ } });
 
-// A buzzer's tone per slot: a square wave at @hz (0: silent). The level
-// follows the fundamental of a pulse train of duty @duty: sin(pi * duty)
+// A buzzer's tone per "<board>.<slot>": a square wave at @hz (0: silent).
+// The level follows the fundamental of a pulse train of duty @duty:
+// sin(pi * duty)
 function tone(slot, hz, duty) {
   let t = tones[slot];
   if (!hz) {
@@ -844,10 +1093,10 @@ function tick() {
   } catch (_) { /* no audio */ }
 }
 
-function showSignals(lv) {
-  levels = lv;
-  updateClickParts();
-  for (const s of document.querySelectorAll(".signal, .click-pin")) {
+function showSignals(tv, lv) {
+  tv.levels = lv;
+  updateClickParts(tv);
+  for (const s of within(tv, ".signal, .click-pin")) {
     const { group, bit } = pinRef(s.dataset.pin);
     if (!(group in lv)) { s.classList.remove("active"); continue; }
     const high = (lv[group] >>> bit) & 1;
@@ -857,12 +1106,12 @@ function showSignals(lv) {
 
 // Brightness: the fraction of the last frame the LED's pad was driven to
 // its "on" level, so a PWM-dimmed LED glows at its duty cycle
-function showPins(pins) {
-  pinsNow = pins;
-  updateClickParts();
-  for (const led of leds) {
+function showPins(tv, pins) {
+  tv.pinsNow = pins;
+  updateClickParts(tv);
+  for (const led of tv.leds) {
     const g = pins[led.group];
-    const f = g ? g[led.bit][led.active_low ? 1 : 0] : 0;
+    const f = g && g[led.bit] ? g[led.bit][led.active_low ? 1 : 0] : 0;
     // Steps (blinking) show at once; PWM levels are smoothed over frames
     led.level = Math.abs(f - (led.level ?? 0)) > 0.6 ? f
               : 0.6 * f + 0.4 * (led.level ?? 0);
@@ -870,6 +1119,8 @@ function showPins(pins) {
     led.el.classList.toggle("on", f > 0.5);
   }
 }
+
+// -- the side panel: the selected board --------------------------------------------
 
 function appendUart(text) {
   const c = $("console");
@@ -881,52 +1132,224 @@ function appendUart(text) {
 // The CIRCUITPY drive (CircuitPython boards): its files, and code.py to
 // edit; saving restarts the twin with the new file
 function showFiles(msg) {
-  if (!msg.files) return;
+  if (!msg || !msg.files) return;
   $("file-list").textContent = msg.files.filter((f) => !f.dir)
     .map((f) => `${f.path} (${f.size} B)`).join("\n");
   if (document.activeElement !== $("code-py")) $("code-py").value = msg.code || "";
 }
 
+function showStatus(tv) {
+  const s = tv.status, name = Object.keys(twins).length > 1 ? `${tv.key}: ` : "";
+  if (s.state === "running") setStatus("running", `${name}running ${s.elf}`);
+  else if (s.state === "stopped") setStatus("stopped", `${name}stopped (exit ${s.code})`);
+  else if (s.state === "error") setStatus("error", `${name}${s.error}`);
+  else setStatus("idle", `${name}${s.text || ""}`);
+}
+
+function renderSide() {
+  const tv = twins[selected];
+  $("drop").classList.toggle("off", !tv);
+  $("clicks").textContent = "";
+  if (!tv) {
+    $("vcom").textContent = "";
+    $("hint").innerHTML = "Add a board from the palette (or a template on the bench) to run firmware.";
+    $("clicks-head").hidden = true;
+    $("files-head").hidden = $("files").hidden = true;
+    $("console").textContent = "";
+    if (typeof DV !== "undefined") DV.board(null);
+    return;
+  }
+  const b = tv.board, several = Object.keys(twins).length > 1;
+  $("vcom").textContent = `${several ? `${tv.key} · ` : ""}${b.vcom || ""}`;
+  // The hint names this board's buttons
+  const names = b.buttons.map((x) => `<b>${x.id}</b>`);
+  $("hint").innerHTML = (several ? `<b>${tv.key}</b> ${b.name}: ` : "") +
+    (names.length ? `click ${names.join(" and ")} on the board` +
+      ((b.parts || []).some((p) => p.sticks) ? "; drag the stick to tilt it." : ".") : "");
+  $("files-head").hidden = $("files").hidden = !b.circuitpython;
+  if (b.circuitpython) showFiles(tv.files);
+  $("console").textContent = tv.uart.replace(/\r/g, "");
+  $("console").scrollTop = $("console").scrollHeight;
+  clickRows(tv);
+  showSignals(tv, tv.levels);
+  renderFaults(tv);
+  if (typeof DV !== "undefined") {
+    DV.board(b);
+    if (tv.dgiinfo) DV.info(tv.dgiinfo);
+  }
+  showStatus(tv);
+}
+
+function select(key) {
+  if (!twins[key] || selected === key) return;
+  selected = key;
+  send({ type: "select", twin: key });
+  for (const tv of Object.values(twins)) tv.label();
+  renderSide();
+  Workspace.selected();
+  if (typeof Timeline !== "undefined") Timeline.selected();
+}
+
+// -- messages -------------------------------------------------------------------
+
+function onWorkspace(msg) {
+  workspaceMsg = msg;
+  catalog = msg.catalog || {};
+  adapters = msg.adapters || {};
+  const keys = new Set(msg.twins.map((t) => t.key));
+  for (const [key, tv] of Object.entries(twins)) {
+    if (!keys.has(key)) { tv.remove(); delete twins[key]; }
+  }
+  for (const t of msg.twins) {
+    if (twins[t.key]) twins[t.key].update(t);
+    else twins[t.key] = new TwinView(t);
+  }
+  selected = keys.has(msg.selected) ? msg.selected : (msg.twins[0] || {}).key || null;
+  for (const tv of Object.values(twins)) tv.label();
+  if (typeof Bench !== "undefined") Bench.board(msg);
+  Workspace.board(msg);
+  renderSide();
+}
+
 function handle(msg) {
   switch (msg.type) {
-  case "files": showFiles(msg); break;
-  case "board":
-    if (msg.boards) {
-      const sel = $("board-select");
-      sel.innerHTML = msg.boards.map((x) => `<option value="${x.id}">${x.name}</option>`).join("");
+  case "workspace": onWorkspace(msg); return;
+  case "bench": if (typeof Bench !== "undefined") Bench.bench(msg.bench); return;
+  case "benchstate": if (typeof Bench !== "undefined") Bench.state(msg); return;
+  case "timeline": if (typeof Timeline !== "undefined") Timeline.data(msg); return;
+  case "recorder": if (typeof Timeline !== "undefined") Timeline.recorder(msg); return;
+  }
+  const tv = msg.twin && twins[msg.twin];
+  if (!tv) {
+    if (msg.type === "status" && !Object.keys(twins).length) {
+      setStatus(msg.state === "error" ? "error" : "idle", msg.text || msg.error || "");
     }
-    pinsNow = {}; levels = {}; clickState = {};
-    buildBoard(msg.board, msg.catalog, msg.adapters);
-    if (typeof Bench !== "undefined") Bench.board(msg);
-    if (typeof DV !== "undefined") DV.board(msg.board);
+    return;
+  }
+  const sel = tv.key === selected;
+  switch (msg.type) {
+  case "files": tv.files = msg; if (sel) showFiles(msg); break;
+  case "dgiinfo":
+    tv.dgiinfo = msg;
+    if (sel && typeof DV !== "undefined") DV.info(msg);
     break;
-  case "dgiinfo": if (typeof DV !== "undefined") DV.info(msg); break;
-  case "dgidata": if (typeof DV !== "undefined") DV.data(msg); break;
-  case "dgigpio": if (typeof DV !== "undefined") DV.gpio(msg); break;
-  case "bench": if (typeof Bench !== "undefined") Bench.bench(msg.bench); break;
-  case "benchstate": if (typeof Bench !== "undefined") Bench.state(msg); break;
-  case "clicks": showClicks(msg.clicks); break;
-  case "levels": showSignals(msg.levels); break;
-  case "clickstate": clickState = msg.state; updateClickParts(); break;
-  case "pins": showPins(msg.pins); break;
-  case "uart": appendUart(msg.data); break;
+  case "dgidata": if (sel && typeof DV !== "undefined") DV.data(msg); break;
+  case "dgigpio": if (sel && typeof DV !== "undefined") DV.gpio(msg); break;
+  case "clicks":
+    showClicks(tv, msg);
+    if (typeof Bench !== "undefined") Bench.redraw();
+    $("fault-args").dataset.kind = "";          // the I2C Clicks changed
+    if (sel) faultArgs();
+    break;
+  case "faults":
+    tv.faults = msg.faults || [];
+    tv.faultError = msg.error || "";
+    tv.label();
+    if (sel) renderFaults(tv);
+    break;
+  case "levels": showSignals(tv, msg.levels); break;
+  case "clickstate": tv.clickState = msg.state; updateClickParts(tv); break;
+  case "pins": showPins(tv, msg.pins); break;
+  case "uart":
+    tv.uart = (tv.uart + msg.data).slice(-20000);
+    if (sel) appendUart(msg.data);
+    break;
   case "reset":
-    $("console").textContent = ""; showPins({}); showSignals({});
-    if (typeof DV !== "undefined") DV.reset();
+    tv.uart = "";
+    if (sel) $("console").textContent = "";
+    showPins(tv, {});
+    showSignals(tv, {});
+    if (sel && typeof DV !== "undefined") DV.reset();
     break;
   case "status":
-    $("board").classList.toggle("powered", msg.state === "running");
-    if (msg.state === "running") setStatus("running", `running ${msg.elf}`);
-    else if (msg.state === "stopped") setStatus("stopped", `stopped (exit ${msg.code})`);
-    else if (msg.state === "error") setStatus("error", msg.error);
-    else if (msg.state === "idle") setStatus("idle", msg.text);
+    tv.status = msg;
+    tv.el.classList.toggle("powered", msg.state === "running");
+    tv.label();
+    if (sel) showStatus(tv);
     break;
   }
 }
 
-async function upload(file) {
+// -- injected faults (the side panel) -------------------------------------------
+
+function faultText(f) {
+  const hex = (v) => v.toString(16).toUpperCase().padStart(2, "0");
+  const tv = twins[selected];
+  if (f.kind === "short") return `${f.pad} shorted to ${f.level ? "VDD" : "GND"}`;
+  if (f.kind === "nack") {
+    const c = f.slot && tv && tv.clicks[f.slot];
+    const what = c && catalog[c.id] ? ` (${f.slot.toUpperCase()} ${catalog[c.id].name})` : "";
+    return `I2C 0x${hex(f.addr)} not answering${what}`;
+  }
+  return `${(f.host || "").toUpperCase()} MISO stuck, reads ${hex(f.value)}`;
+}
+
+function renderFaults(tv) {
+  const list = $("fault-list");
+  list.textContent = "";
+  $("fault-add").hidden = !tv;
+  $("fault-error").textContent = tv ? tv.faultError : "";
+  if (!tv) return;
+  tv.faults.forEach((f, i) => {
+    const row = document.createElement("div");
+    row.className = "fault";
+    row.innerHTML = `<span>⚡</span><span class="fault-what"></span><button title="Remove this fault">×</button>`;
+    row.querySelector(".fault-what").textContent = faultText(f);
+    row.querySelector("button").addEventListener("click", () => {
+      send({ type: "faults", twin: tv.key, faults: tv.faults.filter((_, j) => j !== i) });
+    });
+    list.appendChild(row);
+  });
+  faultArgs();
+}
+
+// The inputs the chosen kind of fault needs, for the selected board
+function faultArgs() {
+  const tv = twins[selected], kind = $("fault-kind").value, args = $("fault-args");
+  if (!tv) return;
+  if (args.dataset.kind === `${kind}:${tv.key}`) return;
+  args.dataset.kind = `${kind}:${tv.key}`;
+  const b = tv.board;
+  if (kind === "short") {
+    const pads = new Set([...b.leds.map((l) => l.pin), ...b.buttons.map((x) => x.pin),
+                          ...Object.values(b.pin_labels || {}),
+                          ...b.headers.flatMap((h) => Object.values(h.mikrobus || {}))].filter(Boolean));
+    args.innerHTML = `<input id="fa-pad" list="fa-pads" placeholder="PA24" size="6" spellcheck="false">
+      <select id="fa-level"><option value="0">to GND</option><option value="1">to VDD</option></select>
+      <datalist id="fa-pads">${[...pads].sort().map((p) => `<option value="${p}">`).join("")}</datalist>`;
+  } else if (kind === "nack") {
+    const i2c = Object.entries(tv.clicks).filter(([, c]) => c && /^I2C/.test((catalog[c.id] || {}).bus || ""));
+    args.innerHTML = `<select id="fa-click">${i2c.map(([slot, c]) =>
+      `<option value="${slot}">${slot.toUpperCase()} ${catalog[c.id].name} (${catalog[c.id].bus.slice(4)})</option>`).join("")}
+      <option value="">address…</option></select>
+      <input id="fa-addr" placeholder="0x18" size="5" spellcheck="false">`;
+  } else {
+    args.innerHTML = `<select id="fa-host">${(tv.spiHosts || []).map((h) =>
+      `<option value="${h}">${h.toUpperCase()}</option>`).join("")}</select>
+      <select id="fa-val"><option value="ff">reads FF</option><option value="0">reads 00</option></select>`;
+  }
+}
+
+$("fault-kind").addEventListener("change", faultArgs);
+$("fault-add").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const tv = twins[selected];
+  if (!tv) return;
+  const kind = $("fault-kind").value, val = (id) => ($(id) || {}).value || "";
+  let f;
+  if (kind === "short") f = { kind, pad: val("fa-pad").trim(), level: Number(val("fa-level")) };
+  else if (kind === "nack") f = val("fa-click") ? { kind, slot: val("fa-click") }
+    : { kind, addr: val("fa-addr").trim().replace(/^0x/i, "") };
+  else f = { kind, host: val("fa-host"), value: val("fa-val") };
+  send({ type: "faults", twin: tv.key, faults: [...tv.faults, f] });
+});
+
+async function upload(file, key) {
+  key = key || selected;
+  if (!key) { Workspace.hint("Add a board first, then drop its firmware."); return; }
   setStatus("idle", `loading ${file.name}`);
-  const r = await fetch("/api/firmware", { method: "POST", body: file });
+  const r = await fetch(`/api/firmware?twin=${encodeURIComponent(key)}&name=${encodeURIComponent(file.name)}`,
+                        { method: "POST", body: file });
   if (!r.ok) setStatus("error", await r.text());
 }
 
@@ -949,10 +1372,3 @@ $("save-code").addEventListener("click", () => {
   setStatus("idle", "saving code.py, restarting");
   send({ type: "save-file", path: "code.py", text: $("code-py").value });
 });
-
-$("board-select").addEventListener("change", (e) => {
-  setStatus("idle", "switching board");
-  send({ type: "select-board", board: e.target.value });
-});
-
-connect();
