@@ -2429,5 +2429,929 @@
         "color": "#5dff7a"
       }
     ]
+  },
+  "adc": {
+    "name": "ADC Click",
+    "vendor": "MikroElektronika",
+    "chip": "MCP3204",
+    "bus": "SPI (CS)",
+    "description": "4-channel 12-bit ADC (MCP3204) on SPI, single-ended or differential: the screw terminals' inputs through an MCP6284 buffer, the reference VCC (REFERENCE jumper; the MCP1541's 4.096 V on the other side)",
+    "controls": [
+      {
+        "id": "ch0",
+        "label": "CH0",
+        "property": "in0",
+        "unit": "V",
+        "min": 0,
+        "max": 3.3,
+        "step": 0.001,
+        "scale": 1000,
+        "default": 0
+      },
+      {
+        "id": "ch1",
+        "label": "CH1",
+        "property": "in1",
+        "unit": "V",
+        "min": 0,
+        "max": 3.3,
+        "step": 0.001,
+        "scale": 1000,
+        "default": 0
+      },
+      {
+        "id": "ch2",
+        "label": "CH2",
+        "property": "in2",
+        "unit": "V",
+        "min": 0,
+        "max": 3.3,
+        "step": 0.001,
+        "scale": 1000,
+        "default": 0
+      },
+      {
+        "id": "ch3",
+        "label": "CH3",
+        "property": "in3",
+        "unit": "V",
+        "min": 0,
+        "max": 3.3,
+        "step": 0.001,
+        "scale": 1000,
+        "default": 0
+      }
+    ],
+    "signals": [],
+    "image": "adc/top.png",
+    "origin_mm": [
+      -1.27,
+      37.3634
+    ],
+    "size_mm": [
+      25.4,
+      41.1734
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          0.51,
+          21.47
+        ],
+        "color": "#5dff7a"
+      }
+    ]
+  },
+  "ledringr": {
+    "name": "LED Ring R Click",
+    "vendor": "MikroElektronika",
+    "chip": "4x 74HC595",
+    "bus": "SPI (CS latches)",
+    "description": "32 red LEDs in a ring on four 74HC595 shift registers: 32 bits a frame, CS latching them, MR# on RST (LED1 at three o'clock, counter-clockwise)",
+    "controls": [],
+    "display": {
+      "type": "bits",
+      "property": "outputs",
+      "color": "#ff3b30",
+      "size_mm": 2.2,
+      "leds": [
+        {
+          "id": "LED1",
+          "bit": 24,
+          "at_mm": [
+            22.47,
+            40.64
+          ]
+        },
+        {
+          "id": "LED2",
+          "bit": 25,
+          "at_mm": [
+            22.25,
+            42.79
+          ]
+        },
+        {
+          "id": "LED3",
+          "bit": 26,
+          "at_mm": [
+            21.63,
+            44.86
+          ]
+        },
+        {
+          "id": "LED4",
+          "bit": 27,
+          "at_mm": [
+            20.61,
+            46.77
+          ]
+        },
+        {
+          "id": "LED5",
+          "bit": 28,
+          "at_mm": [
+            19.23,
+            48.44
+          ]
+        },
+        {
+          "id": "LED6",
+          "bit": 29,
+          "at_mm": [
+            17.56,
+            49.82
+          ]
+        },
+        {
+          "id": "LED7",
+          "bit": 30,
+          "at_mm": [
+            15.65,
+            50.84
+          ]
+        },
+        {
+          "id": "LED8",
+          "bit": 31,
+          "at_mm": [
+            13.58,
+            51.46
+          ]
+        },
+        {
+          "id": "LED9",
+          "bit": 16,
+          "at_mm": [
+            11.43,
+            51.68
+          ]
+        },
+        {
+          "id": "LED10",
+          "bit": 17,
+          "at_mm": [
+            9.28,
+            51.46
+          ]
+        },
+        {
+          "id": "LED11",
+          "bit": 18,
+          "at_mm": [
+            7.21,
+            50.84
+          ]
+        },
+        {
+          "id": "LED12",
+          "bit": 19,
+          "at_mm": [
+            5.3,
+            49.82
+          ]
+        },
+        {
+          "id": "LED13",
+          "bit": 20,
+          "at_mm": [
+            3.63,
+            48.44
+          ]
+        },
+        {
+          "id": "LED14",
+          "bit": 21,
+          "at_mm": [
+            2.25,
+            46.77
+          ]
+        },
+        {
+          "id": "LED15",
+          "bit": 22,
+          "at_mm": [
+            1.23,
+            44.86
+          ]
+        },
+        {
+          "id": "LED16",
+          "bit": 23,
+          "at_mm": [
+            0.61,
+            42.79
+          ]
+        },
+        {
+          "id": "LED17",
+          "bit": 8,
+          "at_mm": [
+            0.39,
+            40.64
+          ]
+        },
+        {
+          "id": "LED18",
+          "bit": 9,
+          "at_mm": [
+            0.61,
+            38.49
+          ]
+        },
+        {
+          "id": "LED19",
+          "bit": 10,
+          "at_mm": [
+            1.23,
+            36.42
+          ]
+        },
+        {
+          "id": "LED20",
+          "bit": 11,
+          "at_mm": [
+            2.25,
+            34.51
+          ]
+        },
+        {
+          "id": "LED21",
+          "bit": 12,
+          "at_mm": [
+            3.63,
+            32.84
+          ]
+        },
+        {
+          "id": "LED22",
+          "bit": 13,
+          "at_mm": [
+            5.3,
+            31.46
+          ]
+        },
+        {
+          "id": "LED23",
+          "bit": 14,
+          "at_mm": [
+            7.21,
+            30.44
+          ]
+        },
+        {
+          "id": "LED24",
+          "bit": 15,
+          "at_mm": [
+            9.28,
+            29.82
+          ]
+        },
+        {
+          "id": "LED25",
+          "bit": 0,
+          "at_mm": [
+            11.43,
+            29.6
+          ]
+        },
+        {
+          "id": "LED26",
+          "bit": 1,
+          "at_mm": [
+            13.58,
+            29.82
+          ]
+        },
+        {
+          "id": "LED27",
+          "bit": 2,
+          "at_mm": [
+            15.65,
+            30.44
+          ]
+        },
+        {
+          "id": "LED28",
+          "bit": 3,
+          "at_mm": [
+            17.56,
+            31.46
+          ]
+        },
+        {
+          "id": "LED29",
+          "bit": 4,
+          "at_mm": [
+            19.23,
+            32.84
+          ]
+        },
+        {
+          "id": "LED30",
+          "bit": 5,
+          "at_mm": [
+            20.61,
+            34.51
+          ]
+        },
+        {
+          "id": "LED31",
+          "bit": 6,
+          "at_mm": [
+            21.63,
+            36.42
+          ]
+        },
+        {
+          "id": "LED32",
+          "bit": 7,
+          "at_mm": [
+            22.25,
+            38.49
+          ]
+        }
+      ]
+    },
+    "signals": [],
+    "image": "ledringr/top.png",
+    "origin_mm": [
+      -1.27,
+      53.34
+    ],
+    "size_mm": [
+      25.4,
+      57.15
+    ],
+    "leds": []
+  },
+  "dac": {
+    "name": "DAC Click",
+    "vendor": "MikroElektronika",
+    "chip": "MCP4921",
+    "bus": "SPI (CS)",
+    "description": "12-bit DAC (MCP4921) on SPI, VREF from VCC (REFERENCE jumper; the MCP1541's 4.096 V on the other side): gain 1x or 2x, shutdown, out to the VOUT terminal. The output voltage shows on the Click",
+    "controls": [],
+    "display": {
+      "type": "text",
+      "property": "readout",
+      "at_mm": [
+        11.45,
+        12.4
+      ],
+      "size_mm": [
+        12.4,
+        2.4
+      ],
+      "color": "#ffd27a"
+    },
+    "signals": [],
+    "image": "dac/top.png",
+    "origin_mm": [
+      -1.2954,
+      24.7396
+    ],
+    "size_mm": [
+      25.4254,
+      28.5496
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          18.27,
+          15.37
+        ],
+        "color": "#5dff7a"
+      }
+    ]
+  },
+  "expand2": {
+    "name": "Expand 2 Click",
+    "vendor": "MikroElektronika",
+    "chip": "MCP23017",
+    "bus": "I2C 0x20",
+    "description": "16-bit I/O expander (MCP23017) on I2C: ports A and B on the 2x5 headers with pull-ups, polarity and interrupt-on-change (INTA on INT), RESET# on RST. A pin lights while it is high; hold its pad to ground it",
+    "controls": [],
+    "buttons": [
+      {
+        "id": "PA0",
+        "property": "pa0",
+        "at_mm": [
+          16.51,
+          53.57
+        ],
+        "size_mm": [
+          2.2,
+          2.2
+        ]
+      },
+      {
+        "id": "PA1",
+        "property": "pa1",
+        "at_mm": [
+          19.05,
+          53.57
+        ],
+        "size_mm": [
+          2.2,
+          2.2
+        ]
+      },
+      {
+        "id": "PA2",
+        "property": "pa2",
+        "at_mm": [
+          16.51,
+          51.03
+        ],
+        "size_mm": [
+          2.2,
+          2.2
+        ]
+      },
+      {
+        "id": "PA3",
+        "property": "pa3",
+        "at_mm": [
+          19.05,
+          51.03
+        ],
+        "size_mm": [
+          2.2,
+          2.2
+        ]
+      },
+      {
+        "id": "PA4",
+        "property": "pa4",
+        "at_mm": [
+          16.51,
+          48.49
+        ],
+        "size_mm": [
+          2.2,
+          2.2
+        ]
+      },
+      {
+        "id": "PA5",
+        "property": "pa5",
+        "at_mm": [
+          19.05,
+          48.49
+        ],
+        "size_mm": [
+          2.2,
+          2.2
+        ]
+      },
+      {
+        "id": "PA6",
+        "property": "pa6",
+        "at_mm": [
+          16.51,
+          45.95
+        ],
+        "size_mm": [
+          2.2,
+          2.2
+        ]
+      },
+      {
+        "id": "PA7",
+        "property": "pa7",
+        "at_mm": [
+          19.05,
+          45.95
+        ],
+        "size_mm": [
+          2.2,
+          2.2
+        ]
+      },
+      {
+        "id": "PB0",
+        "property": "pb0",
+        "at_mm": [
+          3.84,
+          53.57
+        ],
+        "size_mm": [
+          2.2,
+          2.2
+        ]
+      },
+      {
+        "id": "PB1",
+        "property": "pb1",
+        "at_mm": [
+          6.38,
+          53.57
+        ],
+        "size_mm": [
+          2.2,
+          2.2
+        ]
+      },
+      {
+        "id": "PB2",
+        "property": "pb2",
+        "at_mm": [
+          3.84,
+          51.03
+        ],
+        "size_mm": [
+          2.2,
+          2.2
+        ]
+      },
+      {
+        "id": "PB3",
+        "property": "pb3",
+        "at_mm": [
+          6.38,
+          51.03
+        ],
+        "size_mm": [
+          2.2,
+          2.2
+        ]
+      },
+      {
+        "id": "PB4",
+        "property": "pb4",
+        "at_mm": [
+          3.84,
+          48.49
+        ],
+        "size_mm": [
+          2.2,
+          2.2
+        ]
+      },
+      {
+        "id": "PB5",
+        "property": "pb5",
+        "at_mm": [
+          6.38,
+          48.49
+        ],
+        "size_mm": [
+          2.2,
+          2.2
+        ]
+      },
+      {
+        "id": "PB6",
+        "property": "pb6",
+        "at_mm": [
+          3.84,
+          45.95
+        ],
+        "size_mm": [
+          2.2,
+          2.2
+        ]
+      },
+      {
+        "id": "PB7",
+        "property": "pb7",
+        "at_mm": [
+          6.38,
+          45.95
+        ],
+        "size_mm": [
+          2.2,
+          2.2
+        ]
+      }
+    ],
+    "display": {
+      "type": "bits",
+      "property": "levels",
+      "color": "#ffb020",
+      "size_mm": 1.9,
+      "leds": [
+        {
+          "id": "PA0",
+          "bit": 0,
+          "at_mm": [
+            16.51,
+            53.57
+          ]
+        },
+        {
+          "id": "PA1",
+          "bit": 1,
+          "at_mm": [
+            19.05,
+            53.57
+          ]
+        },
+        {
+          "id": "PA2",
+          "bit": 2,
+          "at_mm": [
+            16.51,
+            51.03
+          ]
+        },
+        {
+          "id": "PA3",
+          "bit": 3,
+          "at_mm": [
+            19.05,
+            51.03
+          ]
+        },
+        {
+          "id": "PA4",
+          "bit": 4,
+          "at_mm": [
+            16.51,
+            48.49
+          ]
+        },
+        {
+          "id": "PA5",
+          "bit": 5,
+          "at_mm": [
+            19.05,
+            48.49
+          ]
+        },
+        {
+          "id": "PA6",
+          "bit": 6,
+          "at_mm": [
+            16.51,
+            45.95
+          ]
+        },
+        {
+          "id": "PA7",
+          "bit": 7,
+          "at_mm": [
+            19.05,
+            45.95
+          ]
+        },
+        {
+          "id": "PB0",
+          "bit": 8,
+          "at_mm": [
+            3.84,
+            53.57
+          ]
+        },
+        {
+          "id": "PB1",
+          "bit": 9,
+          "at_mm": [
+            6.38,
+            53.57
+          ]
+        },
+        {
+          "id": "PB2",
+          "bit": 10,
+          "at_mm": [
+            3.84,
+            51.03
+          ]
+        },
+        {
+          "id": "PB3",
+          "bit": 11,
+          "at_mm": [
+            6.38,
+            51.03
+          ]
+        },
+        {
+          "id": "PB4",
+          "bit": 12,
+          "at_mm": [
+            3.84,
+            48.49
+          ]
+        },
+        {
+          "id": "PB5",
+          "bit": 13,
+          "at_mm": [
+            6.38,
+            48.49
+          ]
+        },
+        {
+          "id": "PB6",
+          "bit": 14,
+          "at_mm": [
+            3.84,
+            45.95
+          ]
+        },
+        {
+          "id": "PB7",
+          "bit": 15,
+          "at_mm": [
+            6.38,
+            45.95
+          ]
+        }
+      ]
+    },
+    "signals": [
+      {
+        "id": "INTA",
+        "pin": "int",
+        "active_low": true,
+        "at_mm": [
+          22.86,
+          17.5
+        ]
+      }
+    ],
+    "image": "expand2/top.png",
+    "origin_mm": [
+      -1.27,
+      55.6006
+    ],
+    "size_mm": [
+      25.4,
+      57.15
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          5.15,
+          3.53
+        ],
+        "color": "#5dff7a"
+      }
+    ],
+    "header_center_mm": [
+      11.43,
+      11.15
+    ]
+  },
+  "lcdmini": {
+    "name": "LCD mini Click",
+    "vendor": "MikroElektronika",
+    "chip": "MCP23S17 + MCP4161 + ST7066U",
+    "bus": "SPI (CS, CS2 on AN)",
+    "description": "16x2 character LCD (Topway LMB162XFW, ST7066U) on its ribbon, driven in 4-bit mode through an MCP23S17 on SPI (CS); an MCP4161 digital pot (CS2 on AN) sets the contrast and PWM switches the backlight. The LCD lies over the Click here",
+    "controls": [],
+    "display": {
+      "type": "panel",
+      "property": "frame",
+      "gen_property": "frame-gen",
+      "width": 296,
+      "height": 82,
+      "at_mm": [
+        11.43,
+        29.1
+      ],
+      "size_mm": [
+        36.4,
+        10.1
+      ],
+      "rotate_deg": 90
+    },
+    "signals": [],
+    "image": "lcdmini/top.png",
+    "origin_mm": [
+      -1.27,
+      56.6
+    ],
+    "size_mm": [
+      25.4,
+      60.41
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          11.68,
+          1.78
+        ],
+        "color": "#5dff7a"
+      }
+    ]
+  },
+  "ambient2": {
+    "name": "Ambient 2 Click",
+    "vendor": "MikroElektronika",
+    "chip": "OPT3001",
+    "bus": "I2C 0x44",
+    "description": "Ambient light sensor with the eye's response (TI OPT3001): automatic full-scale, 100 or 800 ms conversions, single-shot or continuous, limits in latched or transparent mode; INT (open drain, 4.7k pull-up) on INT",
+    "controls": [
+      {
+        "id": "lux",
+        "label": "Illuminance",
+        "property": "lux",
+        "unit": "lx",
+        "min": 0,
+        "max": 83865,
+        "step": 1,
+        "scale": 1000,
+        "default": 300
+      }
+    ],
+    "signals": [
+      {
+        "id": "INT",
+        "pin": "int",
+        "active_low": true,
+        "at_mm": [
+          22.86,
+          15.24
+        ]
+      }
+    ],
+    "image": "ambient2/top.png",
+    "origin_mm": [
+      -1.27,
+      24.765
+    ],
+    "size_mm": [
+      25.4,
+      28.575
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          11.43,
+          1.27
+        ],
+        "color": "#5dff7a"
+      }
+    ]
+  },
+  "thermok": {
+    "name": "Thermo K Click",
+    "vendor": "MikroElektronika",
+    "chip": "MCP9600",
+    "bus": "I2C 0x60",
+    "description": "Thermocouple EMF to temperature converter (MCP9600) with a type K socket: hot and cold junction, the raw EMF, 18 to 12 bit conversions, four alerts (ALERT1 on INT, ALERT2 on PWM, ALERT3 on RST, ALERT4 on AN)",
+    "controls": [
+      {
+        "id": "temperature",
+        "label": "Hot junction",
+        "property": "temperature",
+        "unit": "°C",
+        "min": -200,
+        "max": 1372,
+        "step": 0.5,
+        "scale": 1000,
+        "default": 25
+      },
+      {
+        "id": "cold",
+        "label": "Cold junction",
+        "property": "cold",
+        "unit": "°C",
+        "min": -40,
+        "max": 125,
+        "step": 0.25,
+        "scale": 1000,
+        "default": 25
+      }
+    ],
+    "signals": [
+      {
+        "id": "ALERT1",
+        "pin": "int",
+        "active_low": true,
+        "at_mm": [
+          22.86,
+          15.24
+        ]
+      }
+    ],
+    "image": "thermok/top.png",
+    "origin_mm": [
+      -1.27,
+      39.116
+    ],
+    "size_mm": [
+      25.4,
+      42.926
+    ],
+    "leds": [
+      {
+        "id": "PWR",
+        "at_mm": [
+          17.6,
+          1.14
+        ],
+        "color": "#5dff7a"
+      }
+    ]
   }
 }

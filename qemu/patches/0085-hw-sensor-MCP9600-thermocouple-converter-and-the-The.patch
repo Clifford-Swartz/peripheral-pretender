@@ -1,0 +1,691 @@
+From 71d445eae26e22f9791a9bca7b72353312c78613 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 22 Oct 2026 23:39:15 -0700
+Subject: [PATCH 85/85] hw/sensor: MCP9600 thermocouple converter and the
+ Thermo K Click
+
+The MCP9600 (DS20005426F section 5): TH, TDELTA and TC in 1/16 degree
+(TC at 0.25 degree on request), the raw ADC at 18 to 12 bits, STATUS
+with TH Update, Burst Complete and Input Range, conversions at the ADC
+resolution's rate in normal, shutdown and burst modes, four alerts
+(TH or TC, rising or falling with hysteresis, comparator or latched
+interrupt mode, push-pull with either polarity), and the device ID.
+QOM "temperature" (hot junction) and "cold" (cold junction) in
+milli-degrees; the raw ADC approximates the type K EMF as 41 uV per
+degree.
+
+Thermo K Click v102: 0x60 (ADDR on ground), ALERT1 on INT, ALERT2 on
+PWM, ALERT3 on RST, ALERT4 on AN (the schematic, and MikroElektronika's
+driver's map), no pull resistors.
+
+qtests: ID, the temperatures and raw ADC after a conversion, clearing
+TH Update, a rising ALERT1 on INT and its release, a negative
+temperature on the MC00's EXT1; TH through TWI0 on the AVR64EA48 Nano
+Base.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  12 +
+ hw/misc/mikrobus.c                    |   8 +
+ hw/sensor/mchp_mcp9600.c              | 446 ++++++++++++++++++++++++++
+ hw/sensor/meson.build                 |   3 +-
+ include/hw/sensor/mchp_mcp9600.h      |  27 ++
+ tests/qtest/avr64ea48-cnano-test.c    |  16 +
+ tests/qtest/pic32cm-click-test.c      |  52 +++
+ 7 files changed, 563 insertions(+), 1 deletion(-)
+ create mode 100644 hw/sensor/mchp_mcp9600.c
+ create mode 100644 include/hw/sensor/mchp_mcp9600.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 421db67..2cdb042 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -240,6 +240,18 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   byte 3 LED25-LED32; ``outputs`` holds register 0 (LED25-LED32) in bits
+   7:0 and LED1-LED8 in bits 31:24.
+ 
++``thermok``
++  Thermo K Click (v102): an MCP9600 thermocouple EMF converter
++  (``mchp-mcp9600``) at I2C 0x60 (ADDR on GND) with a type K
++  thermocouple, ALERT1 on INT, ALERT2 on PWM, ALERT3 on RST and ALERT4 on
++  AN (push-pull, no pull resistors). TH, TDELTA, TC (0.0625 or 0.25
++  degree), the raw ADC at 18 to 12 bits (the EMF approximated as 41 uV
++  per degree), conversions at the ADC's rate in normal, shutdown and
++  burst modes, STATUS, and four alerts (TH or TC, rising or falling with
++  hysteresis, comparator or interrupt mode, polarity). QOM properties
++  ``temperature`` (the hot junction, milli-degrees C, default 25000) and
++  ``cold`` (the cold junction, default 25000).
++
+ ``rn4871``
+   RN4871 Click (v101): Microchip's RN4871 Bluetooth LE module on the UART
+   (``chardev-rn4871``, the RNBD451 model's command set with the RN4871's
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index f35472b..a89eb11 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -40,6 +40,7 @@
+ #include "hw/sensor/adxl345.h"
+ #include "hw/sensor/bme280.h"
+ #include "hw/sensor/isl29125.h"
++#include "hw/sensor/mchp_mcp9600.h"
+ #include "hw/sensor/mchp_mcp9808.h"
+ #include "hw/sensor/opt3001.h"
+ #include "hw/ssi/max7219.h"
+@@ -311,6 +312,13 @@ static const ClickInfo mikrobus_clicks[] = {
+       TYPE_OPT3001, CLICK_I2C, 0x44, 0,
+       .outs = { { OPT3001_INT, MIKROBUS_INT } },
+       .pulls = { { true, MIKROBUS_INT, 1 } } },           /* R3 4.7k */
++    { "thermok", "Thermo K Click: MCP9600 thermocouple converter at I2C "
++      "0x60, a type K thermocouple; ALERT1-4 on INT, PWM, RST and AN",
++      TYPE_MCHP_MCP9600, CLICK_I2C, 0x60, 0,
++      .outs = { { MCHP_MCP9600_ALERT1, MIKROBUS_INT },
++                { MCHP_MCP9600_ALERT2, MIKROBUS_PWM },
++                { MCHP_MCP9600_ALERT3, MIKROBUS_RST },
++                { MCHP_MCP9600_ALERT4, MIKROBUS_AN_PIN } } },
+ };
+ 
+ const char *mikrobus_click_names(void)
+diff --git a/hw/sensor/mchp_mcp9600.c b/hw/sensor/mchp_mcp9600.c
+new file mode 100644
+index 0000000..fc148e8
+--- /dev/null
++++ b/hw/sensor/mchp_mcp9600.c
+@@ -0,0 +1,446 @@
++/*
++ * Microchip MCP9600 thermocouple EMF to temperature converter, and the
++ * Thermo K Click
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * MCP960X data sheet (DS20005426F), section 5:
++ *  - The first byte written sets the register pointer: TH 00h (hot
++ *    junction, cold-junction compensated), TDELTA 01h (TH - TC), TC 02h
++ *    (cold junction), raw ADC 03h (24 bits), STATUS 04h, sensor
++ *    configuration 05h (thermocouple type, filter), device configuration
++ *    06h (TC resolution, ADC resolution, burst samples, mode), alert
++ *    configuration 08h-0Bh, hysteresis 0Ch-0Fh, limits 10h-13h, device ID
++ *    and revision 20h (4010h). Temperatures are 1/16 degree C, two's
++ *    complement; limits drop the two low bits.
++ *  - Conversions repeat at the ADC resolution's rate (18/16/14/12 bits:
++ *    320/80/20/5 ms) in normal mode, stop in shutdown, and in burst mode
++ *    run the configured number of samples, set Burst Complete and shut
++ *    down. Each sets TH Update (Burst Complete and TH Update clear when
++ *    written with 0: the register is R/W, though its table says writing
++ *    0 "has no effect"). TC at 0.25 degree resolution clears its
++ *    two low bits. Input Range flags a hot junction outside type K's
++ *    -200 to 1372 degrees C.
++ *  - Each alert monitors TH or TC, rising (asserts at the limit, releases
++ *    below limit - hysteresis) or falling (asserts at the limit,
++ *    releases above limit + hysteresis); in interrupt mode an assertion
++ *    latches until Interrupt Clear is written. STATUS bits 3:0 show the
++ *    alerts; enabled outputs drive their active level (push-pull), the
++ *    inactive level otherwise.
++ * The model reports the temperatures it is given: the raw ADC holds the
++ * thermocouple's EMF approximated as 41 uV per degree of TH - TC (type K
++ * near room temperature) whatever the type selected; the filter, the
++ * other thermocouple types' ranges, and the alerts' 0.25 degree
++ * comparison steps are not modelled.
++ *
++ * Thermo K Click (MikroElektronika, schematic v102): ADDR to ground
++ * (0x60), ALERT1 on PWM, ALERT2 on INT, ALERT3 on RST, ALERT4 on AN, no
++ * pull resistors. Not checked against a physical Click.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "hw/core/irq.h"
++#include "hw/i2c/i2c.h"
++#include "hw/sensor/mchp_mcp9600.h"
++#include "migration/vmstate.h"
++
++#define REG_TH          0x00
++#define REG_TDELTA      0x01
++#define REG_TC          0x02
++#define REG_ADC         0x03
++#define REG_STATUS      0x04
++#define REG_SENSOR      0x05
++#define REG_DEVICE      0x06
++#define REG_ALERT_CFG   0x08
++#define REG_HYST        0x0c
++#define REG_LIMIT       0x10
++#define REG_ID          0x20
++
++#define ST_BURST        BIT(7)
++#define ST_UPDATE       BIT(6)
++#define ST_RANGE        BIT(4)
++
++#define DEV_TC_RES      BIT(7)          /* 0.25 degree */
++#define DEV_ADC_SHIFT   5
++#define DEV_BURST_SHIFT 2
++#define DEV_MODE        0x3
++#define MODE_SHUTDOWN   1
++#define MODE_BURST      2
++
++#define AL_CLEAR        BIT(7)
++#define AL_TC           BIT(4)
++#define AL_RISING       BIT(3)
++#define AL_HIGH         BIT(2)
++#define AL_INT          BIT(1)
++#define AL_ENABLE       BIT(0)
++
++#define NALERTS         4
++#define EMF_UV_PER_C    41
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpMcp9600State, MCHP_MCP9600)
++
++struct MchpMcp9600State {
++    I2CSlave parent_obj;
++
++    int16_t th, tdelta, tc;             /* 1/16 degree C */
++    int32_t adc;                        /* 24-bit raw */
++    uint8_t status;
++    uint8_t sensor;
++    uint8_t device;
++    uint8_t alert_cfg[NALERTS];
++    uint8_t hyst[NALERTS];
++    int16_t limit[NALERTS];
++    bool asserted[NALERTS];             /* the comparator */
++    bool latched[NALERTS];              /* interrupt mode */
++    uint8_t ptr;
++    bool ptr_set;
++    uint8_t wbuf;
++    uint8_t wcount;
++    uint8_t rcount;
++    uint8_t burst_left;
++
++    int32_t hot;                        /* milli-degrees C */
++    int32_t cold;
++    QEMUTimer *timer;
++    qemu_irq alert[NALERTS];
++};
++
++static void mcp9600_drive_alerts(MchpMcp9600State *s)
++{
++    for (unsigned i = 0; i < NALERTS; i++) {
++        uint8_t cfg = s->alert_cfg[i];
++        bool on = cfg & AL_INT ? s->latched[i] : s->asserted[i];
++        bool active = (cfg & AL_ENABLE) && on;
++
++        qemu_set_irq(s->alert[i], active == !!(cfg & AL_HIGH));
++    }
++}
++
++static void mcp9600_alerts(MchpMcp9600State *s)
++{
++    s->status &= ~0x0f;
++    for (unsigned i = 0; i < NALERTS; i++) {
++        uint8_t cfg = s->alert_cfg[i];
++        int t = cfg & AL_TC ? s->tc : s->th;
++        int lim = s->limit[i], hy = s->hyst[i] * 16;
++        bool was = s->asserted[i];
++
++        if (cfg & AL_RISING) {
++            s->asserted[i] = t >= lim || (was && t >= lim - hy);
++        } else {
++            s->asserted[i] = t <= lim || (was && t <= lim + hy);
++        }
++        if (s->asserted[i] && !was) {
++            s->latched[i] = true;
++        }
++        if (cfg & AL_INT ? s->latched[i] : s->asserted[i]) {
++            s->status |= BIT(i);
++        }
++    }
++    mcp9600_drive_alerts(s);
++}
++
++static int64_t mcp9600_period_ns(MchpMcp9600State *s)
++{
++    static const unsigned ms[4] = { 320, 80, 20, 5 };
++
++    return ms[(s->device >> DEV_ADC_SHIFT) & 3] * SCALE_MS;
++}
++
++static void mcp9600_arm(MchpMcp9600State *s)
++{
++    if ((s->device & DEV_MODE) == MODE_SHUTDOWN ||
++        ((s->device & DEV_MODE) == MODE_BURST && !s->burst_left)) {
++        timer_del(s->timer);
++        return;
++    }
++    timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++              mcp9600_period_ns(s));
++}
++
++static void mcp9600_convert(void *opaque)
++{
++    MchpMcp9600State *s = opaque;
++    unsigned res = (s->device >> DEV_ADC_SHIFT) & 3;
++    int64_t emf_uv = (int64_t)(s->hot - s->cold) * EMF_UV_PER_C / 1000;
++    int32_t raw = emf_uv / 2;           /* 2 uV a count at 18 bits */
++
++    s->th = s->hot * 16 / 1000;
++    s->tc = s->cold * 16 / 1000;
++    if (s->device & DEV_TC_RES) {
++        s->tc &= ~3;
++    }
++    s->tdelta = s->th - s->tc;
++    raw &= ~((1 << (2 * res)) - 1);     /* fewer bits: low ones zero */
++    s->adc = raw & 0xffffff;
++    s->status |= ST_UPDATE;
++    s->status = (s->status & ~ST_RANGE) |
++                (s->hot < -200000 || s->hot > 1372000 ? ST_RANGE : 0);
++    mcp9600_alerts(s);
++    if ((s->device & DEV_MODE) == MODE_BURST && s->burst_left &&
++        !--s->burst_left) {
++        s->status |= ST_BURST;
++        s->device = (s->device & ~DEV_MODE) | MODE_SHUTDOWN;
++    }
++    mcp9600_arm(s);
++}
++
++static unsigned mcp9600_width(uint8_t reg)
++{
++    if (reg <= REG_TC || (reg >= REG_LIMIT && reg < REG_LIMIT + NALERTS) ||
++        reg == REG_ID) {
++        return 2;
++    }
++    return reg == REG_ADC ? 3 : 1;
++}
++
++static uint32_t mcp9600_read_reg(MchpMcp9600State *s, uint8_t reg)
++{
++    switch (reg) {
++    case REG_TH:
++        return (uint16_t)s->th;
++    case REG_TDELTA:
++        return (uint16_t)s->tdelta;
++    case REG_TC:
++        return (uint16_t)s->tc;
++    case REG_ADC:
++        return s->adc;
++    case REG_STATUS:
++        return s->status;
++    case REG_SENSOR:
++        return s->sensor;
++    case REG_DEVICE:
++        return s->device;
++    case REG_ID:
++        return 0x4010;
++    }
++    if (reg >= REG_ALERT_CFG && reg < REG_ALERT_CFG + NALERTS) {
++        return s->alert_cfg[reg - REG_ALERT_CFG] & ~AL_CLEAR;
++    }
++    if (reg >= REG_HYST && reg < REG_HYST + NALERTS) {
++        return s->hyst[reg - REG_HYST];
++    }
++    if (reg >= REG_LIMIT && reg < REG_LIMIT + NALERTS) {
++        return (uint16_t)s->limit[reg - REG_LIMIT];
++    }
++    qemu_log_mask(LOG_GUEST_ERROR, "mcp9600: read of register 0x%02x\n", reg);
++    return 0;
++}
++
++static void mcp9600_write_reg(MchpMcp9600State *s, uint8_t reg, uint32_t v)
++{
++    unsigned i;
++
++    switch (reg) {
++    case REG_STATUS:
++        /* Burst Complete and TH Update: writing 0 clears */
++        s->status &= v | ~(ST_BURST | ST_UPDATE);
++        return;
++    case REG_SENSOR:
++        s->sensor = v & 0x77;
++        return;
++    case REG_DEVICE:
++        s->device = v;
++        if ((v & DEV_MODE) == MODE_BURST) {
++            s->burst_left = 1 << ((v >> DEV_BURST_SHIFT) & 7);
++        }
++        mcp9600_arm(s);
++        return;
++    }
++    if (reg >= REG_ALERT_CFG && reg < REG_ALERT_CFG + NALERTS) {
++        i = reg - REG_ALERT_CFG;
++        s->alert_cfg[i] = v & 0x1f;
++        if (v & AL_CLEAR) {
++            s->latched[i] = false;
++        }
++        mcp9600_alerts(s);
++    } else if (reg >= REG_HYST && reg < REG_HYST + NALERTS) {
++        s->hyst[reg - REG_HYST] = v;
++    } else if (reg >= REG_LIMIT && reg < REG_LIMIT + NALERTS) {
++        s->limit[reg - REG_LIMIT] = v & 0xfffc;
++    } else {
++        qemu_log_mask(LOG_GUEST_ERROR, "mcp9600: write of register 0x%02x\n",
++                      reg);
++    }
++}
++
++static int mcp9600_event(I2CSlave *i2c, enum i2c_event event)
++{
++    MchpMcp9600State *s = MCHP_MCP9600(i2c);
++
++    if (event == I2C_START_SEND) {
++        s->ptr_set = false;
++        s->wcount = 0;
++    } else if (event == I2C_START_RECV) {
++        s->rcount = 0;
++    }
++    return 0;
++}
++
++static int mcp9600_send(I2CSlave *i2c, uint8_t data)
++{
++    MchpMcp9600State *s = MCHP_MCP9600(i2c);
++    unsigned width;
++
++    if (!s->ptr_set) {
++        s->ptr = data & 0x3f;
++        s->ptr_set = true;
++        return 0;
++    }
++    width = mcp9600_width(s->ptr);
++    if (width == 1) {
++        mcp9600_write_reg(s, s->ptr, data);
++    } else if (s->wcount++ % 2 == 0) {
++        s->wbuf = data;
++    } else {
++        mcp9600_write_reg(s, s->ptr, s->wbuf << 8 | data);
++    }
++    return 0;
++}
++
++static uint8_t mcp9600_recv(I2CSlave *i2c)
++{
++    MchpMcp9600State *s = MCHP_MCP9600(i2c);
++    unsigned width = mcp9600_width(s->ptr), n = s->rcount++;
++    uint32_t v = mcp9600_read_reg(s, s->ptr);
++
++    if (n >= width) {
++        return 0;
++    }
++    return v >> (8 * (width - 1 - n));
++}
++
++static void mcp9600_get_temp(Object *obj, Visitor *v, const char *name,
++                             void *opaque, Error **errp)
++{
++    visit_type_int32(v, name, opaque, errp);
++}
++
++static void mcp9600_set_temp(Object *obj, Visitor *v, const char *name,
++                             void *opaque, Error **errp)
++{
++    MchpMcp9600State *s = MCHP_MCP9600(obj);
++    int32_t *t = opaque, value;
++    bool cold = t == &s->cold;
++
++    if (!visit_type_int32(v, name, &value, errp)) {
++        return;
++    }
++    if (cold ? (value < -40000 || value > 125000)
++             : (value < -200000 || value > 1372000)) {
++        error_setg(errp, "%s must be %s milli-degrees C", name,
++                   cold ? "-40000 to 125000" : "-200000 to 1372000");
++        return;
++    }
++    *t = value;
++}
++
++static void mcp9600_reset(DeviceState *dev)
++{
++    MchpMcp9600State *s = MCHP_MCP9600(dev);
++
++    s->th = s->tdelta = s->tc = 0;
++    s->adc = 0;
++    s->status = 0;
++    s->sensor = 0;
++    s->device = 0;
++    memset(s->alert_cfg, 0, sizeof(s->alert_cfg));
++    memset(s->hyst, 0, sizeof(s->hyst));
++    memset(s->limit, 0, sizeof(s->limit));
++    memset(s->asserted, 0, sizeof(s->asserted));
++    memset(s->latched, 0, sizeof(s->latched));
++    s->ptr = 0;
++    s->ptr_set = false;
++    s->burst_left = 0;
++    mcp9600_drive_alerts(s);
++    mcp9600_arm(s);                     /* normal mode at power-on */
++}
++
++static void mcp9600_init(Object *obj)
++{
++    MchpMcp9600State *s = MCHP_MCP9600(obj);
++    static const char *const names[NALERTS] = {
++        MCHP_MCP9600_ALERT1, MCHP_MCP9600_ALERT2, MCHP_MCP9600_ALERT3,
++        MCHP_MCP9600_ALERT4,
++    };
++
++    s->hot = 25000;
++    s->cold = 25000;
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mcp9600_convert, s);
++    for (unsigned i = 0; i < NALERTS; i++) {
++        qdev_init_gpio_out_named(DEVICE(obj), &s->alert[i], names[i], 1);
++    }
++    object_property_add(obj, "temperature", "int32", mcp9600_get_temp,
++                        mcp9600_set_temp, NULL, &s->hot);
++    object_property_add(obj, "cold", "int32", mcp9600_get_temp,
++                        mcp9600_set_temp, NULL, &s->cold);
++}
++
++static void mcp9600_finalize(Object *obj)
++{
++    timer_free(MCHP_MCP9600(obj)->timer);
++}
++
++static const VMStateDescription vmstate_mcp9600 = {
++    .name = TYPE_MCHP_MCP9600,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, MchpMcp9600State),
++        VMSTATE_INT16(th, MchpMcp9600State),
++        VMSTATE_INT16(tdelta, MchpMcp9600State),
++        VMSTATE_INT16(tc, MchpMcp9600State),
++        VMSTATE_INT32(adc, MchpMcp9600State),
++        VMSTATE_UINT8(status, MchpMcp9600State),
++        VMSTATE_UINT8(sensor, MchpMcp9600State),
++        VMSTATE_UINT8(device, MchpMcp9600State),
++        VMSTATE_UINT8_ARRAY(alert_cfg, MchpMcp9600State, NALERTS),
++        VMSTATE_UINT8_ARRAY(hyst, MchpMcp9600State, NALERTS),
++        VMSTATE_INT16_ARRAY(limit, MchpMcp9600State, NALERTS),
++        VMSTATE_BOOL_ARRAY(asserted, MchpMcp9600State, NALERTS),
++        VMSTATE_BOOL_ARRAY(latched, MchpMcp9600State, NALERTS),
++        VMSTATE_UINT8(ptr, MchpMcp9600State),
++        VMSTATE_BOOL(ptr_set, MchpMcp9600State),
++        VMSTATE_UINT8(wbuf, MchpMcp9600State),
++        VMSTATE_UINT8(wcount, MchpMcp9600State),
++        VMSTATE_UINT8(rcount, MchpMcp9600State),
++        VMSTATE_UINT8(burst_left, MchpMcp9600State),
++        VMSTATE_INT32(hot, MchpMcp9600State),
++        VMSTATE_INT32(cold, MchpMcp9600State),
++        VMSTATE_TIMER_PTR(timer, MchpMcp9600State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void mcp9600_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
++
++    dc->desc = "MCP9600 thermocouple EMF to temperature converter";
++    dc->vmsd = &vmstate_mcp9600;
++    device_class_set_legacy_reset(dc, mcp9600_reset);
++    k->event = mcp9600_event;
++    k->send = mcp9600_send;
++    k->recv = mcp9600_recv;
++}
++
++static const TypeInfo mcp9600_types[] = {
++    {
++        .name = TYPE_MCHP_MCP9600,
++        .parent = TYPE_I2C_SLAVE,
++        .instance_size = sizeof(MchpMcp9600State),
++        .instance_init = mcp9600_init,
++        .instance_finalize = mcp9600_finalize,
++        .class_init = mcp9600_class_init,
++    },
++};
++
++DEFINE_TYPES(mcp9600_types)
+diff --git a/hw/sensor/meson.build b/hw/sensor/meson.build
+index 26fb02c..af75b22 100644
+--- a/hw/sensor/meson.build
++++ b/hw/sensor/meson.build
+@@ -10,5 +10,6 @@ system_ss.add(when: 'CONFIG_ISL_PMBUS_VR', if_true: files('isl_pmbus_vr.c'))
+ system_ss.add(when: 'CONFIG_MAX31785', if_true: files('max31785.c'))
+ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp9808.c', 'adxl345.c',
+                                                       'isl29125.c', 'bme280.c',
+-                                                      'opt3001.c'))
++                                                      'opt3001.c',
++                                                      'mchp_mcp9600.c'))
+ system_ss.add(when: 'CONFIG_PYKIT_SENSORS', if_true: files('icm20948.c', 'bno085.c'))
+diff --git a/include/hw/sensor/mchp_mcp9600.h b/include/hw/sensor/mchp_mcp9600.h
+new file mode 100644
+index 0000000..6e875ca
+--- /dev/null
++++ b/include/hw/sensor/mchp_mcp9600.h
+@@ -0,0 +1,27 @@
++/*
++ * Microchip MCP9600 thermocouple EMF to temperature converter
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * "mchp-mcp9600": an I2C target (0x60-0x67 by its ADDR pin, set by the
++ * board). GPIO outputs "alert1".."alert4" (push-pull 0/1). QOM properties
++ * "temperature" (the thermocouple's hot junction, milli-degrees C,
++ * -200000 to 1372000, default 25000) and "cold" (the cold junction, the
++ * chip's own temperature, -40000 to 125000, default 25000), also at run
++ * time.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_SENSOR_MCHP_MCP9600_H
++#define HW_SENSOR_MCHP_MCP9600_H
++
++#define TYPE_MCHP_MCP9600 "mchp-mcp9600"
++
++#define MCHP_MCP9600_ALERT1 "alert1"
++#define MCHP_MCP9600_ALERT2 "alert2"
++#define MCHP_MCP9600_ALERT3 "alert3"
++#define MCHP_MCP9600_ALERT4 "alert4"
++
++#endif /* HW_SENSOR_MCHP_MCP9600_H */
+diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
+index 863d60e..40db6d6 100644
+--- a/tests/qtest/avr64ea48-cnano-test.c
++++ b/tests/qtest/avr64ea48-cnano-test.c
+@@ -625,6 +625,21 @@ static void test_ambient2_mb3(const void *fw)
+     qtest_quit(qts);
+ }
+ 
++/* Thermo K Click on mikroBUS 2: MCP9600 at 0x60 on TWI0 */
++static void test_thermok_mb2(const void *fw)
++{
++    QTestState *qts = qtest_initf("-M avr64ea48-cnano,mb2=thermok "
++                                  "-kernel %s", (const char *)fw);
++    uint8_t d[2];
++
++    qtest_writeb(qts, TWI0 + T_MCTRLA, 0x03);
++    qtest_writeb(qts, TWI0 + T_MSTATUS, 0x01);
++    qtest_clock_step(qts, 321 * 1000 * 1000LL);
++    twi_read(qts, 0x60, 0x00, d, 2);                    /* TH: 25 */
++    g_assert_cmphex(d[0] << 8 | d[1], ==, 0x0190);
++    qtest_quit(qts);
++}
++
+ static void qom_set_str(QTestState *qts, const char *path, const char *prop,
+                         const char *value)
+ {
+@@ -718,6 +733,7 @@ int main(int argc, char **argv)
+     qtest_add_data_func("avr64ea48-cnano/expand2", fw, test_expand2_mb2);
+     qtest_add_data_func("avr64ea48-cnano/lcdmini", fw, test_lcdmini_mb1);
+     qtest_add_data_func("avr64ea48-cnano/ambient2", fw, test_ambient2_mb3);
++    qtest_add_data_func("avr64ea48-cnano/thermok", fw, test_thermok_mb2);
+     ret = g_test_run();
+     unlink(fw);
+     return ret;
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index f4dafd2..0b195cf 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -1022,6 +1022,57 @@ static void test_ambient2(void)
+     qtest_quit(qts);
+ }
+ 
++#define MCP9600         0x60
++
++static uint32_t tk_reg(QTestState *qts, uint8_t reg, unsigned n)
++{
++    uint8_t d[3];
++    uint32_t v = 0;
++
++    i2c_rd(qts, MCP9600, reg, d, n);
++    for (unsigned i = 0; i < n; i++) {
++        v = v << 8 | d[i];
++    }
++    return v;
++}
++
++/*
++ * Thermo K Click on EXT1: MCP9600 at 0x60; ALERT1 on INT (PB02),
++ * push-pull
++ */
++static void test_thermok(void)
++{
++    QTestState *qts = i2c_init("-M pic32cm-mc00-cpro,ext1=thermok ");
++    uint8_t lim[2] = { 0x12, 0xc0 };            /* 300 degrees C */
++    uint8_t cfg = 0x09, zero = 0;               /* enable, rising, low */
++
++    g_assert_cmphex(tk_reg(qts, 0x20, 2), ==, 0x4010);
++    qom_set_int(qts, CLICK1, "temperature", 312500);
++    qom_set_int(qts, CLICK1, "cold", 24000);
++    qtest_clock_step(qts, 321 * 1000 * 1000);
++    g_assert_cmphex(tk_reg(qts, 0x00, 2), ==, 0x1388);      /* TH 312.5 */
++    g_assert_cmphex(tk_reg(qts, 0x02, 2), ==, 0x0180);      /* TC 24 */
++    g_assert_cmphex(tk_reg(qts, 0x01, 2), ==, 0x1208);      /* TDELTA */
++    g_assert_cmphex(tk_reg(qts, 0x03, 3), ==, 5914);        /* 11828 uV */
++    g_assert_cmphex(tk_reg(qts, 0x04, 1) & 0x40, ==, 0x40); /* TH Update */
++    g_assert_true(i2c_wr(qts, MCP9600, 0x04, &zero, 1));
++    g_assert_cmphex(tk_reg(qts, 0x04, 1) & 0x40, ==, 0);
++
++    /* ALERT1: rising at 300 degrees C, comparator, active low */
++    g_assert_true(int_high(qts));
++    g_assert_true(i2c_wr(qts, MCP9600, 0x10, lim, 2));
++    g_assert_true(i2c_wr(qts, MCP9600, 0x08, &cfg, 1));
++    g_assert_false(int_high(qts));
++    g_assert_cmphex(tk_reg(qts, 0x04, 1) & 0x0f, ==, 0x01);
++    qom_set_int(qts, CLICK1, "temperature", 290000);
++    qtest_clock_step(qts, 321 * 1000 * 1000);
++    g_assert_true(int_high(qts));
++    qom_set_int(qts, CLICK1, "temperature", -100000);
++    qtest_clock_step(qts, 321 * 1000 * 1000);
++    g_assert_cmphex(tk_reg(qts, 0x00, 2), ==, 0xf9c0);      /* -100 */
++    qtest_quit(qts);
++}
++
+ #define ADXL345         0x53
+ 
+ static uint8_t adxl_reg(QTestState *qts, uint8_t reg)
+@@ -1748,6 +1799,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/expand2", test_expand2);
+     qtest_add_func("pic32cm-click/lcdmini", test_lcdmini);
+     qtest_add_func("pic32cm-click/ambient2", test_ambient2);
++    qtest_add_func("pic32cm-click/thermok", test_thermok);
+     qtest_add_func("pic32cm-click/accel", test_accel);
+     qtest_add_func("pic32cm-click/rtc6-time", test_rtc6_time);
+     qtest_add_func("pic32cm-click/rtc6-alarm", test_rtc6_alarm);
+-- 
+2.53.0.windows.2
+

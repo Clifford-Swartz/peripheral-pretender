@@ -12,11 +12,13 @@ scaled to mm. Clicks outlines are convex, so the outline is the convex hull
 of the GKO points, which tolerates the duplicated segments some DXFs have.
 Part bodies come from parts.json (positions in the DXF's coordinates, in
 mm). With "-" instead of a DXF, parts.json must give "outline_mm" (the board
-polygon) and may ask for the mikroBUS header pads ("header": true) and
-silkscreen "texts".
+polygon, in order; it may be concave, like Thermo K's connector tab) and may
+ask for the mikroBUS header pads ("header": true) and silkscreen "texts".
+"extend_mm" (points) widens the picture past the board for a part off it,
+like the LCD mini's display on its cable.
 
-The SVG is in millimetres with y flipped; its viewBox is the board outline.
-The outline's top-left corner and size are printed for clicks.json.
+The SVG is in millimetres with y flipped; its viewBox is the board outline
+(and "extend_mm"). Its top-left corner and size are printed for clicks.json.
 """
 
 from __future__ import annotations
@@ -104,9 +106,10 @@ def main(dxf: str, parts_file: str, out: str) -> None:
         outline = [tuple(p) for p in parts["outline_mm"]]
     else:
         layers, outline, k = read_dxf(dxf)
-    edge = hull(outline)
-    x0, y0 = min(p[0] for p in edge), min(p[1] for p in edge)
-    x1, y1 = max(p[0] for p in edge), max(p[1] for p in edge)
+    edge = outline if dxf == "-" else hull(outline)
+    box = edge + [(x / k, y / k) for x, y in parts.get("extend_mm", [])]
+    x0, y0 = min(p[0] for p in box), min(p[1] for p in box)
+    x1, y1 = max(p[0] for p in box), max(p[1] for p in box)
     # Everything below is drawn in mm: DXF units times k, y flipped
     X = lambda x: x * k
     Y = lambda y: (y1 + y0 - y) * k
@@ -123,7 +126,9 @@ def main(dxf: str, parts_file: str, out: str) -> None:
            '<defs><linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1">'
            '<stop offset="0" stop-color="#fff" stop-opacity=".10"/>'
            '<stop offset="1" stop-color="#000" stop-opacity=".12"/>'
-           '</linearGradient></defs>']
+           '</linearGradient><filter id="blur" x="-10%" y="-10%" '
+           'width="120%" height="120%"><feGaussianBlur stdDeviation="0.5"/>'
+           '</filter></defs>']
     board = "M" + " L".join(pt(*p) for p in edge) + "Z"
     svg.append(f'<path d="{board}" fill="{MASK}" stroke="{MASK_EDGE}" '
                'stroke-width="0.3"/>')
@@ -321,6 +326,49 @@ def main(dxf: str, parts_file: str, out: str) -> None:
                            f'font-size="{p.get("label_size", 1.3)}" '
                            'text-anchor="middle" dominant-baseline="central">'
                            f'{p["label"]}</text>')
+        elif kind == "tc_socket":       # miniature thermocouple socket
+            # (the moulding in its type's colour, the socket face along +y)
+            col = p.get("color", "#f0c419")
+            svg.append(f'<rect x="{x:.3f}" y="{y:.3f}" width="{pw}" height="{ph}" '
+                       f'rx="0.6" fill="{col}" stroke="#9c7a0c" stroke-width="0.15"/>')
+            svg.append(f'<rect x="{x:.3f}" y="{y:.3f}" width="{pw}" '
+                       f'height="{ph * 0.14:.3f}" rx="0.6" fill="#000" opacity=".12"/>')
+            svg.append(f'<rect x="{x + pw * 0.08:.3f}" y="{y + ph * 0.2:.3f}" '
+                       f'width="{pw * 0.84:.3f}" height="{ph * 0.72:.3f}" rx="0.5" '
+                       'fill="#fff" opacity=".10"/>')
+            if p.get("label"):
+                svg.append(f'<text x="{cx:.3f}" y="{Y(cy / k):.3f}" fill="#8a6a08" '
+                           'font-family="Arial, sans-serif" font-weight="bold" '
+                           f'font-size="{p.get("label_size", 4)}" text-anchor="middle" '
+                           f'dominant-baseline="central">{p["label"]}</text>')
+        elif kind == "lcd_module":      # character LCD module lying on the
+            # Click: its PCB with corner holes, bezel, the LED backlight's
+            # end blocks and the glass ("window_mm", centred), a shadow
+            svg.append(f'<rect x="{x + 0.5:.3f}" y="{y + 0.7:.3f}" width="{pw}" '
+                       f'height="{ph}" rx="0.8" fill="#000" opacity=".45" '
+                       'filter="url(#blur)"/>')
+            svg.append(f'<rect x="{x:.3f}" y="{y:.3f}" width="{pw}" height="{ph}" '
+                       'rx="0.8" fill="#1f7a3a" stroke="#145a29" stroke-width="0.15"/>')
+            cyy = Y(cy / k)
+            hx, hy = p.get("holes_mm", [pw / 2 - 2.3, ph / 2 - 2.3])
+            for sx in (-1, 1):
+                for sy in (-1, 1):
+                    svg.append(f'<circle cx="{cx + sx * hx:.3f}" cy="{cyy + sy * hy:.3f}" '
+                               f'r="1.45" fill="{GOLD}"/>')
+                    svg.append(f'<circle cx="{cx + sx * hx:.3f}" cy="{cyy + sy * hy:.3f}" '
+                               'r="0.9" fill="#0d1510"/>')
+            bw, bh = p.get("ends_mm", [4.1, 8.7])
+            for sx in (-1, 1):
+                svg.append(f'<rect x="{cx + sx * hx - bw / 2:.3f}" y="{cyy - bh / 2:.3f}" '
+                           f'width="{bw}" height="{bh}" fill="#141518"/>')
+            zw, zh = p.get("bezel_mm", [pw * 0.82, ph * 0.96])
+            svg.append(f'<rect x="{cx - zw / 2:.3f}" y="{cyy - zh / 2:.3f}" width="{zw}" '
+                       f'height="{zh}" rx="0.4" fill="#18191c" stroke="#050506" '
+                       'stroke-width="0.12"/>')
+            ww, wh = p["window_mm"]
+            svg.append(f'<rect x="{cx - ww / 2:.3f}" y="{cyy - wh / 2:.3f}" width="{ww}" '
+                       f'height="{wh}" fill="{p.get("glass", "#1d3fb8")}" '
+                       'stroke="#0b0c0e" stroke-width="0.25"/>')
         elif kind == "crystal":         # small metal can
             svg.append(f'<rect x="{x:.3f}" y="{y:.3f}" width="{pw}" height="{ph}" '
                        f'rx="{min(pw, ph) / 2:.3f}" fill="#c9ccd0" stroke="#8d9299" '

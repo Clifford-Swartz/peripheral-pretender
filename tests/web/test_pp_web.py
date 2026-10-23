@@ -1690,13 +1690,26 @@ def test_session_oledw(qemu_path, qemu_machines):
         return [int.from_bytes(raw[i:i + 2], "little") for i in
                 range(0, len(raw), 2)]
 
+    w, h = 96, 39
+    lit = lambda f, x, y: f[y * w + x] != 0            # noqa: E731
+
+    def inside(f):
+        return sum(lit(f, x, y) for x in range(2, w - 2)
+                   for y in range(2, h - 2))
+
     async def scenario():
         nonlocal app
         app = server.App("ev15n46a", OLEDW_DEMO)
         await app.plug("ext1", "oledw")
         try:
             await asyncio.sleep(1.0)
-            first = await frame()
+            # A frame read while the demo sends its pages can show the
+            # ball's old rows beside its new ones: take one between frames
+            for _ in range(10):
+                first = await frame()
+                if inside(first) <= 25:
+                    break
+                await asyncio.sleep(0.03)
             await asyncio.sleep(0.3)
             second = await frame()
         finally:
@@ -1705,16 +1718,12 @@ def test_session_oledw(qemu_path, qemu_machines):
 
     app = None
     first, second = asyncio.run(scenario())
-    w, h = 96, 39
     assert len(first) == w * h
-    lit = lambda f, x, y: f[y * w + x] != 0            # noqa: E731
     for x in (0, 47, 95):
         assert lit(first, x, 0) and lit(first, x, h - 1), x
     for y in (0, 19, 38):
         assert lit(first, 0, y) and lit(first, w - 1, y), y
-    inside = sum(lit(first, x, y) for x in range(2, w - 2)
-                 for y in range(2, h - 2))
-    assert 0 < inside <= 25                            # the 5x5 ball
+    assert 0 < inside(first) <= 25                     # the 5x5 ball
     assert first != second                             # it moves
 
 
@@ -1755,6 +1764,186 @@ def test_session_oledb(qemu_path, qemu_machines):
     for x, y in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
         assert px[y * w + x], (x, y)
     assert len(lit) == 2 * w + 2 * (h - 2) + 25         # frame and ball
+
+
+def _click_demo(elf: Path, click: str, steps, watch=(), seconds=0.0):
+    """Run @elf with @click on EXT1 of the MC00, watching @watch (Click
+    properties); @steps: (delay, property, value) to set in turn, then
+    @seconds more. Returns (uart text, clickstate states, port B levels)."""
+    async def scenario():
+        uart, states, levels = [], [], []
+
+        def emit(msg):
+            if msg["type"] == "uart":
+                uart.append(msg["data"])
+            elif msg["type"] == "clickstate":
+                states.append(msg["state"])
+            elif msg["type"] == "levels":
+                levels.append(msg["levels"]["b"])
+
+        s = Session(f"pic32cm-mc00-cpro,ext1={click}", elf, emit,
+                    watch=[slot_watch("ext1", *p) for p in watch])
+        await s.start()
+        try:
+            for delay, prop, value in steps:
+                await asyncio.sleep(delay)
+                await s.set_click("ext1", prop, value)
+            await asyncio.sleep(seconds)
+        finally:
+            await s.stop()
+        return "".join(uart), states, levels
+
+    return asyncio.run(scenario())
+
+
+def _app_demo(elf: Path, click: str, steps, prop: str = ""):
+    """Run @elf with @click on EXT1 of the MC00 through the page's side of
+    the server (server.App), so the catalog's scales and button
+    properties are part of the test. @steps: (control or button id, value,
+    seconds to wait after); id None only waits. After each step, INT's
+    level (PB02) and the Click's @prop are sampled. Returns (uart text,
+    samples)."""
+    from tools.pp_web import server
+
+    async def scenario():
+        app = server.App("ev15n46a", elf)
+        await app.plug("ext1", click)
+        samples = []
+        try:
+            for cid, value, wait in steps:
+                if cid:
+                    await app.control("ext1", cid, value)
+                await asyncio.sleep(wait)
+                qmp = app.session.qmp
+                pb = await qmp.execute("qom-get", path="/machine/soc/port",
+                                       property="pb-levels")
+                v = prop and await qmp.execute(
+                    "qom-get", path="/machine/ext1-click", property=prop)
+                samples.append(((pb >> 2) & 1, v))
+        finally:
+            await app.session.stop()
+        return app.uart_log, samples
+
+    return asyncio.run(scenario())
+
+
+def _need_demo(qemu_machines, elf: Path):
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not elf.is_file():
+        pytest.skip(f"{elf.name} not built (make -C firmware/hello "
+                    f"BOARD=pic32cm_mc00_cpro APP={elf.stem})")
+
+
+@pytest.mark.qemu
+def test_session_adc_click(qemu_path, qemu_machines):
+    """adcclick.elf with an ADC Click on EXT1: the MCP3204's channels read
+    the voltages set on its inputs (VREF 3.3 V)."""
+    _need_demo(qemu_machines, BUILD / "adcclick.elf")
+    uart, _ = _app_demo(BUILD / "adcclick.elf", "adc",
+                        [(None, 0, 0.5), ("ch1", 1.65, 0), ("ch3", 3.3, 0.5)])
+    assert "CH0 0.000 V  CH1 0.000 V  CH2 0.000 V  CH3 0.000 V" in uart, uart
+    assert "CH0 0.000 V  CH1 1.650 V  CH2 0.000 V  CH3 3.299 V" in uart, uart
+
+
+@pytest.mark.qemu
+def test_session_dac_click(qemu_path, qemu_machines):
+    """dacclick.elf with a DAC Click on EXT1: the MCP4921's readout follows
+    the codes written."""
+    from tools.pp_web.server import watched
+    _need_demo(qemu_machines, BUILD / "dacclick.elf")
+    assert watched(CLICKS["dac"]) == [("readout",)]
+    uart, states, _ = _click_demo(BUILD / "dacclick.elf", "dac", [],
+                                  watched(CLICKS["dac"]), 2.6)
+    assert "code 2048 VOUT 1.650 V" in uart, uart
+    shown = {s["ext1.readout"] for s in states}
+    assert {"VOUT 0.000 V", "VOUT 0.825 V", "VOUT 1.650 V"} <= shown, shown
+
+
+@pytest.mark.qemu
+def test_session_ledringr(qemu_path, qemu_machines):
+    """ledringr.elf with a LED Ring R Click on EXT1: a three-LED comet goes
+    round; through the catalog's bit map every frame lights three LEDs
+    next to each other and a turn lights all 32."""
+    from tools.pp_web.server import watched
+    _need_demo(qemu_machines, BUILD / "ledringr.elf")
+    uart, states, _ = _click_demo(BUILD / "ledringr.elf", "ledringr", [],
+                                  watched(CLICKS["ledringr"]), 2.0)
+    leds = CLICKS["ledringr"]["display"]["leds"]
+    seen = set()
+    for s in states:
+        v = s["ext1.outputs"]
+        lit = sorted(int(led["id"][3:]) for led in leds if v >> led["bit"] & 1)
+        if not lit:
+            continue                    # before the first frame
+        assert len(lit) == 3, lit
+        assert {(n % 32) + 1 for n in lit} & set(lit), lit  # neighbours
+        seen |= set(lit)
+    assert "turn 1" in uart, uart
+    assert seen == set(range(1, 33)), sorted(seen)
+
+
+@pytest.mark.qemu
+def test_session_expand2(qemu_path, qemu_machines):
+    """expand2.elf with an Expand 2 Click on EXT1: holding PB2 low raises
+    the MCP23017's INTA (mirrored), the demo reads port B and lights PA2."""
+    _need_demo(qemu_machines, BUILD / "expand2.elf")
+    uart, samples = _app_demo(
+        BUILD / "expand2.elf", "expand2",
+        [(None, 0, 0.5), ("PB2", 1, 0.4), ("PB2", 0, 0.4)], "levels")
+    assert "low: none\r\nlow: PB2\r\nlow: none" in uart, uart
+    levels = [v for _, v in samples]
+    assert levels[1] == 0x7B04, hex(levels[1])     # PB2 held, PA2 lit
+    assert levels[2] == 0x7F00, hex(levels[2])     # PB0-PB6 pulled up
+
+
+@pytest.mark.qemu
+def test_session_lcdmini(qemu_path, qemu_machines):
+    """lcdmini.elf with an LCD mini Click on EXT1: the two lines written
+    through the MCP23S17 in 4-bit mode, the seconds counting."""
+    import re
+    from tools.pp_web.server import watched
+    _need_demo(qemu_machines, BUILD / "lcdmini.elf")
+    assert watched(CLICKS["lcdmini"]) == [("frame", "frame-gen")]
+    uart, states, _ = _click_demo(BUILD / "lcdmini.elf", "lcdmini", [],
+                                  [("text",), ("backlight-on",)], 2.5)
+    assert "LCD: Peripheral / Pretender" in uart, uart
+    text = states[-1]["ext1.text"].split("\n")
+    assert text[0] == "   Peripheral   ", text
+    assert re.fullmatch(r"Pretender  00:0[1-3]", text[1]), text
+    assert states[-1]["ext1.backlight-on"] is True
+
+
+@pytest.mark.qemu
+def test_session_ambient2(qemu_path, qemu_machines):
+    """ambient2.elf with an Ambient 2 Click on EXT1: the OPT3001 reads the
+    illuminance set; INT (open drain, pull-up) falls above 1000 lx and
+    rises again below 800 lx."""
+    import re
+    _need_demo(qemu_machines, BUILD / "ambient2.elf")
+    uart, samples = _app_demo(
+        BUILD / "ambient2.elf", "ambient2",
+        [(None, 0, 0.6), ("lux", 1234.5, 0.6), ("lux", 500, 0.6)])
+    assert "manufacturer 0x5449 device 0x3001" in uart, uart
+    assert "lux 300.00\r\nINT high" in uart, uart     # the catalog's default
+    assert re.search(r"lux 123[34]\.\d\d\r\nINT low: above 1000 lx", uart), uart
+    assert re.search(r"lux (499\.\d\d|500\.00)\r\nINT high", uart), uart
+    assert [i for i, _ in samples] == [1, 0, 1], samples
+
+
+@pytest.mark.qemu
+def test_session_thermok(qemu_path, qemu_machines):
+    """thermok.elf with a Thermo K Click on EXT1: the MCP9600 converts the
+    hot junction set; ALERT1, on INT, goes low above 100 C."""
+    _need_demo(qemu_machines, BUILD / "thermok.elf")
+    uart, samples = _app_demo(
+        BUILD / "thermok.elf", "thermok",
+        [(None, 0, 0.6), ("temperature", 150, 1.0), ("temperature", 25, 1.0)])
+    assert "device 0x40 revision 0x10" in uart, uart
+    assert "hot 150.00 C cold 25.00 C\r\nALERT1: above 100 C" in uart, uart
+    assert "hot 25.00 C cold 25.00 C\r\nALERT1 off" in uart.split(
+        "ALERT1: above")[1], uart
+    assert [i for i, _ in samples] == [1, 0, 1], samples
 
 
 ANGLE_ELF = (ROOT / "examples" / "mplab" / "rotary_oled_angle" / "firmware" /

@@ -752,3 +752,37 @@ interrupts pending across SEI) and 0078 (AVR: recorder, faults).
   - bus timing in the serial models;
   - DGI, analog and board-to-board in deterministic runs;
   - CI scenarios on the scheduler.
+
+## Seven more Clicks (2026-10-23)
+
+pp-qemu patches 0079-0085, each with a qtest on the MC00's EXT1 and the AVR64EA48 Nano Base, a
+demo in `firmware/hello/tests/` and a web session test.
+
+| Click | Device | Demo |
+|---|---|---|
+| ADC | MCP3204 (existing model), `in0`..`in3` | `adcclick` |
+| LED Ring R | four 74HC595 (existing model) | `ledringr` |
+| DAC | MCP4921 (`mchp-mcp4921`, new) | `dacclick` |
+| Expand 2 | MCP23017 (`mchp-mcp23017`, new shared MCP23x17 core) | `expand2` |
+| LCD mini | MCP23S17 + MCP4161 + ST7066U 16x2 LCD (`click-lcdmini`, new) | `lcdmini` |
+| Ambient 2 | OPT3001 (`opt3001`, new) | `ambient2` |
+| Thermo K | MCP9600 (`mchp-mcp9600`, new) | `thermok` |
+
+- **Caught against the schematics and data sheets** while making the art and demos:
+  - Thermo K: ALERT1 is on INT and ALERT2 on PWM (the first catalog entry had them swapped).
+  - LCD mini: INT comes from INTB, not INTA.
+  - MCP23017 (data sheet revision D, 3.5.1): GPA7 and GPB7 are outputs only. The model logs a
+    guest error when IODIR sets IO7, and the Expand 2 demo uses PB0-PB6.
+- **Art:**
+  - `render_click.py` takes a concave `-` outline (Thermo K's socket tab), `extend_mm` (art past
+    the board) and new kinds `tc_socket` and `lcd_module`.
+  - The LCD mini's module (53 x 20 mm) hangs on a ribbon. It is drawn lying over the Click,
+    turned so its text reads upright on both boards (they hold Clicks turned 90 degrees), and
+    within the 60.6 mm a slot allows.
+  - Expand 2's header sits 2.26 mm off the usual place (`header_origin_mm`).
+- **Page:**
+  - `panel` displays take `rotate_deg`;
+  - text readouts (DAC, RTC 6) stay upright on a turned Click;
+  - Expand 2 has a lit pad and a hold-to-ground button on each header pin.
+- **Open:** none of these was checked against a physical Click. The LCD module's bezel and glass
+  were measured from MikroElektronika's product photo.

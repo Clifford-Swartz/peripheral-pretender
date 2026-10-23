@@ -41,6 +41,13 @@ adapter (ATMBUSADAPTER-XPRO). One of each kind of Click the page can show:
      `clicks/<name>/lib_<name>/`) shows the conventions the datasheet leaves to the board: which
      ADC channel is which joystick axis, the OLED C's 96x96 window in the SSD1351's 128x128
      RAM, the default I2C address (which may disagree with the current schematic: say so).
+     Its `<NAME>_MAP_MIKROBUS` macro (in `lib_<name>/include/<name>.h`) names the chip pin on
+     each mikroBUS signal: check the catalog's `outs` and `ins` against it and the schematic
+     both (Thermo K's ALERT1 is on INT and ALERT2 on PWM; the LCD mini's INT is the MCP23S17's
+     INTB; reading the schematic alone got both wrong).
+   - Read the datasheet's revision history: rules change between revisions (the MCP23017's GPA7
+     and GPB7 became outputs only in revision D). Model the current revision and log a guest
+     error for what it forbids.
 2. **Part model.** If the chip on the Click has no QEMU model, write one in pp-qemu
    (`hw/sensor/mchp_mcp9808.c` is the pattern): an I2C or SSI target with the registers from its
    datasheet, the physical quantity as a QOM property settable at run time (in integer units,
@@ -107,14 +114,28 @@ adapter (ATMBUSADAPTER-XPRO). One of each kind of Click the page can show:
      `{"parts": []}`, read the silkscreen labels, and get pad positions from
      `py tools/pp_web/clicks/dxf_pads.py <dxf>` (a body sits over its pad pair). Kinds: ic,
      resistor, capacitor, led, zero_ohm, button, relay, terminal, digit, buzzer, oled (a display
-     module with `active_mm`/`active_at_mm`), joystick, battery, crystal, silk_label.
+     module with `active_mm`/`active_at_mm`), joystick, battery, crystal, silk_label, module,
+     potentiometer, encoder, tc_socket (a thermocouple socket), lcd_module (a character LCD
+     module: `window_mm`, `bezel_mm`, `holes_mm`, `ends_mm`); `rotate_deg` turns any part.
+   - Where the DXF puts the mikroBUS header: the round pads at x 0 and 22.86 should run y 0 to
+     17.78. If not (Expand 2's run 2.26 to 20.04), give `header_origin_mm` in parts.json, or the
+     tinned joints land beside the pads, and `header_center_mm` in clicks.json.
    - Parts not in the DXF: display modules (the OLED C's panel: draw it from the panel's
      specification), parts on the bottom side (the Thumbstick's ADC). Jumpers: draw only the
      fitted position.
    - Check the DXF really is the Click's: the 7seg Click's page links the 7SEG RGB Click's files,
      the 8x8 B Click's page the 8x8 R Click's. For a colour variant of the same board, render the
      sibling's DXF and cover its letter with a `silk_label` part. Without a usable DXF, pass `-`
-     and give `outline_mm`, `header` and `texts` in parts.json.
+     and give `outline_mm`, `header` and `texts` in parts.json. A `-` outline is used as given,
+     so it may be concave (Thermo K's socket tab).
+   - From a STEP file: part centres are the assembly transforms (each part sits under a wrapper
+     product named after its reference designator; an IC's origin may be its pin 1, as the LCD
+     mini's U1 is). The outline is the Board solid's corner vertices: take VERTEX_POINTs, since
+     its CARTESIAN_POINTs include surface placements off the solid. A body's footprint likewise
+     comes from its vertices, through the part's full placement (axis and reference direction).
+   - A part off the Click (the LCD mini's display on its ribbon): draw it on the Click, turned
+     so it reads upright on the boards (both hold Clicks turned 90 degrees), and give
+     `extend_mm` for art past the board. The longest Click a slot holds is about 60.6 mm.
    - Write the source (zip and DXF names, versions, what was estimated) into parts.json.
 6. **Catalog.** `tools/pp_web/clicks.json`: image, origin and size (as printed), and what the
    page draws on the Click, positions in the Click's mm (y up; `at_mm` is a centre):
@@ -126,8 +147,9 @@ adapter (ATMBUSADAPTER-XPRO). One of each kind of Click the page can show:
      bits, each digit has a `shift`, `enable_pin` dims it), an LED matrix (`"type": "matrix"`:
      `rows_mm`, `cols_mm`, `row_bits`, `col_digits` over a "d0 ... d7" hex property), a display
      panel (`"type": "panel"`: `property` "frame", `gen_property` "frame-gen", `width`,
-     `height`, `at_mm`, `size_mm` of the active area) or a text readout (`"type": "text"`: a
-     string property, `color`),
+     `height`, `at_mm`, `size_mm` of the active area, `rotate_deg` to turn it with a turned
+     module) or a text readout (`"type": "text"`: a string property, `color`; the page keeps it
+     upright on a turned Click),
    - `sound`: a buzzer (`property` frequency in Hz, `duty_property` per mille, `at_mm`,
      `size_mm`); the page plays it with Web Audio after the first click on the page,
    - `sticks`: a knob to drag (`id`, `label`, `at_mm`, `size_mm`, `range`): `"mode": "stick"`
@@ -139,7 +161,9 @@ adapter (ATMBUSADAPTER-XPRO). One of each kind of Click the page can show:
    A long Click may not fit a board's stage: `test_board_description*` checks every Click on
    every header; widen that board's `view_mm`.
 7. **Demo and tests.** A firmware demo (`firmware/hello/tests/<name>.c` for the MC00; the I2C
-   ones share `tests/ext1_i2c.h`) and a web session test. Prefer driving the Click through the
+   ones share `tests/ext1_i2c.h`, the SPI ones `tests/ext1_spi.h`; a name must not clash with an
+   on-chip test: `adc.c` and `dac.c` exist, so `adcclick.c`, `dacclick.c`) and a web session
+   test. Prefer driving the Click through the
    server (`server.App(board, elf)`, `await app.plug(slot, id)`, then `app.control` /
    `app.stick` and `app.uart_log`), which also tests what the page sends; `Session.set_click`
    tests the model alone. Build the demo, add it to the list of apps you build before the gate

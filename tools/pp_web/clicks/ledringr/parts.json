@@ -1,0 +1,1005 @@
+{
+ "source": "MikroElektronika LED Ring R Click v100: 2D and 3D files (LED_Ring_R_Click_2d_3d_files.zip: LED_Ring_R_click_v100.dxf, LED_Ring_R_click_v100.step), schematic v100. Part centres and rotations from the STEP's component placements (LD1 at three o'clock, counter-clockwise; R1-R32 inside them), body sizes from the packages (0603 LEDs and resistors, SOIC-16, 0805). The 3.3V/5V jumper drawn on 3.3V.",
+ "parts": [
+  {
+   "ref": "LD1",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    22.47,
+    40.64
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 0.0
+  },
+  {
+   "ref": "LD2",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    22.25,
+    42.79
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 11.25
+  },
+  {
+   "ref": "LD3",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    21.63,
+    44.86
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 22.5
+  },
+  {
+   "ref": "LD4",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    20.61,
+    46.77
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 33.75
+  },
+  {
+   "ref": "LD5",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    19.23,
+    48.44
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 45.0
+  },
+  {
+   "ref": "LD6",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    17.56,
+    49.82
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 56.25
+  },
+  {
+   "ref": "LD7",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    15.65,
+    50.84
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 67.5
+  },
+  {
+   "ref": "LD8",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    13.58,
+    51.46
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 78.75
+  },
+  {
+   "ref": "LD9",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    11.43,
+    51.68
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 90.0
+  },
+  {
+   "ref": "LD10",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    9.28,
+    51.46
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 101.25
+  },
+  {
+   "ref": "LD11",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    7.21,
+    50.84
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 112.5
+  },
+  {
+   "ref": "LD12",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    5.3,
+    49.82
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 123.75
+  },
+  {
+   "ref": "LD13",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    3.63,
+    48.44
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 135.0
+  },
+  {
+   "ref": "LD14",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    2.25,
+    46.77
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 146.25
+  },
+  {
+   "ref": "LD15",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    1.23,
+    44.86
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 157.5
+  },
+  {
+   "ref": "LD16",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    0.61,
+    42.79
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 168.75
+  },
+  {
+   "ref": "LD17",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    0.39,
+    40.64
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 180.0
+  },
+  {
+   "ref": "LD18",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    0.61,
+    38.49
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 191.25
+  },
+  {
+   "ref": "LD19",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    1.23,
+    36.42
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 202.5
+  },
+  {
+   "ref": "LD20",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    2.25,
+    34.51
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 213.75
+  },
+  {
+   "ref": "LD21",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    3.63,
+    32.84
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 225.0
+  },
+  {
+   "ref": "LD22",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    5.3,
+    31.46
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 236.25
+  },
+  {
+   "ref": "LD23",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    7.21,
+    30.44
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 247.5
+  },
+  {
+   "ref": "LD24",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    9.28,
+    29.82
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 258.75
+  },
+  {
+   "ref": "LD25",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    11.43,
+    29.6
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 270.0
+  },
+  {
+   "ref": "LD26",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    13.58,
+    29.82
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 281.25
+  },
+  {
+   "ref": "LD27",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    15.65,
+    30.44
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 292.5
+  },
+  {
+   "ref": "LD28",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    17.56,
+    31.46
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 303.75
+  },
+  {
+   "ref": "LD29",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    19.23,
+    32.84
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 315.0
+  },
+  {
+   "ref": "LD30",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    20.61,
+    34.51
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 326.25
+  },
+  {
+   "ref": "LD31",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    21.63,
+    36.42
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 337.5
+  },
+  {
+   "ref": "LD32",
+   "kind": "led",
+   "color": "#ff5040",
+   "at_mm": [
+    22.25,
+    38.49
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 348.75
+  },
+  {
+   "ref": "R1",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    19.49,
+    40.64
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 0.0
+  },
+  {
+   "ref": "R2",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    19.34,
+    42.21
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 11.25
+  },
+  {
+   "ref": "R3",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    18.88,
+    43.73
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 22.5
+  },
+  {
+   "ref": "R4",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    18.14,
+    45.12
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 33.75
+  },
+  {
+   "ref": "R5",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    17.13,
+    46.34
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 45.0
+  },
+  {
+   "ref": "R6",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    15.91,
+    47.35
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 56.25
+  },
+  {
+   "ref": "R7",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    14.52,
+    48.09
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 67.5
+  },
+  {
+   "ref": "R8",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    13.0,
+    48.55
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 78.75
+  },
+  {
+   "ref": "R9",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    11.43,
+    48.7
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 90.0
+  },
+  {
+   "ref": "R10",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    9.86,
+    48.55
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 101.25
+  },
+  {
+   "ref": "R11",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    8.34,
+    48.09
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 112.5
+  },
+  {
+   "ref": "R12",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    6.95,
+    47.35
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 123.75
+  },
+  {
+   "ref": "R13",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    5.73,
+    46.34
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 135.0
+  },
+  {
+   "ref": "R14",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    4.72,
+    45.12
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 146.25
+  },
+  {
+   "ref": "R15",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    3.98,
+    43.73
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 157.5
+  },
+  {
+   "ref": "R16",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    3.52,
+    42.21
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 168.75
+  },
+  {
+   "ref": "R17",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    3.37,
+    40.64
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 180.0
+  },
+  {
+   "ref": "R18",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    3.52,
+    39.07
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 191.25
+  },
+  {
+   "ref": "R19",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    3.98,
+    37.55
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 202.5
+  },
+  {
+   "ref": "R20",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    4.72,
+    36.16
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 213.75
+  },
+  {
+   "ref": "R21",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    5.73,
+    34.94
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 225.0
+  },
+  {
+   "ref": "R22",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    6.95,
+    33.93
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 236.25
+  },
+  {
+   "ref": "R23",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    8.34,
+    33.19
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 247.5
+  },
+  {
+   "ref": "R24",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    9.86,
+    32.73
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 258.75
+  },
+  {
+   "ref": "R25",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    11.43,
+    32.58
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 270.0
+  },
+  {
+   "ref": "R26",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    13.0,
+    32.73
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 281.25
+  },
+  {
+   "ref": "R27",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    14.52,
+    33.19
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 292.5
+  },
+  {
+   "ref": "R28",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    15.91,
+    33.93
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 303.75
+  },
+  {
+   "ref": "R29",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    17.13,
+    34.94
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 315.0
+  },
+  {
+   "ref": "R30",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    18.14,
+    36.16
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 326.25
+  },
+  {
+   "ref": "R31",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    18.88,
+    37.55
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 337.5
+  },
+  {
+   "ref": "R32",
+   "kind": "resistor",
+   "value": "3k9",
+   "at_mm": [
+    19.34,
+    39.07
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ],
+   "rotate_deg": 348.75
+  },
+  {
+   "ref": "U1",
+   "kind": "ic",
+   "value": "74HC595 (SOIC-16)",
+   "at_mm": [
+    16.0,
+    9.14
+   ],
+   "size_mm": [
+    3.9,
+    9.9
+   ]
+  },
+  {
+   "ref": "U2",
+   "kind": "ic",
+   "value": "74HC595 (SOIC-16)",
+   "at_mm": [
+    6.86,
+    9.14
+   ],
+   "size_mm": [
+    3.9,
+    9.9
+   ]
+  },
+  {
+   "ref": "U3",
+   "kind": "ic",
+   "value": "74HC595 (SOIC-16)",
+   "at_mm": [
+    6.86,
+    20.96
+   ],
+   "size_mm": [
+    3.9,
+    9.9
+   ]
+  },
+  {
+   "ref": "U4",
+   "kind": "ic",
+   "value": "74HC595 (SOIC-16)",
+   "at_mm": [
+    16.0,
+    20.96
+   ],
+   "size_mm": [
+    3.9,
+    9.9
+   ]
+  },
+  {
+   "ref": "C1",
+   "kind": "capacitor",
+   "value": "10uF",
+   "at_mm": [
+    11.56,
+    1.27
+   ],
+   "size_mm": [
+    1.25,
+    2.0
+   ]
+  },
+  {
+   "ref": "RDP",
+   "kind": "resistor",
+   "value": "2k2",
+   "at_mm": [
+    13.97,
+    1.27
+   ],
+   "size_mm": [
+    1.25,
+    2.0
+   ]
+  },
+  {
+   "ref": "LDP",
+   "kind": "led",
+   "color": "#5dff7a",
+   "at_mm": [
+    17.65,
+    0.51
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "J1A",
+   "kind": "zero_ohm",
+   "value": "3.3V",
+   "at_mm": [
+    5.34,
+    0.49
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  }
+ ]
+}

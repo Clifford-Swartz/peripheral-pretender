@@ -1,0 +1,145 @@
+From ff8b658f1bd99c8789aaf98495238f79f0e04645 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 22 Oct 2026 23:12:51 -0700
+Subject: [PATCH 79/85] hw/misc: ADC Click (MCP3204) on mikroBUS
+
+ADC Click v100: the MCP3204 model with its four inputs on the Click's
+terminals (through MCP6284 buffers), VREF 3.3 V (J1 on VCC, J2 on
+3V3), CS# pulled up by R7 (100 kOhm). "in0".."in3" set the inputs.
+
+qtests: the four channels and a differential read on the MC00's EXT1,
+CH2 through SPI0 on the AVR64EA48 Nano Base's socket 1.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  7 +++++++
+ hw/misc/mikrobus.c                    |  5 +++++
+ tests/qtest/avr64ea48-cnano-test.c    | 24 +++++++++++++++++++++++
+ tests/qtest/pic32cm-click-test.c      | 28 +++++++++++++++++++++++++++
+ 4 files changed, 64 insertions(+)
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index a32e655..fac118f 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -129,6 +129,13 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   ``x`` and ``y`` (-1000 to 1000, right and up) and ``pressed``; ``in0``
+   to ``in3`` (mV) set the ADC inputs directly.
+ 
++``adc``
++  ADC Click (v100): an MCP3204 12-bit SPI ADC (``mchp-mcp3204``) with its
++  four inputs on the Click's terminals through MCP6284 buffers, VREF 3.3 V
++  (J1 on VCC, J2 on 3V3; the MCP1541's 4.096 V is ``vref=4096``); CS
++  100 kOhm pull-up (R7). QOM properties ``in0`` to ``in3`` (mV) set the
++  inputs.
++
+ ``accel``
+   Accel Click (v101): an ADXL345 accelerometer (``adxl345``) at I2C
+   address 0x53 (its ADDR SEL jumper on 0; v100 boards and
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index 18c2c10..e007e6f 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -271,6 +271,11 @@ static const ClickInfo mikrobus_clicks[] = {
+                  { true, MIKROBUS_CS, 0 },                /* R19 4.7k */
+                  { true, MIKROBUS_AN_PIN, 0 },            /* R24 10k */
+                  { true, MIKROBUS_PWM, 0 } } },          /* R25 10k */
++    { "adc", "ADC Click: MCP3204 4-channel 12-bit SPI ADC, CH0-CH3 on its "
++      "terminals through op-amp buffers, VREF 3.3 V",
++      TYPE_MCHP_MCP3204, CLICK_SPI, 0, 0,
++      .ins = { { SSI_GPIO_CS, MIKROBUS_CS } },
++      .pulls = { { true, MIKROBUS_CS, 1 } } },            /* R7 100k */
+ };
+ 
+ const char *mikrobus_click_names(void)
+diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
+index 40149d9..a274dca 100644
+--- a/tests/qtest/avr64ea48-cnano-test.c
++++ b/tests/qtest/avr64ea48-cnano-test.c
+@@ -487,6 +487,29 @@ static void test_twi_rtc6(const void *fw)
+     qtest_quit(qts);
+ }
+ 
++/* ADC Click (MCP3204) on mikroBUS 1: CS on PA7 */
++static void test_adc_mb1(const void *fw)
++{
++    QTestState *qts = qtest_initf("-M avr64ea48-cnano,mb1=adc -kernel %s",
++                                  (const char *)fw);
++    unsigned hi, lo;
++
++    g_assert_cmphex(qtest_readb(qts, PORTA + P_IN) & BIT(7), ==, BIT(7));
++    qtest_qmp_assert_success(qts, "{ 'execute': 'qom-set', 'arguments': {"
++                             " 'path': '/machine/mb1-click',"
++                             " 'property': 'in2', 'value': 2475 } }");
++    qtest_writeb(qts, PORTA + 0x05, BIT(7));                    /* OUTSET */
++    qtest_writeb(qts, PORTA + 0x01, BIT(4) | BIT(6) | BIT(7));  /* DIRSET */
++    qtest_writeb(qts, SPI0 + 0, 0x21);                  /* MASTER, ENABLE */
++    qtest_writeb(qts, PORTA + 0x06, BIT(7));                    /* OUTCLR */
++    g_assert_cmphex(spi0_xfer(qts, 0x06), ==, 0);       /* start, single */
++    hi = spi0_xfer(qts, 0x80);                          /* CH2 */
++    lo = spi0_xfer(qts, 0x00);
++    qtest_writeb(qts, PORTA + 0x05, BIT(7));
++    g_assert_cmpuint((hi & 0x0f) << 8 | lo, ==, 3072);  /* 3/4 of VREF */
++    qtest_quit(qts);
++}
++
+ static void qom_set_str(QTestState *qts, const char *path, const char *prop,
+                         const char *value)
+ {
+@@ -574,6 +597,7 @@ int main(int argc, char **argv)
+     qtest_add_data_func("avr64ea48-cnano/twi-rtc6", fw, test_twi_rtc6);
+     qtest_add_data_func("avr64ea48-cnano/an", fw, test_an);
+     qtest_add_data_func("avr64ea48-cnano/faults", fw, test_faults);
++    qtest_add_data_func("avr64ea48-cnano/adc", fw, test_adc_mb1);
+     ret = g_test_run();
+     unlink(fw);
+     return ret;
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index e76c4bc..8217b5e 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -699,6 +699,33 @@ static void test_faults(void)
+     qtest_quit(qts);
+ }
+ 
++/* ADC Click on EXT1: MCP3204 on SPI (CS# PA17), inputs on terminals */
++static void test_adc(void)
++{
++    QTestState *qts = qtest_init("-M pic32cm-mc00-cpro,ext1=adc ");
++    static const unsigned mv[4] = { 1650, 3300, 825, 0 };
++    static const unsigned code[4] = { 2048, 4095, 1024, 0 };
++
++    g_assert_true(pin_high(qts, PA, 17));               /* R7 pull-up */
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16);
++    qtest_writel(qts, SERCOM1 + 0x04, BIT(17));         /* RXEN */
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16 | 0x02);
++    qtest_writel(qts, PA + P_OUTSET, BIT(17));
++    qtest_writel(qts, PA + P_DIRSET, BIT(17));
++    for (unsigned ch = 0; ch < 4; ch++) {
++        g_autofree char *name = g_strdup_printf("in%u", ch);
++
++        qom_set_int(qts, CLICK1, name, mv[ch]);
++    }
++    for (unsigned ch = 0; ch < 4; ch++) {
++        g_assert_cmpuint(mcp3204_read(qts, 0x06 | ch >> 2, (ch & 3) << 6),
++                         ==, code[ch]);
++    }
++    /* CH0 - CH1 differential: below zero reads 0 */
++    g_assert_cmpuint(mcp3204_read(qts, 0x04, 0x00), ==, 0);
++    qtest_quit(qts);
++}
++
+ /* I2C on SERCOM2 (as mcp_write/mcp_read) to any address */
+ static bool i2c_wr(QTestState *qts, uint8_t addr, uint8_t reg,
+                    const uint8_t *d, unsigned n)
+@@ -1449,6 +1476,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/two-spi", test_two_spi);
+     qtest_add_func("pic32cm-click/oledc", test_oledc);
+     qtest_add_func("pic32cm-click/thumbstick", test_thumbstick);
++    qtest_add_func("pic32cm-click/adc", test_adc);
+     qtest_add_func("pic32cm-click/accel", test_accel);
+     qtest_add_func("pic32cm-click/rtc6-time", test_rtc6_time);
+     qtest_add_func("pic32cm-click/rtc6-alarm", test_rtc6_alarm);
+-- 
+2.53.0.windows.2
+

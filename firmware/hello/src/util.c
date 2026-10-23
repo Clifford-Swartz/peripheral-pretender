@@ -67,6 +67,25 @@ void put_checked(const char *name, uint32_t value, uint32_t expected,
     }
 }
 
+void put_fixed(int32_t v, unsigned int frac)
+{
+    uint32_t scale = 1, u = v < 0 ? -(uint32_t)v : (uint32_t)v;
+
+    for (unsigned int i = 0; i < frac; i++) {
+        scale *= 10U;
+    }
+    if (v < 0) {
+        console_putc('-');
+    }
+    console_put_dec(u / scale);
+    if (frac) {
+        console_putc('.');
+        for (uint32_t d = scale / 10U; d > 0U; d /= 10U) {
+            console_putc((char)('0' + u % scale / d % 10U));
+        }
+    }
+}
+
 void test_exit(void)
 {
     console_puts("PP:EXIT ");

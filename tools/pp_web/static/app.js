@@ -495,7 +495,9 @@ function drawClick(frame, stack, h, id, def) {
     }
   }
   // A display panel (OLED C's SSD1351, later TFTs): the controller's
-  // "frame" (base64 RGB565, rows top to bottom) on a canvas over the glass
+  // "frame" (base64 RGB565, rows top to bottom) on a canvas over the glass;
+  // "rotate_deg" turns it counter-clockwise on the Click about its centre
+  // (the LCD mini's display, lying turned on the Click)
   if (def.display && def.display.type === "panel") {
     const d = def.display, cv = document.createElement("canvas");
     cv.className = "click-panel";
@@ -504,6 +506,7 @@ function drawClick(frame, stack, h, id, def) {
     cv.dataset.prop = `${h.slot}.${d.property}`;
     put(cv, [d.at_mm[0] - d.size_mm[0] / 2, d.at_mm[1] + d.size_mm[1] / 2],
         d.size_mm[0], d.size_mm[1]);
+    if (d.rotate_deg) cv.style.transform = `rotate(${-d.rotate_deg}deg)`;
   }
   // A colour sensor: the light it sees, from its controls, over the sensor
   if (def.display && def.display.type === "swatch") {
@@ -565,7 +568,8 @@ function drawClick(frame, stack, h, id, def) {
                                                        st.at_mm[1] + st.size_mm / 2],
         st.size_mm, st.size_mm);
   }
-  // A text readout (RTC 6's time): a polled string property
+  // A text readout (RTC 6's time): a polled string property. It is the
+  // twin's, not printed on the Click, so it stays upright on a turned Click
   if (def.display && def.display.type === "text") {
     const d = def.display, el = document.createElement("div");
     el.className = "click-text";
@@ -575,6 +579,7 @@ function drawClick(frame, stack, h, id, def) {
       `text-anchor="middle" textLength="${d.size_mm[0] * 0.92}" lengthAdjust="spacingAndGlyphs"></text></svg>`;
     put(el, [d.at_mm[0] - d.size_mm[0] / 2, d.at_mm[1] + d.size_mm[1] / 2],
         d.size_mm[0], d.size_mm[1]);
+    if (rot) el.style.transform = `rotate(${-rot}deg)`;
   }
   // A buzzer: its tone follows the Click's frequency property
   if (def.sound) {

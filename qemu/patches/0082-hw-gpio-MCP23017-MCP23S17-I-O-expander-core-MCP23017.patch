@@ -1,0 +1,780 @@
+From a0a73c630c8d94929392f53ce24018185b353007 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 22 Oct 2026 23:21:22 -0700
+Subject: [PATCH 82/85] hw/gpio: MCP23017/MCP23S17 I/O expander core, MCP23017,
+ Expand 2 Click
+
+Mcp23x17 holds what the two parts share (DS20001952D section 3): both
+register layouts (IOCON.BANK), byte and sequential addressing with the
+A/B toggle, pads from OLAT, external drivers and the 100 kOhm pull-ups,
+IPOL, interrupt on change against the previous value or DEFVAL with
+INTF and INTCAP (cleared by reading GPIO or INTCAP), INTA/INTB with
+MIRROR, ODR and INTPOL, RESET#. The bus side calls mcp23x17_read() and
+mcp23x17_write(); a callback reports the pads.
+
+"mchp-mcp23017" puts it on I2C; GPA7 and GPB7 are outputs only on
+the MCP23017 (revision D, 3.5.1), so IODIR written with IO7 set logs
+a guest error (they still work as inputs). QOM: "levels", "drive" and "pa0".."pb7"
+(a pad held to ground, for the Expand 2 Click's headers on the page).
+
+Expand 2 Click v100: 0x20 (A2..A0 on ground), INTA on INT (J2), RESET#
+on RST without a pull resistor.
+
+qtests: registers, pull-ups, IPOL, outputs, both interrupt modes, BANK
+1 and RESET# on the MC00's EXT1; a pad read through TWI0 on the
+AVR64EA48 Nano Base.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  13 +
+ hw/gpio/mchp_mcp23x17.c               | 450 ++++++++++++++++++++++++++
+ hw/gpio/meson.build                   |   1 +
+ hw/misc/mikrobus.c                    |   6 +
+ include/hw/gpio/mchp_mcp23x17.h       |  79 +++++
+ tests/qtest/avr64ea48-cnano-test.c    |  22 ++
+ tests/qtest/pic32cm-click-test.c      |  79 +++++
+ 7 files changed, 650 insertions(+)
+ create mode 100644 hw/gpio/mchp_mcp23x17.c
+ create mode 100644 include/hw/gpio/mchp_mcp23x17.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 239f1cd..2355445 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -195,6 +195,19 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   fewer clocks abort the write. Read-only QOM properties ``vout`` (mV),
+   ``code`` and ``readout``.
+ 
++``expand2``
++  Expand 2 Click (v100): an MCP23017 16-bit I/O expander
++  (``mchp-mcp23017``) at I2C 0x20 (A2..A0 jumpers on GND), INTA on INT
++  (J2), RESET# on RST (no pull resistor: undriven, it reads high), ports A
++  and B on the Click's headers. Both register layouts (IOCON.BANK), byte
++  and sequential addressing, IPOL, the pull-ups, interrupt on change
++  against the previous value or DEFVAL with INTF/INTCAP, MIRROR, ODR and
++  INTPOL. GPA7 and GPB7 are outputs only on the MCP23017 (data sheet
++  revision D); they work as inputs here, and writing IODIR with IO7 set
++  logs a guest error. QOM properties ``levels`` (the pads, GPA in bits
++  7:0), ``drive`` (external drivers, "<mask> <level>" in hex) and ``pa0``
++  .. ``pb7`` (hold that pad to ground).
++
+ ``ledringr``
+   LED Ring R Click (v100): 32 red LEDs on four chained 74HC595
+   (``74hc595``, length 4; LATCH on CS, MR# on RST, no pull resistors on
+diff --git a/hw/gpio/mchp_mcp23x17.c b/hw/gpio/mchp_mcp23x17.c
+new file mode 100644
+index 0000000..41de6a4
+--- /dev/null
++++ b/hw/gpio/mchp_mcp23x17.c
+@@ -0,0 +1,450 @@
++/*
++ * Microchip MCP23017/MCP23S17 16-bit I/O expanders, and the Expand 2 Click
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * MCP23017/MCP23S17 data sheet (DS20001952D), section 3:
++ *  - Registers in two layouts: IOCON.BANK = 0 pairs each port A register
++ *    with its port B twin (00h IODIRA, 01h IODIRB ... 15h OLATB), BANK = 1
++ *    puts port A at 00h-0Ah and port B at 10h-1Ah. IOCON appears at both
++ *    of its addresses. Power-on: IODIR FFh, everything else 0.
++ *  - The address pointer advances after each byte (IOCON.SEQOP = 0),
++ *    rolling over to 00h after the last register; in byte mode (SEQOP = 1)
++ *    it stays, except that with BANK = 0 it toggles within an A/B pair.
++ *  - Pads: an output (IODIR 0) drives OLAT; an input reads an external
++ *    driver, else its 100 kOhm pull-up (GPPU), else it floats (read as 0
++ *    here). GPIO reads the pads, inputs inverted by IPOL; writing GPIO
++ *    writes OLAT.
++ *  - Interrupt on change, for inputs with GPINTEN set: against the
++ *    previous value (INTCON 0) or against DEFVAL (INTCON 1). The first
++ *    event captures GPIO into INTCAP and sets INTF; the port's interrupt
++ *    stays active until GPIO or INTCAP of that port is read, which also
++ *    takes the pads as the new previous value. A pin that still differs
++ *    from DEFVAL raises it again at once.
++ *  - INTA follows port A, INTB port B, or either with IOCON.MIRROR;
++ *    active-low push-pull, active-high with INTPOL, open-drain (active
++ *    low, released otherwise) with ODR. RESET# low holds the power-on
++ *    state.
++ *  - On the MCP23017, GPA7 and GPB7 are outputs only (revision D, section
++ *    3.5.1: IO7 must be written 0). They still work as inputs here, and a
++ *    write of IODIR with IO7 set logs a guest error.
++ * Not modelled: the slew-rate control (DISSLW), the I2C general call and
++ * the 1.7 MHz high-speed mode.
++ *
++ * Expand 2 Click (MikroElektronika, schematic v100): an MCP23017 at 0x20
++ * (A2..A0 to ground through J3-J5, 100 kOhm pull-ups for the other
++ * position), INTA on INT (J2), RESET# on RST with no pull resistor, the
++ * ports on two headers. Not checked against a physical Click.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/gpio/mchp_mcp23x17.h"
++#include "hw/i2c/i2c.h"
++#include "migration/vmstate.h"
++
++#define IOCON(c)    ((c)->reg[0][MCP23X17_IOCON])
++
++bool mcp23x17_decode(Mcp23x17 *c, uint8_t addr, unsigned *reg,
++                     unsigned *port)
++{
++    if (IOCON(c) & MCP23X17_IOCON_BANK) {
++        *port = (addr >> 4) & 1;
++        *reg = addr & 0x0f;
++        return addr < 0x20 && *reg < MCP23X17_NREGS;
++    }
++    *port = addr & 1;
++    *reg = addr >> 1;
++    return addr < 2 * MCP23X17_NREGS;
++}
++
++static void mcp23x17_advance(Mcp23x17 *c)
++{
++    bool bank = IOCON(c) & MCP23X17_IOCON_BANK;
++
++    if (IOCON(c) & MCP23X17_IOCON_SEQOP) {
++        if (!bank) {
++            c->ptr ^= 1;                /* toggle within the A/B pair */
++        }
++        return;
++    }
++    if (!bank) {
++        c->ptr = (c->ptr + 1) % (2 * MCP23X17_NREGS);
++    } else if ((c->ptr & 0x0f) + 1 < MCP23X17_NREGS) {
++        c->ptr++;
++    } else {
++        c->ptr = c->ptr & 0x10 ? 0x00 : 0x10;
++    }
++}
++
++uint8_t mcp23x17_pads(Mcp23x17 *c, unsigned port)
++{
++    uint8_t *r = c->reg[port];
++    uint8_t in = r[MCP23X17_IODIR];
++    uint8_t ext = c->ext_mask[port] & in;
++    uint8_t pull = r[MCP23X17_GPPU] & in & ~ext;
++
++    return (r[MCP23X17_OLAT] & ~in) | (c->ext_level[port] & ext) | pull;
++}
++
++static uint8_t mcp23x17_gpio(Mcp23x17 *c, unsigned port)
++{
++    uint8_t *r = c->reg[port];
++
++    return mcp23x17_pads(c, port) ^ (r[MCP23X17_IPOL] & r[MCP23X17_IODIR]);
++}
++
++static void mcp23x17_drive_int(Mcp23x17 *c, unsigned pin, bool active)
++{
++    uint8_t iocon = IOCON(c);
++    int level;
++
++    if (iocon & MCP23X17_IOCON_ODR) {
++        level = active ? 0 : -1;
++    } else if (iocon & MCP23X17_IOCON_INTPOL) {
++        level = active;
++    } else {
++        level = !active;
++    }
++    qemu_set_irq(c->intpin[pin], level);
++}
++
++void mcp23x17_update(Mcp23x17 *c)
++{
++    bool mirror = IOCON(c) & MCP23X17_IOCON_MIRROR;
++
++    for (unsigned port = 0; port < 2; port++) {
++        uint8_t *r = c->reg[port];
++        uint8_t pads = mcp23x17_pads(c, port);
++        uint8_t armed = r[MCP23X17_GPINTEN] & r[MCP23X17_IODIR];
++        uint8_t against = (r[MCP23X17_DEFVAL] & r[MCP23X17_INTCON]) |
++                          (c->ref[port] & ~r[MCP23X17_INTCON]);
++        uint8_t hit = (pads ^ against) & armed;
++
++        if (!c->pending[port] && hit && !c->in_reset) {
++            c->pending[port] = true;
++            r[MCP23X17_INTF] = hit;
++            r[MCP23X17_INTCAP] = mcp23x17_gpio(c, port);
++        }
++        if (pads != c->levels[port]) {
++            c->levels[port] = pads;
++            if (c->pins_changed) {
++                c->pins_changed(c->opaque, port, pads);
++            }
++        }
++    }
++    mcp23x17_drive_int(c, 0, c->pending[0] || (mirror && c->pending[1]));
++    mcp23x17_drive_int(c, 1, c->pending[1] || (mirror && c->pending[0]));
++}
++
++static void mcp23x17_clear_int(Mcp23x17 *c, unsigned port)
++{
++    c->pending[port] = false;
++    c->reg[port][MCP23X17_INTF] = 0;
++    c->ref[port] = mcp23x17_pads(c, port);
++}
++
++void mcp23x17_reset(Mcp23x17 *c)
++{
++    memset(c->reg, 0, sizeof(c->reg));
++    c->reg[0][MCP23X17_IODIR] = 0xff;
++    c->reg[1][MCP23X17_IODIR] = 0xff;
++    c->ptr = 0;
++    for (unsigned port = 0; port < 2; port++) {
++        c->pending[port] = false;
++        c->ref[port] = mcp23x17_pads(c, port);
++    }
++    mcp23x17_update(c);
++}
++
++void mcp23x17_set_ptr(Mcp23x17 *c, uint8_t addr)
++{
++    c->ptr = addr;
++}
++
++uint8_t mcp23x17_read(Mcp23x17 *c)
++{
++    unsigned reg, port;
++    uint8_t val = 0;
++
++    if (!mcp23x17_decode(c, c->ptr, &reg, &port)) {
++        qemu_log_mask(LOG_GUEST_ERROR, "mcp23x17: read of unused address "
++                      "0x%02x\n", c->ptr);
++    } else if (reg == MCP23X17_GPIO) {
++        val = mcp23x17_gpio(c, port);
++        mcp23x17_clear_int(c, port);
++        mcp23x17_update(c);
++    } else if (reg == MCP23X17_INTCAP) {
++        val = c->reg[port][reg];
++        mcp23x17_clear_int(c, port);
++        mcp23x17_update(c);
++    } else if (reg == MCP23X17_IOCON) {
++        val = IOCON(c);
++    } else {
++        val = c->reg[port][reg];
++    }
++    mcp23x17_advance(c);
++    return val;
++}
++
++void mcp23x17_write(Mcp23x17 *c, uint8_t val)
++{
++    unsigned reg, port;
++
++    if (c->in_reset) {
++        return;
++    }
++    if (!mcp23x17_decode(c, c->ptr, &reg, &port)) {
++        qemu_log_mask(LOG_GUEST_ERROR, "mcp23x17: write of unused address "
++                      "0x%02x\n", c->ptr);
++    } else {
++        switch (reg) {
++        case MCP23X17_INTF:
++        case MCP23X17_INTCAP:
++            break;                      /* read-only */
++        case MCP23X17_IOCON:
++            IOCON(c) = val & 0xfe;
++            break;
++        case MCP23X17_GPIO:
++            c->reg[port][MCP23X17_OLAT] = val;
++            break;
++        default:
++            c->reg[port][reg] = val;
++            break;
++        }
++        mcp23x17_update(c);
++    }
++    mcp23x17_advance(c);
++}
++
++void mcp23x17_set_reset(Mcp23x17 *c, bool low)
++{
++    if (low) {
++        c->in_reset = false;
++        mcp23x17_reset(c);
++    }
++    c->in_reset = low;
++}
++
++void mcp23x17_drive(Mcp23x17 *c, unsigned port, uint8_t mask, uint8_t level)
++{
++    c->ext_mask[port] = mask;
++    c->ext_level[port] = level & mask;
++    mcp23x17_update(c);
++}
++
++const VMStateDescription vmstate_mcp23x17 = {
++    .name = "mcp23x17",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_UINT8_2DARRAY(reg, Mcp23x17, 2, MCP23X17_NREGS),
++        VMSTATE_UINT8(ptr, Mcp23x17),
++        VMSTATE_UINT8_ARRAY(ext_mask, Mcp23x17, 2),
++        VMSTATE_UINT8_ARRAY(ext_level, Mcp23x17, 2),
++        VMSTATE_UINT8_ARRAY(ref, Mcp23x17, 2),
++        VMSTATE_UINT8_ARRAY(levels, Mcp23x17, 2),
++        VMSTATE_BOOL_ARRAY(pending, Mcp23x17, 2),
++        VMSTATE_BOOL(in_reset, Mcp23x17),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++/* The MCP23017 on I2C: the first byte written sets the pointer */
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpMcp23017State, MCHP_MCP23017)
++
++struct MchpMcp23017State {
++    I2CSlave parent_obj;
++
++    Mcp23x17 core;
++    bool want_ptr;                      /* next byte written: the pointer */
++    uint16_t grounded;                  /* "pa0".."pb7" held down */
++    uint16_t drive_mask;                /* "drive" */
++    uint16_t drive_level;
++};
++
++static void mcp23017_apply(MchpMcp23017State *s)
++{
++    uint16_t mask = s->drive_mask | s->grounded;
++    uint16_t level = s->drive_level & ~s->grounded;
++
++    mcp23x17_drive(&s->core, 0, mask & 0xff, level & 0xff);
++    mcp23x17_drive(&s->core, 1, mask >> 8, level >> 8);
++}
++
++static int mcp23017_event(I2CSlave *i2c, enum i2c_event event)
++{
++    MchpMcp23017State *s = MCHP_MCP23017(i2c);
++
++    if (event == I2C_START_SEND) {
++        s->want_ptr = true;
++    }
++    return 0;
++}
++
++static int mcp23017_send(I2CSlave *i2c, uint8_t data)
++{
++    MchpMcp23017State *s = MCHP_MCP23017(i2c);
++
++    if (s->want_ptr) {
++        s->want_ptr = false;
++        mcp23x17_set_ptr(&s->core, data);
++    } else {
++        unsigned reg, port;
++
++        if (mcp23x17_decode(&s->core, s->core.ptr, &reg, &port) &&
++            reg == MCP23X17_IODIR && (data & 0x80)) {
++            qemu_log_mask(LOG_GUEST_ERROR, "mcp23017: IODIR%c with IO7 set: "
++                          "GP%c7 is an output only on the MCP23017\n",
++                          'A' + port, 'A' + port);
++        }
++        mcp23x17_write(&s->core, data);
++    }
++    return 0;
++}
++
++static uint8_t mcp23017_recv(I2CSlave *i2c)
++{
++    return mcp23x17_read(&MCHP_MCP23017(i2c)->core);
++}
++
++static void mcp23017_set_reset(void *opaque, int n, int level)
++{
++    MchpMcp23017State *s = opaque;
++
++    mcp23x17_set_reset(&s->core, level == 0);
++}
++
++static void mcp23017_get_levels(Object *obj, Visitor *v, const char *name,
++                                void *opaque, Error **errp)
++{
++    MchpMcp23017State *s = MCHP_MCP23017(obj);
++    uint32_t levels = mcp23x17_pads(&s->core, 0) |
++                      mcp23x17_pads(&s->core, 1) << 8;
++
++    visit_type_uint32(v, name, &levels, errp);
++}
++
++static char *mcp23017_get_drive(Object *obj, Error **errp)
++{
++    MchpMcp23017State *s = MCHP_MCP23017(obj);
++
++    return g_strdup_printf("%x %x", s->drive_mask, s->drive_level);
++}
++
++static void mcp23017_set_drive(Object *obj, const char *value, Error **errp)
++{
++    MchpMcp23017State *s = MCHP_MCP23017(obj);
++    unsigned mask, level;
++
++    if (sscanf(value, "%x %x", &mask, &level) != 2 || mask > 0xffff) {
++        error_setg(errp, "drive must be \"<mask> <level>\" in hex");
++        return;
++    }
++    s->drive_mask = mask;
++    s->drive_level = level & mask;
++    mcp23017_apply(s);
++}
++
++static void mcp23017_get_pad(Object *obj, Visitor *v, const char *name,
++                             void *opaque, Error **errp)
++{
++    MchpMcp23017State *s = MCHP_MCP23017(obj);
++    bool held = s->grounded & BIT(GPOINTER_TO_UINT(opaque));
++
++    visit_type_bool(v, name, &held, errp);
++}
++
++static void mcp23017_set_pad(Object *obj, Visitor *v, const char *name,
++                             void *opaque, Error **errp)
++{
++    MchpMcp23017State *s = MCHP_MCP23017(obj);
++    unsigned bit = GPOINTER_TO_UINT(opaque);
++    bool held;
++
++    if (!visit_type_bool(v, name, &held, errp)) {
++        return;
++    }
++    s->grounded = deposit32(s->grounded, bit, 1, held);
++    mcp23017_apply(s);
++}
++
++static void mcp23017_reset(DeviceState *dev)
++{
++    MchpMcp23017State *s = MCHP_MCP23017(dev);
++
++    s->want_ptr = false;
++    mcp23x17_reset(&s->core);
++}
++
++static void mcp23017_init(Object *obj)
++{
++    MchpMcp23017State *s = MCHP_MCP23017(obj);
++
++    qdev_init_gpio_out_named(DEVICE(obj), &s->core.intpin[0],
++                             MCHP_MCP23X17_INTA, 1);
++    qdev_init_gpio_out_named(DEVICE(obj), &s->core.intpin[1],
++                             MCHP_MCP23X17_INTB, 1);
++    qdev_init_gpio_in_named(DEVICE(obj), mcp23017_set_reset,
++                            MCHP_MCP23X17_RESET, 1);
++    object_property_add(obj, "levels", "uint32", mcp23017_get_levels, NULL,
++                        NULL, NULL);
++    object_property_add_str(obj, "drive", mcp23017_get_drive,
++                            mcp23017_set_drive);
++    for (unsigned bit = 0; bit < 16; bit++) {
++        g_autofree char *name = g_strdup_printf("p%c%u", 'a' + bit / 8,
++                                                bit % 8);
++
++        object_property_add(obj, name, "bool", mcp23017_get_pad,
++                            mcp23017_set_pad, NULL, GUINT_TO_POINTER(bit));
++    }
++}
++
++static const VMStateDescription vmstate_mcp23017 = {
++    .name = TYPE_MCHP_MCP23017,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, MchpMcp23017State),
++        VMSTATE_STRUCT(core, MchpMcp23017State, 1, vmstate_mcp23x17,
++                       Mcp23x17),
++        VMSTATE_BOOL(want_ptr, MchpMcp23017State),
++        VMSTATE_UINT16(grounded, MchpMcp23017State),
++        VMSTATE_UINT16(drive_mask, MchpMcp23017State),
++        VMSTATE_UINT16(drive_level, MchpMcp23017State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void mcp23017_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
++
++    dc->desc = "MCP23017 16-bit I2C I/O expander";
++    dc->vmsd = &vmstate_mcp23017;
++    device_class_set_legacy_reset(dc, mcp23017_reset);
++    k->event = mcp23017_event;
++    k->send = mcp23017_send;
++    k->recv = mcp23017_recv;
++}
++
++static const TypeInfo mcp23017_types[] = {
++    {
++        .name = TYPE_MCHP_MCP23017,
++        .parent = TYPE_I2C_SLAVE,
++        .instance_size = sizeof(MchpMcp23017State),
++        .instance_init = mcp23017_init,
++        .class_init = mcp23017_class_init,
++    },
++};
++
++DEFINE_TYPES(mcp23017_types)
+diff --git a/hw/gpio/meson.build b/hw/gpio/meson.build
+index 20d15c7..5f6b0a9 100644
+--- a/hw/gpio/meson.build
++++ b/hw/gpio/meson.build
+@@ -9,6 +9,7 @@ system_ss.add(when: 'CONFIG_ZAURUS_SCOOP', if_true: files('zaurus.c'))
+ system_ss.add(when: 'CONFIG_IMX', if_true: files('imx_gpio.c'))
+ system_ss.add(when: 'CONFIG_MCHP_PORT', if_true: files('mchp_port.c'))
+ system_ss.add(when: 'CONFIG_AVR8X_PORT', if_true: files('avr8x_port.c'))
++system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp23x17.c'))
+ system_ss.add(when: 'CONFIG_NPCM7XX', if_true: files('npcm7xx_gpio.c'))
+ system_ss.add(when: 'CONFIG_NRF51_SOC', if_true: files('nrf51_gpio.c'))
+ system_ss.add(when: 'CONFIG_OMAP', if_true: files('omap_gpio.c'))
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index 623fbee..b8f5217 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -32,6 +32,7 @@
+ #include "hw/misc/rn2903.h"
+ #include "hw/nvram/mchp_at24cm02.h"
+ #include "hw/adc/mchp_mcp3204.h"
++#include "hw/gpio/mchp_mcp23x17.h"
+ #include "hw/display/ssd1306.h"
+ #include "hw/display/ssd1351.h"
+ #include "hw/rtc/mchp_mcp7941x.h"
+@@ -287,6 +288,11 @@ static const ClickInfo mikrobus_clicks[] = {
+       TYPE_MCHP_MCP4921, CLICK_SPI, 0, 0,
+       .ins = { { SSI_GPIO_CS, MIKROBUS_CS } },
+       .pulls = { { true, MIKROBUS_CS, 1 } } },            /* R4 100k */
++    { "expand2", "Expand 2 Click: MCP23017 16-bit I/O expander at I2C 0x20, "
++      "INTA on INT, RESET# on RST",
++      TYPE_MCHP_MCP23017, CLICK_I2C, 0x20, 0,
++      .outs = { { MCHP_MCP23X17_INTA, MIKROBUS_INT } },
++      .ins = { { MCHP_MCP23X17_RESET, MIKROBUS_RST } } },
+ };
+ 
+ const char *mikrobus_click_names(void)
+diff --git a/include/hw/gpio/mchp_mcp23x17.h b/include/hw/gpio/mchp_mcp23x17.h
+new file mode 100644
+index 0000000..22bb529
+--- /dev/null
++++ b/include/hw/gpio/mchp_mcp23x17.h
+@@ -0,0 +1,79 @@
++/*
++ * Microchip MCP23017/MCP23S17 16-bit I/O expanders
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * Mcp23x17 is the register file, pins and interrupt logic both parts
++ * share; the bus side (I2C for the MCP23017, SPI for the MCP23S17) sets
++ * the address pointer and moves bytes through mcp23x17_read() and
++ * mcp23x17_write().
++ *
++ * "mchp-mcp23017": an I2C target (address 0x20 + A2..A0, set by the
++ * board). GPIO outputs "inta" and "intb" (0/1 push-pull, or 0 and -1
++ * open-drain with IOCON.ODR); GPIO input "reset" (RESET#: low holds the
++ * registers at their power-on values; undriven reads high). QOM
++ * properties: "levels" (read-only uint32: the pads, GPA in bits 7:0, GPB
++ * in 15:8), "drive" ("<mask> <level>" in hex: external drivers on the
++ * pads) and "pa0".."pa7", "pb0".."pb7" (bool: that pad held to ground,
++ * as a button on the Expand 2 Click's header would).
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_GPIO_MCHP_MCP23X17_H
++#define HW_GPIO_MCHP_MCP23X17_H
++
++#include "hw/core/irq.h"
++
++#define TYPE_MCHP_MCP23017 "mchp-mcp23017"
++
++#define MCHP_MCP23X17_INTA  "inta"
++#define MCHP_MCP23X17_INTB  "intb"
++#define MCHP_MCP23X17_RESET "reset"
++
++/* Register order within a port (the BANK = 1 layout) */
++enum {
++    MCP23X17_IODIR, MCP23X17_IPOL, MCP23X17_GPINTEN, MCP23X17_DEFVAL,
++    MCP23X17_INTCON, MCP23X17_IOCON, MCP23X17_GPPU, MCP23X17_INTF,
++    MCP23X17_INTCAP, MCP23X17_GPIO, MCP23X17_OLAT, MCP23X17_NREGS
++};
++
++#define MCP23X17_IOCON_BANK     0x80
++#define MCP23X17_IOCON_MIRROR   0x40
++#define MCP23X17_IOCON_SEQOP    0x20
++#define MCP23X17_IOCON_HAEN     0x08
++#define MCP23X17_IOCON_ODR      0x04
++#define MCP23X17_IOCON_INTPOL   0x02
++
++/* Called whenever a port's pads may have changed: @levels are its pads */
++typedef void Mcp23x17PinsFn(void *opaque, unsigned port, uint8_t levels);
++
++typedef struct Mcp23x17 {
++    uint8_t reg[2][MCP23X17_NREGS];     /* IOCON is shared: reg[0] */
++    uint8_t ptr;                        /* address pointer */
++    uint8_t ext_mask[2];                /* external drivers on the pads */
++    uint8_t ext_level[2];
++    uint8_t ref[2];                     /* pin-change reference */
++    uint8_t levels[2];                  /* pads as last reported */
++    bool pending[2];                    /* a port's interrupt */
++    bool in_reset;
++    qemu_irq intpin[2];                 /* INTA, INTB */
++    Mcp23x17PinsFn *pins_changed;
++    void *opaque;
++} Mcp23x17;
++
++void mcp23x17_reset(Mcp23x17 *c);
++/* Register and port of address @addr; false for an unused address */
++bool mcp23x17_decode(Mcp23x17 *c, uint8_t addr, unsigned *reg,
++                     unsigned *port);
++void mcp23x17_set_ptr(Mcp23x17 *c, uint8_t addr);
++uint8_t mcp23x17_read(Mcp23x17 *c);         /* at the pointer, advances */
++void mcp23x17_write(Mcp23x17 *c, uint8_t val);
++void mcp23x17_set_reset(Mcp23x17 *c, bool low);
++void mcp23x17_drive(Mcp23x17 *c, unsigned port, uint8_t mask, uint8_t level);
++uint8_t mcp23x17_pads(Mcp23x17 *c, unsigned port);
++void mcp23x17_update(Mcp23x17 *c);
++extern const VMStateDescription vmstate_mcp23x17;
++
++#endif /* HW_GPIO_MCHP_MCP23X17_H */
+diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
+index 767ef09..ee9aafb 100644
+--- a/tests/qtest/avr64ea48-cnano-test.c
++++ b/tests/qtest/avr64ea48-cnano-test.c
+@@ -546,6 +546,27 @@ static void test_dac_mb1(const void *fw)
+     qtest_quit(qts);
+ }
+ 
++/* Expand 2 Click on mikroBUS 2: MCP23017 at 0x20 on TWI0 */
++static void test_expand2_mb2(const void *fw)
++{
++    QTestState *qts = qtest_initf("-M avr64ea48-cnano,mb2=expand2 "
++                                  "-kernel %s", (const char *)fw);
++    uint8_t d[1];
++
++    qtest_writeb(qts, TWI0 + T_MCTRLA, 0x03);
++    qtest_writeb(qts, TWI0 + T_MSTATUS, 0x01);
++    qtest_writeb(qts, TWI0 + T_MADDR, 0x20 << 1);       /* GPPUB = FFh */
++    qtest_writeb(qts, TWI0 + T_MDATA, 0x0d);
++    qtest_writeb(qts, TWI0 + T_MDATA, 0xff);
++    qtest_writeb(qts, TWI0 + T_MCTRLB, 0x03);
++    qtest_qmp_assert_success(qts, "{ 'execute': 'qom-set', 'arguments': {"
++                             " 'path': '/machine/mb2-click',"
++                             " 'property': 'pb1', 'value': true } }");
++    twi_read(qts, 0x20, 0x13, d, 1);                    /* GPIOB */
++    g_assert_cmphex(d[0], ==, 0xfd);
++    qtest_quit(qts);
++}
++
+ static void qom_set_str(QTestState *qts, const char *path, const char *prop,
+                         const char *value)
+ {
+@@ -636,6 +657,7 @@ int main(int argc, char **argv)
+     qtest_add_data_func("avr64ea48-cnano/adc", fw, test_adc_mb1);
+     qtest_add_data_func("avr64ea48-cnano/ledringr", fw, test_ledringr_mb1);
+     qtest_add_data_func("avr64ea48-cnano/dac", fw, test_dac_mb1);
++    qtest_add_data_func("avr64ea48-cnano/expand2", fw, test_expand2_mb2);
+     ret = g_test_run();
+     unlink(fw);
+     return ret;
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index dbee6c7..991de65 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -820,6 +820,84 @@ static void i2c_rd(QTestState *qts, uint8_t addr, uint8_t reg, uint8_t *d,
+     i2c_stop(qts);
+ }
+ 
++#define MCP23017        0x20
++
++static uint8_t exp_reg(QTestState *qts, uint8_t reg)
++{
++    uint8_t v;
++
++    i2c_rd(qts, MCP23017, reg, &v, 1);
++    return v;
++}
++
++static void exp_set(QTestState *qts, uint8_t reg, uint8_t v)
++{
++    g_assert_true(i2c_wr(qts, MCP23017, reg, &v, 1));
++}
++
++/*
++ * Expand 2 Click on EXT1: MCP23017 at 0x20 on SERCOM2, INTA on INT
++ * (PB02), RESET# on RST (PA20)
++ */
++static void test_expand2(void)
++{
++    QTestState *qts = i2c_init("-M pic32cm-mc00-cpro,ext1=expand2 ");
++    uint8_t d[2];
++
++    i2c_rd(qts, MCP23017, 0x00, d, 2);                  /* IODIRA, IODIRB */
++    g_assert_cmphex(d[0], ==, 0xff);
++    g_assert_cmphex(d[1], ==, 0xff);
++    g_assert_true(int_high(qts));                       /* INTA inactive */
++    exp_set(qts, 0x0c, 0xff);                           /* GPPUA */
++    g_assert_cmphex(exp_reg(qts, 0x12), ==, 0xff);      /* GPIOA pulled */
++    qtest_qom_set_bool(qts, CLICK1, "pa3", true);
++    g_assert_cmphex(exp_reg(qts, 0x12), ==, 0xf7);
++    qtest_qom_set_bool(qts, CLICK1, "pa3", false);
++    exp_set(qts, 0x02, 0x01);                           /* IPOLA bit 0 */
++    g_assert_cmphex(exp_reg(qts, 0x12), ==, 0xfe);
++    exp_set(qts, 0x02, 0x00);
++
++    exp_set(qts, 0x01, 0x00);                           /* IODIRB: out */
++    exp_set(qts, 0x15, 0xa5);                           /* OLATB */
++    g_assert_cmphex(qom_int(qts, CLICK1, "levels") >> 8, ==, 0xa5);
++    g_assert_cmphex(exp_reg(qts, 0x13), ==, 0xa5);      /* GPIOB */
++
++    /* Interrupt on change of GPA3: INTF, INTCAP, cleared by INTCAP */
++    exp_set(qts, 0x04, 0x08);                           /* GPINTENA */
++    g_assert_true(int_high(qts));
++    qtest_qom_set_bool(qts, CLICK1, "pa3", true);
++    g_assert_false(int_high(qts));
++    qtest_qom_set_bool(qts, CLICK1, "pa3", false);      /* still latched */
++    g_assert_false(int_high(qts));
++    g_assert_cmphex(exp_reg(qts, 0x0e), ==, 0x08);      /* INTFA */
++    g_assert_cmphex(exp_reg(qts, 0x10), ==, 0xf7);      /* INTCAPA */
++    g_assert_true(int_high(qts));
++    /* Against DEFVAL: active as long as the pin differs */
++    exp_set(qts, 0x06, 0x08);                           /* DEFVALA */
++    exp_set(qts, 0x08, 0x08);                           /* INTCONA */
++    qtest_qom_set_bool(qts, CLICK1, "pa3", true);
++    g_assert_false(int_high(qts));
++    exp_reg(qts, 0x12);
++    g_assert_false(int_high(qts));                      /* raised again */
++    qtest_qom_set_bool(qts, CLICK1, "pa3", false);
++    exp_reg(qts, 0x12);
++    g_assert_true(int_high(qts));
++
++    /* BANK = 1: port B at 10h; sequential reads wrap */
++    exp_set(qts, 0x0a, 0x80);
++    g_assert_cmphex(exp_reg(qts, 0x10), ==, 0x00);      /* IODIRB */
++    g_assert_cmphex(exp_reg(qts, 0x1a), ==, 0xa5);      /* OLATB */
++    exp_set(qts, 0x05, 0x00);                           /* IOCON: BANK 0 */
++    g_assert_cmphex(exp_reg(qts, 0x0a), ==, 0x00);
++
++    /* RESET# low: the power-on state */
++    qtest_writel(qts, PA + P_OUTCLR, BIT(20));
++    qtest_writel(qts, PA + P_DIRSET, BIT(20));
++    qtest_writel(qts, PA + P_OUTSET, BIT(20));
++    g_assert_cmphex(exp_reg(qts, 0x01), ==, 0xff);
++    qtest_quit(qts);
++}
++
+ #define ADXL345         0x53
+ 
+ static uint8_t adxl_reg(QTestState *qts, uint8_t reg)
+@@ -1543,6 +1621,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/adc", test_adc);
+     qtest_add_func("pic32cm-click/ledringr", test_ledringr);
+     qtest_add_func("pic32cm-click/dac", test_dac);
++    qtest_add_func("pic32cm-click/expand2", test_expand2);
+     qtest_add_func("pic32cm-click/accel", test_accel);
+     qtest_add_func("pic32cm-click/rtc6-time", test_rtc6_time);
+     qtest_add_func("pic32cm-click/rtc6-alarm", test_rtc6_alarm);
+-- 
+2.53.0.windows.2
+

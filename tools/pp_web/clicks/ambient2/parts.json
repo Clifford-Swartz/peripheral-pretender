@@ -1,0 +1,13 @@
+{
+ "source": "MikroElektronika Ambient 2 Click v100 (no ClickID): 2D and 3D files (Ambient_2_Click_2d_3d_files.zip: CAD/Ambient_2_click_v100.dxf, Ambient_2_click_v100.step), schematic v100. Part centres from the STEP's component placements, body sizes from the packages (USON-6 2x2, 0805, Everlight 67-21). The ADD jumper J4 fitted on GND (0x44), as in the STEP.",
+ "parts": [
+  {"ref": "U1", "kind": "ic", "value": "OPT3001 (USON-6)", "at_mm": [11.43, 22.02], "size_mm": [2.0, 2.0]},
+  {"ref": "C1", "kind": "capacitor", "value": "100nF", "at_mm": [11.46, 18.49], "size_mm": [2.0, 1.25]},
+  {"ref": "R4", "kind": "resistor", "value": "4k7", "at_mm": [14.6, 8.89], "size_mm": [2.0, 1.25]},
+  {"ref": "R3", "kind": "resistor", "value": "4k7", "at_mm": [14.6, 13.97], "size_mm": [2.0, 1.25]},
+  {"ref": "R2", "kind": "resistor", "value": "4k7", "at_mm": [14.6, 11.43], "size_mm": [2.0, 1.25]},
+  {"ref": "R1", "kind": "resistor", "value": "2k2", "at_mm": [14.6, 6.35], "size_mm": [2.0, 1.25]},
+  {"ref": "J4", "kind": "zero_ohm", "value": "ADD = GND", "at_mm": [8.28, 6.37], "size_mm": [2.0, 1.25]},
+  {"ref": "PWR", "kind": "led", "color": "#5dff7a", "at_mm": [11.43, 1.27], "size_mm": [3.2, 1.6]}
+ ]
+}

@@ -1,0 +1,478 @@
+{
+ "source": "MikroElektronika Thermo K Click v102 (MIKROE-3311): the 3D zip (thermo_k_click_3d_file_v102.zip) has only a STEP (THERMO_K_click_v102.step, no DXF), so the outline and every part position come from the STEP assembly (the Board solid's corners; refdes products placed by their transforms), schematic v102. Outline: 25.4 x 38.71 mm with the 16.97 x 4.22 mm tab for the connector, one 2.54 mm chamfer at the bottom right. CN1 (PCC-SMP-K) drawn as its body's footprint from the STEP vertices (15.7 x 20.8 mm, socket face on the top edge), yellow for type K. ADDR SEL and PWR SEL are 0805 links at their STEP positions (ADDR on GND, 0x60; 3.3V), the schematic's. Header from the STEP at x 0/22.86, y 0-17.78 (standard). Estimated: silkscreen texts (none in the STEP; header labels from the schematic's nets), the MQFN drawn without its pads.",
+ "outline_mm": [
+  [
+   -1.27,
+   -3.81
+  ],
+  [
+   21.59,
+   -3.81
+  ],
+  [
+   24.13,
+   -1.27
+  ],
+  [
+   24.13,
+   34.9
+  ],
+  [
+   19.914,
+   34.9
+  ],
+  [
+   19.914,
+   39.116
+  ],
+  [
+   2.946,
+   39.116
+  ],
+  [
+   2.946,
+   34.9
+  ],
+  [
+   -1.27,
+   34.9
+  ]
+ ],
+ "header": true,
+ "texts": [
+  {
+   "text": "AL4",
+   "at_mm": [
+    2.053,
+    17.78
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "AL2",
+   "at_mm": [
+    20.813,
+    17.78
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "AL3",
+   "at_mm": [
+    2.053,
+    15.24
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "AL1",
+   "at_mm": [
+    20.813,
+    15.24
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "NC",
+   "at_mm": [
+    2.053,
+    12.7
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "NC",
+   "at_mm": [
+    20.813,
+    12.7
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "NC",
+   "at_mm": [
+    2.053,
+    10.16
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "NC",
+   "at_mm": [
+    20.813,
+    10.16
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "NC",
+   "at_mm": [
+    2.053,
+    7.62
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "SCL",
+   "at_mm": [
+    20.813,
+    7.62
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "NC",
+   "at_mm": [
+    2.053,
+    5.08
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "SDA",
+   "at_mm": [
+    20.813,
+    5.08
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "3V3",
+   "at_mm": [
+    2.053,
+    2.54
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "5V",
+   "at_mm": [
+    20.813,
+    2.54
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "GND",
+   "at_mm": [
+    2.053,
+    0.0
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "GND",
+   "at_mm": [
+    20.813,
+    0.0
+   ],
+   "size": 1.0,
+   "rotate": -90
+  },
+  {
+   "text": "Thermo K click",
+   "at_mm": [
+    11.43,
+    -2.35
+   ],
+   "size": 2.0
+  },
+  {
+   "text": "PWR",
+   "at_mm": [
+    17.6,
+    2.55
+   ],
+   "size": 0.9
+  },
+  {
+   "text": "ADDR",
+   "at_mm": [
+    15.1,
+    6.1
+   ],
+   "size": 0.8
+  },
+  {
+   "text": "PWR SEL",
+   "at_mm": [
+    5.76,
+    6.1
+   ],
+   "size": 0.8
+  },
+  {
+   "text": "U1",
+   "at_mm": [
+    11.43,
+    13.15
+   ],
+   "size": 0.9
+  }
+ ],
+ "parts": [
+  {
+   "ref": "CN1",
+   "kind": "tc_socket",
+   "value": "PCC-SMP-K miniature type K socket",
+   "label": "K",
+   "at_mm": [
+    11.45,
+    28.7
+   ],
+   "size_mm": [
+    15.7,
+    20.8
+   ]
+  },
+  {
+   "ref": "U1",
+   "kind": "ic",
+   "value": "MCP9600 (MQFN-20 5x5)",
+   "at_mm": [
+    11.43,
+    9.91
+   ],
+   "size_mm": [
+    5.0,
+    5.0
+   ]
+  },
+  {
+   "ref": "C1",
+   "kind": "capacitor",
+   "value": "100nF",
+   "at_mm": [
+    4.6,
+    8.89
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ]
+  },
+  {
+   "ref": "C2",
+   "kind": "capacitor",
+   "value": "10uF",
+   "at_mm": [
+    11.35,
+    1.94
+   ],
+   "size_mm": [
+    1.25,
+    2.0
+   ]
+  },
+  {
+   "ref": "C3",
+   "kind": "capacitor",
+   "value": "100nF",
+   "at_mm": [
+    11.43,
+    15.01
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ]
+  },
+  {
+   "ref": "FB1",
+   "kind": "resistor",
+   "value": "ferrite (1206)",
+   "at_mm": [
+    6.76,
+    1.21
+   ],
+   "size_mm": [
+    3.2,
+    1.6
+   ]
+  },
+  {
+   "ref": "FB2",
+   "kind": "resistor",
+   "value": "ferrite (1206)",
+   "at_mm": [
+    6.04,
+    16.81
+   ],
+   "size_mm": [
+    3.2,
+    1.6
+   ]
+  },
+  {
+   "ref": "FB3",
+   "kind": "resistor",
+   "value": "ferrite (1206)",
+   "at_mm": [
+    16.82,
+    16.81
+   ],
+   "size_mm": [
+    3.2,
+    1.6
+   ]
+  },
+  {
+   "ref": "R1",
+   "kind": "resistor",
+   "value": "470",
+   "at_mm": [
+    14.48,
+    0.94
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ]
+  },
+  {
+   "ref": "R2",
+   "kind": "resistor",
+   "value": "4k7",
+   "at_mm": [
+    18.26,
+    8.89
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ]
+  },
+  {
+   "ref": "R3",
+   "kind": "resistor",
+   "value": "4k7",
+   "at_mm": [
+    18.26,
+    11.43
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ]
+  },
+  {
+   "ref": "R4",
+   "kind": "resistor",
+   "value": "2M",
+   "at_mm": [
+    4.6,
+    15.01
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ]
+  },
+  {
+   "ref": "R5",
+   "kind": "resistor",
+   "value": "1M",
+   "at_mm": [
+    4.6,
+    11.43
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ]
+  },
+  {
+   "ref": "R6",
+   "kind": "resistor",
+   "value": "100",
+   "at_mm": [
+    7.52,
+    15.01
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ]
+  },
+  {
+   "ref": "R7",
+   "kind": "resistor",
+   "value": "100",
+   "at_mm": [
+    15.36,
+    15.01
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ]
+  },
+  {
+   "ref": "R8",
+   "kind": "resistor",
+   "value": "2M",
+   "at_mm": [
+    18.26,
+    15.01
+   ],
+   "size_mm": [
+    1.6,
+    0.85
+   ]
+  },
+  {
+   "ref": "ADDR SEL",
+   "kind": "zero_ohm",
+   "value": "GND (0x60)",
+   "at_mm": [
+    15.1,
+    4.81
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "PWR SEL",
+   "kind": "zero_ohm",
+   "value": "3.3V",
+   "at_mm": [
+    5.76,
+    4.81
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  },
+  {
+   "ref": "PWR",
+   "kind": "led",
+   "color": "#5dff7a",
+   "at_mm": [
+    17.6,
+    1.14
+   ],
+   "size_mm": [
+    2.0,
+    1.25
+   ]
+  }
+ ]
+}

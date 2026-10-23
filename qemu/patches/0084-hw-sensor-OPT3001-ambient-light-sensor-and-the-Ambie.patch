@@ -1,0 +1,629 @@
+From 154a35ea226c9d7448532b11579a2098d9749c9c Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 22 Oct 2026 23:34:01 -0700
+Subject: [PATCH 84/85] hw/sensor: OPT3001 ambient light sensor and the Ambient
+ 2 Click
+
+The OPT3001 (SBOS681C sections 7.3-7.6): result E[3:0] R[11:0] in
+automatic or manual full-scale ranges with OVF and the exponent mask,
+100 and 800 ms conversions in single-shot and continuous modes, CRF,
+the low and high limits with fault counts in latched window and
+transparent hysteresis modes, the end-of-conversion mode (low limit
+exponent 11xxb, its reset value), the open-drain INT and its polarity,
+and the ID registers. QOM "lux" (milli-lux) is the light.
+
+Ambient 2 Click v100: 0x44 (ADDR on ground), INT on INT with R3
+4.7 kOhm pull-up.
+
+qtests: IDs, a conversion, the end-of-conversion INT, a latched high
+fault, overflow and ME on the MC00's EXT1; the device ID through TWI0
+on the AVR64EA48 Nano Base.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  10 +
+ hw/misc/mikrobus.c                    |   6 +
+ hw/sensor/meson.build                 |   3 +-
+ hw/sensor/opt3001.c                   | 398 ++++++++++++++++++++++++++
+ include/hw/sensor/opt3001.h           |  22 ++
+ tests/qtest/avr64ea48-cnano-test.c    |  15 +
+ tests/qtest/pic32cm-click-test.c      |  52 ++++
+ 7 files changed, 505 insertions(+), 1 deletion(-)
+ create mode 100644 hw/sensor/opt3001.c
+ create mode 100644 include/hw/sensor/opt3001.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 3edf711..421db67 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -136,6 +136,16 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   100 kOhm pull-up (R7). QOM properties ``in0`` to ``in3`` (mV) set the
+   inputs.
+ 
++``ambient2``
++  Ambient 2 Click (v100): an OPT3001 ambient light sensor (``opt3001``)
++  at I2C 0x44 (ADDR on GND), its open-drain INT on INT (R3 4.7 kOhm
++  pull-up). Automatic and manual full-scale ranges, 100 and 800 ms
++  conversions, single-shot and continuous modes, CRF, OVF, the exponent
++  mask, fault counts in latched window and transparent hysteresis modes,
++  the end-of-conversion mode (low limit exponent 11xxb, the reset value)
++  and the INT polarity. The QOM property ``lux`` (milli-lux, default
++  250000) is the light it sees.
++
+ ``accel``
+   Accel Click (v101): an ADXL345 accelerometer (``adxl345``) at I2C
+   address 0x53 (its ADDR SEL jumper on 0; v100 boards and
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index 072d8a3..f35472b 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -41,6 +41,7 @@
+ #include "hw/sensor/bme280.h"
+ #include "hw/sensor/isl29125.h"
+ #include "hw/sensor/mchp_mcp9808.h"
++#include "hw/sensor/opt3001.h"
+ #include "hw/ssi/max7219.h"
+ #include "hw/ssi/ti_74hc595.h"
+ 
+@@ -305,6 +306,11 @@ static const ClickInfo mikrobus_clicks[] = {
+       .pulls = { { true, MIKROBUS_CS, 1 },                /* R4 10k */
+                  { true, MIKROBUS_AN_PIN, 1 },            /* R5 10k */
+                  { true, MIKROBUS_PWM, 1 } } },           /* R1 1k */
++    { "ambient2", "Ambient 2 Click: OPT3001 ambient light sensor at I2C "
++      "0x44, its open-drain INT on INT",
++      TYPE_OPT3001, CLICK_I2C, 0x44, 0,
++      .outs = { { OPT3001_INT, MIKROBUS_INT } },
++      .pulls = { { true, MIKROBUS_INT, 1 } } },           /* R3 4.7k */
+ };
+ 
+ const char *mikrobus_click_names(void)
+diff --git a/hw/sensor/meson.build b/hw/sensor/meson.build
+index a92382e..26fb02c 100644
+--- a/hw/sensor/meson.build
++++ b/hw/sensor/meson.build
+@@ -9,5 +9,6 @@ system_ss.add(when: 'CONFIG_LSM303DLHC_MAG', if_true: files('lsm303dlhc_mag.c'))
+ system_ss.add(when: 'CONFIG_ISL_PMBUS_VR', if_true: files('isl_pmbus_vr.c'))
+ system_ss.add(when: 'CONFIG_MAX31785', if_true: files('max31785.c'))
+ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('mchp_mcp9808.c', 'adxl345.c',
+-                                                      'isl29125.c', 'bme280.c'))
++                                                      'isl29125.c', 'bme280.c',
++                                                      'opt3001.c'))
+ system_ss.add(when: 'CONFIG_PYKIT_SENSORS', if_true: files('icm20948.c', 'bno085.c'))
+diff --git a/hw/sensor/opt3001.c b/hw/sensor/opt3001.c
+new file mode 100644
+index 0000000..b89d8f8
+--- /dev/null
++++ b/hw/sensor/opt3001.c
+@@ -0,0 +1,398 @@
++/*
++ * TI OPT3001 ambient light sensor, and the Ambient 2 Click
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * OPT3001 data sheet (SBOS681C), sections 7.3-7.6:
++ *  - Registers (16 bits, MSB first; the first byte written sets the
++ *    pointer): result 00h, configuration 01h (power-on C810h: automatic
++ *    range, 800 ms, shutdown, latched), low limit 02h (C000h), high
++ *    limit 03h (BFFFh), manufacturer ID 7Eh (5449h), device ID 7Fh
++ *    (3001h).
++ *  - Results are E[3:0] R[11:0], lux = 0.01 * 2^E * R. Range RN 0-11
++ *    gives a full scale of 40.95 * 2^RN lux (OVF above it); RN 12 picks
++ *    the smallest range that holds the light. ME zeroes the reported
++ *    exponent of a manual range.
++ *  - Conversions take 100 or 800 ms (CT); single-shot (M = 01) returns to
++ *    shutdown after one, continuous (M = 1x) repeats. CRF is set at each
++ *    end and cleared by reading the configuration or writing it with a
++ *    non-shutdown mode.
++ *  - Results above the high limit or below the low limit for FC (1, 2, 4
++ *    or 8) conversions in a row are faults. Latched window mode (L = 1):
++ *    FH or FL and INT latch until the configuration is read. Transparent
++ *    hysteresis (L = 0): above the high limit INT goes active with FH,
++ *    below the low limit inactive with FL; configuration reads do not
++ *    change them. With the low limit's two exponent MSBs set (the reset
++ *    value) INT goes active at every conversion end instead, cleared like
++ *    a latched fault, and only the high limit is compared.
++ *  - INT is open drain: active pulls low (POL 0), or releases (POL 1).
++ * Not modelled: the SMBus alert response, the reduced resolution of
++ * 100 ms conversions in the low ranges, and noise.
++ *
++ * Ambient 2 Click (MikroElektronika, schematic v100): ADDR to ground
++ * (0x44, MikroElektronika's driver default), INT on INT with R3 4.7 kOhm
++ * pull-up. Not checked against a physical Click.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "hw/core/irq.h"
++#include "hw/i2c/i2c.h"
++#include "hw/sensor/opt3001.h"
++#include "migration/vmstate.h"
++
++#define REG_RESULT      0x00
++#define REG_CONFIG      0x01
++#define REG_LOW         0x02
++#define REG_HIGH        0x03
++#define REG_MANUF       0x7e
++#define REG_DEVICE      0x7f
++
++#define CFG_RN_SHIFT    12
++#define CFG_CT          BIT(11)
++#define CFG_M_SHIFT     9
++#define CFG_M           (3 << CFG_M_SHIFT)
++#define CFG_OVF         BIT(8)
++#define CFG_CRF         BIT(7)
++#define CFG_FH          BIT(6)
++#define CFG_FL          BIT(5)
++#define CFG_L           BIT(4)
++#define CFG_POL         BIT(3)
++#define CFG_ME          BIT(2)
++#define CFG_FC          0x3
++#define CFG_RO          (CFG_OVF | CFG_CRF | CFG_FH | CFG_FL)
++
++#define RN_AUTO         12
++#define LUX_MAX_MLX     83865600u       /* 0.01 lux * 2^11 * 4095 */
++
++OBJECT_DECLARE_SIMPLE_TYPE(Opt3001State, OPT3001)
++
++struct Opt3001State {
++    I2CSlave parent_obj;
++
++    uint16_t result;
++    uint16_t config;
++    uint16_t low;
++    uint16_t high;
++    uint8_t ptr;
++    bool ptr_set;               /* the first byte of a write came */
++    uint8_t wbuf;               /* the high byte of a register write */
++    uint8_t wcount;
++    uint8_t rcount;
++    uint8_t high_faults;        /* conversions above the high limit */
++    uint8_t low_faults;
++    bool int_active;
++
++    uint32_t lux;               /* milli-lux */
++    QEMUTimer *timer;
++    qemu_irq irq;
++};
++
++/* A result-format register in hundredths of a lux */
++static uint64_t opt_value(uint16_t reg)
++{
++    return (uint64_t)(reg & 0xfff) << (reg >> 12);
++}
++
++static void opt_update_irq(Opt3001State *s)
++{
++    bool low = s->int_active != !!(s->config & CFG_POL);
++
++    qemu_set_irq(s->irq, low ? 0 : -1);
++}
++
++static bool opt_eoc_mode(Opt3001State *s)
++{
++    return (s->low >> 14) == 3;
++}
++
++static void opt_arm(Opt3001State *s)
++{
++    if (s->config & CFG_M) {
++        timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                  (s->config & CFG_CT ? 800 : 100) * SCALE_MS);
++    } else {
++        timer_del(s->timer);
++    }
++}
++
++static void opt_convert(void *opaque)
++{
++    Opt3001State *s = opaque;
++    unsigned rn = s->config >> CFG_RN_SHIFT, e = rn;
++    uint64_t centi = s->lux / 10;      /* hundredths of a lux */
++    unsigned need = 1u << (s->config & CFG_FC);     /* 1, 2, 4, 8 */
++    bool over;
++
++    if (rn >= RN_AUTO) {
++        for (e = 0; e < 11 && (centi >> e) > 0xfff; e++) {
++        }
++    }
++    over = (centi >> e) > 0xfff;
++    s->result = e << 12 | MIN(centi >> e, 0xfff);
++    s->config = (s->config & ~CFG_OVF) | (over ? CFG_OVF : 0) | CFG_CRF;
++
++    /* Faults, compared in lux whatever ME says */
++    s->high_faults = opt_value(s->result) > opt_value(s->high) ?
++                     MIN(s->high_faults + 1, 8) : 0;
++    s->low_faults = !opt_eoc_mode(s) &&
++                    opt_value(s->result) < opt_value(s->low) ?
++                    MIN(s->low_faults + 1, 8) : 0;
++    if (s->config & CFG_L) {
++        if (s->high_faults >= need) {
++            s->config |= CFG_FH;
++            s->int_active = true;
++        }
++        if (s->low_faults >= need) {
++            s->config |= CFG_FL;
++            s->int_active = true;
++        }
++    } else if (s->high_faults >= need) {
++        s->config = (s->config | CFG_FH) & ~CFG_FL;
++        s->int_active = true;
++    } else if (s->low_faults >= need) {
++        s->config = (s->config | CFG_FL) & ~CFG_FH;
++        s->int_active = false;
++    }
++    if (opt_eoc_mode(s)) {
++        s->int_active = true;
++    }
++    if (((s->config & CFG_M) >> CFG_M_SHIFT) == 1) {
++        s->config &= ~CFG_M;            /* single shot done: shutdown */
++    }
++    opt_update_irq(s);
++    opt_arm(s);
++}
++
++static uint16_t opt_read_reg(Opt3001State *s, uint8_t reg)
++{
++    uint16_t v;
++
++    switch (reg) {
++    case REG_RESULT:
++        v = s->result;
++        if ((s->config & CFG_ME) && (s->config >> CFG_RN_SHIFT) < RN_AUTO) {
++            v &= 0x0fff;
++        }
++        return v;
++    case REG_CONFIG:
++        return s->config;
++    case REG_LOW:
++        return s->low;
++    case REG_HIGH:
++        return s->high;
++    case REG_MANUF:
++        return 0x5449;
++    case REG_DEVICE:
++        return 0x3001;
++    }
++    qemu_log_mask(LOG_GUEST_ERROR, "opt3001: read of register 0x%02x\n",
++                  reg);
++    return 0;
++}
++
++/* Reading the configuration clears CRF, and latched flags and INT */
++static void opt_config_read(Opt3001State *s)
++{
++    s->config &= ~CFG_CRF;
++    if ((s->config & CFG_L) || opt_eoc_mode(s)) {
++        s->config &= ~(CFG_FH | CFG_FL);
++        s->int_active = false;
++    }
++    opt_update_irq(s);
++}
++
++static void opt_write_reg(Opt3001State *s, uint8_t reg, uint16_t v)
++{
++    uint16_t old;
++
++    switch (reg) {
++    case REG_CONFIG:
++        old = s->config;
++        if ((v >> CFG_RN_SHIFT) > RN_AUTO) {
++            qemu_log_mask(LOG_GUEST_ERROR, "opt3001: reserved range %u\n",
++                          v >> CFG_RN_SHIFT);
++        }
++        s->config = (v & ~CFG_RO) | (old & CFG_RO);
++        if (v & CFG_M) {
++            s->config &= ~CFG_CRF;
++            if (opt_eoc_mode(s)) {
++                s->int_active = false;
++            }
++            if ((v ^ old) & (CFG_M | CFG_CT | (0xf << CFG_RN_SHIFT)) ||
++                !timer_pending(s->timer)) {
++                opt_arm(s);
++            }
++        } else {
++            timer_del(s->timer);
++        }
++        opt_update_irq(s);
++        break;
++    case REG_LOW:
++        s->low = v;
++        break;
++    case REG_HIGH:
++        s->high = v;
++        break;
++    default:
++        qemu_log_mask(LOG_GUEST_ERROR, "opt3001: write of register 0x%02x\n",
++                      reg);
++        break;
++    }
++}
++
++static int opt_event(I2CSlave *i2c, enum i2c_event event)
++{
++    Opt3001State *s = OPT3001(i2c);
++
++    if (event == I2C_START_SEND) {
++        s->ptr_set = false;
++        s->wcount = 0;
++    } else if (event == I2C_START_RECV) {
++        s->rcount = 0;
++    }
++    return 0;
++}
++
++static int opt_send(I2CSlave *i2c, uint8_t data)
++{
++    Opt3001State *s = OPT3001(i2c);
++
++    if (!s->ptr_set) {
++        s->ptr = data;
++        s->ptr_set = true;
++        return 0;
++    }
++    if (s->wcount++ % 2 == 0) {
++        s->wbuf = data;
++    } else {
++        opt_write_reg(s, s->ptr, s->wbuf << 8 | data);
++    }
++    return 0;
++}
++
++static uint8_t opt_recv(I2CSlave *i2c)
++{
++    Opt3001State *s = OPT3001(i2c);
++    uint16_t v = opt_read_reg(s, s->ptr);
++
++    if (s->rcount++ % 2 == 0) {
++        return v >> 8;
++    }
++    if (s->ptr == REG_CONFIG) {
++        opt_config_read(s);
++    }
++    return v & 0xff;
++}
++
++static void opt_get_lux(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    visit_type_uint32(v, name, &OPT3001(obj)->lux, errp);
++}
++
++static void opt_set_lux(Object *obj, Visitor *v, const char *name,
++                        void *opaque, Error **errp)
++{
++    uint32_t lux;
++
++    if (!visit_type_uint32(v, name, &lux, errp)) {
++        return;
++    }
++    if (lux > LUX_MAX_MLX) {
++        error_setg(errp, "lux must be 0 to %u milli-lux", LUX_MAX_MLX);
++        return;
++    }
++    OPT3001(obj)->lux = lux;
++}
++
++static void opt_reset(DeviceState *dev)
++{
++    Opt3001State *s = OPT3001(dev);
++
++    s->result = 0;
++    s->config = 0xc810;
++    s->low = 0xc000;
++    s->high = 0xbfff;
++    s->ptr = 0;
++    s->ptr_set = false;
++    s->wcount = 0;
++    s->rcount = 0;
++    s->high_faults = 0;
++    s->low_faults = 0;
++    s->int_active = false;
++    timer_del(s->timer);
++    opt_update_irq(s);
++}
++
++static void opt_init(Object *obj)
++{
++    Opt3001State *s = OPT3001(obj);
++
++    s->lux = 250000;
++    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, opt_convert, s);
++    qdev_init_gpio_out_named(DEVICE(obj), &s->irq, OPT3001_INT, 1);
++    object_property_add(obj, "lux", "uint32", opt_get_lux, opt_set_lux,
++                        NULL, NULL);
++}
++
++static void opt_finalize(Object *obj)
++{
++    timer_free(OPT3001(obj)->timer);
++}
++
++static const VMStateDescription vmstate_opt3001 = {
++    .name = TYPE_OPT3001,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_I2C_SLAVE(parent_obj, Opt3001State),
++        VMSTATE_UINT16(result, Opt3001State),
++        VMSTATE_UINT16(config, Opt3001State),
++        VMSTATE_UINT16(low, Opt3001State),
++        VMSTATE_UINT16(high, Opt3001State),
++        VMSTATE_UINT8(ptr, Opt3001State),
++        VMSTATE_BOOL(ptr_set, Opt3001State),
++        VMSTATE_UINT8(wbuf, Opt3001State),
++        VMSTATE_UINT8(wcount, Opt3001State),
++        VMSTATE_UINT8(rcount, Opt3001State),
++        VMSTATE_UINT8(high_faults, Opt3001State),
++        VMSTATE_UINT8(low_faults, Opt3001State),
++        VMSTATE_BOOL(int_active, Opt3001State),
++        VMSTATE_UINT32(lux, Opt3001State),
++        VMSTATE_TIMER_PTR(timer, Opt3001State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void opt_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
++
++    dc->desc = "OPT3001 ambient light sensor";
++    dc->vmsd = &vmstate_opt3001;
++    device_class_set_legacy_reset(dc, opt_reset);
++    k->event = opt_event;
++    k->send = opt_send;
++    k->recv = opt_recv;
++}
++
++static const TypeInfo opt3001_types[] = {
++    {
++        .name = TYPE_OPT3001,
++        .parent = TYPE_I2C_SLAVE,
++        .instance_size = sizeof(Opt3001State),
++        .instance_init = opt_init,
++        .instance_finalize = opt_finalize,
++        .class_init = opt_class_init,
++    },
++};
++
++DEFINE_TYPES(opt3001_types)
+diff --git a/include/hw/sensor/opt3001.h b/include/hw/sensor/opt3001.h
+new file mode 100644
+index 0000000..e3670a5
+--- /dev/null
++++ b/include/hw/sensor/opt3001.h
+@@ -0,0 +1,22 @@
++/*
++ * TI OPT3001 ambient light sensor
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * "opt3001": an I2C target (0x44-0x47 by its ADDR pin, set by the
++ * board). GPIO output "int": open drain, 0 or -1 (released). QOM
++ * property "lux" (milli-lux, 0 to 83865600, default 250000): the light
++ * the sensor sees, also at run time.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_SENSOR_OPT3001_H
++#define HW_SENSOR_OPT3001_H
++
++#define TYPE_OPT3001 "opt3001"
++
++#define OPT3001_INT "int"
++
++#endif /* HW_SENSOR_OPT3001_H */
+diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
+index 7715473..863d60e 100644
+--- a/tests/qtest/avr64ea48-cnano-test.c
++++ b/tests/qtest/avr64ea48-cnano-test.c
+@@ -611,6 +611,20 @@ static void test_lcdmini_mb1(const void *fw)
+     qtest_quit(qts);
+ }
+ 
++/* Ambient 2 Click on mikroBUS 3: OPT3001 at 0x44 on TWI0 */
++static void test_ambient2_mb3(const void *fw)
++{
++    QTestState *qts = qtest_initf("-M avr64ea48-cnano,mb3=ambient2 "
++                                  "-kernel %s", (const char *)fw);
++    uint8_t d[2];
++
++    qtest_writeb(qts, TWI0 + T_MCTRLA, 0x03);
++    qtest_writeb(qts, TWI0 + T_MSTATUS, 0x01);
++    twi_read(qts, 0x44, 0x7f, d, 2);                    /* device ID */
++    g_assert_cmphex(d[0] << 8 | d[1], ==, 0x3001);
++    qtest_quit(qts);
++}
++
+ static void qom_set_str(QTestState *qts, const char *path, const char *prop,
+                         const char *value)
+ {
+@@ -703,6 +717,7 @@ int main(int argc, char **argv)
+     qtest_add_data_func("avr64ea48-cnano/dac", fw, test_dac_mb1);
+     qtest_add_data_func("avr64ea48-cnano/expand2", fw, test_expand2_mb2);
+     qtest_add_data_func("avr64ea48-cnano/lcdmini", fw, test_lcdmini_mb1);
++    qtest_add_data_func("avr64ea48-cnano/ambient2", fw, test_ambient2_mb3);
+     ret = g_test_run();
+     unlink(fw);
+     return ret;
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index 141bea4..f4dafd2 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -971,6 +971,57 @@ static void test_expand2(void)
+     qtest_quit(qts);
+ }
+ 
++#define OPT3001         0x44
++
++static uint16_t opt_reg(QTestState *qts, uint8_t reg)
++{
++    uint8_t d[2];
++
++    i2c_rd(qts, OPT3001, reg, d, 2);
++    return d[0] << 8 | d[1];
++}
++
++static void opt_set(QTestState *qts, uint8_t reg, uint16_t v)
++{
++    uint8_t d[2] = { v >> 8, v & 0xff };
++
++    g_assert_true(i2c_wr(qts, OPT3001, reg, d, 2));
++}
++
++/* Ambient 2 Click on EXT1: OPT3001 at 0x44, open-drain INT on PB02 */
++static void test_ambient2(void)
++{
++    QTestState *qts = i2c_init("-M pic32cm-mc00-cpro,ext1=ambient2 ");
++
++    g_assert_cmphex(opt_reg(qts, 0x7e), ==, 0x5449);
++    g_assert_cmphex(opt_reg(qts, 0x7f), ==, 0x3001);
++    g_assert_cmphex(opt_reg(qts, 0x01), ==, 0xc810);    /* power-on */
++    g_assert_true(int_high(qts));
++    qom_set_int(qts, CLICK1, "lux", 500000);            /* 500 lux */
++    opt_set(qts, 0x01, 0xc610);                 /* auto, 100 ms, continuous */
++    qtest_clock_step(qts, 101 * 1000 * 1000);
++    g_assert_cmphex(opt_reg(qts, 0x00), ==, 0x4c35);    /* 16 * 3125 */
++    g_assert_false(int_high(qts));              /* end-of-conversion */
++    g_assert_cmphex(opt_reg(qts, 0x01) & 0xe0, ==, 0x80);   /* CRF */
++    g_assert_true(int_high(qts));               /* the read cleared it */
++
++    /* Latched window: above 327.68 lux (4800h) for one conversion */
++    opt_set(qts, 0x02, 0x0010);
++    opt_set(qts, 0x03, 0x4800);
++    qtest_clock_step(qts, 101 * 1000 * 1000);
++    g_assert_false(int_high(qts));
++    g_assert_cmphex(opt_reg(qts, 0x01) & 0x60, ==, 0x40);   /* FH */
++    g_assert_true(int_high(qts));
++    g_assert_cmphex(opt_reg(qts, 0x01) & 0x60, ==, 0x00);
++
++    /* Manual 40.95 lux range: overflow; ME masks the exponent */
++    opt_set(qts, 0x01, 0x0614);
++    qtest_clock_step(qts, 101 * 1000 * 1000);
++    g_assert_cmphex(opt_reg(qts, 0x01) & 0x100, ==, 0x100);  /* OVF */
++    g_assert_cmphex(opt_reg(qts, 0x00), ==, 0x0fff);
++    qtest_quit(qts);
++}
++
+ #define ADXL345         0x53
+ 
+ static uint8_t adxl_reg(QTestState *qts, uint8_t reg)
+@@ -1696,6 +1747,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/dac", test_dac);
+     qtest_add_func("pic32cm-click/expand2", test_expand2);
+     qtest_add_func("pic32cm-click/lcdmini", test_lcdmini);
++    qtest_add_func("pic32cm-click/ambient2", test_ambient2);
+     qtest_add_func("pic32cm-click/accel", test_accel);
+     qtest_add_func("pic32cm-click/rtc6-time", test_rtc6_time);
+     qtest_add_func("pic32cm-click/rtc6-alarm", test_rtc6_alarm);
+-- 
+2.53.0.windows.2
+

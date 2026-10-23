@@ -1,0 +1,437 @@
+From e36c0c7a3ce907cdd7be99c777bd51416f20c11b Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 22 Oct 2026 23:16:27 -0700
+Subject: [PATCH 81/85] hw/misc: MCP4921 12-bit SPI DAC and the DAC Click
+
+The MCP4921 (DS21897B section 5): sixteen-bit writes (A/B, BUF, GA#,
+SHDN#, twelve data bits) load the input register on CS# rising, fewer
+clocks abort, LDAC# low (or falling) copies it to the DAC register;
+VOUT = VREF * D / 4096, twice that with GA# low, limited to VDD, 0 V
+while shut down. QOM: "vref", "vdd", read-only "code", "vout" (mV) and
+"readout" for front ends.
+
+DAC Click v100: CS# with R4 100 kOhm pull-up, LDAC# tied low, VREF on
+VCC (3.3 V).
+
+qtests: gain 1 and 2, the VDD limit, an aborted write and shutdown on
+the MC00's EXT1; a write through SPI0 on the AVR64EA48 Nano Base.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |   8 +
+ hw/misc/mchp_mcp4921.c                | 217 ++++++++++++++++++++++++++
+ hw/misc/meson.build                   |   1 +
+ hw/misc/mikrobus.c                    |   6 +
+ include/hw/misc/mchp_mcp4921.h        |  23 +++
+ tests/qtest/avr64ea48-cnano-test.c    |  18 +++
+ tests/qtest/pic32cm-click-test.c      |  42 +++++
+ 7 files changed, 315 insertions(+)
+ create mode 100644 hw/misc/mchp_mcp4921.c
+ create mode 100644 include/hw/misc/mchp_mcp4921.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index b18d86d..239f1cd 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -187,6 +187,14 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   drives high while pressed and floats otherwise (no pull on the Click).
+   QOM properties ``position`` (detents, clockwise up) and ``pressed``.
+ 
++``dac``
++  DAC Click (v100): an MCP4921 12-bit SPI DAC (``mchp-mcp4921``), CS#
++  100 kOhm pull-up (R4), LDAC# tied low, VREF on VCC (J1; the MCP1541's
++  4.096 V is ``vref=4096``), VOUT on the terminals with a 10 kOhm load.
++  Sixteen-bit writes (A/B, BUF, GA#, SHDN#, data) load on CS# rising;
++  fewer clocks abort the write. Read-only QOM properties ``vout`` (mV),
++  ``code`` and ``readout``.
++
+ ``ledringr``
+   LED Ring R Click (v100): 32 red LEDs on four chained 74HC595
+   (``74hc595``, length 4; LATCH on CS, MR# on RST, no pull resistors on
+diff --git a/hw/misc/mchp_mcp4921.c b/hw/misc/mchp_mcp4921.c
+new file mode 100644
+index 0000000..07bef8d
+--- /dev/null
++++ b/hw/misc/mchp_mcp4921.c
+@@ -0,0 +1,217 @@
++/*
++ * Microchip MCP4921 12-bit SPI DAC, and the DAC Click
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * MCP4921/4922 data sheet (DS21897B), section 5: with CS# low, sixteen
++ * bits shift in MSB first: A/B (the MCP4922's second DAC; writes with it
++ * set are ignored here), BUF, GA# (1: VOUT = VREF * D / 4096, 0: twice
++ * that), SHDN# (0: output off) and twelve data bits. CS# rising after
++ * exactly sixteen clocks loads the input register; before sixteen the
++ * write is aborted. More than sixteen keeps the last sixteen bits (the
++ * shift register; not checked). The DAC register follows the input
++ * register while LDAC# is low, else on its falling edge. The output is
++ * limited to VDD; shut down, it is high impedance and reads 0 V (the
++ * DAC Click loads it with 10 kOhm to ground). The device has no SDO.
++ * Settling time, the reference buffer and the output's load regulation
++ * are not modelled.
++ *
++ * DAC Click (MikroElektronika, schematic v100): CS# with R4 100 kOhm
++ * pull-up, LDAC# tied low, VREF on VCC (J1; 4.096 V from an MCP1541 on
++ * the other position, "vref=4096"), VCC 3.3 V (J2). Not checked against
++ * a physical Click.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/misc/mchp_mcp4921.h"
++#include "hw/ssi/ssi.h"
++#include "migration/vmstate.h"
++
++#define MCP4921_AB          (1u << 15)
++#define MCP4921_GA          (1u << 13)      /* 1: gain 1 */
++#define MCP4921_SHDN        (1u << 12)      /* 0: shut down */
++#define MCP4921_DATA        0x0fffu
++
++OBJECT_DECLARE_SIMPLE_TYPE(MchpMcp4921State, MCHP_MCP4921)
++
++struct MchpMcp4921State {
++    SSIPeripheral parent_obj;
++
++    uint32_t vref;                      /* mV */
++    uint32_t vdd;                       /* mV */
++    uint32_t shift;                     /* bits clocked in since CS# fell */
++    uint32_t bits;
++    uint16_t input;                     /* input register: config + data */
++    uint16_t dac;                       /* DAC register */
++    bool ldac;                          /* LDAC# level */
++};
++
++static uint32_t mcp4921_vout(MchpMcp4921State *s)
++{
++    uint64_t mv;
++
++    if (!(s->dac & MCP4921_SHDN)) {
++        return 0;
++    }
++    mv = (uint64_t)s->vref * (s->dac & MCP4921_DATA) / 4096;
++    if (!(s->dac & MCP4921_GA)) {
++        mv *= 2;
++    }
++    return MIN(mv, s->vdd);
++}
++
++static uint32_t mcp4921_transfer(SSIPeripheral *dev, uint32_t val)
++{
++    MchpMcp4921State *s = MCHP_MCP4921(dev);
++
++    s->shift = s->shift << 8 | (val & 0xff);
++    s->bits += 8;
++    return 0;                           /* no SDO */
++}
++
++static int mcp4921_set_cs(SSIPeripheral *dev, bool high)
++{
++    MchpMcp4921State *s = MCHP_MCP4921(dev);
++
++    if (!high) {
++        s->shift = 0;
++        s->bits = 0;
++        return 0;
++    }
++    if (s->bits < 16) {
++        if (s->bits) {
++            qemu_log_mask(LOG_GUEST_ERROR, "mcp4921: %u clocks, write "
++                          "aborted\n", s->bits);
++        }
++        return 0;
++    }
++    if (s->shift & MCP4921_AB) {
++        qemu_log_mask(LOG_GUEST_ERROR, "mcp4921: write to DAC B ignored\n");
++        return 0;
++    }
++    s->input = s->shift & 0xffff;
++    if (!s->ldac) {
++        s->dac = s->input;
++    }
++    return 0;
++}
++
++static void mcp4921_set_ldac(void *opaque, int n, int level)
++{
++    MchpMcp4921State *s = opaque;
++
++    /* Low (and its falling edge) copies the input register */
++    s->ldac = level > 0;
++    if (!s->ldac) {
++        s->dac = s->input;
++    }
++}
++
++static void mcp4921_get_vout(Object *obj, Visitor *v, const char *name,
++                             void *opaque, Error **errp)
++{
++    uint32_t mv = mcp4921_vout(MCHP_MCP4921(obj));
++
++    visit_type_uint32(v, name, &mv, errp);
++}
++
++static void mcp4921_get_code(Object *obj, Visitor *v, const char *name,
++                             void *opaque, Error **errp)
++{
++    uint32_t code = MCHP_MCP4921(obj)->dac & MCP4921_DATA;
++
++    visit_type_uint32(v, name, &code, errp);
++}
++
++static char *mcp4921_get_readout(Object *obj, Error **errp)
++{
++    MchpMcp4921State *s = MCHP_MCP4921(obj);
++    uint32_t mv = mcp4921_vout(s);
++
++    if (!(s->dac & MCP4921_SHDN)) {
++        return g_strdup("VOUT off");
++    }
++    return g_strdup_printf("VOUT %u.%03u V", mv / 1000, mv % 1000);
++}
++
++static void mcp4921_realize(SSIPeripheral *dev, Error **errp)
++{
++}
++
++static void mcp4921_reset(DeviceState *dev)
++{
++    MchpMcp4921State *s = MCHP_MCP4921(dev);
++
++    /* Power-on reset: the DAC holds 0, the output buffer on */
++    s->shift = 0;
++    s->bits = 0;
++    s->input = MCP4921_GA | MCP4921_SHDN;
++    s->dac = s->input;
++    s->parent_obj.cs = true;            /* CS# pulled up */
++}
++
++static void mcp4921_init(Object *obj)
++{
++    qdev_init_gpio_in_named(DEVICE(obj), mcp4921_set_ldac, MCHP_MCP4921_LDAC,
++                            1);
++    object_property_add(obj, "vout", "uint32", mcp4921_get_vout, NULL, NULL,
++                        NULL);
++    object_property_add(obj, "code", "uint32", mcp4921_get_code, NULL, NULL,
++                        NULL);
++    object_property_add_str(obj, "readout", mcp4921_get_readout, NULL);
++}
++
++static const Property mcp4921_properties[] = {
++    DEFINE_PROP_UINT32("vref", MchpMcp4921State, vref, 3300),
++    DEFINE_PROP_UINT32("vdd", MchpMcp4921State, vdd, 3300),
++};
++
++static const VMStateDescription vmstate_mcp4921 = {
++    .name = TYPE_MCHP_MCP4921,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_SSI_PERIPHERAL(parent_obj, MchpMcp4921State),
++        VMSTATE_UINT32(shift, MchpMcp4921State),
++        VMSTATE_UINT32(bits, MchpMcp4921State),
++        VMSTATE_UINT16(input, MchpMcp4921State),
++        VMSTATE_UINT16(dac, MchpMcp4921State),
++        VMSTATE_BOOL(ldac, MchpMcp4921State),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void mcp4921_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    SSIPeripheralClass *k = SSI_PERIPHERAL_CLASS(klass);
++
++    dc->desc = "MCP4921 12-bit SPI DAC";
++    dc->vmsd = &vmstate_mcp4921;
++    device_class_set_props(dc, mcp4921_properties);
++    device_class_set_legacy_reset(dc, mcp4921_reset);
++    k->realize = mcp4921_realize;
++    k->transfer = mcp4921_transfer;
++    k->set_cs = mcp4921_set_cs;
++    k->cs_polarity = SSI_CS_LOW;
++}
++
++static const TypeInfo mcp4921_types[] = {
++    {
++        .name = TYPE_MCHP_MCP4921,
++        .parent = TYPE_SSI_PERIPHERAL,
++        .instance_size = sizeof(MchpMcp4921State),
++        .instance_init = mcp4921_init,
++        .class_init = mcp4921_class_init,
++    },
++};
++
++DEFINE_TYPES(mcp4921_types)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 7d0207f..76970ba 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -31,6 +31,7 @@ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files(
+   'rn2903.c',
+   'click_dcmotor.c',
+   'click_servo.c',
++  'mchp_mcp4921.c',
+ ))
+ system_ss.add(when: 'CONFIG_WS2812', if_true: files('ws2812.c'))
+ system_ss.add(when: 'CONFIG_PP_COSIM', if_true: files('pp_cosim.c'))
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index 5ab6826..623fbee 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -25,6 +25,7 @@
+ #include "hw/misc/click_pot.h"
+ #include "hw/misc/click_servo.h"
+ #include "hw/misc/emc2301.h"
++#include "hw/misc/mchp_mcp4921.h"
+ #include "hw/misc/mikrobus.h"
+ #include "hw/misc/quectel_l86.h"
+ #include "hw/misc/rnbd451.h"
+@@ -281,6 +282,11 @@ static const ClickInfo mikrobus_clicks[] = {
+       TYPE_TI_74HC595, CLICK_SPI, 0, 4,
+       .ins = { { TI_74HC595_LATCH, MIKROBUS_CS },
+                { TI_74HC595_MR, MIKROBUS_RST } } },
++    { "dac", "DAC Click: MCP4921 12-bit SPI DAC (LDAC tied low), VOUT on "
++      "its terminals, VREF 3.3 V",
++      TYPE_MCHP_MCP4921, CLICK_SPI, 0, 0,
++      .ins = { { SSI_GPIO_CS, MIKROBUS_CS } },
++      .pulls = { { true, MIKROBUS_CS, 1 } } },            /* R4 100k */
+ };
+ 
+ const char *mikrobus_click_names(void)
+diff --git a/include/hw/misc/mchp_mcp4921.h b/include/hw/misc/mchp_mcp4921.h
+new file mode 100644
+index 0000000..c898b4a
+--- /dev/null
++++ b/include/hw/misc/mchp_mcp4921.h
+@@ -0,0 +1,23 @@
++/*
++ * Microchip MCP4921 12-bit SPI DAC
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * "mchp-mcp4921": an SSI peripheral (chip select active low). GPIO input
++ * "ldac" (LDAC#, low by default: the output follows each write). QOM
++ * properties "vref" and "vdd" (mV, default 3300), and read-only "code"
++ * (the DAC register), "vout" (the output in mV, 0 while shut down) and
++ * "readout" ("VOUT 1.650 V", or "VOUT off").
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_MISC_MCHP_MCP4921_H
++#define HW_MISC_MCHP_MCP4921_H
++
++#define TYPE_MCHP_MCP4921 "mchp-mcp4921"
++
++#define MCHP_MCP4921_LDAC "ldac"
++
++#endif /* HW_MISC_MCHP_MCP4921_H */
+diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
+index 5ddfae5..767ef09 100644
+--- a/tests/qtest/avr64ea48-cnano-test.c
++++ b/tests/qtest/avr64ea48-cnano-test.c
+@@ -529,6 +529,23 @@ static void test_ledringr_mb1(const void *fw)
+     qtest_quit(qts);
+ }
+ 
++/* DAC Click on mikroBUS 1: MCP4921, CS# on PA7 */
++static void test_dac_mb1(const void *fw)
++{
++    QTestState *qts = qtest_initf("-M avr64ea48-cnano,mb1=dac -kernel %s",
++                                  (const char *)fw);
++
++    qtest_writeb(qts, PORTA + 0x05, BIT(7));                    /* OUTSET */
++    qtest_writeb(qts, PORTA + 0x01, BIT(4) | BIT(6) | BIT(7));  /* DIRSET */
++    qtest_writeb(qts, SPI0 + 0, 0x21);                  /* MASTER, ENABLE */
++    qtest_writeb(qts, PORTA + 0x06, BIT(7));                    /* OUTCLR */
++    spi0_xfer(qts, 0x34);                       /* gain 1, on, 1024 */
++    spi0_xfer(qts, 0x00);
++    qtest_writeb(qts, PORTA + 0x05, BIT(7));
++    g_assert_cmpuint(qom_uint(qts, "/machine/mb1-click", "vout"), ==, 825);
++    qtest_quit(qts);
++}
++
+ static void qom_set_str(QTestState *qts, const char *path, const char *prop,
+                         const char *value)
+ {
+@@ -618,6 +635,7 @@ int main(int argc, char **argv)
+     qtest_add_data_func("avr64ea48-cnano/faults", fw, test_faults);
+     qtest_add_data_func("avr64ea48-cnano/adc", fw, test_adc_mb1);
+     qtest_add_data_func("avr64ea48-cnano/ledringr", fw, test_ledringr_mb1);
++    qtest_add_data_func("avr64ea48-cnano/dac", fw, test_dac_mb1);
+     ret = g_test_run();
+     unlink(fw);
+     return ret;
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index 9d37379..dbee6c7 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -722,6 +722,47 @@ static void test_ledringr(void)
+     qtest_quit(qts);
+ }
+ 
++static char *qom_str(QTestState *qts, const char *path, const char *prop);
++
++/* One 16-bit MCP4921 write on SERCOM1, CS# on PA17 */
++static void dac_write(QTestState *qts, uint16_t word, unsigned bytes)
++{
++    qtest_writel(qts, PA + P_OUTCLR, BIT(17));
++    spi_byte(qts, word >> 8);
++    if (bytes > 1) {
++        spi_byte(qts, word & 0xff);
++    }
++    qtest_writel(qts, PA + P_OUTSET, BIT(17));
++}
++
++/* DAC Click on EXT1: MCP4921 (CS# PA17), VOUT on its terminals */
++static void test_dac(void)
++{
++    QTestState *qts = qtest_init("-M pic32cm-mc00-cpro,ext1=dac ");
++    g_autofree char *mid = NULL, *off = NULL;
++
++    g_assert_true(pin_high(qts, PA, 17));               /* R4 pull-up */
++    g_assert_cmpuint(qom_int(qts, CLICK1, "vout"), ==, 0);
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16);
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16 | 0x02);
++    qtest_writel(qts, PA + P_OUTSET, BIT(17));
++    qtest_writel(qts, PA + P_DIRSET, BIT(17));
++    dac_write(qts, 0x3800, 2);                  /* gain 1, on, 2048 */
++    g_assert_cmpuint(qom_int(qts, CLICK1, "code"), ==, 2048);
++    g_assert_cmpuint(qom_int(qts, CLICK1, "vout"), ==, 1650);
++    mid = qom_str(qts, CLICK1, "readout");
++    g_assert_cmpstr(mid, ==, "VOUT 1.650 V");
++    dac_write(qts, 0x1c00, 2);                  /* gain 2: 3072 is VDD */
++    g_assert_cmpuint(qom_int(qts, CLICK1, "vout"), ==, 3300);
++    dac_write(qts, 0x3400, 1);                  /* 8 clocks: aborted */
++    g_assert_cmpuint(qom_int(qts, CLICK1, "code"), ==, 3072);
++    dac_write(qts, 0x2800, 2);                  /* SHDN# low */
++    g_assert_cmpuint(qom_int(qts, CLICK1, "vout"), ==, 0);
++    off = qom_str(qts, CLICK1, "readout");
++    g_assert_cmpstr(off, ==, "VOUT off");
++    qtest_quit(qts);
++}
++
+ /* ADC Click on EXT1: MCP3204 on SPI (CS# PA17), inputs on terminals */
+ static void test_adc(void)
+ {
+@@ -1501,6 +1542,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/thumbstick", test_thumbstick);
+     qtest_add_func("pic32cm-click/adc", test_adc);
+     qtest_add_func("pic32cm-click/ledringr", test_ledringr);
++    qtest_add_func("pic32cm-click/dac", test_dac);
+     qtest_add_func("pic32cm-click/accel", test_accel);
+     qtest_add_func("pic32cm-click/rtc6-time", test_rtc6_time);
+     qtest_add_func("pic32cm-click/rtc6-alarm", test_rtc6_alarm);
+-- 
+2.53.0.windows.2
+

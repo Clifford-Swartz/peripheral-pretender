@@ -443,6 +443,43 @@ servo draws (what the LTC2497 reads) and a monitor shows all sixteen pulse width
 -C firmware/hello BOARD=pic32cm_mc00_cpro APP=servo` (EXT1; MikroElektronika's set-up, 30 Hz,
 a readback, servo 1's current; then servo 1 sweeps, servo 2 mirrors it, 3 and 4 hold).
 
+The ADC Click (`clicks/adc/`) has a slider for each input terminal (CH0-CH3, 0-3.3 V, the
+MCP3204's `in0`..`in3`). Demo: `make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=adcclick`
+(EXT1; the four channels single-ended every 100 ms, a line when one moves).
+
+The LED Ring R Click (`clicks/ledringr/`, part positions from its STEP file) lights its 32 red
+LEDs from the four 74HC595's polled `outputs` (`bits`; LED1-LED8 are bits 31:24, as the first
+byte sent ends in the last register). Demo: `make -C firmware/hello BOARD=pic32cm_mc00_cpro
+APP=ledringr` (EXT1; a three-LED comet, a step every 40 ms).
+
+The DAC Click (`clicks/dac/`) shows its MCP4921's output voltage (`display` of type `text` on
+`readout`). A text readout is the twin's, not printed on the Click, so it stays upright when a
+board holds the Click turned (RTC 6's clock too). Demo: `make -C firmware/hello
+BOARD=pic32cm_mc00_cpro APP=dacclick` (EXT1; 0, 1/4, 1/2, 3/4 and full scale, a second each).
+
+The Expand 2 Click (`clicks/expand2/`) lights each header pin while its pad is high (`bits` on
+the MCP23017's `levels`) and has a button on each pin that holds it to ground. Its DXF puts
+the mikroBUS header 2.26 mm higher than most Clicks (`header_origin_mm`, `header_center_mm`).
+Demo: `make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=expand2` (EXT1; PB0-PB6 inputs with
+pull-ups and interrupt-on-change, mirrored to INTA; port A lights the pins held low. GPB7 stays
+an output: on the MCP23017 GPA7 and GPB7 are outputs only).
+
+The LCD mini Click (`clicks/lcdmini/`) draws its LCD module, which hangs on a ribbon cable,
+lying over the Click and turned so its text reads upright on today's boards (`render_click.py`
+kind `lcd_module`; `extend_mm` widens the art past the board). The panel is the model's
+picture (`panel`, 296 x 82) turned the same way (`rotate_deg`). Demo: `make -C firmware/hello
+BOARD=pic32cm_mc00_cpro APP=lcdmini` (EXT1; MikroElektronika's contrast, 4-bit start-up, two
+lines and a seconds counter).
+
+The Ambient 2 Click (`clicks/ambient2/`) has an illuminance slider (0-83865 lx, the OPT3001's
+`lux`). Demo: `make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=ambient2` (EXT1; IDs,
+continuous 100 ms conversions, INT low above 1000 lx and released below 800 lx).
+
+The Thermo K Click (`clicks/thermok/`, art from its STEP file: its outline has a tab for the
+socket, so a `-` outline may be concave, and the socket is kind `tc_socket`) has sliders for
+the hot and cold junctions. Demo: `make -C firmware/hello BOARD=pic32cm_mc00_cpro APP=thermok`
+(EXT1; device ID, both junctions, ALERT1 on INT above 100 C).
+
 Colour variants: 8x8 R, Y and B and Button R and Y share their device with 8x8 G and Button G
 and have their own art and LED colours. The 8x8 B Click's page links the 8x8 R Click's 2D files,
 so its art is the 8x8 R DXF with the silkscreen letter replaced (`silk_label`).

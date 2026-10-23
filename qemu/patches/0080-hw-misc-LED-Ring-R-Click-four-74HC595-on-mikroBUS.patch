@@ -1,0 +1,139 @@
+From 0b8a45f839e46b601697df9ecb5953166488b0b5 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 22 Oct 2026 23:13:50 -0700
+Subject: [PATCH 80/85] hw/misc: LED Ring R Click (four 74HC595) on mikroBUS
+
+LED Ring R Click v100: 32 red LEDs on four chained 74HC595 (length 4),
+LATCH on CS, MR# on RST, no pull resistors. The first byte of a
+transfer ends in the last register: byte 0 is LED1-LED8, in bits 31:24
+of "outputs"; LED25-LED32 are register 0, bits 7:0.
+
+qtests: a 32-bit frame latched on the MC00's EXT1 and on the AVR64EA48
+Nano Base's socket 1.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  8 ++++++++
+ hw/misc/mikrobus.c                    |  5 +++++
+ tests/qtest/avr64ea48-cnano-test.c    | 20 ++++++++++++++++++++
+ tests/qtest/pic32cm-click-test.c      | 24 ++++++++++++++++++++++++
+ 4 files changed, 57 insertions(+)
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index fac118f..b18d86d 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -187,6 +187,14 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   drives high while pressed and floats otherwise (no pull on the Click).
+   QOM properties ``position`` (detents, clockwise up) and ``pressed``.
+ 
++``ledringr``
++  LED Ring R Click (v100): 32 red LEDs on four chained 74HC595
++  (``74hc595``, length 4; LATCH on CS, MR# on RST, no pull resistors on
++  the Click: an undriven MR# reads high). The first byte of a transfer
++  ends in the last register, so byte 0 lights LED1-LED8 (bit 0 LED1),
++  byte 3 LED25-LED32; ``outputs`` holds register 0 (LED25-LED32) in bits
++  7:0 and LED1-LED8 in bits 31:24.
++
+ ``rn4871``
+   RN4871 Click (v101): Microchip's RN4871 Bluetooth LE module on the UART
+   (``chardev-rn4871``, the RNBD451 model's command set with the RN4871's
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index e007e6f..5ab6826 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -276,6 +276,11 @@ static const ClickInfo mikrobus_clicks[] = {
+       TYPE_MCHP_MCP3204, CLICK_SPI, 0, 0,
+       .ins = { { SSI_GPIO_CS, MIKROBUS_CS } },
+       .pulls = { { true, MIKROBUS_CS, 1 } } },            /* R7 100k */
++    { "ledringr", "LED Ring R Click: ring of 32 red LEDs on four 74HC595 "
++      "(LATCH on CS, MR# on RST)",
++      TYPE_TI_74HC595, CLICK_SPI, 0, 4,
++      .ins = { { TI_74HC595_LATCH, MIKROBUS_CS },
++               { TI_74HC595_MR, MIKROBUS_RST } } },
+ };
+ 
+ const char *mikrobus_click_names(void)
+diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
+index a274dca..5ddfae5 100644
+--- a/tests/qtest/avr64ea48-cnano-test.c
++++ b/tests/qtest/avr64ea48-cnano-test.c
+@@ -510,6 +510,25 @@ static void test_adc_mb1(const void *fw)
+     qtest_quit(qts);
+ }
+ 
++/* LED Ring R Click on mikroBUS 1: four 74HC595, LATCH on CS (PA7) */
++static void test_ledringr_mb1(const void *fw)
++{
++    QTestState *qts = qtest_initf("-M avr64ea48-cnano,mb1=ledringr "
++                                  "-kernel %s", (const char *)fw);
++
++    qtest_writeb(qts, PORTA + 0x06, BIT(7));                    /* OUTCLR */
++    qtest_writeb(qts, PORTA + 0x01, BIT(4) | BIT(6) | BIT(7));  /* DIRSET */
++    qtest_writeb(qts, SPI0 + 0, 0x21);                  /* MASTER, ENABLE */
++    spi0_xfer(qts, 0x0f);                               /* LED1-LED4 */
++    spi0_xfer(qts, 0x00);
++    spi0_xfer(qts, 0x00);
++    spi0_xfer(qts, 0x00);
++    qtest_writeb(qts, PORTA + 0x05, BIT(7));            /* LATCH rises */
++    g_assert_cmphex(qom_uint(qts, "/machine/mb1-click", "outputs"), ==,
++                    0x0f000000);
++    qtest_quit(qts);
++}
++
+ static void qom_set_str(QTestState *qts, const char *path, const char *prop,
+                         const char *value)
+ {
+@@ -598,6 +617,7 @@ int main(int argc, char **argv)
+     qtest_add_data_func("avr64ea48-cnano/an", fw, test_an);
+     qtest_add_data_func("avr64ea48-cnano/faults", fw, test_faults);
+     qtest_add_data_func("avr64ea48-cnano/adc", fw, test_adc_mb1);
++    qtest_add_data_func("avr64ea48-cnano/ledringr", fw, test_ledringr_mb1);
+     ret = g_test_run();
+     unlink(fw);
+     return ret;
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index 8217b5e..9d37379 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -699,6 +699,29 @@ static void test_faults(void)
+     qtest_quit(qts);
+ }
+ 
++/*
++ * LED Ring R Click on EXT1: four 74HC595, LATCH on CS (PA17). Byte 0
++ * (LED1-8) ends in the last register, bits 31:24 of "outputs"
++ */
++static void test_ledringr(void)
++{
++    QTestState *qts = qtest_init("-M pic32cm-mc00-cpro,ext1=ledringr ");
++    static const uint8_t ring[4] = { 0x01, 0x00, 0x00, 0x80 };
++
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16);   /* host, DOPO 1 */
++    qtest_writel(qts, SERCOM1 + 0x04, BIT(17));            /* RXEN */
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16 | 0x02);
++    qtest_writel(qts, PA + P_OUTCLR, BIT(17));
++    qtest_writel(qts, PA + P_DIRSET, BIT(17));
++    for (unsigned i = 0; i < 4; i++) {
++        spi_byte(qts, ring[i]);
++    }
++    g_assert_cmphex(qom_int(qts, CLICK1, "outputs"), ==, 0);   /* latched */
++    qtest_writel(qts, PA + P_OUTSET, BIT(17));             /* LATCH rises */
++    g_assert_cmphex(qom_int(qts, CLICK1, "outputs"), ==, 0x01000080);
++    qtest_quit(qts);
++}
++
+ /* ADC Click on EXT1: MCP3204 on SPI (CS# PA17), inputs on terminals */
+ static void test_adc(void)
+ {
+@@ -1477,6 +1500,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/oledc", test_oledc);
+     qtest_add_func("pic32cm-click/thumbstick", test_thumbstick);
+     qtest_add_func("pic32cm-click/adc", test_adc);
++    qtest_add_func("pic32cm-click/ledringr", test_ledringr);
+     qtest_add_func("pic32cm-click/accel", test_accel);
+     qtest_add_func("pic32cm-click/rtc6-time", test_rtc6_time);
+     qtest_add_func("pic32cm-click/rtc6-alarm", test_rtc6_alarm);
+-- 
+2.53.0.windows.2
+

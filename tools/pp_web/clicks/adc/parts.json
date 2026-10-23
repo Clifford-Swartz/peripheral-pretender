@@ -1,0 +1,33 @@
+{
+ "source": "MikroElektronika ADC Click v100: 2D and 3D files (ADC_Click_2d_3d_files.zip: ADC_click_v100.dxf), schematic v100. Part centres from the DXF pads and silkscreen; body sizes from the packages (SOIC-14, SOT-23, SOD-123, 0603, 3528 tantalum, 2.54 mm two-way terminal blocks). PWR SEL drawn on 3.3V and REFERENCE on VCC, the schematic's positions; the IC pads are not in the DXF.",
+ "parts": [
+  {"ref": "CN3", "kind": "terminal", "ways": 2, "value": "CH3, CH2", "at_mm": [5.84, 33.7], "size_mm": [5.6, 6.2]},
+  {"ref": "CN2", "kind": "terminal", "ways": 2, "value": "CH1, CH0", "at_mm": [11.43, 33.7], "size_mm": [5.6, 6.2]},
+  {"ref": "CN4", "kind": "terminal", "ways": 2, "value": "GND, GND", "at_mm": [17.02, 33.7], "size_mm": [5.6, 6.2]},
+  {"ref": "U1", "kind": "ic", "value": "MCP6284 (SOIC-14)", "at_mm": [15.54, 20.74], "size_mm": [3.9, 8.65]},
+  {"ref": "U2", "kind": "ic", "value": "MCP3204 (SOIC-14)", "at_mm": [7.23, 9.11], "size_mm": [8.65, 3.9]},
+  {"ref": "REF1", "kind": "ic", "value": "MCP1541 (SOT-23)", "at_mm": [15.94, 14.2], "size_mm": [2.9, 1.3]},
+  {"ref": "D7", "kind": "ic", "value": "BAT43 (SOD-123)", "at_mm": [0.51, 33.72], "size_mm": [1.6, 2.7]},
+  {"ref": "D6", "kind": "ic", "value": "BAT43 (SOD-123)", "at_mm": [0.51, 27.9], "size_mm": [1.6, 2.7]},
+  {"ref": "D4", "kind": "ic", "value": "BAT43 (SOD-123)", "at_mm": [22.23, 33.72], "size_mm": [1.6, 2.7]},
+  {"ref": "D1", "kind": "ic", "value": "BAT43 (SOD-123)", "at_mm": [22.23, 27.75], "size_mm": [1.6, 2.7]},
+  {"ref": "D3", "kind": "ic", "value": "BAT43 (SOD-123)", "at_mm": [7.25, 27.08], "size_mm": [2.7, 1.6]},
+  {"ref": "D2", "kind": "ic", "value": "BAT43 (SOD-123)", "at_mm": [7.25, 24.54], "size_mm": [2.7, 1.6]},
+  {"ref": "D5", "kind": "ic", "value": "BAT43 (SOD-123)", "at_mm": [7.28, 22.02], "size_mm": [2.7, 1.6]},
+  {"ref": "D8", "kind": "ic", "value": "BAT43 (SOD-123)", "at_mm": [7.22, 19.63], "size_mm": [2.7, 1.6]},
+  {"ref": "R4", "kind": "resistor", "value": "1k", "at_mm": [3.05, 25.91], "size_mm": [0.85, 1.6]},
+  {"ref": "R6", "kind": "resistor", "value": "220", "at_mm": [3.05, 21.41], "size_mm": [0.85, 1.6]},
+  {"ref": "R7", "kind": "resistor", "value": "100k", "at_mm": [3.05, 16.38], "size_mm": [0.85, 1.6]},
+  {"ref": "R3", "kind": "resistor", "value": "1k", "at_mm": [13.21, 26.77], "size_mm": [1.6, 0.85]},
+  {"ref": "R2", "kind": "resistor", "value": "1k", "at_mm": [18.03, 26.77], "size_mm": [1.6, 0.85]},
+  {"ref": "R1", "kind": "resistor", "value": "1k", "at_mm": [22.23, 21.36], "size_mm": [0.85, 1.6]},
+  {"ref": "R5", "kind": "resistor", "value": "100", "at_mm": [17.65, 10.54], "size_mm": [0.85, 1.6]},
+  {"ref": "C1", "kind": "capacitor", "value": "100nF", "at_mm": [13.46, 14.1], "size_mm": [0.85, 1.6]},
+  {"ref": "C2", "kind": "capacitor", "value": "100nF", "at_mm": [13.46, 10.54], "size_mm": [0.85, 1.6]},
+  {"ref": "E1", "kind": "ic", "value": "10uF tantalum (3528)", "at_mm": [7.27, 15.93], "size_mm": [3.5, 2.8]},
+  {"ref": "E2", "kind": "ic", "value": "10uF tantalum (3528)", "at_mm": [15.55, 6.71], "size_mm": [3.5, 2.8]},
+  {"ref": "PWR", "kind": "led", "color": "#5dff7a", "at_mm": [0.51, 21.47], "size_mm": [0.85, 1.6]},
+  {"ref": "PWR SEL", "kind": "zero_ohm", "value": "3.3V", "at_mm": [6.22, 2.16], "size_mm": [2.1, 1.3]},
+  {"ref": "REFERENCE", "kind": "zero_ohm", "value": "VCC", "at_mm": [14.48, 2.16], "size_mm": [2.1, 1.3]}
+ ]
+}

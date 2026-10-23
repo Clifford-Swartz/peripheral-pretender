@@ -1,0 +1,1035 @@
+From 79ca837a0364efbc044034367db18d6312c55610 Mon Sep 17 00:00:00 2001
+From: Peripheral Pretender setup <pp-setup@localhost>
+Date: Thu, 22 Oct 2026 23:30:44 -0700
+Subject: [PATCH 83/85] hw/display: LCD mini Click (MCP23S17, MCP4161, 16x2
+ character LCD)
+
+"click-lcdmini" (LCD mini Click v101 with the LCD mini display, a Topway
+LMB162XFW with an ST7066U):
+- an MCP23S17 on SPI, the Mcp23x17 core behind SPI framing (opcode,
+  address, data; address bits checked with IOCON.HAEN), RESET# on RST,
+  INTB on INT;
+- port B drives the LCD: RS GPB2, E GPB3, DB4-DB7 GPB4-GPB7, DB0-DB3 and
+  R/W tied low;
+- the ST7066U/HD44780 instruction set from an 8-bit power-on state:
+  latches on falling E, 4-bit transfers after function set, clear,
+  home, entry mode, display control with cursor and blink (409 ms),
+  cursor and display shift, CGRAM and DDRAM (two lines of 40 or one of
+  80); execution times not modelled;
+- an MCP4161 on its own chip select (AN) sets the contrast with its
+  volatile wiper (write, increment, decrement); the backlight is on
+  unless PWM is driven low;
+- a PpPanel picture: 5x8 dot cells, codes 00h-0Fh from CGRAM and 20h-7Fh
+  in a 5x7 font with the A00 ROM's yen and arrows, white on blue as the
+  product photograph shows, its strength following the wiper, blocks on
+  the first line until the first instruction; "text", "contrast" and
+  "backlight-on" for tests and front ends.
+
+qtests: MikroElektronika's start-up (02h into 4-bit mode), two lines of
+text, a display shift, the contrast write and the backlight on the
+MC00's EXT1; text through SPI0 on the AVR64EA48 Nano Base.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/system/arm/pic32cm-mc00-cpro.rst |  14 +
+ hw/display/click_lcdmini.c            | 723 ++++++++++++++++++++++++++
+ hw/display/meson.build                |   3 +-
+ hw/misc/mikrobus.c                    |  12 +
+ include/hw/display/click_lcdmini.h    |  29 ++
+ tests/qtest/avr64ea48-cnano-test.c    |  45 ++
+ tests/qtest/pic32cm-click-test.c      |  74 +++
+ 7 files changed, 899 insertions(+), 1 deletion(-)
+ create mode 100644 hw/display/click_lcdmini.c
+ create mode 100644 include/hw/display/click_lcdmini.h
+
+diff --git a/docs/system/arm/pic32cm-mc00-cpro.rst b/docs/system/arm/pic32cm-mc00-cpro.rst
+index 2355445..3edf711 100644
+--- a/docs/system/arm/pic32cm-mc00-cpro.rst
++++ b/docs/system/arm/pic32cm-mc00-cpro.rst
+@@ -208,6 +208,20 @@ headers, so one UART Click at a time; it then takes SERCOM3's place in
+   7:0), ``drive`` (external drivers, "<mask> <level>" in hex) and ``pa0``
+   .. ``pb7`` (hold that pad to ground).
+ 
++``lcdmini``
++  LCD mini Click (v101) with its LCD mini display (a 16x2 character LCD,
++  Topway LMB162XFW, ST7066U controller): ``click-lcdmini``. An MCP23S17
++  on the SPI bus (CS# 10 kOhm pull-up, RESET# on RST, INTB on INT; the
++  MCP23017's register file and interrupts) drives the LCD from port B
++  (RS GPB2, E GPB3, DB4-DB7 GPB4-GPB7; DB0-DB3 and R/W tied low). The
++  controller starts in 8-bit mode and takes the HD44780 instruction set,
++  CGRAM included; execution times are not modelled. An MCP4161 (CS# on
++  AN, 10 kOhm pull-up) sets the contrast with its volatile wiper; the
++  backlight is on unless PWM is driven low (R1 1 kOhm pull-up). QOM
++  properties ``frame``/``frame-gen`` (the picture, blue with white
++  dots), ``text`` (the two visible lines), ``contrast`` (the wiper,
++  0-256) and ``backlight-on``.
++
+ ``ledringr``
+   LED Ring R Click (v100): 32 red LEDs on four chained 74HC595
+   (``74hc595``, length 4; LATCH on CS, MR# on RST, no pull resistors on
+diff --git a/hw/display/click_lcdmini.c b/hw/display/click_lcdmini.c
+new file mode 100644
+index 0000000..8cf33ed
+--- /dev/null
++++ b/hw/display/click_lcdmini.c
+@@ -0,0 +1,723 @@
++/*
++ * LCD mini Click: a 16x2 character LCD behind an MCP23S17
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * LCD mini Click (MikroElektronika, schematic v101) with its LCD mini
++ * display (Topway LMB162XFW, an ST7066U controller):
++ *  - An MCP23S17 on SPI (CS# with R4 10 kOhm pull-up, A2..A0 on ground,
++ *    RESET# on RST, INTB on INT) drives the LCD from port B: RS on GPB2,
++ *    E on GPB3, DB4-DB7 on GPB4-GPB7. DB0-DB3 are tied to ground and R/W
++ *    to ground, so the LCD is write-only and its busy flag unreadable.
++ *    The register file, pads and interrupts are the Mcp23x17 core's
++ *    (hw/gpio/mchp_mcp23x17.c); SPI frames are an opcode (0100 A2 A1 A0
++ *    R/W, the address bits checked only with IOCON.HAEN), the register
++ *    address, then data at the advancing pointer.
++ *  - An MCP4161 digital potentiometer (CS# on AN with R5 10 kOhm pull-up)
++ *    sets the LCD's contrast voltage from its wiper (DS22059B section
++ *    7: 16-bit commands AD3:AD0 C1:C0 D9:D8 then D7:D0, write C = 00;
++ *    8-bit increment C = 01 and decrement C = 10; wiper 0 is address 0,
++ *    0-256, mid-scale at power-on). Only the volatile wiper is modelled;
++ *    the MCP4161 has no SDO line on the Click. MikroElektronika's driver
++ *    writes 255 - contrast: a low wiper is a dark display.
++ *  - The backlight is switched by a transistor from PWM, R1 1 kOhm
++ *    pulling it on.
++ *  - The ST7066U follows the HD44780's instruction set: it starts in
++ *    8-bit mode, one line, display off; each falling E latches DB7-DB0
++ *    (a nibble at a time, high first, once function set picks 4 bits),
++ *    RS choosing data or instruction. Clear, home, entry mode, display
++ *    on/off with cursor and blink, cursor and display shift, function
++ *    set, CGRAM and DDRAM addresses, data to DDRAM (two lines of 40 at
++ *    00h and 40h, or one of 80) or CGRAM. Execution times are not
++ *    modelled. The panel shows codes 00h-0Fh from CGRAM, 20h-7Fh in a
++ *    5x7 font with the A00 ROM's yen and arrows, and nothing for the
++ *    ROM's other codes. Until the first instruction the first line shows
++ *    blocks, as a powered, uninitialised module does.
++ *  - The picture: blue background, white dots (as the Click's product
++ *    photograph shows; the LMB162XFW manual describes a yellow-green
++ *    part), their strength following the contrast wiper, dim with the
++ *    backlight off. The window's size is estimated from the photograph.
++ * Not checked against a physical Click.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/timer.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "hw/core/irq.h"
++#include "hw/core/qdev-properties.h"
++#include "hw/display/click_lcdmini.h"
++#include "hw/display/pp_panel.h"
++#include "hw/gpio/mchp_mcp23x17.h"
++#include "hw/ssi/ssi.h"
++#include "migration/vmstate.h"
++
++/* The LCD's lines on port B */
++#define LCD_RS          BIT(2)
++#define LCD_E           BIT(3)
++
++#define LCD_COLS        16
++#define LCD_LINES       2
++#define LCD_DDRAM       80
++#define LCD_CGRAM       64
++#define LCD_BLINK_NS    (409 * SCALE_MS)
++
++/* The picture: 3-pixel dots (2 lit, 1 gap), cells of 5x8 dots */
++#define DOT             3
++#define CELL_W          (6 * DOT)
++#define CELL_H          (10 * DOT)
++#define FRAME_W         296
++#define FRAME_H         82
++#define TEXT_X          6
++#define TEXT_Y          14
++
++#define POT_WIPER_MAX   256
++
++OBJECT_DECLARE_SIMPLE_TYPE(ClickLcdminiState, CLICK_LCDMINI)
++
++struct ClickLcdminiState {
++    SSIPeripheral parent_obj;
++
++    Mcp23x17 io;
++    bool cs;                            /* CS# levels */
++    bool cs2;
++    uint8_t io_phase;                   /* 0 opcode, 1 address, 2 data */
++    bool io_read;
++    bool io_ignore;
++    uint8_t pot_phase;                  /* 0 command, 1 data */
++    uint8_t pot_cmd;
++    uint16_t wiper;
++    bool backlight;
++    uint8_t portb;                      /* port B as last seen */
++
++    /* ST7066U */
++    uint8_t ddram[LCD_DDRAM];
++    uint8_t cgram[LCD_CGRAM];
++    uint8_t ac;                         /* address counter */
++    bool ac_cgram;                      /* AC addresses CGRAM */
++    bool bus8;                          /* 8-bit interface */
++    bool nibble_low;                    /* 4-bit: the high nibble came */
++    uint8_t nibble;
++    bool two_lines;
++    bool increment;
++    bool shift_on_write;
++    bool display_on;
++    bool cursor_on;
++    bool blink_on;
++    bool blink_phase;
++    bool initialised;                   /* an instruction arrived */
++    uint8_t shift;                      /* display shift, 0..39 */
++
++    QEMUTimer *blink;
++    PpPanel panel;
++};
++
++/* 20h (space) to 7Fh, a column a byte, bit 0 at the top */
++static const uint8_t lcdmini_font[96][5] = {
++    { 0x00, 0x00, 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x5f, 0x00, 0x00 },
++    { 0x00, 0x07, 0x00, 0x07, 0x00 }, { 0x14, 0x7f, 0x14, 0x7f, 0x14 },
++    { 0x24, 0x2a, 0x7f, 0x2a, 0x12 }, { 0x23, 0x13, 0x08, 0x64, 0x62 },
++    { 0x36, 0x49, 0x55, 0x22, 0x50 }, { 0x00, 0x05, 0x03, 0x00, 0x00 },
++    { 0x00, 0x1c, 0x22, 0x41, 0x00 }, { 0x00, 0x41, 0x22, 0x1c, 0x00 },
++    { 0x14, 0x08, 0x3e, 0x08, 0x14 }, { 0x08, 0x08, 0x3e, 0x08, 0x08 },
++    { 0x00, 0x50, 0x30, 0x00, 0x00 }, { 0x08, 0x08, 0x08, 0x08, 0x08 },
++    { 0x00, 0x60, 0x60, 0x00, 0x00 }, { 0x20, 0x10, 0x08, 0x04, 0x02 },
++    { 0x3e, 0x51, 0x49, 0x45, 0x3e }, { 0x00, 0x42, 0x7f, 0x40, 0x00 },
++    { 0x42, 0x61, 0x51, 0x49, 0x46 }, { 0x21, 0x41, 0x45, 0x4b, 0x31 },
++    { 0x18, 0x14, 0x12, 0x7f, 0x10 }, { 0x27, 0x45, 0x45, 0x45, 0x39 },
++    { 0x3c, 0x4a, 0x49, 0x49, 0x30 }, { 0x01, 0x71, 0x09, 0x05, 0x03 },
++    { 0x36, 0x49, 0x49, 0x49, 0x36 }, { 0x06, 0x49, 0x49, 0x29, 0x1e },
++    { 0x00, 0x36, 0x36, 0x00, 0x00 }, { 0x00, 0x56, 0x36, 0x00, 0x00 },
++    { 0x08, 0x14, 0x22, 0x41, 0x00 }, { 0x14, 0x14, 0x14, 0x14, 0x14 },
++    { 0x00, 0x41, 0x22, 0x14, 0x08 }, { 0x02, 0x01, 0x51, 0x09, 0x06 },
++    { 0x32, 0x49, 0x79, 0x41, 0x3e }, { 0x7e, 0x11, 0x11, 0x11, 0x7e },
++    { 0x7f, 0x49, 0x49, 0x49, 0x36 }, { 0x3e, 0x41, 0x41, 0x41, 0x22 },
++    { 0x7f, 0x41, 0x41, 0x22, 0x1c }, { 0x7f, 0x49, 0x49, 0x49, 0x41 },
++    { 0x7f, 0x09, 0x09, 0x09, 0x01 }, { 0x3e, 0x41, 0x49, 0x49, 0x7a },
++    { 0x7f, 0x08, 0x08, 0x08, 0x7f }, { 0x00, 0x41, 0x7f, 0x41, 0x00 },
++    { 0x20, 0x40, 0x41, 0x3f, 0x01 }, { 0x7f, 0x08, 0x14, 0x22, 0x41 },
++    { 0x7f, 0x40, 0x40, 0x40, 0x40 }, { 0x7f, 0x02, 0x0c, 0x02, 0x7f },
++    { 0x7f, 0x04, 0x08, 0x10, 0x7f }, { 0x3e, 0x41, 0x41, 0x41, 0x3e },
++    { 0x7f, 0x09, 0x09, 0x09, 0x06 }, { 0x3e, 0x41, 0x51, 0x21, 0x5e },
++    { 0x7f, 0x09, 0x19, 0x29, 0x46 }, { 0x46, 0x49, 0x49, 0x49, 0x31 },
++    { 0x01, 0x01, 0x7f, 0x01, 0x01 }, { 0x3f, 0x40, 0x40, 0x40, 0x3f },
++    { 0x1f, 0x20, 0x40, 0x20, 0x1f }, { 0x3f, 0x40, 0x38, 0x40, 0x3f },
++    { 0x63, 0x14, 0x08, 0x14, 0x63 }, { 0x07, 0x08, 0x70, 0x08, 0x07 },
++    { 0x61, 0x51, 0x49, 0x45, 0x43 }, { 0x00, 0x7f, 0x41, 0x41, 0x00 },
++    { 0x15, 0x16, 0x7c, 0x16, 0x15 }, { 0x00, 0x41, 0x41, 0x7f, 0x00 },
++    { 0x04, 0x02, 0x01, 0x02, 0x04 }, { 0x40, 0x40, 0x40, 0x40, 0x40 },
++    { 0x00, 0x01, 0x02, 0x04, 0x00 }, { 0x20, 0x54, 0x54, 0x54, 0x78 },
++    { 0x7f, 0x48, 0x44, 0x44, 0x38 }, { 0x38, 0x44, 0x44, 0x44, 0x20 },
++    { 0x38, 0x44, 0x44, 0x48, 0x7f }, { 0x38, 0x54, 0x54, 0x54, 0x18 },
++    { 0x08, 0x7e, 0x09, 0x01, 0x02 }, { 0x0c, 0x52, 0x52, 0x52, 0x3e },
++    { 0x7f, 0x08, 0x04, 0x04, 0x78 }, { 0x00, 0x44, 0x7d, 0x40, 0x00 },
++    { 0x20, 0x40, 0x44, 0x3d, 0x00 }, { 0x7f, 0x10, 0x28, 0x44, 0x00 },
++    { 0x00, 0x41, 0x7f, 0x40, 0x00 }, { 0x7c, 0x04, 0x18, 0x04, 0x78 },
++    { 0x7c, 0x08, 0x04, 0x04, 0x78 }, { 0x38, 0x44, 0x44, 0x44, 0x38 },
++    { 0x7c, 0x14, 0x14, 0x14, 0x08 }, { 0x08, 0x14, 0x14, 0x18, 0x7c },
++    { 0x7c, 0x08, 0x04, 0x04, 0x08 }, { 0x48, 0x54, 0x54, 0x54, 0x20 },
++    { 0x04, 0x3f, 0x44, 0x40, 0x20 }, { 0x3c, 0x40, 0x40, 0x20, 0x7c },
++    { 0x1c, 0x20, 0x40, 0x20, 0x1c }, { 0x3c, 0x40, 0x30, 0x40, 0x3c },
++    { 0x44, 0x28, 0x10, 0x28, 0x44 }, { 0x0c, 0x50, 0x50, 0x50, 0x3c },
++    { 0x44, 0x64, 0x54, 0x4c, 0x44 }, { 0x00, 0x08, 0x36, 0x41, 0x00 },
++    { 0x00, 0x00, 0x7f, 0x00, 0x00 }, { 0x00, 0x41, 0x36, 0x08, 0x00 },
++    { 0x08, 0x08, 0x2a, 0x1c, 0x08 }, { 0x08, 0x1c, 0x2a, 0x08, 0x08 },
++};
++
++static void lcdmini_changed(ClickLcdminiState *s)
++{
++    pp_panel_changed(&s->panel);
++}
++
++static void lcdmini_blink_arm(ClickLcdminiState *s)
++{
++    if (s->display_on && s->blink_on) {
++        timer_mod(s->blink, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++                  LCD_BLINK_NS);
++    } else {
++        timer_del(s->blink);
++        s->blink_phase = false;
++    }
++}
++
++static void lcdmini_blink(void *opaque)
++{
++    ClickLcdminiState *s = opaque;
++
++    s->blink_phase = !s->blink_phase;
++    lcdmini_changed(s);
++    lcdmini_blink_arm(s);
++}
++
++static uint8_t lcdmini_wrap(ClickLcdminiState *s, int addr)
++{
++    if (!s->two_lines) {
++        return (addr + LCD_DDRAM) % LCD_DDRAM;
++    }
++    /* Two lines: 00h-27h and 40h-67h */
++    if (addr < 0) {
++        return 0x67;
++    }
++    if (addr > 0x67) {
++        return 0x00;
++    }
++    if (addr > 0x27 && addr < 0x40) {
++        return s->increment ? 0x40 : 0x27;
++    }
++    return addr;
++}
++
++static unsigned lcdmini_index(ClickLcdminiState *s, uint8_t addr)
++{
++    return s->two_lines && addr >= 0x40 ? 40 + (addr - 0x40) : addr;
++}
++
++static void lcdmini_shift_display(ClickLcdminiState *s, bool right)
++{
++    unsigned width = s->two_lines ? 40 : LCD_DDRAM;
++
++    s->shift = (s->shift + (right ? width - 1 : 1)) % width;
++}
++
++static void lcdmini_step(ClickLcdminiState *s)
++{
++    if (s->ac_cgram) {
++        s->ac = (s->ac + (s->increment ? 1 : LCD_CGRAM - 1)) % LCD_CGRAM;
++    } else {
++        s->ac = lcdmini_wrap(s, s->ac + (s->increment ? 1 : -1));
++    }
++}
++
++static void lcdmini_instruction(ClickLcdminiState *s, uint8_t op)
++{
++    s->initialised = true;
++    if (op & 0x80) {                    /* set DDRAM address */
++        s->ac = lcdmini_wrap(s, op & 0x7f);
++        s->ac_cgram = false;
++    } else if (op & 0x40) {             /* set CGRAM address */
++        s->ac = op & 0x3f;
++        s->ac_cgram = true;
++    } else if (op & 0x20) {             /* function set */
++        s->bus8 = op & 0x10;
++        s->two_lines = op & 0x08;
++        s->nibble_low = false;
++    } else if (op & 0x10) {             /* cursor or display shift */
++        bool right = op & 0x04;
++
++        if (op & 0x08) {
++            lcdmini_shift_display(s, right);
++        } else if (!s->ac_cgram) {
++            s->ac = lcdmini_wrap(s, s->ac + (right ? 1 : -1));
++        }
++    } else if (op & 0x08) {             /* display on/off control */
++        s->display_on = op & 0x04;
++        s->cursor_on = op & 0x02;
++        s->blink_on = op & 0x01;
++        lcdmini_blink_arm(s);
++    } else if (op & 0x04) {             /* entry mode set */
++        s->increment = op & 0x02;
++        s->shift_on_write = op & 0x01;
++    } else if (op & 0x02) {             /* return home */
++        s->ac = 0;
++        s->ac_cgram = false;
++        s->shift = 0;
++    } else if (op & 0x01) {             /* clear display */
++        memset(s->ddram, ' ', sizeof(s->ddram));
++        s->ac = 0;
++        s->ac_cgram = false;
++        s->shift = 0;
++        s->increment = true;
++    }
++    lcdmini_changed(s);
++}
++
++static void lcdmini_data(ClickLcdminiState *s, uint8_t val)
++{
++    if (s->ac_cgram) {
++        s->cgram[s->ac] = val & 0x1f;
++    } else {
++        s->ddram[lcdmini_index(s, s->ac)] = val;
++        if (s->shift_on_write) {
++            lcdmini_shift_display(s, !s->increment);
++        }
++    }
++    lcdmini_step(s);
++    lcdmini_changed(s);
++}
++
++/* A falling E: DB7-DB4 from GPB7-GPB4, DB3-DB0 tied low */
++static void lcdmini_latch(ClickLcdminiState *s, uint8_t portb)
++{
++    uint8_t nibble = portb >> 4, val;
++
++    if (s->bus8) {
++        val = nibble << 4;
++    } else if (!s->nibble_low) {
++        s->nibble = nibble;
++        s->nibble_low = true;
++        return;
++    } else {
++        val = s->nibble << 4 | nibble;
++        s->nibble_low = false;
++    }
++    if (portb & LCD_RS) {
++        lcdmini_data(s, val);
++    } else {
++        lcdmini_instruction(s, val);
++    }
++}
++
++static void lcdmini_pins(void *opaque, unsigned port, uint8_t levels)
++{
++    ClickLcdminiState *s = opaque;
++
++    if (port != 1) {
++        return;
++    }
++    if ((s->portb & LCD_E) && !(levels & LCD_E)) {
++        lcdmini_latch(s, s->portb);     /* data stable before E fell */
++    }
++    s->portb = levels;
++}
++
++/* The character cell's dots: bit c of row r is column c from the left */
++static void lcdmini_glyph(ClickLcdminiState *s, uint8_t code, uint8_t *rows)
++{
++    memset(rows, 0, 8);
++    if (code < 0x10) {
++        for (unsigned r = 0; r < 8; r++) {
++            uint8_t line = s->cgram[(code & 7) * 8 + r];
++
++            for (unsigned c = 0; c < 5; c++) {
++                rows[r] |= ((line >> (4 - c)) & 1) << c;
++            }
++        }
++    } else if (code >= 0x20 && code < 0x80) {
++        const uint8_t *g = lcdmini_font[code - 0x20];
++
++        for (unsigned c = 0; c < 5; c++) {
++            for (unsigned r = 0; r < 7; r++) {
++                rows[r] |= ((g[c] >> r) & 1) << c;
++            }
++        }
++    }
++}
++
++static uint8_t lcdmini_visible(ClickLcdminiState *s, unsigned line,
++                               unsigned col)
++{
++    unsigned width = s->two_lines ? 40 : LCD_DDRAM;
++    unsigned base = s->two_lines ? line * 40 : 0;
++
++    if (line && !s->two_lines) {
++        return ' ';
++    }
++    return s->ddram[base + (col + s->shift) % width];
++}
++
++static uint16_t lcdmini_mix(const uint8_t *a, const uint8_t *b, unsigned k)
++{
++    return pp_panel_rgb565(a[0] + (b[0] - a[0]) * (int)k / 256,
++                           a[1] + (b[1] - a[1]) * (int)k / 256,
++                           a[2] + (b[2] - a[2]) * (int)k / 256);
++}
++
++static void lcdmini_render(void *opaque, uint16_t *fb)
++{
++    ClickLcdminiState *s = opaque;
++    static const uint8_t bg_lit[3] = { 36, 72, 222 };
++    static const uint8_t bg_dark[3] = { 14, 22, 66 };
++    static const uint8_t dot_lit[3] = { 236, 242, 255 };
++    static const uint8_t dot_dark[3] = { 70, 80, 120 };
++    const uint8_t *bg = s->backlight ? bg_lit : bg_dark;
++    const uint8_t *on = s->backlight ? dot_lit : dot_dark;
++    /* Contrast: a low wiper is a low LCD voltage, a strong picture */
++    unsigned k = MIN(256, (POT_WIPER_MAX - s->wiper) * 360 / POT_WIPER_MAX);
++    uint16_t back = pp_panel_rgb565(bg[0], bg[1], bg[2]);
++    uint16_t dot_off = lcdmini_mix(bg, on, 24);
++    uint16_t dot_on = lcdmini_mix(bg, on, k);
++    unsigned cursor = s->two_lines && s->ac >= 0x40 ?
++                      40 + s->ac - 0x40 : s->ac;
++
++    for (unsigned i = 0; i < FRAME_W * FRAME_H; i++) {
++        fb[i] = back;
++    }
++    for (unsigned line = 0; line < LCD_LINES; line++) {
++        for (unsigned col = 0; col < LCD_COLS; col++) {
++            unsigned width = s->two_lines ? 40 : LCD_DDRAM;
++            unsigned at = (s->two_lines ? line * 40 : 0) +
++                          (col + s->shift) % width;
++            bool here = !s->ac_cgram && at == cursor &&
++                        (line == 0 || s->two_lines);
++            uint8_t rows[8];
++
++            if (!s->initialised) {
++                memset(rows, line == 0 ? 0x1f : 0, sizeof(rows));
++            } else if (!s->display_on) {
++                memset(rows, 0, sizeof(rows));
++            } else {
++                lcdmini_glyph(s, lcdmini_visible(s, line, col), rows);
++                if (here && s->cursor_on) {
++                    rows[7] = 0x1f;
++                }
++                if (here && s->blink_on && s->blink_phase) {
++                    memset(rows, 0x1f, sizeof(rows));
++                }
++            }
++            for (unsigned r = 0; r < 8; r++) {
++                for (unsigned c = 0; c < 5; c++) {
++                    uint16_t px = rows[r] >> c & 1 ? dot_on : dot_off;
++                    unsigned x = TEXT_X + col * CELL_W + c * DOT;
++                    unsigned y = TEXT_Y + line * CELL_H + r * DOT;
++
++                    for (unsigned dy = 0; dy < DOT - 1; dy++) {
++                        for (unsigned dx = 0; dx < DOT - 1; dx++) {
++                            fb[(y + dy) * FRAME_W + x + dx] = px;
++                        }
++                    }
++                }
++            }
++        }
++    }
++}
++
++static uint32_t lcdmini_io_byte(ClickLcdminiState *s, uint8_t val)
++{
++    uint8_t ret = 0;
++
++    switch (s->io_phase) {
++    case 0:
++        s->io_read = val & 1;
++        s->io_ignore = (val & 0xf0) != 0x40 ||
++                       ((s->io.reg[0][MCP23X17_IOCON] &
++                         MCP23X17_IOCON_HAEN) && (val & 0x0e));
++        s->io_phase = 1;
++        break;
++    case 1:
++        if (!s->io_ignore) {
++            mcp23x17_set_ptr(&s->io, val);
++        }
++        s->io_phase = 2;
++        break;
++    default:
++        if (s->io_ignore) {
++            break;
++        }
++        if (s->io_read) {
++            ret = mcp23x17_read(&s->io);
++        } else {
++            mcp23x17_write(&s->io, val);
++        }
++        break;
++    }
++    return ret;
++}
++
++static void lcdmini_pot_byte(ClickLcdminiState *s, uint8_t val)
++{
++    unsigned addr, op;
++
++    if (s->pot_phase == 1) {
++        addr = s->pot_cmd >> 4;
++        if ((s->pot_cmd & 0x0c) == 0x0c) {
++            /* the read's data byte: the Click has no SDO */
++        } else if (addr == 0) {
++            s->wiper = MIN(POT_WIPER_MAX, (s->pot_cmd & 3) << 8 | val);
++            lcdmini_changed(s);
++        } else {
++            qemu_log_mask(LOG_UNIMP, "click-lcdmini: MCP4161 write to "
++                          "address %u\n", addr);
++        }
++        s->pot_phase = 0;
++        return;
++    }
++    addr = val >> 4;
++    op = (val >> 2) & 3;
++    switch (op) {
++    case 0:                             /* write: a data byte follows */
++    case 3:                             /* read: no SDO on the Click */
++        s->pot_cmd = val;
++        s->pot_phase = 1;
++        break;
++    default:                            /* increment, decrement */
++        if (addr == 0) {
++            if (op == 1 && s->wiper < POT_WIPER_MAX) {
++                s->wiper++;
++            } else if (op == 2 && s->wiper > 0) {
++                s->wiper--;
++            }
++            lcdmini_changed(s);
++        }
++        break;
++    }
++}
++
++static uint32_t lcdmini_transfer(SSIPeripheral *dev, uint32_t val)
++{
++    ClickLcdminiState *s = CLICK_LCDMINI(dev);
++    uint32_t ret = 0;
++
++    if (!s->cs) {
++        ret = lcdmini_io_byte(s, val);
++    }
++    if (!s->cs2) {
++        lcdmini_pot_byte(s, val);
++    }
++    return ret;
++}
++
++static void lcdmini_set_cs(void *opaque, int n, int level)
++{
++    ClickLcdminiState *s = opaque;
++    bool high = level != 0;             /* undriven: the pull-up */
++
++    if (s->cs && !high) {
++        s->io_phase = 0;
++    }
++    s->cs = high;
++}
++
++static void lcdmini_set_cs2(void *opaque, int n, int level)
++{
++    ClickLcdminiState *s = opaque;
++    bool high = level != 0;
++
++    if (s->cs2 && !high) {
++        s->pot_phase = 0;
++    }
++    s->cs2 = high;
++}
++
++static void lcdmini_set_reset(void *opaque, int n, int level)
++{
++    ClickLcdminiState *s = opaque;
++
++    mcp23x17_set_reset(&s->io, level == 0);
++}
++
++static void lcdmini_set_backlight(void *opaque, int n, int level)
++{
++    ClickLcdminiState *s = opaque;
++    bool on = level != 0;               /* R1 pulls it on */
++
++    if (on != s->backlight) {
++        s->backlight = on;
++        lcdmini_changed(s);
++    }
++}
++
++static char *lcdmini_get_text(Object *obj, Error **errp)
++{
++    ClickLcdminiState *s = CLICK_LCDMINI(obj);
++    GString *text = g_string_new(NULL);
++
++    for (unsigned line = 0; line < LCD_LINES; line++) {
++        for (unsigned col = 0; col < LCD_COLS; col++) {
++            uint8_t code = s->display_on ? lcdmini_visible(s, line, col)
++                                         : ' ';
++
++            g_string_append_c(text, code >= 0x20 && code < 0x7f ? code
++                                                                : '?');
++        }
++        if (!line) {
++            g_string_append_c(text, '\n');
++        }
++    }
++    return g_string_free(text, false);
++}
++
++static void lcdmini_get_contrast(Object *obj, Visitor *v, const char *name,
++                                 void *opaque, Error **errp)
++{
++    uint32_t wiper = CLICK_LCDMINI(obj)->wiper;
++
++    visit_type_uint32(v, name, &wiper, errp);
++}
++
++static bool lcdmini_get_backlight(Object *obj, Error **errp)
++{
++    return CLICK_LCDMINI(obj)->backlight;
++}
++
++static void lcdmini_realize(SSIPeripheral *dev, Error **errp)
++{
++}
++
++static void lcdmini_reset(DeviceState *dev)
++{
++    ClickLcdminiState *s = CLICK_LCDMINI(dev);
++
++    /* Idle levels of the pulled pins: CS# and CS2# high, backlight on */
++    s->cs = true;
++    s->cs2 = true;
++    s->io_phase = 0;
++    s->pot_phase = 0;
++    s->wiper = POT_WIPER_MAX / 2;
++    s->backlight = true;
++    s->portb = 0;
++    mcp23x17_reset(&s->io);
++    s->io.in_reset = false;
++
++    /* ST7066U power-on: 8-bit, one line, display off, increment */
++    memset(s->ddram, ' ', sizeof(s->ddram));
++    memset(s->cgram, 0, sizeof(s->cgram));
++    s->ac = 0;
++    s->ac_cgram = false;
++    s->bus8 = true;
++    s->nibble_low = false;
++    s->two_lines = false;
++    s->increment = true;
++    s->shift_on_write = false;
++    s->display_on = false;
++    s->cursor_on = false;
++    s->blink_on = false;
++    s->blink_phase = false;
++    s->initialised = false;
++    s->shift = 0;
++    timer_del(s->blink);
++    lcdmini_changed(s);
++}
++
++static void lcdmini_init(Object *obj)
++{
++    ClickLcdminiState *s = CLICK_LCDMINI(obj);
++    DeviceState *dev = DEVICE(obj);
++
++    s->io.pins_changed = lcdmini_pins;
++    s->io.opaque = s;
++    qdev_init_gpio_out_named(dev, &s->io.intpin[1], CLICK_LCDMINI_INT, 1);
++    qdev_init_gpio_in_named(dev, lcdmini_set_cs, CLICK_LCDMINI_CS, 1);
++    qdev_init_gpio_in_named(dev, lcdmini_set_cs2, CLICK_LCDMINI_CS2, 1);
++    qdev_init_gpio_in_named(dev, lcdmini_set_reset, CLICK_LCDMINI_RESET, 1);
++    qdev_init_gpio_in_named(dev, lcdmini_set_backlight,
++                            CLICK_LCDMINI_BACKLIGHT, 1);
++    s->blink = timer_new_ns(QEMU_CLOCK_VIRTUAL, lcdmini_blink, s);
++    pp_panel_init(&s->panel, obj, FRAME_W, FRAME_H, lcdmini_render, s);
++    object_property_add_str(obj, "text", lcdmini_get_text, NULL);
++    object_property_add(obj, "contrast", "uint32", lcdmini_get_contrast,
++                        NULL, NULL, NULL);
++    object_property_add_bool(obj, "backlight-on", lcdmini_get_backlight,
++                             NULL);
++}
++
++static void lcdmini_finalize(Object *obj)
++{
++    timer_free(CLICK_LCDMINI(obj)->blink);
++}
++
++static int lcdmini_post_load(void *opaque, int version_id)
++{
++    ClickLcdminiState *s = opaque;
++
++    lcdmini_blink_arm(s);
++    lcdmini_changed(s);
++    return 0;
++}
++
++static const VMStateDescription vmstate_lcdmini = {
++    .name = TYPE_CLICK_LCDMINI,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .post_load = lcdmini_post_load,
++    .fields = (const VMStateField[]) {
++        VMSTATE_SSI_PERIPHERAL(parent_obj, ClickLcdminiState),
++        VMSTATE_STRUCT(io, ClickLcdminiState, 1, vmstate_mcp23x17, Mcp23x17),
++        VMSTATE_BOOL(cs, ClickLcdminiState),
++        VMSTATE_BOOL(cs2, ClickLcdminiState),
++        VMSTATE_UINT8(io_phase, ClickLcdminiState),
++        VMSTATE_BOOL(io_read, ClickLcdminiState),
++        VMSTATE_BOOL(io_ignore, ClickLcdminiState),
++        VMSTATE_UINT8(pot_phase, ClickLcdminiState),
++        VMSTATE_UINT8(pot_cmd, ClickLcdminiState),
++        VMSTATE_UINT16(wiper, ClickLcdminiState),
++        VMSTATE_BOOL(backlight, ClickLcdminiState),
++        VMSTATE_UINT8(portb, ClickLcdminiState),
++        VMSTATE_UINT8_ARRAY(ddram, ClickLcdminiState, LCD_DDRAM),
++        VMSTATE_UINT8_ARRAY(cgram, ClickLcdminiState, LCD_CGRAM),
++        VMSTATE_UINT8(ac, ClickLcdminiState),
++        VMSTATE_BOOL(ac_cgram, ClickLcdminiState),
++        VMSTATE_BOOL(bus8, ClickLcdminiState),
++        VMSTATE_BOOL(nibble_low, ClickLcdminiState),
++        VMSTATE_UINT8(nibble, ClickLcdminiState),
++        VMSTATE_BOOL(two_lines, ClickLcdminiState),
++        VMSTATE_BOOL(increment, ClickLcdminiState),
++        VMSTATE_BOOL(shift_on_write, ClickLcdminiState),
++        VMSTATE_BOOL(display_on, ClickLcdminiState),
++        VMSTATE_BOOL(cursor_on, ClickLcdminiState),
++        VMSTATE_BOOL(blink_on, ClickLcdminiState),
++        VMSTATE_BOOL(blink_phase, ClickLcdminiState),
++        VMSTATE_BOOL(initialised, ClickLcdminiState),
++        VMSTATE_UINT8(shift, ClickLcdminiState),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
++static void lcdmini_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    SSIPeripheralClass *k = SSI_PERIPHERAL_CLASS(klass);
++
++    dc->desc = "LCD mini Click: MCP23S17, MCP4161 and a 16x2 LCD";
++    dc->vmsd = &vmstate_lcdmini;
++    device_class_set_legacy_reset(dc, lcdmini_reset);
++    k->realize = lcdmini_realize;
++    k->transfer = lcdmini_transfer;
++    k->cs_polarity = SSI_CS_NONE;       /* its own CS# inputs */
++}
++
++static const TypeInfo lcdmini_types[] = {
++    {
++        .name = TYPE_CLICK_LCDMINI,
++        .parent = TYPE_SSI_PERIPHERAL,
++        .instance_size = sizeof(ClickLcdminiState),
++        .instance_init = lcdmini_init,
++        .instance_finalize = lcdmini_finalize,
++        .class_init = lcdmini_class_init,
++    },
++};
++
++DEFINE_TYPES(lcdmini_types)
+diff --git a/hw/display/meson.build b/hw/display/meson.build
+index 10213fe..5b17e6a 100644
+--- a/hw/display/meson.build
++++ b/hw/display/meson.build
+@@ -17,7 +17,8 @@ system_ss.add(when: 'CONFIG_SII9022', if_true: files('sii9022.c'))
+ system_ss.add(when: 'CONFIG_SSD0303', if_true: files('ssd0303.c'))
+ system_ss.add(when: 'CONFIG_SSD0323', if_true: files('ssd0323.c'))
+ system_ss.add(when: 'CONFIG_MIKROBUS', if_true: files('pp_panel.c', 'ssd1351.c',
+-                                                    'ssd1306.c'))
++                                                    'ssd1306.c',
++                                                    'click_lcdmini.c'))
+ system_ss.add(when: 'CONFIG_ST7789', if_true: files('st7789.c'))
+ system_ss.add(when: 'CONFIG_XEN_BUS', if_true: files('xenfb.c'))
+ 
+diff --git a/hw/misc/mikrobus.c b/hw/misc/mikrobus.c
+index b8f5217..072d8a3 100644
+--- a/hw/misc/mikrobus.c
++++ b/hw/misc/mikrobus.c
+@@ -33,6 +33,7 @@
+ #include "hw/nvram/mchp_at24cm02.h"
+ #include "hw/adc/mchp_mcp3204.h"
+ #include "hw/gpio/mchp_mcp23x17.h"
++#include "hw/display/click_lcdmini.h"
+ #include "hw/display/ssd1306.h"
+ #include "hw/display/ssd1351.h"
+ #include "hw/rtc/mchp_mcp7941x.h"
+@@ -293,6 +294,17 @@ static const ClickInfo mikrobus_clicks[] = {
+       TYPE_MCHP_MCP23017, CLICK_I2C, 0x20, 0,
+       .outs = { { MCHP_MCP23X17_INTA, MIKROBUS_INT } },
+       .ins = { { MCHP_MCP23X17_RESET, MIKROBUS_RST } } },
++    { "lcdmini", "LCD mini Click: 16x2 character LCD on an MCP23S17 (CS), "
++      "contrast from an MCP4161 (CS2 on AN), backlight on PWM",
++      TYPE_CLICK_LCDMINI, CLICK_SPI, 0, 0,
++      .outs = { { CLICK_LCDMINI_INT, MIKROBUS_INT } },
++      .ins = { { CLICK_LCDMINI_CS, MIKROBUS_CS },
++               { CLICK_LCDMINI_CS2, MIKROBUS_AN_PIN },
++               { CLICK_LCDMINI_RESET, MIKROBUS_RST },
++               { CLICK_LCDMINI_BACKLIGHT, MIKROBUS_PWM } },
++      .pulls = { { true, MIKROBUS_CS, 1 },                /* R4 10k */
++                 { true, MIKROBUS_AN_PIN, 1 },            /* R5 10k */
++                 { true, MIKROBUS_PWM, 1 } } },           /* R1 1k */
+ };
+ 
+ const char *mikrobus_click_names(void)
+diff --git a/include/hw/display/click_lcdmini.h b/include/hw/display/click_lcdmini.h
+new file mode 100644
+index 0000000..9f84c94
+--- /dev/null
++++ b/include/hw/display/click_lcdmini.h
+@@ -0,0 +1,29 @@
++/*
++ * LCD mini Click: a 16x2 character LCD behind an MCP23S17
++ *
++ * Peripheral Pretender: a personal project. AI-assisted code;
++ * not for submission to upstream QEMU.
++ *
++ * "click-lcdmini": an SSI peripheral that watches its own chip selects.
++ * GPIO inputs "cs" (the MCP23S17's CS#), "cs2" (the MCP4161's CS#),
++ * "reset" (the MCP23S17's RESET#) and "backlight" (the backlight switch:
++ * on unless driven low); GPIO output "int" (INTB). QOM properties: those
++ * of pp_panel_init() ("frame", "frame-gen", ...), and read-only "text"
++ * (the two visible lines, separated by a newline), "contrast" (the
++ * MCP4161's wiper, 0-256) and "backlight-on".
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_DISPLAY_CLICK_LCDMINI_H
++#define HW_DISPLAY_CLICK_LCDMINI_H
++
++#define TYPE_CLICK_LCDMINI "click-lcdmini"
++
++#define CLICK_LCDMINI_CS        "cs"
++#define CLICK_LCDMINI_CS2       "cs2"
++#define CLICK_LCDMINI_RESET     "reset"
++#define CLICK_LCDMINI_BACKLIGHT "backlight"
++#define CLICK_LCDMINI_INT       "int"
++
++#endif /* HW_DISPLAY_CLICK_LCDMINI_H */
+diff --git a/tests/qtest/avr64ea48-cnano-test.c b/tests/qtest/avr64ea48-cnano-test.c
+index ee9aafb..7715473 100644
+--- a/tests/qtest/avr64ea48-cnano-test.c
++++ b/tests/qtest/avr64ea48-cnano-test.c
+@@ -567,6 +567,50 @@ static void test_expand2_mb2(const void *fw)
+     qtest_quit(qts);
+ }
+ 
++/* LCD mini Click on mikroBUS 1: MCP23S17 CS# on PA7 */
++static void lcd_reg_mb1(QTestState *qts, uint8_t reg, uint8_t val)
++{
++    qtest_writeb(qts, PORTA + 0x06, BIT(7));                    /* OUTCLR */
++    spi0_xfer(qts, 0x40);
++    spi0_xfer(qts, reg);
++    spi0_xfer(qts, val);
++    qtest_writeb(qts, PORTA + 0x05, BIT(7));                    /* OUTSET */
++}
++
++static void lcd_byte_mb1(QTestState *qts, uint8_t b, bool data)
++{
++    uint8_t rs = data ? 0x04 : 0;
++
++    for (unsigned half = 0; half < 2; half++) {
++        uint8_t nib = (half ? b << 4 : b) & 0xf0;
++
++        lcd_reg_mb1(qts, 0x15, nib | rs | 0x08);
++        lcd_reg_mb1(qts, 0x15, nib | rs);
++    }
++}
++
++static void test_lcdmini_mb1(const void *fw)
++{
++    QTestState *qts = qtest_initf("-M avr64ea48-cnano,mb1=lcdmini "
++                                  "-kernel %s", (const char *)fw);
++    static const uint8_t init[] = { 0x02, 0x28, 0x0c, 0x01, 0x06 };
++    g_autofree char *text = NULL;
++
++    qtest_writeb(qts, PORTA + 0x05, BIT(7));
++    qtest_writeb(qts, PORTA + 0x01, BIT(4) | BIT(6) | BIT(7));  /* DIRSET */
++    qtest_writeb(qts, SPI0 + 0, 0x21);                  /* MASTER, ENABLE */
++    lcd_reg_mb1(qts, 0x01, 0x00);                       /* IODIRB */
++    for (unsigned i = 0; i < ARRAY_SIZE(init); i++) {
++        lcd_byte_mb1(qts, init[i], false);
++    }
++    lcd_byte_mb1(qts, 'A', true);
++    lcd_byte_mb1(qts, 'V', true);
++    lcd_byte_mb1(qts, 'R', true);
++    text = qom_str(qts, "/machine/mb1-click", "text");
++    g_assert_cmpstr(text, ==, "AVR             \n                ");
++    qtest_quit(qts);
++}
++
+ static void qom_set_str(QTestState *qts, const char *path, const char *prop,
+                         const char *value)
+ {
+@@ -658,6 +702,7 @@ int main(int argc, char **argv)
+     qtest_add_data_func("avr64ea48-cnano/ledringr", fw, test_ledringr_mb1);
+     qtest_add_data_func("avr64ea48-cnano/dac", fw, test_dac_mb1);
+     qtest_add_data_func("avr64ea48-cnano/expand2", fw, test_expand2_mb2);
++    qtest_add_data_func("avr64ea48-cnano/lcdmini", fw, test_lcdmini_mb1);
+     ret = g_test_run();
+     unlink(fw);
+     return ret;
+diff --git a/tests/qtest/pic32cm-click-test.c b/tests/qtest/pic32cm-click-test.c
+index 991de65..141bea4 100644
+--- a/tests/qtest/pic32cm-click-test.c
++++ b/tests/qtest/pic32cm-click-test.c
+@@ -763,6 +763,79 @@ static void test_dac(void)
+     qtest_quit(qts);
+ }
+ 
++/* LCD mini Click on EXT1: MCP23S17 CS# PA17, MCP4161 CS# on AN (PB08) */
++static void lcd_reg(QTestState *qts, uint8_t reg, uint8_t val)
++{
++    qtest_writel(qts, PA + P_OUTCLR, BIT(17));
++    spi_byte(qts, 0x40);                        /* opcode: write, A = 0 */
++    spi_byte(qts, reg);
++    spi_byte(qts, val);
++    qtest_writel(qts, PA + P_OUTSET, BIT(17));
++}
++
++/* One byte to the LCD as MikroElektronika's driver sends it: OLATB */
++static void lcd_byte(QTestState *qts, uint8_t b, bool data)
++{
++    uint8_t rs = data ? 0x04 : 0;
++
++    for (unsigned half = 0; half < 2; half++) {
++        uint8_t nib = (half ? b << 4 : b) & 0xf0;
++
++        lcd_reg(qts, 0x15, nib | rs);
++        lcd_reg(qts, 0x15, nib | rs | 0x08);    /* E high */
++        lcd_reg(qts, 0x15, nib | rs);           /* E falls: latched */
++    }
++}
++
++static void lcd_text(QTestState *qts, uint8_t addr, const char *text)
++{
++    lcd_byte(qts, 0x80 | addr, false);
++    while (*text) {
++        lcd_byte(qts, *text++, true);
++    }
++}
++
++static void test_lcdmini(void)
++{
++    QTestState *qts = qtest_init("-M pic32cm-mc00-cpro,ext1=lcdmini ");
++    g_autofree char *blank = NULL, *shown = NULL, *shifted = NULL;
++    static const uint8_t init[] = { 0x02, 0x28, 0x08, 0x01, 0x0c, 0x06 };
++
++    blank = qom_str(qts, CLICK1, "text");
++    g_assert_cmpstr(blank, ==, "                \n                ");
++    g_assert_cmpuint(qom_int(qts, CLICK1, "contrast"), ==, 128);
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16);
++    qtest_writel(qts, SERCOM1 + 0x00, 3 << 2 | 1 << 16 | 0x02);
++    qtest_writel(qts, PA + P_OUTSET, BIT(17) | BIT(20));
++    qtest_writel(qts, PA + P_DIRSET, BIT(17) | BIT(20));
++    lcd_reg(qts, 0x0a, 0x00);                   /* IOCON */
++    lcd_reg(qts, 0x01, 0x00);                   /* IODIRB: outputs */
++    for (unsigned i = 0; i < ARRAY_SIZE(init); i++) {
++        lcd_byte(qts, init[i], false);          /* 02h: into 4-bit mode */
++    }
++    lcd_text(qts, 0x05, "Mikro E");
++    lcd_text(qts, 0x41, "LCD mini Click");
++    shown = qom_str(qts, CLICK1, "text");
++    g_assert_cmpstr(shown, ==, "     Mikro E    \n LCD mini Click ");
++    lcd_byte(qts, 0x18, false);                 /* shift the display left */
++    shifted = qom_str(qts, CLICK1, "text");
++    g_assert_cmpstr(shifted, ==, "    Mikro E     \nLCD mini Click  ");
++
++    /* Contrast: [00h, ~200] to the MCP4161 */
++    qtest_writel(qts, PB + P_OUTCLR, BIT(8));
++    qtest_writel(qts, PB + P_DIRSET, BIT(8));
++    spi_byte(qts, 0x00);
++    spi_byte(qts, (uint8_t)~200);
++    qtest_writel(qts, PB + P_OUTSET, BIT(8));
++    g_assert_cmpuint(qom_int(qts, CLICK1, "contrast"), ==, 55);
++    /* Backlight: on while PWM (PB10) floats, off when driven low */
++    g_assert_true(qtest_qom_get_bool(qts, CLICK1, "backlight-on"));
++    qtest_writel(qts, PB + P_OUTCLR, BIT(10));
++    qtest_writel(qts, PB + P_DIRSET, BIT(10));
++    g_assert_false(qtest_qom_get_bool(qts, CLICK1, "backlight-on"));
++    qtest_quit(qts);
++}
++
+ /* ADC Click on EXT1: MCP3204 on SPI (CS# PA17), inputs on terminals */
+ static void test_adc(void)
+ {
+@@ -1622,6 +1695,7 @@ int main(int argc, char **argv)
+     qtest_add_func("pic32cm-click/ledringr", test_ledringr);
+     qtest_add_func("pic32cm-click/dac", test_dac);
+     qtest_add_func("pic32cm-click/expand2", test_expand2);
++    qtest_add_func("pic32cm-click/lcdmini", test_lcdmini);
+     qtest_add_func("pic32cm-click/accel", test_accel);
+     qtest_add_func("pic32cm-click/rtc6-time", test_rtc6_time);
+     qtest_add_func("pic32cm-click/rtc6-alarm", test_rtc6_alarm);
+-- 
+2.53.0.windows.2
+

@@ -28,6 +28,10 @@ void put_field(const char *name, uint32_t value, unsigned int digits);
 void put_checked(const char *name, uint32_t value, uint32_t expected,
                  unsigned int digits);
 
+/* @v in units of 10^-@frac as a signed decimal: put_fixed(-1250, 2)
+ * prints "-12.50" */
+void put_fixed(int32_t v, unsigned int frac);
+
 /* "PP:EXIT <failures>", wait for the last stop bit, then WFI forever */
 void test_exit(void) __attribute__((noreturn));
 
