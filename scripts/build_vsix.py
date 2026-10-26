@@ -8,7 +8,7 @@ vscode/engine/ (staged here, not in git):
             tools/pp_analog (ngspice is not bundled: without it a bench
             with a capacitor stays on the DC solve), tools/pp_mcp (the MCP
             server the extension registers), devices/*.json and each
-            board's demo firmware (if built)
+            board's demo and each template's firmware (all must be built)
   qemu/     qemu-system-arm and -avr (stripped) and their MSYS2 DLLs
   gdb/      gdb-multiarch (Arm, AVR) with its Python and data directory
 
@@ -89,19 +89,28 @@ def stage_app() -> None:
     (app / "devices").mkdir()
     for f in (ROOT / "devices").glob("*.json"):
         shutil.copy2(f, app / "devices")
-    for board in sorted((ROOT / "tools" / "pp_web" / "boards")
-                        .glob("*/board.json")):
-        demo = json.loads(board.read_text(encoding="utf-8")).get("demo_elf")
-        if not demo:
-            continue
-        src = ROOT / demo
-        if src.is_file():
-            (app / demo).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, app / demo)
-            log(f"demo {demo}")
-        else:
-            log(f"warning: {demo} not built; {board.parent.name} starts "
-                "without firmware")
+    firmware = bundled_firmware()
+    missing = [f for f in firmware if not (ROOT / f).is_file()]
+    if missing:
+        raise SystemExit("not built (a board or template would run "
+                         "something else):\n  " + "\n  ".join(missing))
+    for f in firmware:
+        (app / f).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / f, app / f)
+        log(f"firmware {f}")
+
+
+def bundled_firmware() -> list[str]:
+    """The ELFs the engine runs on its own: each board's demo and each
+    template's firmware (paths from the project root, as the engine
+    resolves them). Without its ELF a template quietly runs the board's
+    demo instead."""
+    web = ROOT / "tools" / "pp_web"
+    elfs = [json.loads(b.read_text(encoding="utf-8")).get("demo_elf")
+            for b in sorted((web / "boards").glob("*/board.json"))]
+    elfs += [t.get("firmware") for t in json.loads(
+        (web / "templates.json").read_text(encoding="utf-8"))]
+    return sorted({f for f in elfs if f})
 
 
 def msys(cmd: str) -> str:

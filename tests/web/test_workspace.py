@@ -246,6 +246,43 @@ def test_wired_oledc_draws(qemu_path, qemu_machines):
     assert lit(frame) > 100
 
 
+def test_template_rotary_oled_draws(qemu_path, qemu_machines):
+    """The "Rotary angle on an OLED C" template from the palette: its own
+    firmware runs (not the board's blinky) and the OLED C on EXT1 draws
+    the dial."""
+    if "pic32cm-mc00-cpro" not in qemu_machines:
+        pytest.skip("QEMU build has no pic32cm-mc00-cpro machine")
+    if not OLED_ELF.is_file():
+        pytest.skip("the rotary_oledc_angle example is not built")
+
+    import base64
+
+    def lit(frame):
+        raw = base64.b64decode(frame)
+        return sum(1 for i in range(0, len(raw), 2) if raw[i] | raw[i + 1])
+
+    async def scenario():
+        app = App(None, None)
+        app.emit = lambda m: None
+        await app.apply_template("mc00-rotary-oled")
+        frame = None
+        try:
+            elf = app.kept_elf
+            for _ in range(60):
+                await asyncio.sleep(0.1)
+                frame = app.session.click_state.get("ext1.frame")
+                if frame and lit(frame) > 100:
+                    break
+        finally:
+            await app.session.stop()
+        return elf, frame
+
+    elf, frame = asyncio.run(scenario())
+    assert elf and elf.name == OLED_ELF.name, elf
+    assert frame, "no frame from the OLED C"
+    assert lit(frame) > 100
+
+
 # -- several boards -------------------------------------------------------
 
 MC00_BLINKY = ROOT / "firmware" / "hello" / "build" / "pic32cm_mc00_cpro" / \
