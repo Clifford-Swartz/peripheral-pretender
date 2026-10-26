@@ -4,13 +4,13 @@
 
 **Microchip dev boards that run your firmware, without the board.**
 
-A QEMU digital twin of PIC32CM, SAM E51 and AVR boards and 31 MikroE Click boards, checked
+A QEMU digital twin of PIC32CM, SAM E51 and AVR boards and 38 MikroE Click boards, checked
 against silicon. A live board view, a logic-analyzer timeline, fault injection and exact replay,
 in VS Code, in CI, or driven by an AI assistant over MCP.
 
 ![QEMU](https://img.shields.io/badge/QEMU-11.1-ff6600)
 ![Boards](https://img.shields.io/badge/boards-4-2ea44f)
-![Click boards](https://img.shields.io/badge/Click%20boards-31-e4002b)
+![Click boards](https://img.shields.io/badge/Click%20boards-38-e4002b)
 ![VS Code](https://img.shields.io/badge/VS%20Code-extension-007acc?logo=visualstudiocode&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-bench%20tools-d97757)
 ![License](https://img.shields.io/badge/license-MIT%20%2B%20GPL%20patches-8a92b2)
@@ -32,9 +32,9 @@ two shift registers on the same bus. (Real time.)</sub>
   transcripts byte for byte.
 - **Shows the real board.** Rendered from Microchip's production Gerbers: LEDs follow the pins
   (PWM dims them), buttons click, the virtual COM port is a console.
-- **Click boards.** 31 MikroE Clicks (OLEDs, sensors, rotary encoders, LED matrices, motors,
-  radios…) plug into mikroBUS headers, or wire pin by pin to any pads; the bench checks that a
-  SERCOM can reach them.
+- **Click boards.** 38 MikroE Clicks (OLEDs, a character LCD, sensors, ADCs and DACs, I/O
+  expanders, rotary encoders, LED matrices, motors, radios…) plug into mikroBUS headers, or
+  wire pin by pin to any pads; the bench checks that a SERCOM can reach them.
 - **A logic analyzer on every pin.** Pad edges, UART bytes, SPI transfers, I2C transactions and
   interrupts, stamped with the firmware's own time, in a timeline that zooms from a minute down
   to microseconds.
